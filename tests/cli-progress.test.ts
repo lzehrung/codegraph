@@ -6,8 +6,6 @@ import { createCliProgressHandler, runWithCliRuntime } from "../src/cli/context.
 import { createCliProgressDisplay, resolveCliProgressPresentation } from "../src/cli/progress.js";
 import { buildProjectIndex } from "../src/index.js";
 import * as configModule from "../src/config.js";
-import * as mcpServer from "../src/mcp/server.js";
-import { normalizePath } from "../src/util/paths.js";
 import { captureCli } from "./helpers/cli.js";
 import { runGit } from "./helpers/git.js";
 
@@ -658,110 +656,6 @@ describe("CLI index progress", () => {
       expect(textSearch.stderr).not.toContain("Preparing project index");
       expect(() => JSON.parse(textSearch.stdout)).not.toThrow();
     } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("defaults MCP startup to base warmup and forwards explicit warmup modes", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-preparation-"));
-    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
-
-    try {
-      const captureOptions = {
-        stderrIsTTY: true,
-        terminalSupportsControlSequences: true,
-        progressPreparationDelayMs: 0,
-      };
-      const defaultCall = await captureCli(["mcp", "serve", "--root", root], captureOptions);
-      const noWarmup = await captureCli(["mcp", "serve", "--root", root, "--no-warmup"], captureOptions);
-      const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
-      const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
-      const normalizedRoot = normalizePath(root);
-      const expectedBuildOptions = expect.objectContaining({
-        discovery: {},
-        onProgress: expect.any(Function),
-      });
-
-      expect(defaultCall.stderr).not.toContain("project index");
-      expect(noWarmup.stderr).not.toContain("project index");
-      expect(baseWarmup.stderr).not.toContain("Preparing project index");
-      expect(symbolWarmup.stderr).not.toContain("Preparing project index");
-      expect(serveSpy).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ root: normalizedRoot, warmup: "base", buildOptions: expectedBuildOptions }),
-      );
-      expect(serveSpy).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ root: normalizedRoot, warmup: "off", buildOptions: expectedBuildOptions }),
-      );
-      expect(serveSpy).toHaveBeenNthCalledWith(
-        3,
-        expect.objectContaining({
-          root: normalizedRoot,
-          warmup: "base",
-          buildOptions: expectedBuildOptions,
-        }),
-      );
-      expect(serveSpy).toHaveBeenNthCalledWith(
-        4,
-        expect.objectContaining({
-          root: normalizedRoot,
-          warmup: "symbols",
-          buildOptions: expectedBuildOptions,
-        }),
-      );
-    } finally {
-      serveSpy.mockRestore();
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("leaves the MCP file watcher on by default and forwards --no-watch", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-watch-"));
-    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
-
-    try {
-      const captureOptions = {
-        stderrIsTTY: true,
-        terminalSupportsControlSequences: true,
-        progressPreparationDelayMs: 0,
-      };
-      await captureCli(["mcp", "serve", "--root", root], captureOptions);
-      await captureCli(["mcp", "serve", "--root", root, "--no-watch"], captureOptions);
-      await captureCli(["mcp", "serve", "--root", root, "--no-watch", "--no-warmup"], captureOptions);
-
-      expect(serveSpy.mock.calls[0]?.[0]).not.toHaveProperty("watch");
-      expect(serveSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ watch: false, warmup: "base" }));
-      expect(serveSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ watch: false, warmup: "off" }));
-    } finally {
-      serveSpy.mockRestore();
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("leaves the MCP index wait at the server default and forwards --index-wait-ms", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-index-wait-"));
-    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
-
-    try {
-      const captureOptions = {
-        stderrIsTTY: true,
-        terminalSupportsControlSequences: true,
-        progressPreparationDelayMs: 0,
-      };
-      await captureCli(["mcp", "serve", "--root", root], captureOptions);
-      await captureCli(["mcp", "serve", "--root", root, "--index-wait-ms", "8000"], captureOptions);
-      await captureCli(["mcp", "serve", "--root", root, "--index-wait-ms", "0"], captureOptions);
-      const invalid = await captureCli(["mcp", "serve", "--root", root, "--index-wait-ms", "soon"], captureOptions);
-
-      expect(serveSpy.mock.calls[0]?.[0]).not.toHaveProperty("mcpIndexWaitMs");
-      expect(serveSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ mcpIndexWaitMs: 8000 }));
-      expect(serveSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ mcpIndexWaitMs: 0 }));
-      expect(invalid.exitCode).toBe(2);
-      expect(invalid.stderr).toContain("--index-wait-ms");
-      expect(serveSpy).toHaveBeenCalledTimes(3);
-    } finally {
-      serveSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

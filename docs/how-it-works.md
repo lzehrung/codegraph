@@ -14,6 +14,8 @@ The native addon is required for Tree-sitter parsing and queries. TypeScript cod
 
 The first index-backed question, such as `codegraph explore "..." --root .`, may discover, parse, resolve, and persist a cold index. Interactive progress goes to stderr; later compatible queries reuse the project-root cache and only rebuild or update work invalidated by file, configuration, or option changes.
 
+CLI stdio MCP processes bridge requests to a compatible owner per physical project root. The owner holds the session, worker pool and watcher; the existing verified HTTP lifecycle coordinates startup and detects incompatible configuration or runtime code. An explicit workspace routes to those same per-project owners without building a parent-root graph. Library sessions remain caller-owned.
+
 ## Discovery
 
 Commands start from the project root and any selected scan roots. Git repositories normally use tracked and non-ignored untracked paths; other modes scan the filesystem. Discovery applies supported-extension filtering, honors `.gitignore` by default, and applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.

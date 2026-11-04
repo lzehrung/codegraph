@@ -559,7 +559,9 @@ handlers.dispose();
 
 Handler sets created without `session` own their session; call `handlers.dispose()` when the host stops using one to release its query-index database and cached analysis. When `session` is supplied, the caller owns its lifecycle: disposing a handler set does not invalidate the shared session, and the caller must call `session.invalidate()` after every consumer is done.
 
-`serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
+`serveCodegraphMcp()` (from `@lzehrung/codegraph/mcp`) starts an in-process stdio or HTTP server; CLI stdio uses a separate shared owner instead. MCP uses the same analysis engine, with file and artifact paths confined after realpath resolution.
+
+`CodegraphMcpHandlerOptions.useConfig` defaults to `true`, preserving live project/user configuration loading for library and directly managed HTTP sessions. Set it to `false` to use only supplied `buildOptions`; it has no effect with a supplied `session`. Automatic CLI owners use merged startup options with configuration reloading disabled, so changing configuration requires an explicit owner restart.
 
 `CodegraphMcpServerOptions.mcpToolConcurrency` caps concurrent calls per protocol session (default `4`); saturation returns a retryable busy error. `httpBodyTimeoutMs` bounds HTTP request-body receipt (default `30_000` ms), returning HTTP 408 on expiry; `mcpToolTimeoutMs` bounds each tool execution on stdio and HTTP (default `300_000` ms, `0` disables), aborting the handler with a deadline error that names the tool and limit. Supplied values must be whole milliseconds from `0` through `2_147_483_647` for `mcpToolTimeoutMs`, or `1` through `2_147_483_647` for `httpBodyTimeoutMs`; startup throws for other values.
 

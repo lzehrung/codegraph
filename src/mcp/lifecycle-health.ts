@@ -6,6 +6,8 @@ export type McpLifecycleHealthIdentity = {
   pid: number;
   root: string;
   startedAt: string;
+  ownerIdentity?: string;
+  ownerEndpoint?: string;
 };
 
 const TOKEN_BYTES = 32;
@@ -53,5 +55,7 @@ function serializeHealthIdentity(challenge: string, identity: McpLifecycleHealth
     pid: identity.pid,
     root: identity.root,
     startedAt: identity.startedAt,
+    ...(identity.ownerIdentity !== undefined ? { ownerIdentity: identity.ownerIdentity } : {}),
+    ...(identity.ownerEndpoint !== undefined ? { ownerEndpoint: identity.ownerEndpoint } : {}),
   });
 }

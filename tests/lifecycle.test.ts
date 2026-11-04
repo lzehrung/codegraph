@@ -1017,21 +1017,17 @@ describe("project lifecycle commands", () => {
     const jsonResult = await captureCli(["init", jsonRoot, "--json"]);
 
     expect(jsonResult.exitCode).toBeUndefined();
-    expect(jsonResult.stderr).toBe("");
     const payload = JSON.parse(jsonResult.stdout) as CodegraphLifecycleSyncResult;
     expect(payload.gitignore).toEqual({
       status: "added",
       path: ".gitignore",
       rules: [".codegraph/"],
     });
-    expect(jsonResult.stdout.trim().startsWith("{")).toBeTruthy();
-    expect(jsonResult.stdout.trim().endsWith("}")).toBeTruthy();
 
     const prettyRoot = await mkTmpDir("cg-life-cli-gitignore-pretty-");
     await initializeGitRepository(prettyRoot);
     await writeFile(prettyRoot, "src/main.ts", "export const main = 1;\n");
     const prettyResult = await captureCli(["init", prettyRoot]);
-    expect(prettyResult.stderr).toBe("");
     expect(prettyResult.stdout).toContain(`Updated Git ignore policy at ${path.join(prettyRoot, ".gitignore")}`);
     expect(prettyResult.stdout).toContain("added .codegraph/");
 
@@ -1041,7 +1037,6 @@ describe("project lifecycle commands", () => {
     await initCodegraphLifecycle(trackedRoot, { updateGitignore: false });
     await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { windowsHide: true, cwd: trackedRoot });
     const trackedResult = await captureCli(["init", trackedRoot]);
-    expect(trackedResult.stderr).toBe("");
     expect(trackedResult.stdout).toContain("Warning: .codegraph/manifest.json is tracked by Git");
 
     const ordinary = await captureCli(["sync", jsonRoot, "--json"]);

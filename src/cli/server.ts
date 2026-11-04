@@ -6,6 +6,8 @@ import { delay } from "../util/concurrency.js";
 import { withInstallerLeaseLock } from "../installer/locks.js";
 import { isPlainRecord } from "../util/guards.js";
 import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
+import { MCP_LIFECYCLE_HEALTH_TOKEN_ENV } from "../mcp/lifecycle-health.js";
+import type { ResolvedSharedOwnerOptions } from "../mcp/owner-identity.js";
 import { exitWithError, type CliOptionContext, type CliPositionalsContext, type CliRootContext } from "./context.js";
 import { getCliCommandUsage, parseOptionalBoundedIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
@@ -85,6 +87,8 @@ type ServerHealth = {
     reason?: string;
   };
   lifecycleProof?: string;
+  ownerIdentity?: string;
+  ownerEndpoint?: string;
 };
 
 type ServerStatus =
@@ -124,6 +128,7 @@ type LegacyCodegraphServerRegistry = {
   startedAt: string;
   version: string;
   credentialId?: undefined;
+  ownerIdentity?: undefined;
 };
 
 export type CodegraphServerRegistry =
@@ -136,6 +141,7 @@ export type CodegraphServerRegistry =
       startedAt: string;
       version: string;
       credentialId: string;
+      ownerIdentity?: string;
     };
 
 type ServerLifecycleCredential = {
@@ -252,6 +258,9 @@ async function startServerForRoot(
     await removeRegistry(root, existingStatus.registry!.credentialId);
   } else if (existingStatus.status === "stale") {
     if (!canSafelyRemoveStaleRegistry(existingStatus)) {
+      if (!existingStatus.registry) {
+        throw new Error("Refusing to replace a Codegraph server with an invalid registry; verify the owner first.");
+      }
       throw new Error("Refusing to replace a Codegraph server whose identity does not match the requested root.");
     }
     await removeRegistry(root, existingStatus.registry?.credentialId);
@@ -356,6 +365,9 @@ async function stopServer(context: ServerCommandContext): Promise<void> {
     }
     if (status.status === "stale") {
       if (!canSafelyRemoveStaleRegistry(status)) {
+        if (!status.registry) {
+          throw new Error("Refusing to stop a Codegraph server with an invalid registry; verify the owner first.");
+        }
         throw new Error("Refusing to stop a Codegraph server whose identity does not match the requested root.");
       }
       await removeRegistry(root, status.registry?.credentialId);
@@ -422,7 +434,7 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
   const readResult = await readRegistry(registryPath);
   if (readResult.status === "missing") return { status: "not_started", requestedRoot: root };
   if (readResult.status === "invalid") {
-    return { status: "stale", requestedRoot: root, safeToRemove: true, reason: "Server registry is invalid." };
+    return { status: "stale", requestedRoot: root, safeToRemove: false, reason: "Server registry is invalid." };
   }
 
   const registry = readResult.registry;
@@ -519,6 +531,19 @@ async function readServerStatus(root: string): Promise<ServerStatus> {
       registry,
       health,
       reason: "Server startup time does not match the registry.",
+    };
+  }
+  if (
+    registry.ownerIdentity !== health.ownerIdentity ||
+    (registry.ownerIdentity !== undefined && registry.url !== health.ownerEndpoint)
+  ) {
+    return {
+      status: "stale",
+      requestedRoot: root,
+      safeToRemove: false,
+      registry,
+      health,
+      reason: "Server owner identity does not match the registry.",
     };
   }
   return { status: "live", requestedRoot: root, registry, health };
@@ -816,7 +841,10 @@ function isServerHealth(value: unknown): value is ServerHealth {
     typeof update.runningVersion === "string" &&
     (update.installedVersion === undefined || typeof update.installedVersion === "string") &&
     (update.reason === undefined || typeof update.reason === "string") &&
-    (value.lifecycleProof === undefined || typeof value.lifecycleProof === "string")
+    (value.lifecycleProof === undefined || typeof value.lifecycleProof === "string") &&
+    (value.ownerIdentity === undefined ||
+      (typeof value.ownerIdentity === "string" && /^[a-f0-9]{64}$/.test(value.ownerIdentity))) &&
+    (value.ownerEndpoint === undefined || typeof value.ownerEndpoint === "string")
   );
 }
 
@@ -848,11 +876,13 @@ function isServerRegistry(value: unknown): value is CodegraphServerRegistry {
     typeof value.startedAt === "string" &&
     typeof value.version === "string";
   if (!isCommonRegistry) return false;
-  if (value.schemaVersion === 1) return value.credentialId === undefined;
+  if (value.schemaVersion === 1) return value.credentialId === undefined && value.ownerIdentity === undefined;
   return (
     value.schemaVersion === SERVER_REGISTRY_SCHEMA_VERSION &&
     typeof value.credentialId === "string" &&
-    /^[a-f0-9-]{36}$/.test(value.credentialId)
+    /^[a-f0-9-]{36}$/.test(value.credentialId) &&
+    (value.ownerIdentity === undefined ||
+      (typeof value.ownerIdentity === "string" && /^[a-f0-9]{64}$/.test(value.ownerIdentity)))
   );
 }
 
@@ -1075,4 +1105,269 @@ function isMissingProcessError(error: unknown): boolean {
 
 function isPermissionProcessError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "EPERM";
+}
+
+export type SharedOwnerConnection = {
+  url: string;
+  root: string;
+  pid: number;
+  identity: string;
+  startedAt: string;
+  credentialId: string;
+};
+
+/** Reprove a captured owner without restarting it or recomputing its runtime/configuration fingerprint. */
+export async function assertSharedOwnerConnection(owner: SharedOwnerConnection): Promise<void> {
+  const status = await readServerStatus(owner.root);
+  const registry = status.registry;
+  const health = status.health;
+  if (
+    status.status !== "live" ||
+    !registry ||
+    registry.schemaVersion !== SERVER_REGISTRY_SCHEMA_VERSION ||
+    registry.url !== owner.url ||
+    registry.pid !== owner.pid ||
+    registry.startedAt !== owner.startedAt ||
+    registry.credentialId !== owner.credentialId ||
+    registry.ownerIdentity !== owner.identity ||
+    !health ||
+    health.update.restartRequired
+  ) {
+    throw new Error(
+      "The captured shared Codegraph owner is no longer authenticated or its lifecycle identity changed. Retry this call; no tool call was sent.",
+    );
+  }
+}
+
+/**
+ * Shared clients and `server start/stop` use the same lease, registry, credentials, and health proof.
+ * A live server without an authenticated matching owner identity is never replaced or duplicated.
+ */
+export async function ensureSharedOwnerServer(
+  options: ResolvedSharedOwnerOptions,
+  getIdentity: () => Promise<string>,
+  entryPath: string,
+): Promise<SharedOwnerConnection> {
+  const root = await resolveServerRoot(options.root);
+  const deadline = Date.now() + 90_000;
+  while (true) {
+    try {
+      return await withServerLifecycleLock(root, async () => {
+        const status = await readServerStatus(root);
+        const identity = await getIdentity();
+        if (status.status === "live") {
+          const registry = status.registry!;
+          if (
+            registry.schemaVersion !== SERVER_REGISTRY_SCHEMA_VERSION ||
+            registry.ownerIdentity !== identity ||
+            !isSharedOwnerUrl(registry.url) ||
+            status.health!.ownerIdentity !== identity ||
+            status.health!.update.restartRequired
+          ) {
+            throw new Error(
+              `The Codegraph server at ${registry.url} has an incompatible shared-owner configuration or runtime. Stop it before changing options.`,
+            );
+          }
+          return {
+            url: registry.url,
+            root,
+            pid: registry.pid,
+            identity,
+            startedAt: registry.startedAt,
+            credentialId: registry.credentialId,
+          };
+        }
+        if (status.status === "unreachable") {
+          throw new Error(`Cannot reuse or replace the Codegraph server: ${status.reason}`);
+        }
+        if (status.status === "stale") {
+          // Corrupt registry bytes do not prove that an owner has exited.
+          if (!status.safeToRemove || !status.registry) {
+            throw new Error(`Cannot safely recover the Codegraph server registry: ${status.reason}`);
+          }
+          await removeRegistry(root, status.registry.credentialId);
+        }
+        return await startSharedOwnerForRoot(options, root, identity, entryPath);
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !error.message.startsWith("Another Codegraph server lifecycle command is in progress")
+      ) {
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "The shared Codegraph owner is still busy starting or stopping after 90 seconds. Retry after it finishes.",
+          {
+            cause: error,
+          },
+        );
+      }
+      await delay(SERVER_RETRY_DELAY_MS);
+    }
+  }
+}
+
+async function startSharedOwnerForRoot(
+  options: ResolvedSharedOwnerOptions,
+  root: string,
+  identity: string,
+  entryPath: string,
+): Promise<SharedOwnerConnection> {
+  let child: ChildProcess | undefined;
+  let diagnostics: ServerStartupDiagnostics | undefined;
+  let credential: ServerLifecycleCredential | undefined;
+  let wroteRegistry = false;
+  try {
+    const startedAfterMs = Date.now();
+    credential = await createServerLifecycleCredential(root);
+    const startupDiagnostics = await createServerStartupDiagnostics(root);
+    diagnostics = startupDiagnostics;
+    child = spawn(process.execPath, [entryPath, "--codegraph-shared-owner"], {
+      detached: true,
+      env: { ...process.env, [MCP_LIFECYCLE_HEALTH_TOKEN_ENV]: credential.token },
+      stdio: ["ignore", "ignore", startupDiagnostics.fileDescriptor, "ipc"],
+      windowsHide: true,
+    });
+    await waitForServerProcessSpawn(child);
+    const pid = child.pid;
+    if (!pid) throw new Error("Shared Codegraph owner process did not provide a pid.");
+    const ready = waitForSharedOwnerMessage(child, "ready", DEFAULT_SERVER_START_TIMEOUT_MS);
+    void ready.catch(() => undefined);
+    await sendSharedOwnerMessage(child, { kind: "start", options, identity });
+    const message = await ready;
+    if (typeof message.url !== "string" || !isSharedOwnerUrl(message.url)) {
+      throw new Error("Shared Codegraph owner returned an invalid endpoint.");
+    }
+    const url = message.url;
+    const health = await waitForLiveServer(
+      url,
+      root,
+      DEFAULT_SERVER_START_TIMEOUT_MS,
+      child,
+      pid,
+      startedAfterMs,
+      credential.token,
+    );
+    if (health.ownerIdentity !== identity || health.ownerEndpoint !== url || health.update.restartRequired) {
+      throw new Error("Shared Codegraph owner reported an incompatible runtime or configuration.");
+    }
+    const registry: CodegraphServerRegistry = {
+      schemaVersion: SERVER_REGISTRY_SCHEMA_VERSION,
+      pid,
+      url,
+      root,
+      startedAt: health.startedAt,
+      version: health.version,
+      credentialId: credential.id,
+      ownerIdentity: identity,
+    };
+    await writeRegistry(root, registry);
+    wroteRegistry = true;
+    const registered = waitForSharedOwnerMessage(child, "registered", DEFAULT_SERVER_START_TIMEOUT_MS);
+    void registered.catch(() => undefined);
+    await sendSharedOwnerMessage(child, { kind: "registered" });
+    await registered;
+    child.disconnect();
+    child.unref();
+    return { url, root, pid, identity, startedAt: registry.startedAt, credentialId: credential.id };
+  } catch (error) {
+    if (wroteRegistry) await removeRegistry(root, credential?.id).catch(() => undefined);
+    if (child) await terminateServerProcess(child);
+    if (credential) await removeServerLifecycleCredential(root, credential.id).catch(() => undefined);
+    throw await withServerStartupDiagnostics(error, diagnostics);
+  } finally {
+    await diagnostics?.dispose();
+  }
+}
+
+function isSharedOwnerUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      !!url.port &&
+      url.pathname === "/mcp" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sendSharedOwnerMessage(child: ChildProcess, message: object): Promise<void> {
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  if (!child.connected) {
+    reject(new Error("Shared Codegraph owner startup channel closed."));
+    return promise;
+  }
+  child.send(message, (error) => {
+    if (error) reject(error);
+    else resolve();
+  });
+  return promise;
+}
+
+function waitForSharedOwnerMessage(
+  child: ChildProcess,
+  kind: string,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  const { promise, resolve, reject } = Promise.withResolvers<Record<string, unknown>>();
+  const timer = setTimeout(
+    () => finish(new Error(`Shared Codegraph owner did not send ${kind} within ${timeoutMs}ms.`)),
+    timeoutMs,
+  );
+  const onExit = (): void => finish(new Error("Shared Codegraph owner exited during startup."));
+  const onMessage = (value: unknown): void => {
+    if (!isPlainRecord(value)) return;
+    if (value.kind === "error") {
+      finish(new Error(typeof value.message === "string" ? value.message : "Shared Codegraph owner startup failed."));
+    } else if (value.kind === kind) {
+      finish(undefined, value);
+    }
+  };
+  const finish = (error?: Error, value?: Record<string, unknown>): void => {
+    clearTimeout(timer);
+    child.off("message", onMessage);
+    child.off("exit", onExit);
+    child.off("error", finish);
+    if (error) reject(error);
+    else if (value) resolve(value);
+  };
+  child.on("message", onMessage);
+  child.once("exit", onExit);
+  child.once("error", finish);
+  if (child.exitCode !== null || child.signalCode !== null) onExit();
+  return promise;
+}
+
+/** Retire only our own registry while excluding concurrent ensure/start/stop operations. */
+export async function retireIdleSharedOwner(
+  root: string,
+  identity: string,
+  isIdle: () => boolean,
+  close: () => Promise<void>,
+): Promise<boolean> {
+  return await withServerLifecycleLock(root, async () => {
+    if (!isIdle()) return false;
+    const registryPath = await resolveRegistryPath(root, false);
+    const result = registryPath ? await readRegistry(registryPath) : { status: "missing" as const };
+    if (!isIdle()) return false;
+    await close();
+    if (
+      result.status === "found" &&
+      result.registry.pid === process.pid &&
+      result.registry.ownerIdentity === identity &&
+      sameRoot(result.registry.root, root)
+    ) {
+      await removeRegistry(root, result.registry.credentialId);
+    }
+    return true;
+  });
 }

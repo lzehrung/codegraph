@@ -9,6 +9,7 @@ import {
   type AgentProjectSnapshot,
   type AgentSession,
 } from "../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import {
   createWatchController,
   startProjectWatcher,
@@ -1849,6 +1850,76 @@ describe("startProjectWatcher with the real file system", () => {
       statSpy.mockRestore();
     }
   });
+
+  it("warms the latest workspace after an older failed rebuild overlaps a new burst's retry budget", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-retry-burst-");
+    const source = path.join(projectRoot, "main.ts");
+    await fs.writeFile(source, "export function originalName() { return 1; }\n");
+    const session = createAgentSession({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      freshness: { policy: "auto" },
+    });
+    await workspaceSymbolsWithSession(session, { root: projectRoot, query: "", fileGlob: "**/*.ts" });
+    const firstAttempt = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const rebuilt = Promise.withResolvers<void>();
+    const loadProject = session.loadProject.bind(session);
+    let attempts = 0;
+    const loadSpy = vi.spyOn(session, "loadProject").mockImplementation(async (options) => {
+      attempts += 1;
+      if (attempts === 1) {
+        firstAttempt.resolve();
+        await release.promise;
+      }
+      if (attempts <= 3) throw new Error("temporary rebuild failure");
+      const loaded = await loadProject(options);
+      rebuilt.resolve();
+      return loaded;
+    });
+    const fake = createFakeWatch();
+    const log = vi.fn();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const controller = createWatchController(session, {
+      root: projectRoot,
+      platform: "win32",
+      watch: fake.watch,
+      idleMs: 0,
+      log,
+      runExclusive: createExclusiveRunner(),
+    });
+
+    try {
+      await fs.writeFile(source, "export function intermediateName() { return 22; }\n");
+      fake.deliver(projectRoot, "main.ts");
+      await vi.advanceTimersByTimeAsync(500);
+      await firstAttempt.promise;
+
+      await fs.writeFile(source, "export function latestNameAfterRetry() { return 333; }\n");
+      fake.deliver(projectRoot, "main.ts");
+      await vi.advanceTimersByTimeAsync(500);
+      // This failure belongs to the previous burst, not to the three attempts allowed for the latest edit.
+      release.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(loadSpy).toHaveBeenCalledTimes(4);
+      await rebuilt.promise;
+      const result = await workspaceSymbolsWithSession(session, { root: projectRoot, query: "", fileGlob: "**/*.ts" });
+      expect(result.symbols.map((symbol) => symbol.name)).toEqual(["latestNameAfterRetry"]);
+      expect(result.freshness.state).toBe("fresh");
+      expect(log.mock.calls).toEqual(
+        Array.from({ length: 3 }, () => ["[codegraph] watch refresh failed: temporary rebuild failure"]),
+      );
+    } finally {
+      release.resolve();
+      await controller.close();
+      loadSpy.mockRestore();
+      vi.useRealTimers();
+      session.invalidate();
+    }
+  });
 });
 
 describe("startProjectWatcher with directories that appear", () => {
@@ -2195,6 +2266,86 @@ describe("startProjectWatcher with directories that appear", () => {
     expect(fake.deliver(src, "a.ts")).toBe(1);
     expect(listFiles).toHaveBeenCalledTimes(listed);
     expect(fake.duplicateOpens).toEqual([]);
+  });
+
+  it("keeps workspace symbols current after a parent reports its own removal before its recreated subtree", async () => {
+    const projectRoot = await tempRoots.create("cg-project-watcher-replaced-tree-");
+    const retiredRoot = await tempRoots.create("cg-project-watcher-retired-tree-");
+    const src = path.join(projectRoot, "src");
+    const feature = path.join(src, "feature");
+    const inner = path.join(feature, "inner");
+    const listed = path.join(inner, "current.ts");
+    await fs.mkdir(inner, { recursive: true });
+    await fs.writeFile(listed, "export function beforeSwitch() { return 1; }\n");
+    const session = createAgentSession({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      freshness: { policy: "auto" },
+    });
+    const fake = createFakeWatch();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const watcher = startProjectWatcher({
+      root: projectRoot,
+      platform: "linux",
+      watch: fake.watch,
+      onChange: () => session.markChanged?.(),
+      onSettled: () => undefined,
+      listFiles: () => session.listFiles!(),
+    });
+    const symbols = () => workspaceSymbolsWithSession(session, { root: projectRoot, query: "", fileGlob: "**/*.ts" });
+
+    try {
+      expect((await symbols()).symbols.map((symbol) => symbol.name)).toEqual(["beforeSwitch"]);
+      await watcher.refreshDirectories();
+      const previous = fake.openHandles().filter((handle) => handle.directory.startsWith(`${feature}${path.sep}`));
+      expect(previous.map((handle) => handle.directory)).toEqual([inner]);
+      const previousParent = fake.openHandles().find((handle) => handle.directory === feature);
+
+      await fs.rename(feature, path.join(retiredRoot, "feature"));
+      // The parent reports its own removal first; descendants can lose their watches without events of their own.
+      for (const handle of previous) handle.silent = true;
+      previousParent?.emit(path.basename(feature), "rename");
+      await fs.mkdir(inner, { recursive: true });
+      await fs.writeFile(listed, "export function afterSwitch() { return 22; }\n");
+      fake.deliver(src, "feature", "rename");
+      await watcher.refreshDirectories();
+      expect((await symbols()).symbols.map((symbol) => symbol.name)).toEqual(["afterSwitch"]);
+
+      // Notifications queued on retired handles must not close or disable the replacement tree.
+      previousParent?.emit(path.basename(feature), "rename");
+      previous[0]?.fail(errnoError("ENOSPC"));
+
+      // Prime the pull cache after the replacement. A later edit inside its 5 s window needs the recreated watch.
+      session.markChanged?.();
+      expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+      await fs.writeFile(path.join(inner, "added.ts"), "export function addedAfterSwitch() { return 3; }\n");
+      fake.deliver(inner, "added.ts", "rename");
+      const result = await symbols();
+
+      expect(result.symbols.map((symbol) => symbol.name).sort()).toEqual(["addedAfterSwitch", "afterSwitch"]);
+      expect(result.freshness.state).toBe("refreshed");
+      expect(previous.every((handle) => !handle.open)).toBe(true);
+      expect(fake.duplicateOpens).toEqual([]);
+
+      clock.mockReturnValue(Date.now() + 5_001);
+      expect(await session.checkFreshness!()).toEqual({ state: "fresh" });
+      await fs.writeFile(path.join(inner, "queued.ts"), "export function queuedBeforeRetirement() { return 4; }\n");
+      const retired = previous[0];
+      if (!retired) throw new Error("Missing retired subtree watch.");
+      // The event was queued before close; it is still an edit hint, not authority over the replacement handles.
+      retired.silent = false;
+      retired.emit("queued.ts", "rename");
+      expect((await symbols()).symbols.map((symbol) => symbol.name).sort()).toEqual([
+        "addedAfterSwitch",
+        "afterSwitch",
+        "queuedBeforeRetirement",
+      ]);
+      expect(fake.duplicateOpens).toEqual([]);
+    } finally {
+      watcher.close();
+      session.invalidate();
+      clock.mockRestore();
+    }
   });
 
   it("opens at most 128 watches from events, so that a build that creates thousands of directories cannot use up the inotify watches", async () => {

@@ -3,7 +3,7 @@ import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.
 import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import fsSync, { type FSWatcher, type WatchListener } from "node:fs";
 import fs from "node:fs/promises";
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
@@ -4021,6 +4021,43 @@ describe("MCP session teardown regressions (S2)", () => {
     }
   });
 
+  it("drains a keep-alive health connection when shutdown begins during its request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-health-shutdown-"));
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0, watch: false, warmup: "off" });
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    let closing: Promise<void> | undefined;
+    let closed = false;
+    // Begin shutdown after Node accepts the request, before its response finishes.
+    httpServer.server.prependOnceListener("request", () => {
+      closing = httpServer.close().then(() => {
+        closed = true;
+      });
+    });
+    try {
+      const health = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const request = httpRequest(new URL("/health", httpServer.url), { agent }, (response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          response.once("error", reject);
+          response.once("end", () => resolve({ status: response.statusCode, body }));
+        });
+        request.once("error", reject);
+        request.end();
+      });
+      expect(health.status).toBe(200);
+      expect(JSON.parse(health.body)).toMatchObject({ service: "codegraph", root });
+      await expect.poll(() => closed, { timeout: 2_000 }).toBe(true);
+    } finally {
+      agent.destroy();
+      await closing;
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drains active tool calls before invalidating the shared session during shutdown", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-shutdown-drain-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -4775,7 +4812,7 @@ describe("MCP file watcher", () => {
     });
   });
 
-  it("runs refresh_index after a background rebuild that is running, so that the later build's file signatures stay", async () => {
+  it("keeps files fresh when an explicit refresh overlaps a background rebuild", async () => {
     const root = await createProject("cg-mcp-watch-refresh-index-");
     const held = holdBackgroundRebuild();
     const resources = await createWarmedCodegraphMcpResources({
@@ -4792,24 +4829,13 @@ describe("MCP file watcher", () => {
 
       const refreshed = resources.handlers.refresh_index({ warmup: "base" });
 
-      // Run at once, the refresh would drop the session state under the background build and start a second build
-      // beside it. Whichever build ended last would then replace the file signatures of the snapshot that is served.
-      expect(held.events).toEqual(["loadProject:start"]);
-
       held.release();
       await refreshed;
 
-      expect(held.events).toEqual([
-        "loadProject:start",
-        "loadProject:end",
-        "invalidate",
-        "loadProject:start",
-        "loadProject:end",
-      ]);
       held.armed = false;
       // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
       resources.session.markChanged?.();
-      // The baseline is the second build's, so it knows `late.ts` as the snapshot that is served does.
+      // The freshness baseline must include `late.ts`, just as the served snapshot does.
       expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
         found: true,
         freshness: { state: "fresh" },

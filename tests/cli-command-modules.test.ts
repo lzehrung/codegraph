@@ -50,7 +50,6 @@ import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-import * as mcpServer from "../src/mcp/server.js";
 import * as projectFilesModule from "../src/util/project-files.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -3529,21 +3528,12 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("mcp --stdio --idle-timeout-ms reaches serveCodegraphMcp as a number, and rejects non-numeric values", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-mcp-idle-timeout-"));
-    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
-
-    try {
-      const result = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "1000"]);
-      expect(result.exitCode).toBeUndefined();
-      expect(serveSpy).toHaveBeenCalledWith(expect.objectContaining({ idleTimeoutMs: 1000 }));
-
-      const invalid = await captureCli(["mcp", "--root", root, "--stdio", "--idle-timeout-ms", "not-a-number"]);
-      expect(invalid.exitCode).toBe(2);
-      expect(invalid.stderr).toContain('Invalid --idle-timeout-ms value "not-a-number"');
-    } finally {
-      serveSpy.mockRestore();
-      await fsp.rm(root, { recursive: true, force: true });
-    }
+  test.each([
+    ["--idle-timeout-ms", "not-a-number"],
+    ["--index-wait-ms", "soon"],
+  ])("rejects a non-numeric MCP %s value", async (option, value) => {
+    const invalid = await captureCli(["mcp", "--stdio", option, value]);
+    expect(invalid.exitCode).toBe(2);
+    expect(invalid.stderr).toContain(`Invalid ${option} value`);
   });
 });

@@ -9,19 +9,14 @@ import { registerSessionInvalidationHook } from "../agent/session-lifecycle.js";
 import type { ProgressUpdate } from "../types.js";
 import { mcpCancellationError } from "./cancellation.js";
 import { describeMcpRuntimeError } from "./stale-install.js";
+import { MAX_MCP_INDEX_WAIT_MS } from "./runtime-limits.js";
 
-/**
- * The longest one tool call waits for an index build before it answers `index_building`. It stays below the 30 seconds
- * that MCP clients commonly allow for a request.
- */
-export const DEFAULT_MCP_INDEX_WAIT_MS = 15_000;
+export { DEFAULT_MCP_INDEX_WAIT_MS, MAX_MCP_INDEX_WAIT_MS } from "./runtime-limits.js";
 /**
  * How soon a caller that got `index_building` may ask again. The build continues meanwhile, and the retry waits for it
  * up to the same budget, so an immediate retry is fine.
  */
 export const MCP_INDEX_RETRY_AFTER_MS = 1_000;
-/** The largest delay a timer accepts. */
-export const MAX_MCP_INDEX_WAIT_MS = 2_147_483_647;
 
 export function assertMcpIndexWait(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_MCP_INDEX_WAIT_MS) {
