@@ -209,7 +209,13 @@ codegraph server stop --root .
 
 `server start --json` emits `status: "started"`, the registry fields, and `update`. `server status` retries challenged HTTP health checks instead of trusting a PID and asks users to verify an unreachable or identity-mismatched server. `server stop` removes only confirmed stale metadata or signals a Codegraph server whose proven health identity matches the registry.
 
-The v2 registry stores only `schemaVersion`, `pid`, `url`, `root`, `startedAt`, `version`, and a non-secret `credentialId`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
+Default `codegraph mcp serve --root . --stdio` clients automatically reuse one compatible owner through the same registry, with an available loopback port. Use `server status` and `server stop` for that owner too; stopping a bridge alone leaves other clients connected. Changes to effective configuration, write access or installed runtime require an explicit stop and reconnect.
+
+For a directory containing independent repositories, use `codegraph mcp serve --root /path/to/workspace --workspace workspace.json`. The root-confined config lists `projects: [{ "id": "app", "path": "app" }]` and optional `dependencies: [{ "from": "app", "to": "lib" }]`; each endpoint must be selected. `search` and `workspace_symbols` fan out in config order, with separate project results, freshness, pending status and omissions; other tools need `project` or a returned qualified handle/path. See [MCP workspace routing](./mcp.md#select-multiple-repositories) for limits and schema.
+
+MCP rejects an ambiguous non-Git parent before loading configuration or indexing; `--allow-parent-root` explicitly permits whole-root indexing. Discovery-budget exhaustion is an error, not a partial index. Git monorepos, initialized submodules, selected subdirectories and non-Git single projects retain their scope.
+
+The v2 registry stores process metadata, a non-secret `credentialId`, and, for automatic owners, `ownerIdentity`; its credential remains in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A v1 registry with a live process is never signaled; stop that old process manually, then start it again.
 
 `server start` forwards `--warmup`, `--warmup-symbols`, `--no-warmup`, `--no-watch`, `--index-wait-ms`, cache, native, worker, and discovery options to `mcp serve`; each start truncates `.codegraph/server.log` for server stderr and startup diagnostics. `status` accepts only `--json` or `--pretty`, and `stop` accepts no output or startup options. The commands do not start implicitly from unrelated commands or manage a general background daemon.
 
@@ -335,6 +341,8 @@ codegraph mcp --root . --stdio --index-wait-ms 10000
 codegraph mcp --root . --port 7331
 codegraph mcp --root . --stdio --no-warmup
 codegraph mcp --root . --stdio --no-watch
+codegraph mcp --root /path/to/workspace --workspace workspace.json
+codegraph mcp --root /path/to/intentional-parent --allow-parent-root --stdio
 codegraph mcp --root . --port 7331 --warmup-symbols
 
 # Install or preview agent client integration

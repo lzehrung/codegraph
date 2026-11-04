@@ -15,7 +15,12 @@ import {
   writeStdoutLineAndWait,
   type CommandReport,
 } from "./context.js";
-import type { CliBaseContext, CliProjectContext } from "./invocation-context.js";
+import {
+  createCliBaseContext,
+  loadCliProjectContext,
+  type CliBaseContext,
+  type CliProjectContext,
+} from "./invocation-context.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../util/package-info.js";
 import { writeCliOutput } from "./pretty.js";
 
@@ -310,13 +315,18 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     },
   },
   mcp: {
-    stage: "project",
+    stage: "base",
     run: async (ctx) => {
       const { handleMcpServeCommand } = await import("./mcp.js");
       await handleMcpServeCommand({
         positionals: ctx.parsed.positionals,
         root: ctx.projectRootAbs,
-        buildOptions: ctx.buildAgentOptions(),
+        projectBuildOptions: async (root) => {
+          const options = new Map(ctx.parsed.options);
+          options.set("--root", [root]);
+          const selected = await loadCliProjectContext(createCliBaseContext("mcp", { ...ctx.parsed, options }));
+          return selected.buildAgentOptions();
+        },
         getOpt: ctx.getOpt,
         hasFlag: ctx.hasFlag,
         writeStderrLine,

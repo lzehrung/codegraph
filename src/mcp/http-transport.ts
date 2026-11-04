@@ -65,7 +65,7 @@ const MCP_HTTP_PATH = "/mcp";
 const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
 type OriginValidator = (request: IncomingMessage, response: ServerResponse) => boolean;
 export async function startCodegraphMcpHttpServer(
-  options: CodegraphMcpServerOptions & { port: number },
+  options: CodegraphMcpServerOptions & { port: number; sharedOwnerIdentity?: string },
 ): Promise<CodegraphMcpHttpServer> {
   const httpBodyTimeoutMs = assertMcpHttpBodyTimeout(
     options.httpBodyTimeoutMs === undefined ? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS : options.httpBodyTimeoutMs,
@@ -102,6 +102,7 @@ export async function startCodegraphMcpHttpServer(
   });
   const validateOrigin = originValidation(buildAllowedOriginHostnames(host));
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
+  let sharedOwnerUrl: string | undefined;
   let closeResourcesPromise: Promise<void> | undefined;
   const closeResources = (): Promise<void> => {
     closeResourcesPromise ??= (async () => {
@@ -141,6 +142,8 @@ export async function startCodegraphMcpHttpServer(
           version: runtimeIdentity.runningVersion,
           startedAt: runtimeIdentity.startedAt,
           update: installedVersionChecker.check(),
+          ...(options.sharedOwnerIdentity !== undefined ? { ownerIdentity: options.sharedOwnerIdentity } : {}),
+          ...(sharedOwnerUrl !== undefined ? { ownerEndpoint: sharedOwnerUrl } : {}),
         };
         const lifecycleHealthToken = lifecycleHealth.readMcpLifecycleHealthToken();
         const challenge = request.headers["x-codegraph-health-challenge"];
@@ -169,6 +172,7 @@ export async function startCodegraphMcpHttpServer(
   const actualPort = getHttpServerPort(address);
   const urlHost = formatHostForUrl(host);
   const url = `http://${urlHost}:${actualPort}${MCP_HTTP_PATH}`;
+  if (options.sharedOwnerIdentity !== undefined) sharedOwnerUrl = url;
   allowedHostHeaders = buildAllowedHostHeaders(host, actualPort);
   // The server answers requests now, so `initialize` and `tools/list` never wait for the build that starts here.
   startWarmup();

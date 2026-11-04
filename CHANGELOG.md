@@ -9,6 +9,19 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- MCP workspace routing: `codegraph mcp serve --root /path/to/workspace --workspace workspace.json` selects independent repositories without building a parent index. Search results keep project-qualified handles, deterministic project order, freshness, omissions and failures; dependency relationships require explicit configuration.
+
+### Changed
+
+- CLI stdio MCP clients reuse one compatible project owner, index, worker pool and watcher through the existing verified server lifecycle. Automatic owners use an available loopback port and exit after 30 inactive minutes; client disconnects and cancellations do not close another client's analysis state. Incompatible configuration, security policy or runtime code requires an explicit owner stop and reconnect.
+- MCP checks non-Git parent roots before configuration loading or indexing. Multiple independent repositories require project selection or an explicit workspace; discovery-budget exhaustion reports unknown scope. Intentional broad-root indexing uses `--allow-parent-root`.
+
+### Fixed
+
+- MCP watching retires descendant handles after a parent directory disappears; queued edits still invalidate freshness, but retired handles cannot close or disable replacement watches. An older failed rebuild no longer consumes a newer edit burst's retry attempts.
+
 ## [3.1.2] - 2026-11-02
 
 ### Changed

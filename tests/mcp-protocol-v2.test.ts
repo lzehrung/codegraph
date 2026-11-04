@@ -8,6 +8,7 @@ import { getCodegraphVersion } from "../src/util/package-info.js";
 import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src/mcp/server.js";
 import { countingSession } from "./helpers/agent.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { runCliOrThrow } from "./helpers/cli.js";
 
 const OPERATION_TIMEOUT_MS = 15_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
@@ -169,6 +170,7 @@ describe("MCP protocol v2 interoperability", () => {
       ];
       if (childStarted) cleanupPromises.push(withTimeout(childClosed, CLEANUP_TIMEOUT_MS, "MCP stdio child cleanup"));
       const cleanupResults = await Promise.allSettled(cleanupPromises);
+      await runCliOrThrow(["server", "stop", "--root", root]);
       await withTimeout(fsp.rm(root, { recursive: true, force: true }), CLEANUP_TIMEOUT_MS, "stdio temp root cleanup");
       const cleanupFailure = cleanupResults.find((result) => result.status === "rejected");
       if (cleanupFailure?.status === "rejected") {

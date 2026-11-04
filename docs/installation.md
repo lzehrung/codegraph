@@ -17,7 +17,7 @@ codegraph doctor
 
 Public npm installs need no GitHub authentication, token, or registry mapping. If a user or project `.npmrc` still contains `@lzehrung:registry=https://npm.pkg.github.com`, remove or replace that legacy mapping first so npm uses the public release.
 
-To update, run `npm install -g @lzehrung/codegraph@latest`, then restart any MCP clients and run `codegraph doctor`.
+To update, run `npm install -g @lzehrung/codegraph@latest`, stop each shared owner with `codegraph server stop --root /path/to/repo`, then restart MCP clients and run `codegraph doctor`.
 
 ## Install the standalone preview
 

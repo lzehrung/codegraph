@@ -429,16 +429,26 @@ Safety:
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--index-wait-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
+Usage: codegraph mcp [serve] [--root <path>] [--workspace <config> | --allow-parent-root] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--index-wait-ms <ms>] [--allow-build] [--warmup | --warmup-symbols | --no-warmup] [--no-watch]
 
 Transports:
-  --stdio          Serve MCP over stdio (default)
+  --stdio          Bridge stdio to one compatible project owner (default); clients share its index, workers and watcher
   --port <number> Serve Streamable HTTP at /mcp
   --warmup        Build the base session cache and the search index in the background after startup (default)
   --warmup-symbols Also build the detailed symbol graph in the background
   --no-warmup     Skip the startup warmup; the first tool call that needs the index starts the build
   --no-watch      Do not watch project files; rely on the freshness check of each tool call
+  --workspace <config> Route selected repositories from a root-confined JSON config through their own owners (stdio only)
+  --allow-parent-root Intentionally index a broad non-Git root instead of requiring project selection
   --index-wait-ms <ms> Longest wait of search, explore, orient, get_file with includeGraphContext, review, packet_get, workspace_symbols, and impact for a running index build before they answer index_building (default 15000; 0 waits without limit)
+
+Ownership:
+  Automatic owners listen on loopback with an available port and reuse the verified .codegraph/server.json lifecycle.
+  Disconnecting stdio closes only that bridge. An inactive automatic owner exits after 30 minutes.
+  Different configuration, security options or runtime code require explicit server stop and reconnect, not duplicate indexes.
+  Non-Git roots containing multiple independent repositories require --workspace or a selected --root before analysis starts.
+  Workspace search/workspace_symbols fan out to at most two projects per call; other tools require project or qualified handles.
+  Preflight bounds discovery, not project index size; scope-unknown errors never mean a complete partial index.
 
 Index Options:
   --cache <mode>     Session cache mode: disk, memory, off

@@ -90,6 +90,8 @@ Filename results are suggestions only.
 ## Scope, freshness, and sensitive files
 
 - CLI `--root` sets the project boundary. Use project-relative paths; MCP uses the root fixed at server startup.
+- Default CLI stdio clients share a compatible owner per physical project root; inspect with `codegraph server status --root . --json`. After runtime/configuration incompatibility, explicitly stop the owner with `codegraph server stop --root .`, then reconnect.
+- For independent repositories, launch `codegraph mcp serve --root /path/to/workspace --workspace workspace.json`, then call `workspace_projects`. Set `project` for direct tools or reuse returned qualified handles; only `search` and `workspace_symbols` fan out without a selector. Check each project's errors, freshness and coverage. `--allow-parent-root` is an explicit whole-root override, not workspace selection.
 - Config globs are project-root-relative; CLI `--include-glob` / `--ignore-glob` filters are relative to each scan root. For `duplicates`, they do not alter the shared project-index cache. Use `--no-gitignore` only for deliberately included ignored files.
 - Current-state CLI queries reuse and validate the disk index. `init`, `index`, and `sync` are not prerequisites.
 - Check MCP `freshness`; on `stale`, run `refresh_index` and repeat the query. `artifact_build` requires fresh state and write access. `unchecked` comes only from an embedded manual-policy session: it cannot check or build a SQLite artifact, so rebuild the artifact with `codegraph artifact --sqlite`.

@@ -5,13 +5,14 @@ import { createCodegraphMcpResources, type CodegraphMcpServerOptions } from "./h
 import {
   assertMcpToolTimeout,
   createCodegraphMcpProtocolFactory,
-  createCodegraphMcpStdioTransport,
   DEFAULT_MCP_TOOL_CONCURRENCY,
   DEFAULT_MCP_TOOL_TIMEOUT_MS,
 } from "./protocol.js";
 import { startCodegraphMcpHttpServer } from "./http-transport.js";
 import { waitForHttpServerClose } from "./http.js";
 import { awaitStdioMcpLifecycle, DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdio-lifecycle.js";
+import { createCodegraphMcpStdioTransport } from "./stdio-transport.js";
+export { createParseErrorReportingStdin } from "./stdio-transport.js";
 
 export { listCodegraphMcpTools } from "./tools.js";
 export { createCodegraphMcpHandlers } from "./handlers.js";
@@ -29,7 +30,6 @@ export {
   callMcpTool,
   createCodegraphMcpProtocolServer,
   createCodegraphMcpProtocolServerWithTracker,
-  createParseErrorReportingStdin,
   DEFAULT_MCP_TOOL_CONCURRENCY,
   DEFAULT_MCP_TOOL_TIMEOUT_MS,
 } from "./protocol.js";

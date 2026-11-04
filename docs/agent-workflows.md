@@ -195,13 +195,15 @@ Interactive confirmation accepts only `y` or `yes` and defaults to no. Nonintera
 
 ## MCP server
 
-Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a stdio MCP subprocess.
+Use `codegraph mcp serve --root . --stdio` for a lightweight client bridge. Compatible clients share one project owner's index, worker pool and watcher; disconnecting a client does not close another client's analysis state.
 Use `codegraph server start --root /path/to/repo` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`. The server listens before it builds: by default it warms the base session cache and the search index in the background, so add `--startup-timeout-ms <milliseconds>` only when the process needs more than the 15-second default to start answering `/health`, or pass `--no-warmup` to build only when a tool call needs the index. Use `--json` to receive `status: "started"`, the registry fields, and update state.
 
 Check it with `codegraph server status --root /path/to/repo --json`, and stop it explicitly with `codegraph server stop --root /path/to/repo`. The wrapper verifies its process with a per-user credential in the Codegraph state directory, outside the project and separate from package files and compiler cache data; an unreachable or identity-mismatched server requires verification and keeps its registry.
 MCP is an ergonomics and performance layer over the same analysis engine; it keeps warm session state, returns bounded resources, confines paths to the project root, and keeps tools read-only unless the server is started with `--allow-build`. It also watches project files and refreshes the index in the background; pass `--no-watch` to leave freshness to the check each tool call runs. `search`, `explore`, `orient`, `get_file` with `includeGraphContext`, `review`, `packet_get`, `workspace_symbols`, and `impact` that wait longer than `--index-wait-ms` (default 15000) for a cold index build return `status: "index_building"` with progress while the build continues; call the same tool again.
 
-Restart or reload the owning client after `codegraph install` or a codegraph update. A running MCP server keeps the version and tool catalog captured at startup; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.
+At a parent directory of independent repositories, select a project root or use `codegraph mcp serve --root /path/to/workspace --workspace workspace.json`. Call `workspace_projects` first for the configured ids, then select `project` for direct tools or reuse returned qualified handles. `search` and `workspace_symbols` can fan out; inspect each project's coverage and errors before making workspace-wide claims. See [workspace routing](./mcp.md#select-multiple-repositories); the router does not create a combined parent index or infer cross-project symbol edges.
+
+After a codegraph update or incompatible configuration change, explicitly stop the owner with `codegraph server stop --root /path/to/repo`, then restart or reload the clients. A running owner keeps its captured runtime; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.
 
 See [MCP server](./mcp.md) for client configuration and troubleshooting.
 

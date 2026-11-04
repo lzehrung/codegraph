@@ -239,6 +239,9 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
   const watch: ProjectWatchFactory = options.watch ?? fs.watch;
   const log = options.log ?? ((message: string): void => console.error(message));
   const handles = new Map<string, ProjectWatchHandle>();
+  // Inode of a directory a per-directory watch was opened for. A later parent rename with the same inode is not a
+  // replacement; a different inode, or no recorded inode, may be a directory that was removed and created again.
+  const directoryIdentity = new Map<string, { dev: number; ino: number }>();
   // Per-directory mode: the open handles that no file list names, because an event reported their directory, or a list
   // named it until it stopped, or it lies above one of those. They stay while their directory exists, up to the limit.
   const retainedDirectories = new Set<string>();
@@ -271,8 +274,18 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     if (handles.get(directory) === handle) {
       handles.delete(directory);
       retainedDirectories.delete(directory);
+      directoryIdentity.delete(directory);
     }
     handle.close();
+  };
+
+  // Closes `directory` and every watch under it. A parent rename is how a removed directory is reported when its own
+  // watch never says so; the watches under it are the same kind of handle and do not get their own event.
+  const closeWatchedTree = (directory: string): void => {
+    const prefix = `${directory}${path.sep}`;
+    for (const [watched, handle] of [...handles]) {
+      if (watched === directory || watched.startsWith(prefix)) closeHandle(watched, handle);
+    }
   };
 
   const closeAll = (): void => {
@@ -301,15 +314,28 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     try {
       handle = watch(directory, { recursive: recursiveWatch }, (eventType, filename) => {
         if (closed) return;
+        // A queued edit still invalidates freshness, but a retired handle cannot alter the replacement watch tree.
+        if (handles.get(directory) !== handle) {
+          if (!filename || !isIgnored(prefix + filename)) noteChange();
+          return;
+        }
         // Before the ignore check: this name is the directory's own path, which may pass through an ignored name.
         if (namesWatchedDirectory(directory, eventType, filename, !recursiveWatch)) {
-          closeHandle(directory, handle);
+          // Descendant watches can disappear silently with the directory too. Leaving them in the map would keep
+          // `queueDirectory` from opening their replacements after a branch switch recreates the same paths.
+          closeWatchedTree(directory);
           noteChange();
           return;
         }
         if (filename && isIgnored(prefix + filename)) return;
         noteChange();
-        if (!recursive && eventType === "rename" && filename) queueDirectory(path.join(directory, filename));
+        if (!recursive && eventType === "rename" && filename) {
+          const child = path.join(directory, filename);
+          // A directory that already has a watch may have been removed and created again before that watch reported
+          // the loss. `queueDirectory` would ignore the event while the old handle is still in the map.
+          if (handles.has(child)) void replaceWatchedDirectory(child);
+          else queueDirectory(child);
+        }
       });
     } catch (error) {
       // A directory that vanished before its watch opened is seen again, or gone, at the next refresh.
@@ -320,7 +346,7 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     }
     handle.unref();
     handle.on("error", (error) => {
-      if (closed) return;
+      if (closed || handles.get(directory) !== handle) return;
       const code = capacityErrorCode(error);
       if (code) {
         disable(code);
@@ -333,6 +359,14 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     });
     handles.set(directory, handle);
     if (!listedDirectories.has(directory)) retainedDirectories.add(directory);
+    if (!recursiveWatch) {
+      try {
+        const stats = fs.lstatSync(directory);
+        if (stats.isDirectory()) directoryIdentity.set(directory, { dev: stats.dev, ino: stats.ino });
+      } catch {
+        // Not created yet, or not a real directory. A later rename records the identity or drops the handle.
+      }
+    }
   };
 
   // True when a watch for `directory` would be one more that no file list names, beyond the limit on those.
@@ -390,6 +424,61 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
     });
   };
 
+  // One replacement check at a time per directory. A delete and the create that follows it both arrive as `rename`,
+  // and the second must see whatever the first decided instead of opening another watch beside it.
+  const replacingDirectories = new Set<string>();
+  const replaceAgain = new Set<string>();
+
+  const replaceWatchedDirectoryOnce = async (directory: string): Promise<void> => {
+    const handle = handles.get(directory);
+    if (!handle) {
+      queueDirectory(directory);
+      return;
+    }
+    let stats: fs.Stats | undefined;
+    try {
+      stats = await fsp.lstat(directory);
+    } catch (error) {
+      if (!isMissingPathError(error)) return;
+      stats = undefined;
+    }
+    if (handles.get(directory) !== handle || closed || disabled) return;
+    if (!stats?.isDirectory()) {
+      closeWatchedTree(directory);
+      return;
+    }
+    const next = { dev: stats.dev, ino: stats.ino };
+    const known = directoryIdentity.get(directory);
+    // No recorded inode yet: this handle was opened on the directory that is here now. Remember it and keep the
+    // watch. A known inode that differs was removed and created again under the same path.
+    if (!known || (known.dev === next.dev && known.ino === next.ino)) {
+      directoryIdentity.set(directory, next);
+      return;
+    }
+    closeWatchedTree(directory);
+    directoryIdentity.set(directory, next);
+    queueDirectory(directory);
+  };
+
+  const replaceWatchedDirectory = async (directory: string): Promise<void> => {
+    if (replacingDirectories.has(directory)) {
+      replaceAgain.add(directory);
+      return;
+    }
+    replacingDirectories.add(directory);
+    try {
+      do {
+        replaceAgain.delete(directory);
+        await replaceWatchedDirectoryOnce(directory);
+      } while (replaceAgain.has(directory) && !closed && !disabled);
+    } catch (error) {
+      logFailureOnce(error);
+    } finally {
+      replacingDirectories.delete(directory);
+      replaceAgain.delete(directory);
+    }
+  };
+
   const applyDirectories = async (files: readonly string[]): Promise<void> => {
     const wanted = collectWatchDirectories(root, files, isIgnored);
     // A watch that the list no longer names stays while its directory exists: a source file that is added there later
@@ -403,8 +492,19 @@ export function startProjectWatcher(options: ProjectWatcherOptions): ProjectWatc
       else rejected.set(directory, handle);
       if (closed || disabled) return;
     }
-    // Nothing awaits from here on, so no event opens or closes a watch before this ends. A watch that an event opened
+    // Events during the checks above may still be opening watches. Fold those in before anything is closed. After this
+    // await, nothing awaits, so no event opens or closes a watch before the update ends. A watch that an event opened
     // while the directories were looked at is not rejected, and competes as the newest.
+    if (walkingPending) {
+      const seenWalks = new Set<Promise<void>>();
+      while (walkingPending) {
+        const walk = pendingWalk;
+        if (seenWalks.has(walk)) break;
+        seenWalks.add(walk);
+        await walk;
+        if (closed || disabled) return;
+      }
+    }
     // Watched even while no handle is open: what the list needs, and what stays with the directories above it.
     const required = new Set(wanted);
     for (const [directory, handle] of [...handles].reverse()) {
@@ -532,7 +632,12 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
  * - A settled burst starts a refresh, no sooner than `minRefreshIntervalMs` after the previous one ended.
  * - One refresh runs at a time. A settled burst during it sets one rerun flag. Its freshness check, invalidation, and
  *   rebuild run in one turn of `runExclusive`, so they never overlap an explicit refresh or an artifact build. Every
- *   read of the file list for the per-directory watches takes a turn as well.
+ *   read of the file list for the per-directory watches takes a turn as well. A stale result that a newer burst
+ *   superseded does not rebuild in this turn (the session still has its snapshot); that burst rebuilds once, and this
+ *   turn does not move the interval. A rebuild that overlapped later events schedules one more after the interval,
+ *   because the snapshot may have been read before those writes and a later check can still report fresh.
+ * - A refresh that throws is retried at the minimum interval, up to three attempts in a row. A new burst starts the
+ *   count over. A pause or `close` cancels a retry that has not started.
  * - After `idleMs` without `noteActivity` the watches close, and a refresh that waits for its turn gives it up. The
  *   next `noteActivity` reopens them and calls `markChanged`, so the pull check sees every edit made during the pause.
  * - `close` ends the watching for good. The refresh that is running finishes, and so does every read of the file list
@@ -553,6 +658,17 @@ export function createWatchController(session: AgentSession, options: WatchContr
   const activeReads = new Set<Promise<unknown>>();
   let rerun = false;
   let closed = false;
+  // True from an event until its burst settles. A retry must not start in the middle of one.
+  let burstOpen = false;
+  // The last refresh decided a rebuild is still required: a stale scan was superseded, a rebuild overlapped later
+  // events, or a rebuild threw after the session was invalidated. The next refresh loads without trusting a fresh
+  // answer from an empty or just-written signature baseline.
+  let pendingRebuild = false;
+  // The refresh took its turn but did not rebuild, so it must not push the next one back by the minimum interval.
+  let deferredRebuild = false;
+  let refreshFailed = false;
+  let failureCount = 0;
+  const maxRefreshAttempts = 3;
   // Bumped by every event and by `pause`. A refresh keeps the value it started under, and gives up its turn of
   // `runExclusive` when the value has moved by the time the turn comes: an event reopened the burst, so the refresh
   // that its settling starts is the one that counts, or the watching ended.
@@ -576,8 +692,23 @@ export function createWatchController(session: AgentSession, options: WatchContr
     }, waitMs);
   };
 
+  const loadForRebuild = async (token: number): Promise<void> => {
+    // Stay pending on failure: a check of an already invalidated session reports fresh.
+    pendingRebuild = true;
+    await session.loadProject({ symbolGraph: "skip" });
+    pendingRebuild = false;
+    if (!closed && token !== turnToken && watcher) pendingRebuild = true;
+  };
+
   // Runs in one turn of `runExclusive`, so that no other refresh replaces the session between the check and the rebuild.
-  const checkAndRebuild = async (): Promise<void> => {
+  const checkAndRebuild = async (token: number): Promise<void> => {
+    if (pendingRebuild) {
+      // A newer burst, a pause, or a close owns what happens next. The flag stays set for the refresh that still runs.
+      if (closed || !watcher || token !== turnToken) return;
+      session.invalidate();
+      await loadForRebuild(token);
+      return;
+    }
     const freshness: AgentFreshnessResult = session.checkFreshness
       ? await session.checkFreshness()
       : { state: "fresh" };
@@ -586,26 +717,37 @@ export function createWatchController(session: AgentSession, options: WatchContr
     // Nobody waits in the background, so the auto-refresh limits do not apply to a stale result. A session that
     // cannot verify its configuration keeps its snapshot instead, as it does without a watcher.
     const rebuildStale = freshness.state === "stale" && freshness.reason !== CONFIGURATION_UNCHECKED_REASON;
-    if (rebuildStale) session.invalidate();
-    if (rebuildStale || freshness.state === "refreshed") {
-      await session.loadProject({ symbolGraph: "skip" });
+    const shouldRebuild = rebuildStale || freshness.state === "refreshed";
+    // A newer burst superseded a stale scan. The session still holds its snapshot, so wait for that burst instead of
+    // rebuilding from a read the burst already replaced. `refreshed` has invalidated the session; skipping the load
+    // would leave it empty, and the next check would report that as fresh.
+    if (rebuildStale && token !== turnToken && watcher) {
+      pendingRebuild = true;
+      deferredRebuild = true;
+      return;
     }
+    if (!shouldRebuild) return;
+    if (rebuildStale) session.invalidate();
+    await loadForRebuild(token);
   };
 
   // Never rejects: a failure is logged. Resolves to whether the refresh took its turn.
   const refreshSession = async (current: ProjectWatcher | undefined, token: number): Promise<boolean> => {
     let tookTurn = false;
+    refreshFailed = false;
+    deferredRebuild = false;
     try {
       await options.runExclusive(async () => {
         // The turn comes after every refresh and build that held the session, however long those take. Events since
         // this refresh started reopened its burst, and a pause or a close ended the watching, so it is not due now.
         if (token !== turnToken) return;
         tookTurn = true;
-        await checkAndRebuild();
+        await checkAndRebuild(token);
       });
       // After every refresh, so a directory that a query already rebuilt around still gets its watch.
       if (tookTurn) await current?.refreshDirectories();
     } catch (error) {
+      refreshFailed = true;
       log(`[codegraph] watch refresh failed: ${errorMessage(error)}`);
     }
     return tookTurn;
@@ -613,16 +755,27 @@ export function createWatchController(session: AgentSession, options: WatchContr
 
   const startRefresh = (): void => {
     rerun = false;
-    const refresh: Promise<void> = refreshSession(watcher, turnToken).then((tookTurn) => {
-      // A refresh that gave up its turn did nothing, so it does not push the next one back.
-      if (tookTurn) lastRefreshEndedAt = Date.now();
+    const token = turnToken;
+    const refresh: Promise<void> = refreshSession(watcher, token).then((tookTurn) => {
+      const deferred = deferredRebuild;
+      deferredRebuild = false;
+      // A refresh that gave up its turn, or that deferred the rebuild to a newer burst, did not rebuild, so it does
+      // not push the next one back.
+      if (tookTurn && !deferred) lastRefreshEndedAt = Date.now();
+      if (!refreshFailed) failureCount = 0;
+      // An event already reset the retry count for its newer burst. An older failure must not use up that budget.
+      else if (tookTurn && token === turnToken) failureCount += 1;
       if (activeRefresh === refresh) activeRefresh = undefined;
+      // No new burst is open: a failed attempt retries until the cap. A burst that is still arriving settles into its
+      // own refresh, which sees `pendingRebuild` when the failure invalidated the session.
+      if (refreshFailed && tookTurn && failureCount < maxRefreshAttempts && !burstOpen && watcher) rerun = true;
       if (rerun && watcher) scheduleRefresh();
     });
     activeRefresh = refresh;
   };
 
   const onSettled = (): void => {
+    burstOpen = false;
     if (!watcher) return;
     if (activeRefresh) {
       rerun = true;
@@ -635,9 +788,11 @@ export function createWatchController(session: AgentSession, options: WatchContr
   // would start in the middle of this one, so it goes now: its timer is cancelled, and a refresh that already waits
   // for its turn gives the turn up.
   const onChange = (): void => {
+    burstOpen = true;
     clearTimeout(refreshTimer);
     refreshTimer = undefined;
     rerun = false;
+    failureCount = 0;
     turnToken += 1;
     session.markChanged?.();
   };
@@ -647,6 +802,7 @@ export function createWatchController(session: AgentSession, options: WatchContr
     clearTimeout(refreshTimer);
     idleTimer = undefined;
     refreshTimer = undefined;
+    burstOpen = false;
     rerun = false;
     turnToken += 1;
     watcherToken += 1;

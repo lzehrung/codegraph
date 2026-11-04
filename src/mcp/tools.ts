@@ -5,10 +5,11 @@ import {
   DEFAULT_FILE_VIEW_LINES,
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
-} from "../agent/file-view.js";
-import { MAX_GRAPH_DEPTH } from "../agent/search.js";
+  MAX_GRAPH_DEPTH,
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+} from "../query/limits.js";
 import { MAX_CALL_HIERARCHY_DEPTH } from "../indexer/call-hierarchy.js";
-import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqlite-guard.js";

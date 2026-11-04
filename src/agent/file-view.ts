@@ -13,10 +13,18 @@ import {
 } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
-export const DEFAULT_FILE_VIEW_BYTES = 80_000;
-export const MAX_FILE_VIEW_BYTES = 500_000;
-export const DEFAULT_FILE_VIEW_LINES = 2_000;
-export const MAX_FILE_VIEW_LINES = 10_000;
+import {
+  DEFAULT_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_BYTES,
+  DEFAULT_FILE_VIEW_LINES,
+  MAX_FILE_VIEW_LINES,
+} from "../query/limits.js";
+export {
+  DEFAULT_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_BYTES,
+  DEFAULT_FILE_VIEW_LINES,
+  MAX_FILE_VIEW_LINES,
+} from "../query/limits.js";
 export const FILE_VIEW_GRAPH_CONTEXT_LIMIT = 100;
 
 export type AgentFileGraphContext = {

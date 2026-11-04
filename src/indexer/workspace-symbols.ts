@@ -10,8 +10,8 @@ import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types
 import { importNodeId } from "./import-types.js";
 import { compareCodeUnits, pushAll } from "../util/collections.js";
 
-export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
-export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
+import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../query/limits.js";
+export { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../query/limits.js";
 
 export type WorkspaceSymbolsRequest = {
   query: string;

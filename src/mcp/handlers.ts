@@ -92,6 +92,8 @@ export type CodegraphMcpHandlerOptions = {
   readOnly?: boolean;
   session?: AgentSession;
   buildOptions?: BuildOptions;
+  /** Load project/user configuration when creating a session. Defaults to true; ignored with a supplied session. */
+  useConfig?: boolean;
 };
 
 export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
@@ -392,6 +394,7 @@ function createCodegraphMcpSession(
     : options.buildOptions;
   return createAgentSession({
     root,
+    ...(options.useConfig !== undefined ? { useConfig: options.useConfig } : {}),
     ...(buildOptions ? { buildOptions } : {}),
     freshness: { policy: "auto" },
   });

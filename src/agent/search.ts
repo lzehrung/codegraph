@@ -1,3 +1,4 @@
+import { MAX_GRAPH_DEPTH } from "../query/limits.js";
 import fs from "node:fs/promises";
 import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from "../analysis-summary.js";
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
@@ -208,7 +209,7 @@ type SearchCache = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_TEXT_BYTES = 300_000;
-export const MAX_GRAPH_DEPTH = 5;
+export { MAX_GRAPH_DEPTH } from "../query/limits.js";
 const DOCS_EXACT_PHRASE_BOOST = 18;
 const DOCS_PROXIMITY_BOOST = 6;
 const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([

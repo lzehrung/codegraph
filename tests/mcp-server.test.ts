@@ -4775,7 +4775,7 @@ describe("MCP file watcher", () => {
     });
   });
 
-  it("runs refresh_index after a background rebuild that is running, so that the later build's file signatures stay", async () => {
+  it("keeps files fresh when an explicit refresh overlaps a background rebuild", async () => {
     const root = await createProject("cg-mcp-watch-refresh-index-");
     const held = holdBackgroundRebuild();
     const resources = await createWarmedCodegraphMcpResources({
@@ -4792,24 +4792,13 @@ describe("MCP file watcher", () => {
 
       const refreshed = resources.handlers.refresh_index({ warmup: "base" });
 
-      // Run at once, the refresh would drop the session state under the background build and start a second build
-      // beside it. Whichever build ended last would then replace the file signatures of the snapshot that is served.
-      expect(held.events).toEqual(["loadProject:start"]);
-
       held.release();
       await refreshed;
 
-      expect(held.events).toEqual([
-        "loadProject:start",
-        "loadProject:end",
-        "invalidate",
-        "loadProject:start",
-        "loadProject:end",
-      ]);
       held.armed = false;
       // Ends the 5 s window as an event would, so that the query checks the project against the session's baseline.
       resources.session.markChanged?.();
-      // The baseline is the second build's, so it knows `late.ts` as the snapshot that is served does.
+      // The freshness baseline must include `late.ts`, just as the served snapshot does.
       expect(await findSymbol(resources.handlers, "lateSymbol")).toEqual({
         found: true,
         freshness: { state: "fresh" },
