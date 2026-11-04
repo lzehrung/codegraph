@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-11-04
+
 ### Added
 
 - MCP workspace routing: `codegraph mcp serve --root /path/to/workspace --workspace workspace.json` selects independent repositories without building a parent index. Search results keep project-qualified handles, deterministic project order, freshness, omissions and failures; dependency relationships require explicit configuration.
@@ -818,7 +820,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.2...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.3...HEAD
+[3.1.3]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.3
 [3.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.2
 [3.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.1
 [3.1.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.0
