@@ -417,7 +417,7 @@ export type ReceiverBinding =
       constructed?: boolean;
     };
 
-/** What one receiver expression proves, memoized per enclosing function and text. */
+/** What one receiver expression proves, memoized per receiver syntax site. */
 export type ReceiverProof = {
   /** A constructor or declared type from a binding visible at this receiver. */
   typeEvidence: ReceiverTypeEvidence | null;
@@ -1344,7 +1344,8 @@ export function classifyReceiver(
   const receiverIsName = isReceiverNameNode(sup, receiver.type);
   const importProof = receiverIsName ? classifyImport?.(text, receiver) : null;
   if (importProof === "module-import") return { kind: "module-import", receiver };
-  const cacheKey = proofCache ? cacheScope + "\u0000" + text : "";
+  // Equal receiver text can name different bindings in blocks, closures, or parameter defaults.
+  const cacheKey = proofCache ? cacheScope + "\u0000" + receiver.startIndex + "\u0000" + receiver.endIndex : "";
   let proof = proofCache?.get(cacheKey);
   if (!proof) {
     const typeEvidence = receiverTypeEvidence(receiver, source, sup);
