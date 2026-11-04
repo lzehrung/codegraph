@@ -8,6 +8,7 @@ import { readMcpLifecycleHealthToken } from "./lifecycle-health.js";
 
 export type { SharedOwnerOptions } from "./owner-identity.js";
 export type { SharedOwnerConnection } from "../cli/server.js";
+export { assertSharedOwnerConnection } from "../cli/server.js";
 
 const SHARED_OWNER_IDLE_MS = 30 * 60 * 1000;
 

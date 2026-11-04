@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { isPlainRecord } from "../src/util/guards.js";
 import { dispatchWorkspaceTool, parseWorkspaceQualifiedValue, qualifyWorkspaceValue } from "../src/mcp/workspace.js";
-import { loadWorkspaceMcpConfig } from "../src/mcp/workspace-config.js";
+import { loadWorkspaceMcpConfig, type WorkspaceProject } from "../src/mcp/workspace-config.js";
 import { mkTmpDir, tryCreateDirectorySymlink, tryCreateFileSymlink } from "./helpers/filesystem.js";
 
 async function makeWorkspace(prefix: string): Promise<string> {
@@ -107,7 +107,7 @@ describe("workspace MCP configuration and routing", () => {
     }
   });
 
-  it("preserves logical workspace and project aliases in caller-facing roots", async () => {
+  it("revalidates deduplicated aliases while preserving caller-facing logical roots", async () => {
     const root = await makeWorkspace("codegraph-workspace-logical-");
     const aliasParent = await mkTmpDir("codegraph-workspace-alias-");
     const workspaceAlias = path.join(aliasParent, "selected");
@@ -119,38 +119,203 @@ describe("workspace MCP configuration and routing", () => {
       projectLinked = await tryCreateDirectorySymlink(path.join(root, "projects", "app"), projectAlias);
       if (!workspaceLinked || !projectLinked) return;
       const source = `export const physicalRootText = ${JSON.stringify(root)};\n`;
+      const handle = "symbol:main.ts:physicalRootText:1:0";
       await fs.writeFile(path.join(root, "projects", "app", "main.ts"), source);
-      await writeWorkspaceConfig(root, { projects: [{ id: "app", path: "projects/app-alias" }] });
+      await writeWorkspaceConfig(root, {
+        projects: [
+          { id: "app", path: "projects/app" },
+          { id: "app-alias", path: "projects/app-alias" },
+        ],
+      });
       const config = await loadWorkspaceMcpConfig(workspaceAlias, "workspace.json");
-      const response = await dispatchWorkspaceTool(
+      expect(config.projects.map((project) => project.id)).toEqual(["app"]);
+      const readFile = vi.fn(async (project: WorkspaceProject) => ({
+        root: project.root,
+        content: await fs.readFile(path.join(project.root, "main.ts"), "utf8"),
+        handle,
+        freshness: { state: "fresh" },
+      }));
+      for (const input of [
+        { project: "app-alias", file: "main.ts" },
+        { project: "app-alias", file: qualifyWorkspaceValue("app", "main.ts") },
+        { file: qualifyWorkspaceValue("app-alias", "main.ts") },
+      ]) {
+        const response = await dispatchWorkspaceTool(config, "get_file", input, readFile);
+        expect(records(response.projects)).toMatchObject([
+          {
+            project: { id: "app", path: "projects/app-alias", aliases: ["app-alias"] },
+            status: "ok",
+            result: {
+              root: path.join(workspaceAlias, "projects", "app-alias"),
+              content: source,
+              handle: qualifyWorkspaceValue("app", handle),
+            },
+          },
+        ]);
+        expect(response.coverage).toMatchObject({ selectedProjects: 1, complete: true });
+      }
+      expect(readFile).toHaveBeenCalledTimes(3);
+      const canonical = await dispatchWorkspaceTool(
         config,
         "get_file",
-        { project: "app", file: "main.ts" },
-        async (project) => ({
-          root: project.root,
-          content: await fs.readFile(path.join(project.root, "main.ts"), "utf8"),
-          freshness: { state: "fresh" },
-        }),
+        { project: "app", file: qualifyWorkspaceValue("app-alias", "main.ts") },
+        readFile,
       );
-      expect(records(response.projects)[0]).toMatchObject({
-        result: { root: path.join(workspaceAlias, "projects", "app-alias"), content: source },
+      expect(records(canonical.projects)[0]).toMatchObject({
+        project: { id: "app", path: "projects/app" },
+        result: { root: path.join(workspaceAlias, "projects", "app"), content: source },
       });
+
       await fs.unlink(projectAlias);
       projectLinked = false;
       projectLinked = await tryCreateDirectorySymlink(path.join(root, "projects", "lib"), projectAlias);
       if (!projectLinked) throw new Error("Could not retarget the project alias.");
       const call = vi.fn(async () => ({ freshness: { state: "fresh" } }));
-      const changed = await dispatchWorkspaceTool(config, "get_file", { project: "app", file: "main.ts" }, call);
-      expect(records(changed.projects)[0]).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("root changed"),
-      });
+      for (const input of [
+        { project: "app-alias", file: "main.ts" },
+        { project: "app-alias", file: qualifyWorkspaceValue("app", "main.ts") },
+        { project: "app", file: qualifyWorkspaceValue("app-alias", "main.ts") },
+        { file: qualifyWorkspaceValue("app-alias", "main.ts") },
+      ]) {
+        const changed = await dispatchWorkspaceTool(config, "get_file", input, call);
+        expect(records(changed.projects)[0]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("root changed"),
+          coverage: { state: "failed" },
+        });
+        expect(changed.coverage).toEqual({
+          selectedProjects: 1,
+          completedProjects: 0,
+          failedProjects: 1,
+          complete: false,
+        });
+      }
       expect(call).not.toHaveBeenCalled();
+      const unchanged = await dispatchWorkspaceTool(config, "get_file", { project: "app", file: "main.ts" }, readFile);
+      expect(records(unchanged.projects)[0]).toMatchObject({
+        status: "ok",
+        result: {
+          root: path.join(workspaceAlias, "projects", "app"),
+          content: source,
+          handle: qualifyWorkspaceValue("app", handle),
+        },
+      });
     } finally {
       if (projectLinked) await fs.unlink(projectAlias);
       if (workspaceLinked) await fs.unlink(workspaceAlias);
       await fs.rm(root, { recursive: true, force: true });
       await fs.rm(aliasParent, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["search", "workspace_symbols"])(
+    "fails one canonical project when a configured alias changes during %s fanout",
+    async (toolName) => {
+      const root = await makeWorkspace("codegraph-workspace-alias-fanout-");
+      const projectAlias = path.join(root, "projects", "app-alias");
+      let linked = false;
+      try {
+        linked = await tryCreateDirectorySymlink(path.join(root, "projects", "app"), projectAlias);
+        if (!linked) return;
+        await writeWorkspaceConfig(root, {
+          projects: [
+            { id: "app", path: "projects/app" },
+            { id: "app-alias", path: "projects/app-alias" },
+            { id: "lib", path: "projects/lib" },
+          ],
+        });
+        const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+        const collection = toolName === "search" ? "results" : "symbols";
+        const call = vi.fn(async (project: WorkspaceProject) => ({
+          root: project.root,
+          [collection]: [{ handle: `symbol:main.ts:${project.id}:1:0` }],
+          freshness: { state: "fresh" },
+        }));
+        const initial = await dispatchWorkspaceTool(config, toolName, { query: "needle" }, call);
+        expect(call.mock.calls.map(([project]) => project.id).sort()).toEqual(["app", "lib"]);
+        expect(records(initial.projects)).toMatchObject([
+          {
+            project: { id: "app", path: "projects/app", aliases: ["app-alias"] },
+            status: "ok",
+            result: { [collection]: [{ handle: qualifyWorkspaceValue("app", "symbol:main.ts:app:1:0") }] },
+          },
+          { project: { id: "lib" }, status: "ok" },
+        ]);
+        expect(initial.coverage).toEqual({
+          selectedProjects: 2,
+          completedProjects: 2,
+          failedProjects: 0,
+          complete: true,
+        });
+
+        await fs.unlink(projectAlias);
+        linked = false;
+        linked = await tryCreateDirectorySymlink(path.join(root, "projects", "lib"), projectAlias);
+        if (!linked) throw new Error("Could not retarget the project alias.");
+        call.mockClear();
+        const changed = await dispatchWorkspaceTool(config, toolName, { query: "needle" }, call);
+        expect(call.mock.calls.map(([project]) => project.id)).toEqual(["lib"]);
+        expect(records(changed.projects)).toMatchObject([
+          {
+            project: { id: "app", path: "projects/app", aliases: ["app-alias"] },
+            status: "error",
+            error: expect.stringContaining("root changed"),
+            coverage: { state: "failed" },
+          },
+          {
+            project: { id: "lib" },
+            status: "ok",
+            result: { [collection]: [{ handle: qualifyWorkspaceValue("lib", "symbol:main.ts:lib:1:0") }] },
+          },
+        ]);
+        expect(changed.coverage).toEqual({
+          selectedProjects: 2,
+          completedProjects: 1,
+          failedProjects: 1,
+          complete: false,
+        });
+      } finally {
+        if (linked) await fs.unlink(projectAlias);
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not let a secondary declaration bypass a changed canonical project root", async () => {
+    const root = await makeWorkspace("codegraph-workspace-canonical-alias-");
+    const projectAlias = path.join(root, "projects", "app-primary");
+    let linked = false;
+    try {
+      linked = await tryCreateDirectorySymlink(path.join(root, "projects", "app"), projectAlias);
+      if (!linked) return;
+      await writeWorkspaceConfig(root, {
+        projects: [
+          { id: "app", path: "projects/app-primary" },
+          { id: "app-alias", path: "projects/app" },
+        ],
+      });
+      const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+      expect(config.projects.map((project) => project.id)).toEqual(["app"]);
+      await fs.unlink(projectAlias);
+      linked = false;
+      linked = await tryCreateDirectorySymlink(path.join(root, "projects", "lib"), projectAlias);
+      if (!linked) throw new Error("Could not retarget the canonical project alias.");
+      const call = vi.fn(async () => ({ freshness: { state: "fresh" } }));
+      for (const input of [
+        { project: "app-alias", file: "main.ts" },
+        { project: "app", file: qualifyWorkspaceValue("app-alias", "main.ts") },
+        { file: qualifyWorkspaceValue("app-alias", "main.ts") },
+      ]) {
+        const changed = await dispatchWorkspaceTool(config, "get_file", input, call);
+        expect(records(changed.projects)[0]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("root changed"),
+        });
+      }
+      expect(call).not.toHaveBeenCalled();
+    } finally {
+      if (linked) await fs.unlink(projectAlias);
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

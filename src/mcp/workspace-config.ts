@@ -14,6 +14,11 @@ export type WorkspaceProject = {
   aliases: string[];
 };
 
+export type WorkspaceProjectDeclaration = {
+  project: WorkspaceProject;
+  path: string;
+};
+
 export type WorkspaceDependency = {
   from: string;
   to: string;
@@ -26,7 +31,7 @@ export type WorkspaceMcpConfig = {
   logicalRoot: string;
   projects: WorkspaceProject[];
   dependencies: WorkspaceDependency[];
-  aliases: Map<string, WorkspaceProject>;
+  aliases: Map<string, WorkspaceProjectDeclaration>;
 };
 
 type WorkspaceConfigInput = {
@@ -138,7 +143,7 @@ export async function loadWorkspaceMcpConfig(root: string, configPath: string): 
   const input = parseConfig(parsedJson);
   const projectIds = new Set<string>();
   const projectByIdentity = new Map<string, WorkspaceProject>();
-  const aliases = new Map<string, WorkspaceProject>();
+  const aliases = new Map<string, WorkspaceProjectDeclaration>();
   const projects: WorkspaceProject[] = [];
 
   for (const declaration of input.projects) {
@@ -156,14 +161,14 @@ export async function loadWorkspaceMcpConfig(root: string, configPath: string): 
     const projectStat = await fs.stat(physicalProjectPath);
     if (!projectStat.isDirectory()) throw new Error(`Workspace project '${declaration.id}' is not a directory.`);
 
+    const relativeToRoot = normalizePath(path.relative(logicalRoot, candidatePath)) || ".";
     const identity = fileIdentityKey(physicalProjectPath);
     const existingProject = projectByIdentity.get(identity);
     if (existingProject) {
       existingProject.aliases.push(declaration.id);
-      aliases.set(declaration.id, existingProject);
+      aliases.set(declaration.id, { project: existingProject, path: relativeToRoot });
       continue;
     }
-    const relativeToRoot = normalizePath(path.relative(logicalRoot, candidatePath)) || ".";
     const project: WorkspaceProject = {
       id: declaration.id,
       path: relativeToRoot,
@@ -171,7 +176,7 @@ export async function loadWorkspaceMcpConfig(root: string, configPath: string): 
       aliases: [],
     };
     projectByIdentity.set(identity, project);
-    aliases.set(declaration.id, project);
+    aliases.set(declaration.id, { project, path: relativeToRoot });
     projects.push(project);
   }
 
@@ -187,8 +192,8 @@ export async function loadWorkspaceMcpConfig(root: string, configPath: string): 
     }
     dependencyKeys.add(key);
     return {
-      from: sourceProject.id,
-      to: targetProject.id,
+      from: sourceProject.project.id,
+      to: targetProject.project.id,
       configuredFrom: dependency.from,
       configuredTo: dependency.to,
     };

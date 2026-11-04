@@ -18,12 +18,22 @@ import { fileIdentityKey, isFilePathWithinRoot } from "../util/paths.js";
 import { getCodegraphVersion } from "../util/package-info.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertMcpRootScope } from "./root-preflight.js";
-import { ensureSharedOwner, type SharedOwnerOptions } from "./shared-owner.js";
+import {
+  assertSharedOwnerConnection,
+  ensureSharedOwner,
+  type SharedOwnerConnection,
+  type SharedOwnerOptions,
+} from "./shared-owner.js";
 import { awaitStdioMcpLifecycle, DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdio-lifecycle.js";
 import { createCodegraphMcpStdioTransport } from "./stdio-transport.js";
 import { DEFAULT_MCP_TOOL_CONCURRENCY } from "./runtime-limits.js";
 import { listCodegraphMcpTools, MCP_TOOL_REGISTRY } from "./tools.js";
-import { loadWorkspaceMcpConfig, type WorkspaceMcpConfig, type WorkspaceProject } from "./workspace-config.js";
+import {
+  loadWorkspaceMcpConfig,
+  type WorkspaceMcpConfig,
+  type WorkspaceProject,
+  type WorkspaceProjectDeclaration,
+} from "./workspace-config.js";
 
 const WORKSPACE_TOOL_CONCURRENCY = 2;
 const PROJECT_QUALIFIER_PREFIX = "cgws1:";
@@ -35,8 +45,15 @@ type WorkspaceProjectCall = (
   signal?: AbortSignal,
 ) => Promise<unknown>;
 
+type WorkspaceProjectSelection = {
+  project: WorkspaceProject;
+  path: string;
+  validationPaths: Set<string>;
+};
+
 type WorkspaceOwnerClient = {
   client: Client;
+  owner: SharedOwnerConnection;
 };
 type WorkspaceOwnerConnection = {
   promise: Promise<WorkspaceOwnerClient>;
@@ -114,14 +131,14 @@ export function parseWorkspaceQualifiedValue(value: string): WorkspaceQualifiedV
   return { projectId: decodedId, value: payload };
 }
 
-function summaryForProject(project: WorkspaceProject): ProjectSummary {
-  return { id: project.id, path: project.path, aliases: [...project.aliases] };
+function summaryForProject(project: WorkspaceProject, logicalPath = project.path): ProjectSummary {
+  return { id: project.id, path: logicalPath, aliases: [...project.aliases] };
 }
 
 function listWorkspaceProjects(config: WorkspaceMcpConfig): Record<string, unknown> {
   return {
     schemaVersion: 1,
-    projects: config.projects.map(summaryForProject),
+    projects: config.projects.map((project) => summaryForProject(project)),
     dependencies: config.dependencies.map((dependency) => ({
       from: dependency.from,
       to: dependency.to,
@@ -146,34 +163,40 @@ function routeArguments(
   config: WorkspaceMcpConfig,
   toolName: string,
   sourceArguments: Record<string, unknown>,
-): { projects: WorkspaceProject[]; arguments_: Record<string, unknown> } {
+): { projects: WorkspaceProjectSelection[]; arguments_: Record<string, unknown> } {
   const arguments_ = { ...sourceArguments };
   const explicitId = arguments_.project;
   delete arguments_.project;
-  let selectedProject = typeof explicitId === "string" ? resolveProject(config, explicitId) : undefined;
+  let selectedProject = typeof explicitId === "string" ? resolveProjectDeclaration(config, explicitId) : undefined;
   if (explicitId !== undefined && typeof explicitId !== "string") {
     throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Workspace project must be a project id string.");
   }
   if (typeof explicitId === "string" && !selectedProject) {
     throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown workspace project: ${explicitId}.`);
   }
+  const validationPaths = new Set<string>();
+  if (selectedProject) {
+    validationPaths.add(selectedProject.project.path);
+    validationPaths.add(selectedProject.path);
+  }
 
-  const selectQualifiedProject = (projectId: string): WorkspaceProject => {
-    const project = resolveProject(config, projectId);
+  const selectQualifiedProject = (projectId: string): void => {
+    const project = resolveProjectDeclaration(config, projectId);
     if (!project) {
       throw new ProtocolError(
         ProtocolErrorCode.InvalidParams,
         `Unknown workspace project in qualified value: ${projectId}.`,
       );
     }
-    if (selectedProject && selectedProject.id !== project.id) {
+    if (selectedProject && selectedProject.project.id !== project.project.id) {
       throw new ProtocolError(
         ProtocolErrorCode.InvalidParams,
-        `Workspace project '${selectedProject.id}' does not match qualified value for '${project.id}'.`,
+        `Workspace project '${selectedProject.project.id}' does not match qualified value for '${project.project.id}'.`,
       );
     }
-    selectedProject = project;
-    return project;
+    selectedProject ??= project;
+    validationPaths.add(project.project.path);
+    validationPaths.add(project.path);
   };
 
   for (const field of getRouteFields(toolName)) {
@@ -214,11 +237,28 @@ function routeArguments(
       `Workspace tool '${toolName}' requires a project id or a project-qualified handle or path.`,
     );
   }
-  const projects = selectedProject ? [selectedProject] : config.projects;
+  if (selectedProject) {
+    return {
+      projects: [{ project: selectedProject.project, path: selectedProject.path, validationPaths }],
+      arguments_,
+    };
+  }
+  const projects = config.projects.map((project) => ({
+    project,
+    path: project.path,
+    validationPaths: new Set([project.path]),
+  }));
+  const projectSelections = new Map(projects.map((selection) => [selection.project.id, selection]));
+  for (const declaration of config.aliases.values()) {
+    projectSelections.get(declaration.project.id)?.validationPaths.add(declaration.path);
+  }
   return { projects, arguments_ };
 }
 
-function resolveProject(config: WorkspaceMcpConfig, projectId: string): WorkspaceProject | undefined {
+function resolveProjectDeclaration(
+  config: WorkspaceMcpConfig,
+  projectId: string,
+): WorkspaceProjectDeclaration | undefined {
   return config.aliases.get(projectId);
 }
 
@@ -257,15 +297,21 @@ function assertRelativePath(project: WorkspaceProject, fileValue: string): void 
   }
 }
 
-async function assertWorkspaceProjectRoot(config: WorkspaceMcpConfig, project: WorkspaceProject): Promise<void> {
+async function assertWorkspaceProjectRoot(
+  config: WorkspaceMcpConfig,
+  project: WorkspaceProject,
+  projectPaths: Iterable<string> = [project.path],
+): Promise<void> {
   const workspaceRoot = await fs.realpath(config.logicalRoot);
-  const projectRoot = await fs.realpath(path.resolve(config.logicalRoot, project.path));
-  if (
-    fileIdentityKey(workspaceRoot) !== fileIdentityKey(config.root) ||
-    fileIdentityKey(projectRoot) !== fileIdentityKey(project.root) ||
-    !isFilePathWithinRoot(workspaceRoot, projectRoot)
-  ) {
-    throw new Error("Workspace project root changed or escaped the workspace; reload the workspace configuration.");
+  for (const projectPath of projectPaths) {
+    const projectRoot = await fs.realpath(path.resolve(config.logicalRoot, projectPath));
+    if (
+      fileIdentityKey(workspaceRoot) !== fileIdentityKey(config.root) ||
+      fileIdentityKey(projectRoot) !== fileIdentityKey(project.root) ||
+      !isFilePathWithinRoot(workspaceRoot, projectRoot)
+    ) {
+      throw new Error("Workspace project root changed or escaped the workspace; reload the workspace configuration.");
+    }
   }
 }
 
@@ -396,10 +442,11 @@ export async function dispatchWorkspaceTool(
     throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown MCP tool: ${toolName}.`);
   }
   const route = routeArguments(config, toolName, input);
-  const projectResults = await mapLimit(route.projects, WORKSPACE_TOOL_CONCURRENCY, async (project) => {
+  const projectResults = await mapLimit(route.projects, WORKSPACE_TOOL_CONCURRENCY, async (selection) => {
+    const { project } = selection;
     if (signal?.aborted) throw signal.reason ?? new Error("Workspace tool call was cancelled.");
     try {
-      await assertWorkspaceProjectRoot(config, project);
+      await assertWorkspaceProjectRoot(config, project, selection.validationPaths);
       validateProjectPaths(project, toolName, route.arguments_);
       const result = await callProjectTool(project, toolName, route.arguments_, signal);
       const coverage = getProjectCoverage(result);
@@ -410,10 +457,10 @@ export async function dispatchWorkspaceTool(
         typeof qualified.root === "string" &&
         fileIdentityKey(qualified.root) === fileIdentityKey(project.root)
       ) {
-        qualified.root = path.resolve(config.logicalRoot, project.path);
+        qualified.root = path.resolve(config.logicalRoot, selection.path);
       }
       return {
-        project: summaryForProject(project),
+        project: summaryForProject(project, selection.path),
         status,
         result: qualified,
         coverage,
@@ -421,7 +468,7 @@ export async function dispatchWorkspaceTool(
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       return {
-        project: summaryForProject(project),
+        project: summaryForProject(project, selection.path),
         status: "error" as const,
         error: errorText(error),
         coverage: failedProjectCoverage(),
@@ -559,6 +606,7 @@ export async function serveWorkspaceMcp(options: {
         );
       }
       const owner = await ensureSharedOwner({ ...perProjectOptions, root: project.root });
+      await assertSharedOwnerConnection(owner);
       const client = new Client(
         { name: "codegraph-workspace-router", version: getCodegraphVersion() },
         { versionNegotiation: { mode: "auto" } },
@@ -566,7 +614,7 @@ export async function serveWorkspaceMcp(options: {
       const transport = new StreamableHTTPClientTransport(new URL(owner.url));
       try {
         await client.connect(transport);
-        return { client };
+        return { client, owner };
       } catch (error) {
         await client.close().catch(() => undefined);
         throw error;
@@ -597,6 +645,7 @@ export async function serveWorkspaceMcp(options: {
         );
       }
       try {
+        await assertSharedOwnerConnection(owner.owner);
         const result = await owner.client.callTool(
           { name: toolName, arguments: arguments_ },
           { ...(signal ? { signal } : {}), timeout: 2_147_483_647 },

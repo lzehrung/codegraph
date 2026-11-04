@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { Client, LOG_LEVEL_META_KEY, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { ProtocolError, Server, type CallToolResult } from "@modelcontextprotocol/server";
@@ -7,7 +8,12 @@ import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { isPlainRecord } from "../util/guards.js";
 import { createCodegraphMcpStdioTransport } from "./stdio-transport.js";
-import { ensureSharedOwner, type SharedOwnerConnection, type SharedOwnerOptions } from "./shared-owner.js";
+import {
+  assertSharedOwnerConnection,
+  ensureSharedOwner,
+  type SharedOwnerConnection,
+  type SharedOwnerOptions,
+} from "./shared-owner.js";
 import { awaitStdioMcpLifecycle } from "./stdio-lifecycle.js";
 import { DEFAULT_MCP_TOOL_CONCURRENCY } from "./runtime-limits.js";
 import { listCodegraphMcpTools } from "./tools.js";
@@ -18,13 +24,26 @@ export async function serveSharedStdioMcp(
 ): Promise<void> {
   const version = getCodegraphVersion();
   const logicalRoot = normalizePath(path.resolve(options.root));
+  const physicalRoot = normalizePath(await fs.realpath(logicalRoot));
+  const assertLogicalRoot = async (): Promise<void> => {
+    if (fileIdentityKey(await fs.realpath(logicalRoot)) !== fileIdentityKey(physicalRoot)) {
+      throw new Error("Shared MCP stdio project root changed after startup.");
+    }
+  };
   const clients = new Set<Client>();
   const active = new Map<string | number, AbortController>();
   let closed = false;
   let ownerPromise: Promise<SharedOwnerConnection> | undefined;
   const connectOwner = (): Promise<SharedOwnerConnection> => {
     if (ownerPromise) return ownerPromise;
-    const pending = ensureSharedOwner(options);
+    const pending = (async () => {
+      await assertLogicalRoot();
+      const owner = await ensureSharedOwner(options);
+      if (fileIdentityKey(owner.root) !== fileIdentityKey(physicalRoot)) {
+        throw new Error("Shared MCP stdio project root changed during owner startup.");
+      }
+      return owner;
+    })();
     ownerPromise = pending;
     void pending.catch(() => {
       if (ownerPromise === pending) ownerPromise = undefined;
@@ -59,7 +78,12 @@ export async function serveSharedStdioMcp(
         try {
           const owner = await pending;
           signal.throwIfAborted();
+          await assertLogicalRoot();
+          await assertSharedOwnerConnection(owner);
+          signal.throwIfAborted();
           await client.connect(new StreamableHTTPClientTransport(new URL(owner.url)), { signal });
+          await assertSharedOwnerConnection(owner);
+          await assertLogicalRoot();
           signal.throwIfAborted();
           const envelope: Record<string, unknown> = ctx.mcpReq.envelope ?? {};
           // Legacy clients use the connection's logging threshold. Modern clients opt in per request.

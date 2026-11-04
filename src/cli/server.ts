@@ -1112,7 +1112,32 @@ export type SharedOwnerConnection = {
   root: string;
   pid: number;
   identity: string;
+  startedAt: string;
+  credentialId: string;
 };
+
+/** Reprove a captured owner without restarting it or recomputing its runtime/configuration fingerprint. */
+export async function assertSharedOwnerConnection(owner: SharedOwnerConnection): Promise<void> {
+  const status = await readServerStatus(owner.root);
+  const registry = status.registry;
+  const health = status.health;
+  if (
+    status.status !== "live" ||
+    !registry ||
+    registry.schemaVersion !== SERVER_REGISTRY_SCHEMA_VERSION ||
+    registry.url !== owner.url ||
+    registry.pid !== owner.pid ||
+    registry.startedAt !== owner.startedAt ||
+    registry.credentialId !== owner.credentialId ||
+    registry.ownerIdentity !== owner.identity ||
+    !health ||
+    health.update.restartRequired
+  ) {
+    throw new Error(
+      "The captured shared Codegraph owner is no longer authenticated or its lifecycle identity changed. Retry this call; no tool call was sent.",
+    );
+  }
+}
 
 /**
  * Shared clients and `server start/stop` use the same lease, registry, credentials, and health proof.
@@ -1133,6 +1158,7 @@ export async function ensureSharedOwnerServer(
         if (status.status === "live") {
           const registry = status.registry!;
           if (
+            registry.schemaVersion !== SERVER_REGISTRY_SCHEMA_VERSION ||
             registry.ownerIdentity !== identity ||
             !isSharedOwnerUrl(registry.url) ||
             status.health!.ownerIdentity !== identity ||
@@ -1142,7 +1168,14 @@ export async function ensureSharedOwnerServer(
               `The Codegraph server at ${registry.url} has an incompatible shared-owner configuration or runtime. Stop it before changing options.`,
             );
           }
-          return { url: registry.url, root, pid: registry.pid, identity };
+          return {
+            url: registry.url,
+            root,
+            pid: registry.pid,
+            identity,
+            startedAt: registry.startedAt,
+            credentialId: registry.credentialId,
+          };
         }
         if (status.status === "unreachable") {
           throw new Error(`Cannot reuse or replace the Codegraph server: ${status.reason}`);
@@ -1238,7 +1271,7 @@ async function startSharedOwnerForRoot(
     await registered;
     child.disconnect();
     child.unref();
-    return { url, root, pid, identity };
+    return { url, root, pid, identity, startedAt: registry.startedAt, credentialId: credential.id };
   } catch (error) {
     if (wroteRegistry) await removeRegistry(root, credential?.id).catch(() => undefined);
     if (child) await terminateServerProcess(child);

@@ -1,8 +1,9 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/client";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { describe, expect, it } from "vitest";
+import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src/mcp/http-transport.js";
 import { mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 import { runCliOrThrow } from "./helpers/cli.js";
 
@@ -11,11 +12,21 @@ const cli = path.resolve("dist/cli.js");
 function stdioClient(
   root: string,
   mode: "legacy" | "auto" = "legacy",
+  workspace?: string,
 ): { client: Client; transport: StdioClientTransport } {
   const client = new Client({ name: "shared-index-consumer", version: "1.0.0" }, { versionNegotiation: { mode } });
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [cli, "mcp", "serve", "--stdio", "--root", root, "--no-warmup"],
+    args: [
+      cli,
+      "mcp",
+      "serve",
+      "--stdio",
+      "--root",
+      root,
+      "--no-warmup",
+      ...(workspace ? ["--workspace", workspace] : []),
+    ],
     stderr: "pipe",
   });
   return { client, transport };
@@ -131,4 +142,178 @@ describe("shared stdio project ownership", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("rejects live alias retargeting until the original logical root is restored", async (context) => {
+    const root = await mkTmpDir("cg-shared-stdio-bound-root-");
+    const otherRoot = await mkTmpDir("cg-shared-stdio-other-root-");
+    const parent = await mkTmpDir("cg-shared-stdio-retarget-");
+    const alias = path.join(parent, "selected");
+    const { client, transport } = stdioClient(alias, "auto");
+    let linked = false;
+    try {
+      linked = await tryCreateDirectorySymlink(root, alias);
+      if (!linked) {
+        context.skip();
+        return;
+      }
+      await fsp.writeFile(path.join(root, "main.ts"), "export function sharedTargetOriginal() { return 1; }\n");
+      await fsp.writeFile(path.join(otherRoot, "main.ts"), "export function sharedTargetOther() { return 2; }\n");
+      await client.connect(transport);
+      const initial = await names(client);
+      expect(JSON.parse(initial) as unknown).toMatchObject({ root: alias });
+      expect(initial).toContain("sharedTargetOriginal");
+      expect(initial).not.toContain("sharedTargetOther");
+      const registryPath = path.join(root, ".codegraph", "server.json");
+      const registry = await fsp.readFile(registryPath, "utf8");
+
+      await fsp.unlink(alias);
+      linked = false;
+      linked = await tryCreateDirectorySymlink(otherRoot, alias);
+      expect(linked).toBe(true);
+      await expect(names(client)).rejects.toThrow("project root changed");
+      // A later explicit request must not silently bind this bridge to the alias's new project.
+      await expect(names(client)).rejects.toThrow("project root changed");
+      await expect(fsp.access(path.join(otherRoot, ".codegraph", "server.json"))).rejects.toThrow();
+      expect(await fsp.readFile(registryPath, "utf8")).toBe(registry);
+
+      await fsp.unlink(alias);
+      linked = false;
+      linked = await tryCreateDirectorySymlink(root, alias);
+      expect(linked).toBe(true);
+      const restored = await names(client);
+      expect(JSON.parse(restored) as unknown).toMatchObject({ root: alias });
+      expect(restored).toContain("sharedTargetOriginal");
+      expect(restored).not.toContain("sharedTargetOther");
+      expect(await fsp.readFile(registryPath, "utf8")).toBe(registry);
+    } finally {
+      await client.close();
+      await runCliOrThrow(["server", "stop", "--root", root]);
+      if (linked) await fsp.unlink(alias);
+      await fsp.rm(parent, { recursive: true, force: true });
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(otherRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it.each(["legacy", "auto", "workspace"] as const)(
+    "rejects a different MCP server reusing the captured endpoint without replay (%s)",
+    async (mode) => {
+      const root = await mkTmpDir("cg-shared-stdio-bound-endpoint-");
+      const otherRoot = await mkTmpDir("cg-shared-stdio-replacement-");
+      const { client, transport } = stdioClient(
+        root,
+        mode === "legacy" ? "legacy" : "auto",
+        mode === "workspace" ? "workspace.json" : undefined,
+      );
+      const direct = new Client(
+        { name: "replacement-endpoint-consumer", version: "1.0.0" },
+        { versionNegotiation: { mode: "auto" } },
+      );
+      let replacement: CodegraphMcpHttpServer | undefined;
+      try {
+        await fsp.writeFile(path.join(root, "main.ts"), "export function sharedTargetOriginal() { return 1; }\n");
+        if (mode === "workspace") {
+          await fsp.writeFile(
+            path.join(root, "workspace.json"),
+            JSON.stringify({ projects: [{ id: "project", path: "." }] }),
+          );
+        }
+        await fsp.writeFile(
+          path.join(otherRoot, "main.ts"),
+          "export function sharedTargetReplacement() { return 2; }\n",
+        );
+        await client.connect(transport);
+        expect(await names(client)).toContain("sharedTargetOriginal");
+        const registry = JSON.parse(await fsp.readFile(path.join(root, ".codegraph", "server.json"), "utf8")) as {
+          pid: number;
+          url: string;
+        };
+        // An external exit leaves the old registry and credential in place, so the next dispatch must reprove health.
+        process.kill(registry.pid, "SIGTERM");
+        await expect
+          .poll(
+            () => {
+              try {
+                process.kill(registry.pid, 0);
+                return false;
+              } catch (error) {
+                if (error instanceof Error && "code" in error && error.code === "ESRCH") return true;
+                throw error;
+              }
+            },
+            { timeout: 10_000 },
+          )
+          .toBe(true);
+        await expect
+          .poll(
+            async () => {
+              try {
+                replacement = await startCodegraphMcpHttpServer({
+                  root: otherRoot,
+                  host: "127.0.0.1",
+                  port: Number(new URL(registry.url).port),
+                  readOnly: false,
+                  warmup: "off",
+                  watch: false,
+                });
+                return true;
+              } catch (error) {
+                if (error instanceof Error && "code" in error && error.code === "EADDRINUSE") return false;
+                throw error;
+              }
+            },
+            { timeout: 10_000 },
+          )
+          .toBe(true);
+        if (!replacement) throw new Error("Replacement endpoint did not start.");
+        expect(replacement.url).toBe(registry.url);
+        await direct.connect(new StreamableHTTPClientTransport(new URL(replacement.url)));
+        const replacementResult = await names(direct);
+        expect(replacementResult).toContain("sharedTargetReplacement");
+        expect(replacementResult).not.toContain("sharedTargetOriginal");
+        await direct.close();
+        const replacementMcpRequests: string[] = [];
+        replacement.server.on("request", (request) => {
+          if (request.url?.split("?", 1)[0] === "/mcp") replacementMcpRequests.push(request.method ?? "");
+        });
+
+        if (mode === "workspace") {
+          const rejected = await names(client);
+          expect(rejected).toContain("captured shared Codegraph owner");
+          expect(rejected).not.toContain("sharedTargetReplacement");
+        } else {
+          await expect(names(client)).rejects.toThrow("captured shared Codegraph owner");
+        }
+        expect(replacementMcpRequests).toEqual([]);
+        await replacement.close();
+        replacement = undefined;
+        // Recovery belongs to the next explicit call, never a replay of the rejected request.
+        const recovered = await names(client);
+        expect(recovered).toContain("sharedTargetOriginal");
+        expect(recovered).not.toContain("sharedTargetReplacement");
+      } finally {
+        await Promise.allSettled([client.close(), direct.close()]);
+        await replacement?.close();
+        // Coverage load can exceed the lifecycle health probe's deadline; retry only that transient refusal.
+        await expect
+          .poll(
+            async () => {
+              try {
+                await runCliOrThrow(["server", "stop", "--root", root]);
+                return true;
+              } catch (error) {
+                if (error instanceof Error && error.message.includes("health endpoint is temporarily unavailable"))
+                  return false;
+                throw error;
+              }
+            },
+            { timeout: 10_000 },
+          )
+          .toBe(true);
+        await fsp.rm(root, { recursive: true, force: true });
+        await fsp.rm(otherRoot, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });

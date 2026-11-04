@@ -21,6 +21,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - MCP watching retires descendant handles after a parent directory disappears; queued edits still invalidate freshness, but retired handles cannot close or disable replacement watches. An older failed rebuild no longer consumes a newer edit burst's retry attempts.
+- MCP bridges reject retargeted project aliases and revalidate captured owner endpoints before sending tool calls. Workspace routing retains and checks secondary alias paths after physical-project deduplication.
 
 ## [3.1.2] - 2026-11-02
 
