@@ -1803,6 +1803,6 @@ export function buildIndexedCandidateCoverage(args: {
     scope: "indexed_candidates",
     state: "partial",
     reasons: REFERENCE_COVERAGE_REASON_ORDER.filter((reason) => reasons.includes(reason)),
-    ...(affectedFiles.length ? { affectedFiles: affectedFiles.sort() } : {}),
+    ...(affectedFiles.length ? { affectedFiles } : {}),
   };
 }
