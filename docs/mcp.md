@@ -40,7 +40,7 @@ codegraph mcp serve --root /path/to/workspace --workspace workspace.json
 - Config and project paths stay inside `--root`, including resolved symlinks. The config allows at most 64 projects and 1,000,000 bytes. Physical aliases reuse one project; distinct worktrees do not.
 - `workspace_projects` lists configured projects and explicit dependency relationships. These relationships are configuration evidence, not inferred symbol-level links.
 - Workspace selection and dependency declarations are loaded at startup; restart the workspace bridge after changing them. Each owner tracks edits within its selected project independently.
-- Every deduplicated alias keeps its declared path. A changed alias fails its fan-out project group; an explicitly selected unchanged declaration remains usable.
+- Every deduplicated alias keeps its declared path. A changed secondary alias fails its fan-out project group; explicitly selecting the unchanged canonical declaration remains usable. A changed canonical root invalidates all declarations in its group.
 - `search` and `workspace_symbols` query all selected projects unless `project` selects one. Other tools require `project` or a returned project-qualified handle/path.
 - Results stay grouped in config order. Fan-out runs at most two projects per call; at most four calls are admitted. Freshness, omissions and errors stay per project; pending, truncated or degraded analysis is never complete.
 - Each project uses its own configuration and the same owner as a standalone client. The router never builds a parent-root index.
