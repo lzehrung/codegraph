@@ -17,6 +17,7 @@ import {
 import { awaitStdioMcpLifecycle } from "./stdio-lifecycle.js";
 import { DEFAULT_MCP_TOOL_CONCURRENCY } from "./runtime-limits.js";
 import { listCodegraphMcpTools } from "./tools.js";
+import { rebaseMcpResponseRoots } from "./response-envelopes.js";
 
 /** A stdio connection owns protocol state, never the project's index or watcher. */
 export async function serveSharedStdioMcp(
@@ -113,7 +114,7 @@ export async function serveSharedStdioMcp(
                 : {}),
             },
           );
-          return rebaseResponseRoot(result, owner.root, path.resolve(options.root));
+          return rebaseResponseRoot(result, request.params.name, owner.root, path.resolve(options.root));
         } catch (error) {
           // Do not replay a request: artifact_build may already have written output. A later call can recover a dead
           // or idle-expired owner. Protocol argument errors and cancellation do not retire a healthy owner.
@@ -172,13 +173,13 @@ function rebaseRequestPaths(
   return translated;
 }
 
-function rebaseResponseRoot(result: CallToolResult, physicalRoot: string, logicalRoot: string): CallToolResult {
+function rebaseResponseRoot(
+  result: CallToolResult,
+  toolName: string,
+  physicalRoot: string,
+  logicalRoot: string,
+): CallToolResult {
   if (physicalRoot === logicalRoot) return result;
-  const physicalRootKey = fileIdentityKey(physicalRoot);
-  const rebasePayload = (value: Record<string, unknown>): Record<string, unknown> => {
-    if (typeof value.root !== "string" || fileIdentityKey(value.root) !== physicalRootKey) return value;
-    return { ...value, root: logicalRoot };
-  };
   const content = result.content.map((block) => {
     if (block.type !== "text") return block;
     let payload: unknown;
@@ -188,12 +189,14 @@ function rebaseResponseRoot(result: CallToolResult, physicalRoot: string, logica
       return block;
     }
     if (!isPlainRecord(payload)) return block;
-    const rebased = rebasePayload(payload);
+    const rebased = rebaseMcpResponseRoots(toolName, payload, physicalRoot, logicalRoot);
     return rebased === payload ? block : { ...block, text: JSON.stringify(rebased) };
   });
   return {
     ...result,
     content,
-    ...(isPlainRecord(result.structuredContent) ? { structuredContent: rebasePayload(result.structuredContent) } : {}),
+    ...(isPlainRecord(result.structuredContent)
+      ? { structuredContent: rebaseMcpResponseRoots(toolName, result.structuredContent, physicalRoot, logicalRoot) }
+      : {}),
   };
 }

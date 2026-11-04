@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createCodegraphMcpHandlers } from "../src/mcp/handlers.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { dispatchWorkspaceTool, parseWorkspaceQualifiedValue, qualifyWorkspaceValue } from "../src/mcp/workspace.js";
 import { loadWorkspaceMcpConfig, type WorkspaceProject } from "../src/mcp/workspace-config.js";
@@ -473,6 +474,276 @@ describe("workspace MCP configuration and routing", () => {
       expect(records(response.projects)[0]).toMatchObject({ status: "ok", coverage: { state: "partial" } });
       expect(response.coverage).toMatchObject({ completedProjects: 1, complete: false });
     } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("derives packet and explore coverage from nested evidence with fresh zero-omission outer metadata", async () => {
+    const root = await makeWorkspace("codegraph-workspace-packet-coverage-");
+    const projectRoot = await fs.realpath(path.join(root, "projects", "app"));
+    const handlers = createCodegraphMcpHandlers({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      useConfig: false,
+    });
+    try {
+      await fs.writeFile(
+        path.join(projectRoot, "main.ts"),
+        "export function needle(): number { return 1; }\nexport const value = needle();\n",
+      );
+      await writeWorkspaceConfig(root, { projects: [{ id: "app", path: "projects/app" }] });
+      const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+      const symbols = await handlers.workspace_symbols({ query: "needle", limit: 1 });
+      const handle = symbols.symbols[0]?.handle;
+      if (!handle) throw new Error("Packet fixture symbol was not indexed.");
+      const ownerPacket = await handlers.packet_get({ target: handle });
+      const explanation = ownerPacket.packet;
+      if (!("target" in explanation)) throw new Error("Expected an explanation packet.");
+      expect(ownerPacket.freshness.state).toBe("fresh");
+      expect(Object.values(ownerPacket.omittedCounts).every((count) => !count)).toBe(true);
+      expect(explanation.analysis).toMatchObject({ parserDegradedFiles: 0, nativeFilesFellBack: 0 });
+      expect(explanation.referenceCoverage?.state).toBe("complete");
+      const ownerExplore = await handlers.explore({ query: "main.ts", includeSource: true });
+      expect(ownerExplore.freshness.state).toBe("fresh");
+      expect(Object.values(ownerExplore.omittedCounts).every((count) => !count)).toBe(true);
+
+      for (const [label, parserDegradedFiles, nativeFilesFellBack, referenceState, complete] of [
+        ["complete evidence", 0, 0, "complete", true],
+        ["degraded parser", 1, 0, "complete", false],
+        ["skipped native file", 0, 1, "complete", false],
+        ["partial reference proof", 0, 0, "partial", false],
+      ] as const) {
+        const answer: typeof ownerPacket = {
+          ...ownerPacket,
+          packet: {
+            ...explanation,
+            analysis: { ...explanation.analysis, parserDegradedFiles, nativeFilesFellBack },
+            referenceCoverage: { scope: "indexed_candidates", state: referenceState },
+          },
+        };
+        const response = await dispatchWorkspaceTool(
+          config,
+          "packet_get",
+          { project: "app", target: handle },
+          async () => answer,
+        );
+        expect(records(response.projects)[0], label).toMatchObject({
+          status: "ok",
+          coverage: {
+            state: complete ? "complete" : "partial",
+            freshness: { state: "fresh" },
+            omittedCounts: ownerPacket.omittedCounts,
+          },
+        });
+        expect(response.coverage, label).toEqual({
+          selectedProjects: 1,
+          completedProjects: 1,
+          failedProjects: 0,
+          complete,
+        });
+        const exploreAnswer: typeof ownerExplore = { ...ownerExplore, packets: [answer] };
+        const exploreResponse = await dispatchWorkspaceTool(
+          config,
+          "explore",
+          { project: "app", query: "main.ts", includeSource: true },
+          async () => exploreAnswer,
+        );
+        expect(records(exploreResponse.projects)[0], label).toMatchObject({
+          status: "ok",
+          coverage: { state: complete ? "complete" : "partial", omittedCounts: ownerExplore.omittedCounts },
+        });
+        expect(exploreResponse.coverage, label).toMatchObject({ completedProjects: 1, complete });
+      }
+      const fileView = ownerExplore.fileView;
+      if (!fileView) throw new Error("Exact-file exploration did not include its file view.");
+      const truncatedExplore: typeof ownerExplore = { ...ownerExplore, fileView: { ...fileView, truncated: true } };
+      const truncatedResponse = await dispatchWorkspaceTool(
+        config,
+        "explore",
+        { project: "app", query: "main.ts", includeSource: true },
+        async () => truncatedExplore,
+      );
+      expect(records(truncatedResponse.projects)[0]).toMatchObject({ status: "ok", coverage: { state: "partial" } });
+      expect(truncatedResponse.coverage).toMatchObject({ completedProjects: 1, complete: false });
+    } finally {
+      handlers.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves nested rename limits and degraded analysis in refactor plan coverage", async () => {
+    const root = await makeWorkspace("codegraph-workspace-rename-coverage-");
+    const projectRoot = await fs.realpath(path.join(root, "projects", "app"));
+    const handlers = createCodegraphMcpHandlers({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      useConfig: false,
+    });
+    try {
+      await fs.writeFile(
+        path.join(projectRoot, "main.ts"),
+        "export interface Contract { run(): void }\nexport class Worker implements Contract { run(): void {} }\n",
+      );
+      await writeWorkspaceConfig(root, { projects: [{ id: "app", path: "projects/app" }] });
+      const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+      const symbols = await handlers.workspace_symbols({ query: "Contract", limit: 1 });
+      const handle = symbols.symbols[0]?.handle;
+      if (!handle) throw new Error("Refactor fixture interface was not indexed.");
+      const ownerPlan = await handlers.refactor_plan({ handle, renameTo: "RenamedContract" });
+      const rename = ownerPlan.rename;
+      if (!rename) throw new Error("Refactor fixture did not include its rename preview.");
+      expect(ownerPlan.freshness.state).toBe("fresh");
+      expect(Object.values(ownerPlan.omittedCounts).every((count) => !count)).toBe(true);
+      expect(ownerPlan.analysis).toMatchObject({ parserDegradedFiles: 0, nativeFilesFellBack: 0 });
+      expect(ownerPlan.referenceCoverage?.state).toBe("complete");
+      for (const [label, parserDegradedFiles, omittedEdits, complete] of [
+        ["complete rename", 0, 0, true],
+        ["degraded rename", 1, 0, false],
+        ["bounded rename", 0, 1, false],
+      ] as const) {
+        const answer: typeof ownerPlan = {
+          ...ownerPlan,
+          rename: {
+            ...rename,
+            analysis: { ...rename.analysis, parserDegradedFiles },
+            omittedCounts: { ...rename.omittedCounts, edits: omittedEdits },
+          },
+        };
+        const response = await dispatchWorkspaceTool(
+          config,
+          "refactor_plan",
+          { project: "app", handle, renameTo: "RenamedContract" },
+          async () => answer,
+        );
+        expect(records(response.projects)[0], label).toMatchObject({
+          status: "ok",
+          coverage: { state: complete ? "complete" : "partial", omittedCounts: ownerPlan.omittedCounts },
+        });
+        expect(response.coverage, label).toMatchObject({ completedProjects: 1, complete });
+      }
+    } finally {
+      handlers.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebases alias packet, explore, and refactor metadata without changing physical-root source text", async () => {
+    const root = await makeWorkspace("codegraph-workspace-envelope-roots-");
+    const projectRoot = await fs.realpath(path.join(root, "projects", "app"));
+    const projectAlias = path.join(root, "projects", "app-alias");
+    const handlers = createCodegraphMcpHandlers({
+      root: projectRoot,
+      buildOptions: { cache: "off" },
+      useConfig: false,
+    });
+    let linked = false;
+    try {
+      linked = await tryCreateDirectorySymlink(projectRoot, projectAlias);
+      if (!linked) return;
+      const source = [
+        `export interface Contract { run(): void } // ${projectRoot}`,
+        `export class Worker implements Contract { run(): void {} } // ${projectRoot}`,
+        `export const metadata = ${JSON.stringify({ root: projectRoot, packet: { root: projectRoot } })};`,
+        "",
+      ].join("\n");
+      await fs.writeFile(path.join(projectRoot, "main.ts"), source);
+      await writeWorkspaceConfig(root, { projects: [{ id: "app", path: "projects/app-alias" }] });
+      const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+      const symbols = await handlers.workspace_symbols({ query: "Contract", limit: 1 });
+      const handle = symbols.symbols[0]?.handle;
+      if (!handle) throw new Error("Alias fixture interface was not indexed.");
+      const ownerPacket = await handlers.packet_get({ target: handle });
+      const explanation = ownerPacket.packet;
+      if (!("target" in explanation)) throw new Error("Expected an explanation packet.");
+      expect(explanation.snippets.some((snippet) => snippet.text.includes(projectRoot))).toBe(true);
+      const packetResponse = await dispatchWorkspaceTool(
+        config,
+        "packet_get",
+        { project: "app", target: qualifyWorkspaceValue("app", handle) },
+        async (_project, _toolName, arguments_) => {
+          if (typeof arguments_.target !== "string") throw new Error("Missing routed packet target.");
+          return await handlers.packet_get({ target: arguments_.target });
+        },
+      );
+      expect(records(packetResponse.projects)[0]).toMatchObject({
+        status: "ok",
+        result: {
+          root: projectAlias,
+          packet: {
+            root: projectAlias,
+            snippets: explanation.snippets,
+            target: { handle: qualifyWorkspaceValue("app", handle) },
+          },
+        },
+      });
+
+      const ownerPlan = await handlers.refactor_plan({ handle, renameTo: "RenamedContract", includeSource: true });
+      expect(ownerPlan.references.some((reference) => reference.context?.includes(projectRoot))).toBe(true);
+      const planResponse = await dispatchWorkspaceTool(
+        config,
+        "refactor_plan",
+        {
+          project: "app",
+          handle: qualifyWorkspaceValue("app", handle),
+          renameTo: "RenamedContract",
+          includeSource: true,
+        },
+        async (_project, _toolName, arguments_) => {
+          if (typeof arguments_.handle !== "string") throw new Error("Missing routed refactor handle.");
+          return await handlers.refactor_plan({
+            handle: arguments_.handle,
+            renameTo: "RenamedContract",
+            includeSource: true,
+          });
+        },
+      );
+      expect(records(planResponse.projects)[0]).toMatchObject({
+        status: "ok",
+        result: {
+          root: projectAlias,
+          references: ownerPlan.references,
+          rename: { root: projectAlias, target: { handle: qualifyWorkspaceValue("app", handle) } },
+        },
+      });
+
+      const ownerExplore = await handlers.explore({ query: "main.ts", includeSource: true });
+      expect(ownerExplore.packets.map((packet) => packet.root)).toContain(projectRoot);
+      if (!ownerExplore.fileView) throw new Error("Exact-file exploration did not include its file view.");
+      expect(ownerExplore.fileView.content).toContain(projectRoot);
+      const expectedPackets = ownerExplore.packets.map((packet) => {
+        const payload = packet.packet;
+        if (!("target" in payload)) throw new Error("Expected an exploration explanation packet.");
+        return { root: projectAlias, packet: { root: projectAlias, snippets: payload.snippets } };
+      });
+      const exploreResponse = await dispatchWorkspaceTool(
+        config,
+        "explore",
+        { project: "app", query: "main.ts", includeSource: true },
+        async () => await handlers.explore({ query: "main.ts", includeSource: true }),
+      );
+      expect(records(exploreResponse.projects)[0]).toMatchObject({
+        status: "ok",
+        result: {
+          packets: expectedPackets,
+          fileView: { content: ownerExplore.fileView.content, text: ownerExplore.fileView.text },
+        },
+      });
+
+      const otherRoot = path.join(root, "projects", "lib");
+      const differentRoot = await dispatchWorkspaceTool(
+        config,
+        "packet_get",
+        { project: "app", target: handle },
+        async () => ({ ...ownerPacket, packet: { ...explanation, root: otherRoot } }),
+      );
+      expect(records(differentRoot.projects)[0]).toMatchObject({
+        status: "ok",
+        result: { root: projectAlias, packet: { root: otherRoot, snippets: explanation.snippets } },
+      });
+      expect(await fs.readFile(path.join(projectRoot, "main.ts"), "utf8")).toBe(source);
+    } finally {
+      handlers.dispose();
+      if (linked) await fs.unlink(projectAlias);
       await fs.rm(root, { recursive: true, force: true });
     }
   });

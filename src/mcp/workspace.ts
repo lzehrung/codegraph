@@ -18,6 +18,7 @@ import { fileIdentityKey, isFilePathWithinRoot } from "../util/paths.js";
 import { getCodegraphVersion } from "../util/package-info.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertMcpRootScope } from "./root-preflight.js";
+import { mapMcpResponseEnvelopes, rebaseMcpResponseRoots } from "./response-envelopes.js";
 import {
   assertSharedOwnerConnection,
   ensureSharedOwner,
@@ -42,6 +43,8 @@ type WorkspaceProjectCall = (
   project: WorkspaceProject,
   toolName: string,
   arguments_: Record<string, unknown>,
+  /** Revalidate selected roots after connection/authentication, immediately before sending the tool request. */
+  beforeCall: () => Promise<void>,
   signal?: AbortSignal,
 ) => Promise<unknown>;
 
@@ -303,10 +306,17 @@ async function assertWorkspaceProjectRoot(
   projectPaths: Iterable<string> = [project.path],
 ): Promise<void> {
   const workspaceRoot = await fs.realpath(config.logicalRoot);
+  const canonicalRoot = await fs.realpath(project.root);
+  if (
+    fileIdentityKey(workspaceRoot) !== fileIdentityKey(config.root) ||
+    fileIdentityKey(canonicalRoot) !== fileIdentityKey(project.root) ||
+    !isFilePathWithinRoot(workspaceRoot, canonicalRoot)
+  ) {
+    throw new Error("Workspace project root changed or escaped the workspace; reload the workspace configuration.");
+  }
   for (const projectPath of projectPaths) {
     const projectRoot = await fs.realpath(path.resolve(config.logicalRoot, projectPath));
     if (
-      fileIdentityKey(workspaceRoot) !== fileIdentityKey(config.root) ||
       fileIdentityKey(projectRoot) !== fileIdentityKey(project.root) ||
       !isFilePathWithinRoot(workspaceRoot, projectRoot)
     ) {
@@ -383,29 +393,42 @@ function readOmittedCounts(value: unknown): Record<string, number> {
   return counts;
 }
 
-function getProjectCoverage(value: unknown): ProjectCoverage {
+function getProjectCoverage(toolName: string, value: unknown): ProjectCoverage {
   const freshness = readFreshness(value);
   const omittedCounts = readOmittedCounts(value);
   const pending = isPlainRecord(value) && value.status === "index_building";
   const unknownFreshness = freshness.state !== "fresh" && freshness.state !== "refreshed";
-  const hasOmissions = Object.values(omittedCounts).some((count) => count > 0);
-  const bounded =
-    isPlainRecord(value) &&
-    (Boolean(value.truncated) ||
-      (typeof value.omitted === "number" && value.omitted > 0) ||
-      (isPlainRecord(value.referenceCoverage) && value.referenceCoverage.state !== "complete"));
-  const analysis = isPlainRecord(value) ? value.analysis : undefined;
-  const incompleteAnalysis =
-    isPlainRecord(analysis) &&
-    (typeof analysis.parserDegradedFiles !== "number" ||
-      typeof analysis.nativeFilesFellBack !== "number" ||
-      !isAnalysisComplete({
-        parserDegradedFiles: analysis.parserDegradedFiles,
-        nativeFilesFellBack: analysis.nativeFilesFellBack,
-      }));
+  const envelopes: Record<string, unknown>[] = [];
+  if (isPlainRecord(value)) {
+    mapMcpResponseEnvelopes(toolName, value, (envelope) => {
+      envelopes.push(envelope);
+      return envelope;
+    });
+  }
+  const incompleteEnvelope = envelopes.some((envelope) => {
+    const hasOmissions = Object.values(readOmittedCounts(envelope)).some((count) => count > 0);
+    const bounded =
+      Boolean(envelope.truncated) ||
+      (typeof envelope.omitted === "number" && envelope.omitted > 0) ||
+      (isPlainRecord(envelope.referenceCoverage) && envelope.referenceCoverage.state !== "complete");
+    const analysis = envelope.analysis;
+    const incompleteAnalysis =
+      isPlainRecord(analysis) &&
+      (typeof analysis.parserDegradedFiles !== "number" ||
+        typeof analysis.nativeFilesFellBack !== "number" ||
+        !isAnalysisComplete({
+          parserDegradedFiles: analysis.parserDegradedFiles,
+          nativeFilesFellBack: analysis.nativeFilesFellBack,
+        }));
+    const incompleteFreshness =
+      isPlainRecord(envelope.freshness) &&
+      envelope.freshness.state !== "fresh" &&
+      envelope.freshness.state !== "refreshed";
+    return hasOmissions || bounded || incompleteAnalysis || incompleteFreshness;
+  });
   let state: ProjectCoverage["state"] = "complete";
   if (pending) state = "pending";
-  else if (unknownFreshness || hasOmissions || bounded || incompleteAnalysis) state = "partial";
+  else if (unknownFreshness || incompleteEnvelope) state = "partial";
   return {
     state,
     freshness,
@@ -446,19 +469,16 @@ export async function dispatchWorkspaceTool(
     const { project } = selection;
     if (signal?.aborted) throw signal.reason ?? new Error("Workspace tool call was cancelled.");
     try {
-      await assertWorkspaceProjectRoot(config, project, selection.validationPaths);
+      const beforeCall = (): Promise<void> => assertWorkspaceProjectRoot(config, project, selection.validationPaths);
+      await beforeCall();
       validateProjectPaths(project, toolName, route.arguments_);
-      const result = await callProjectTool(project, toolName, route.arguments_, signal);
-      const coverage = getProjectCoverage(result);
+      const result = await callProjectTool(project, toolName, route.arguments_, beforeCall, signal);
+      const coverage = getProjectCoverage(toolName, result);
       const status = coverage.state === "pending" ? ("index_building" as const) : ("ok" as const);
-      const qualified = qualifyHandles(result, project.id);
-      if (
-        isPlainRecord(qualified) &&
-        typeof qualified.root === "string" &&
-        fileIdentityKey(qualified.root) === fileIdentityKey(project.root)
-      ) {
-        qualified.root = path.resolve(config.logicalRoot, selection.path);
-      }
+      const rebased = isPlainRecord(result)
+        ? rebaseMcpResponseRoots(toolName, result, project.root, path.resolve(config.logicalRoot, selection.path))
+        : result;
+      const qualified = qualifyHandles(rebased, project.id);
       return {
         project: summaryForProject(project, selection.path),
         status,
@@ -606,6 +626,9 @@ export async function serveWorkspaceMcp(options: {
         );
       }
       const owner = await ensureSharedOwner({ ...perProjectOptions, root: project.root });
+      if (fileIdentityKey(owner.root) !== fileIdentityKey(project.root)) {
+        throw new Error("Workspace project root changed during owner startup; reload the workspace configuration.");
+      }
       await assertSharedOwnerConnection(owner);
       const client = new Client(
         { name: "codegraph-workspace-router", version: getCodegraphVersion() },
@@ -631,7 +654,7 @@ export async function serveWorkspaceMcp(options: {
   const getConnection = (project: WorkspaceProject): WorkspaceOwnerConnection =>
     clients.get(project.id) ?? createConnection(project);
 
-  const callProjectTool: WorkspaceProjectCall = async (project, toolName, arguments_, signal) => {
+  const callProjectTool: WorkspaceProjectCall = async (project, toolName, arguments_, beforeCall, signal) => {
     const connection = getConnection(project);
     connection.activeCalls += 1;
     try {
@@ -646,6 +669,7 @@ export async function serveWorkspaceMcp(options: {
       }
       try {
         await assertSharedOwnerConnection(owner.owner);
+        await beforeCall();
         const result = await owner.client.callTool(
           { name: toolName, arguments: arguments_ },
           { ...(signal ? { signal } : {}), timeout: 2_147_483_647 },

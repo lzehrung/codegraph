@@ -1,9 +1,12 @@
 import fsp from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { describe, expect, it } from "vitest";
 import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src/mcp/http-transport.js";
+import { qualifyWorkspaceValue } from "../src/mcp/workspace.js";
 import { mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 import { runCliOrThrow } from "./helpers/cli.js";
 
@@ -32,10 +35,119 @@ function stdioClient(
   return { client, transport };
 }
 
-async function names(client: Client): Promise<string> {
-  const result = await client.callTool({ name: "workspace_symbols", arguments: { query: "sharedTarget" } });
+async function names(client: Client, arguments_: Record<string, unknown> = {}): Promise<string> {
+  const result = await client.callTool({
+    name: "workspace_symbols",
+    arguments: { query: "sharedTarget", ...arguments_ },
+  });
   expect(result.isError).not.toBe(true);
   return result.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
+}
+
+type StartupGatedWorkspace = {
+  client: Client;
+  transport: StdioClientTransport;
+  blocked: Promise<void>;
+  release: () => void;
+  toolRequests: () => Promise<unknown[]>;
+  close: () => Promise<void>;
+};
+
+async function startupGatedWorkspace(
+  root: string,
+  scratch: string,
+  mode: "legacy" | "auto" = "auto",
+): Promise<StartupGatedWorkspace> {
+  const requestLog = path.join(scratch, "owner-tool-calls.jsonl");
+  const observer = path.join(scratch, "observe-owner-requests.mjs");
+  await fsp.writeFile(requestLog, "");
+  // Observe real owner requests without replacing the HTTP server or its tool handlers.
+  await fsp.writeFile(
+    observer,
+    [
+      'import { channel } from "node:diagnostics_channel";',
+      'import { appendFileSync } from "node:fs";',
+      'channel("http.server.request.start").subscribe(({ request }) => {',
+      '  if (request.url?.split("?", 1)[0] !== "/mcp" || request.method !== "POST") return;',
+      '  let body = "";',
+      '  request.on("data", (chunk) => { body += chunk; });',
+      '  request.on("end", () => {',
+      "    const payload = JSON.parse(body);",
+      '    if (payload.method === "tools/call") {',
+      `      appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({ pid: process.pid, name: payload.params.name }) + "\\n");`,
+      "    }",
+      "  });",
+      "});",
+    ].join("\n"),
+  );
+  const blocked = Promise.withResolvers<void>();
+  const heldResponses = new Set<ServerResponse>();
+  let released = false;
+  const gate = createServer((_request, response) => {
+    if (released) {
+      response.end();
+      return;
+    }
+    heldResponses.add(response);
+    blocked.resolve();
+  });
+  const listening = Promise.withResolvers<void>();
+  gate.once("error", listening.reject);
+  gate.listen(0, "127.0.0.1", listening.resolve);
+  await listening.promise;
+  const address = gate.address();
+  if (!address || typeof address === "string") throw new Error("Workspace startup gate did not bind a port.");
+  const gateUrl = `http://127.0.0.1:${address.port}`;
+  const workspaceModule = pathToFileURL(path.resolve("dist/mcp/workspace.js")).href;
+  const code = [
+    `import { serveWorkspaceMcp } from ${JSON.stringify(workspaceModule)};`,
+    "await serveWorkspaceMcp({",
+    `  root: ${JSON.stringify(root)}, configPath: "workspace.json",`,
+    '  ownerOptions: { warmup: "off", watch: false },',
+    "  projectBuildOptions: async () => {",
+    `    const response = await fetch(${JSON.stringify(gateUrl)});`,
+    "    await response.arrayBuffer();",
+    '    return { cache: "off" };',
+    "  },",
+    "});",
+  ].join("\n");
+  const client = new Client({ name: "startup-alias-consumer", version: "1.0.0" }, { versionNegotiation: { mode } });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["--input-type=module", "--eval", code],
+    env: {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(observer).href}`].filter(Boolean).join(" "),
+    },
+    stderr: "pipe",
+  });
+  const release = (): void => {
+    released = true;
+    for (const response of heldResponses) response.end();
+    heldResponses.clear();
+  };
+  return {
+    client,
+    transport,
+    blocked: blocked.promise,
+    release,
+    async toolRequests(): Promise<unknown[]> {
+      const recorded = (await fsp.readFile(requestLog, "utf8")).trim();
+      return recorded ? recorded.split("\n").map((line) => JSON.parse(line) as unknown) : [];
+    },
+    async close(): Promise<void> {
+      release();
+      try {
+        await client.close();
+      } finally {
+        const closed = Promise.withResolvers<void>();
+        gate.close((error) => {
+          if (error) closed.reject(error);
+          else closed.resolve();
+        });
+        await closed.promise;
+      }
+    },
+  };
 }
 
 describe("shared stdio project ownership", () => {
@@ -192,6 +304,156 @@ describe("shared stdio project ownership", () => {
       await fsp.rm(parent, { recursive: true, force: true });
       await fsp.rm(root, { recursive: true, force: true });
       await fsp.rm(otherRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it.for([
+    { selection: "selected alias", mode: "legacy" as const, arguments_: { project: "app-alias" } },
+    {
+      selection: "qualified secondary alias",
+      mode: "auto" as const,
+      arguments_: { project: "app", fileGlob: qualifyWorkspaceValue("app-alias", "**/*.ts") },
+    },
+    { selection: "fanout", mode: "auto" as const, arguments_: {} },
+  ])("rejects $selection changes during owner startup", { timeout: 60_000 }, async (scenario, context) => {
+    const root = await mkTmpDir("cg-workspace-startup-alias-");
+    const otherRoot = await mkTmpDir("cg-workspace-startup-alias-other-");
+    const scratch = await mkTmpDir("cg-workspace-startup-alias-gate-");
+    const projectRoot = path.join(root, "app");
+    const alias = path.join(root, "app-alias");
+    let linked = false;
+    let consumer: StartupGatedWorkspace | undefined;
+    try {
+      await fsp.mkdir(projectRoot);
+      await fsp.writeFile(path.join(projectRoot, "main.ts"), "export function sharedTargetOriginal() { return 1; }\n");
+      await fsp.writeFile(path.join(otherRoot, "main.ts"), "export function sharedTargetOther() { return 2; }\n");
+      linked = await tryCreateDirectorySymlink(projectRoot, alias);
+      if (!linked) {
+        context.skip();
+        return;
+      }
+      await fsp.writeFile(
+        path.join(root, "workspace.json"),
+        JSON.stringify({
+          projects: [
+            { id: "app", path: "app" },
+            { id: "app-alias", path: "app-alias" },
+          ],
+        }),
+      );
+      consumer = await startupGatedWorkspace(root, scratch, scenario.mode);
+      await consumer.client.connect(consumer.transport);
+      const pending = names(consumer.client, scenario.arguments_);
+      await consumer.blocked;
+      await fsp.unlink(alias);
+      linked = false;
+      linked = await tryCreateDirectorySymlink(otherRoot, alias);
+      expect(linked).toBe(true);
+      consumer.release();
+      const rejected = await pending;
+      expect(await consumer.toolRequests()).toEqual([]);
+      expect(JSON.parse(rejected) as unknown).toMatchObject({
+        projects: [{ project: { id: "app" }, status: "error", error: expect.stringContaining("root changed") }],
+        coverage: { selectedProjects: 1, completedProjects: 0, failedProjects: 1, complete: false },
+      });
+      expect(rejected).not.toContain("sharedTargetOriginal");
+      expect(rejected).not.toContain("sharedTargetOther");
+      await expect(fsp.access(path.join(otherRoot, ".codegraph", "server.json"))).rejects.toThrow();
+      const registryPath = path.join(projectRoot, ".codegraph", "server.json");
+      const registry = await fsp.readFile(registryPath, "utf8");
+      const owner = JSON.parse(registry) as { pid: number };
+
+      // A changed secondary declaration must not poison an explicitly selected unchanged canonical declaration.
+      const canonical = await names(consumer.client, { project: "app" });
+      expect(JSON.parse(canonical) as unknown).toMatchObject({
+        projects: [{ project: { id: "app", path: "app" }, status: "ok" }],
+      });
+      expect(canonical).toContain("sharedTargetOriginal");
+      expect(canonical).not.toContain("sharedTargetOther");
+      expect(await consumer.toolRequests()).toEqual([{ pid: owner.pid, name: "workspace_symbols" }]);
+      expect(await fsp.readFile(registryPath, "utf8")).toBe(registry);
+    } finally {
+      await consumer?.close();
+      await runCliOrThrow(["server", "stop", "--root", projectRoot]);
+      if (linked) await fsp.unlink(alias);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(otherRoot, { recursive: true, force: true });
+      await fsp.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a captured canonical root retargeted outside the workspace during owner startup", async (context) => {
+    const root = await mkTmpDir("cg-workspace-startup-root-");
+    const otherRoot = await mkTmpDir("cg-workspace-startup-root-other-");
+    const scratch = await mkTmpDir("cg-workspace-startup-root-gate-");
+    const projectRoot = path.join(root, "app");
+    const savedRoot = path.join(root, "original-app");
+    const alias = path.join(root, "app-alias");
+    let aliasLinked = false;
+    let rootLinked = false;
+    let moved = false;
+    let consumer: StartupGatedWorkspace | undefined;
+    try {
+      await fsp.mkdir(projectRoot);
+      await fsp.writeFile(path.join(projectRoot, "main.ts"), "export function sharedTargetOriginal() { return 1; }\n");
+      await fsp.writeFile(path.join(otherRoot, "main.ts"), "export function sharedTargetExternal() { return 2; }\n");
+      aliasLinked = await tryCreateDirectorySymlink(projectRoot, alias);
+      if (!aliasLinked) {
+        context.skip();
+        return;
+      }
+      await fsp.writeFile(
+        path.join(root, "workspace.json"),
+        JSON.stringify({
+          projects: [
+            { id: "app", path: "app" },
+            { id: "app-alias", path: "app-alias" },
+          ],
+        }),
+      );
+      consumer = await startupGatedWorkspace(root, scratch);
+      await consumer.client.connect(consumer.transport);
+      const pending = names(consumer.client, { project: "app-alias" });
+      await consumer.blocked;
+      await fsp.rename(projectRoot, savedRoot);
+      moved = true;
+      rootLinked = await tryCreateDirectorySymlink(otherRoot, projectRoot);
+      expect(rootLinked).toBe(true);
+      consumer.release();
+      const rejected = await pending;
+      expect(await consumer.toolRequests()).toEqual([]);
+      expect(JSON.parse(rejected) as unknown).toMatchObject({
+        projects: [{ status: "error", error: expect.stringContaining("root changed during owner startup") }],
+        coverage: { selectedProjects: 1, completedProjects: 0, failedProjects: 1, complete: false },
+      });
+      expect(rejected).not.toContain("sharedTargetOriginal");
+      expect(rejected).not.toContain("sharedTargetExternal");
+      await expect(fsp.access(path.join(savedRoot, ".codegraph", "server.json"))).rejects.toThrow();
+
+      await fsp.unlink(projectRoot);
+      rootLinked = false;
+      await fsp.rename(savedRoot, projectRoot);
+      moved = false;
+      const canonical = await names(consumer.client, { project: "app" });
+      expect(JSON.parse(canonical) as unknown).toMatchObject({
+        projects: [{ project: { id: "app", path: "app" }, status: "ok" }],
+      });
+      expect(canonical).toContain("sharedTargetOriginal");
+      expect(canonical).not.toContain("sharedTargetExternal");
+      const owner = JSON.parse(await fsp.readFile(path.join(projectRoot, ".codegraph", "server.json"), "utf8")) as {
+        pid: number;
+      };
+      expect(await consumer.toolRequests()).toEqual([{ pid: owner.pid, name: "workspace_symbols" }]);
+    } finally {
+      await consumer?.close();
+      if (rootLinked) await fsp.unlink(projectRoot);
+      if (moved) await fsp.rename(savedRoot, projectRoot);
+      if (aliasLinked) await fsp.unlink(alias);
+      await runCliOrThrow(["server", "stop", "--root", projectRoot]);
+      await runCliOrThrow(["server", "stop", "--root", otherRoot]);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(otherRoot, { recursive: true, force: true });
+      await fsp.rm(scratch, { recursive: true, force: true });
     }
   }, 60_000);
 
