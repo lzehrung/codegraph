@@ -124,6 +124,11 @@ export async function startCodegraphMcpHttpServer(
   };
 
   const server = createServer((request, response) => {
+    // server.close() only reaps sockets already idle at that instant. A response
+    // finishing afterward must not leave a keep-alive socket holding shutdown open.
+    response.once("finish", () => {
+      if (!server.listening) server.closeIdleConnections();
+    });
     void handleMcpHttpRequest(
       request,
       response,

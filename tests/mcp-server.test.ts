@@ -3,7 +3,7 @@ import { ensureSessionQueryIndex } from "../src/agent/query-index/session-store.
 import * as queryIndexUpdate from "../src/agent/query-index/update.js";
 import fsSync, { type FSWatcher, type WatchListener } from "node:fs";
 import fs from "node:fs/promises";
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import os from "node:os";
@@ -4018,6 +4018,43 @@ describe("MCP session teardown regressions (S2)", () => {
       expect(handle.store?.isClosed).toBe(true);
     } finally {
       await httpServer.close();
+    }
+  });
+
+  it("drains a keep-alive health connection when shutdown begins during its request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-health-shutdown-"));
+    const httpServer = await startCodegraphMcpHttpServer({ root, port: 0, watch: false, warmup: "off" });
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    let closing: Promise<void> | undefined;
+    let closed = false;
+    // Begin shutdown after Node accepts the request, before its response finishes.
+    httpServer.server.prependOnceListener("request", () => {
+      closing = httpServer.close().then(() => {
+        closed = true;
+      });
+    });
+    try {
+      const health = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const request = httpRequest(new URL("/health", httpServer.url), { agent }, (response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          response.once("error", reject);
+          response.once("end", () => resolve({ status: response.statusCode, body }));
+        });
+        request.once("error", reject);
+        request.end();
+      });
+      expect(health.status).toBe(200);
+      expect(JSON.parse(health.body)).toMatchObject({ service: "codegraph", root });
+      await expect.poll(() => closed, { timeout: 2_000 }).toBe(true);
+    } finally {
+      agent.destroy();
+      await closing;
+      await httpServer.close();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

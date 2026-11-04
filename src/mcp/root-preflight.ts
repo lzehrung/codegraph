@@ -14,12 +14,9 @@ export const MCP_ROOT_PREFLIGHT_LIMITS = Object.freeze({
   elapsedMs: 2_000, // Checked between filesystem operations, not an OS I/O cancellation deadline.
 });
 
-// These prune only the preflight, without changing project-file discovery or configured includes.
-// Keep Git metadata opaque, including worktree/submodule pointers in regular .git files.
+// Prune contents, but still recognize a Git project at the directory itself.
+// Repository metadata stays opaque; worktree/submodule pointers are checked only as .git markers.
 const SKIPPED_DIRECTORIES: Readonly<Record<string, true>> = {
-  ".git": true,
-  ".hg": true,
-  ".svn": true,
   ".codegraph": true,
   ".codegraph-cache": true,
   node_modules: true,
@@ -171,7 +168,7 @@ export async function assertMcpRootScope(root: string, options: { allowParentRoo
     operation = "check the selected root's owning Git project";
     if (await hasOwningGitProject(realRoot, state)) return;
 
-    const directories = [{ directory: realRoot, depth: 0 }];
+    const directories = [{ directory: realRoot, depth: 0, pruned: false }];
     for (let index = 0; index < directories.length; index += 1) {
       const current = directories[index]!;
       const relative = normalizePath(path.relative(realRoot, current.directory));
@@ -187,6 +184,7 @@ export async function assertMcpRootScope(root: string, options: { allowParentRoo
         if (state.projects.length > 1) throw selectionRequired(state);
         continue;
       }
+      if (current.pruned) continue;
 
       const directory = await fsp.opendir(current.directory, { bufferSize: 32 });
       try {
@@ -210,7 +208,8 @@ export async function assertMcpRootScope(root: string, options: { allowParentRoo
             );
           }
           if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
-          if (Object.hasOwn(SKIPPED_DIRECTORIES, entry.name.toLowerCase())) continue;
+          const name = entry.name.toLowerCase();
+          if (name === ".git" || name === ".hg" || name === ".svn") continue;
           if (current.depth >= MCP_ROOT_PREFLIGHT_LIMITS.directoryDepth) {
             throw scopeUnknown(
               state,
@@ -223,7 +222,11 @@ export async function assertMcpRootScope(root: string, options: { allowParentRoo
               `directory discovery budget exceeded (${MCP_ROOT_PREFLIGHT_LIMITS.directories} directories)`,
             );
           }
-          directories.push({ directory: path.join(current.directory, entry.name), depth: current.depth + 1 });
+          directories.push({
+            directory: path.join(current.directory, entry.name),
+            depth: current.depth + 1,
+            pruned: Object.hasOwn(SKIPPED_DIRECTORIES, name),
+          });
         }
       } finally {
         await directory.close();

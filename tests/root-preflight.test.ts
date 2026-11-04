@@ -174,6 +174,26 @@ describe("assertMcpRootScope", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["vendor", "directory"],
+    ["coverage", "file"],
+    ["out", "directory"],
+    ["bin", "file"],
+    ["obj", "directory"],
+  ] as const)("recognizes a Git project at a pruned directory itself: %s", async (name, marker) => {
+    const root = await roots.create("cg-root-preflight-pruned-project-");
+    await gitProject(root, "app");
+    await gitProject(root, name, marker);
+    const error = await scopeFailure(root);
+    expect(error).toMatchObject({ code: "MCP_ROOT_SELECTION_REQUIRED" });
+    expect(error.message).toContain('"app"');
+    expect(error.message).toContain(JSON.stringify(name));
+    expectRemedies(error);
+
+    await fsp.rm(path.join(root, "app", ".git"), { recursive: true });
+    await expect(assertMcpRootScope(root)).resolves.toBeUndefined();
+  });
+
   it("reports only a bounded, explicitly incomplete project list", async () => {
     const root = await roots.create("cg-root-preflight-many-projects-");
     for (let index = 0; index < 5; index += 1) await gitProject(root, `project-${index}`);

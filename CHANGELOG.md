@@ -22,6 +22,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 - MCP watching retires descendant handles after a parent directory disappears; queued edits still invalidate freshness, but retired handles cannot close or disable replacement watches. An older failed rebuild no longer consumes a newer edit burst's retry attempts.
 - MCP bridges reject retargeted project aliases and revalidate captured owner endpoints after connection setup, before sending tool calls. Workspace routing retains and checks secondary alias paths after physical-project deduplication, rejects owners with a changed root, and preserves nested packet coverage and logical-root metadata.
+- HTTP MCP shutdown closes keep-alive connections after their active responses finish, so health polling cannot hold `codegraph server stop` open.
+- MCP root preflight recognizes Git checkouts directly inside pruned directory names such as `vendor`, without scanning their contents. Workspace errors retain owner compatibility reasons and recovery instructions while redacting filesystem paths.
 
 ## [3.1.2] - 2026-11-02
 

@@ -416,6 +416,46 @@ describe("workspace MCP configuration and routing", () => {
     }
   });
 
+  it.each([
+    {
+      message:
+        "The Codegraph server at http://127.0.0.1:7331/mcp has an incompatible shared-owner configuration or runtime. Stop the owner, then reconnect.",
+      expected:
+        "The Codegraph server at http://127.0.0.1:7331/mcp has an incompatible shared-owner configuration or runtime. Stop the owner, then reconnect.",
+    },
+    {
+      message: "ENOENT: no such file or directory, open '/private/work space/project.json'",
+      expected: "ENOENT: no such file or directory, open '<path>'",
+    },
+    {
+      message: 'EACCES: open "C:\\private work\\project.json" failed',
+      expected: 'EACCES: open "<path>" failed',
+    },
+  ])("preserves actionable workspace errors while redacting file paths: $message", async ({ message, expected }) => {
+    const root = await makeWorkspace("codegraph-workspace-errors-");
+    try {
+      await writeWorkspaceConfig(root, { projects: [{ id: "app", path: "projects/app" }] });
+      const config = await loadWorkspaceMcpConfig(root, "workspace.json");
+      const response = await dispatchWorkspaceTool(config, "workspace_symbols", { query: "needle" }, async () => {
+        throw new Error(message);
+      });
+      expect(records(response.projects)[0]).toMatchObject({
+        status: "error",
+        error: expected,
+        coverage: { state: "failed", freshness: { state: "unavailable" } },
+      });
+      expect(response.errors).toEqual([{ project: { id: "app", path: "projects/app", aliases: [] }, error: expected }]);
+      expect(response.coverage).toEqual({
+        selectedProjects: 1,
+        completedProjects: 0,
+        failedProjects: 1,
+        complete: false,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports building owners as pending rather than completed search coverage", async () => {
     const root = await makeWorkspace("codegraph-workspace-pending-");
     try {

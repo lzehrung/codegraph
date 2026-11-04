@@ -17,6 +17,7 @@ codegraph mcp serve --root . --stdio
 - Automatic owners keep their merged startup configuration; configuration or installed-code changes require `codegraph server stop --root /path/to/repo`, then reconnect. Source edits remain live. Requests are never automatically replayed.
 - `serveCodegraphMcp` library calls remain in-process; `mcp serve --port` remains a directly managed HTTP server.
 - Owner startup/shutdown contention retries for 90 seconds, then returns a busy error with a retry instruction.
+- HTTP shutdown drains active responses, then closes idle keep-alive connections; health polling does not keep an owner alive.
 - Stdio and workspace calls revalidate their root aliases and captured owner's authenticated lifecycle identity after connection setup, immediately before dispatch. Changed aliases or replaced endpoints fail without replay.
 
 ### Select multiple repositories
@@ -43,10 +44,12 @@ codegraph mcp serve --root /path/to/workspace --workspace workspace.json
 - Every deduplicated alias keeps its declared path. A changed secondary alias fails its fan-out project group; explicitly selecting the unchanged canonical declaration remains usable. A changed canonical root invalidates all declarations in its group.
 - `search` and `workspace_symbols` query all selected projects unless `project` selects one. Other tools require `project` or a returned project-qualified handle/path.
 - Results stay grouped in config order. Fan-out runs at most two projects per call; at most four calls are admitted. Freshness, omissions and errors stay per project; pending, truncated or degraded analysis, including nested `packet_get` coverage, is never complete.
+- Workspace errors retain server URLs, failure reasons and recovery instructions; absolute filesystem paths are redacted.
 - Each project uses its own configuration and the same owner as a standalone client. The router never builds a parent-root index.
 - Caller-facing root metadata stays logical, including nested `packet_get` packets and `refactor_plan` rename previews. Source text and arbitrary data are not rewritten.
 - Intentional whole-root indexing requires `--allow-parent-root`, not a workspace. Existing Git monorepos, submodules, subdirectory roots and non-Git single projects keep their scope.
 - Preflight limits are 128 ancestors, 512 directories, depth 16, 16,384 entries, 512 KiB of entry names and 2 seconds between I/O operations. Exhaustion reports unknown scope, not a complete inventory; these are not index-size limits.
+- Preflight checks Git markers at dependency, cache and build directories before pruning their contents. Git metadata itself stays opaque.
 
 ### Manage HTTP lifecycle
 

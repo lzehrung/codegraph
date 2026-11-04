@@ -442,7 +442,10 @@ function failedProjectCoverage(): ProjectCoverage {
 
 function errorText(error: unknown): string {
   const message = errorMessage(error);
-  return message.replace(/(?:[A-Za-z]:)?[/\\][^'"\n]*?(?=(?:[/\\][^'"\n]*)?['"]|$)/g, "<path>");
+  return message.replace(/https?:\/\/[^\s'"]+|(?:[A-Za-z]:)?[/\\][^'"\n]*(?=['"]|$)/g, (value) => {
+    if (value.startsWith("http://") || value.startsWith("https://")) return value;
+    return "<path>";
+  });
 }
 
 export async function dispatchWorkspaceTool(
