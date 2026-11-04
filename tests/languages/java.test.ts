@@ -25,6 +25,7 @@ import { exportedNameOf } from "../helpers/narrow.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "java",
@@ -1059,6 +1060,35 @@ describe("Java lowercase class import bindings", () => {
         }),
         expect.objectContaining({ kind: "star", from: "com.example", jvmTypeWildcardName: "example", typeOnly: false }),
       ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java authoritative package imports", () => {
+  it("keeps undeclared package names external without guessing bindings or file edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-authoritative-package-"));
+    try {
+      const paths = await writeFixtureFiles(root, JVM_PACKAGE_IMPORT_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const row of JVM_PACKAGE_IMPORT_CASES.filter((entry) => entry.file.endsWith(".java"))) {
+        const file = paths[row.file]!;
+        const module = index.byFile.get(fileIdentityKey(file));
+        expect(module?.imports, row.file).toHaveLength(1);
+        const resolved = module?.imports[0]?.resolved;
+        if (row.target) {
+          expect(resolved, row.file).toBe(paths[row.target.file]);
+        } else {
+          expect(resolved, row.file).toEqual({ external: row.specifier });
+        }
+        expect(module?.parserDegraded, row.file).toBeUndefined();
+        expect(module?.importLookupIncomplete, row.file).toBeUndefined();
+        const fileEdges = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
+          .flatMap((edge) => (edge.to.type === "file" ? [normalizePath(edge.to.path)] : []));
+        expect(fileEdges, row.file).toEqual(row.target ? [paths[row.target.file]] : []);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

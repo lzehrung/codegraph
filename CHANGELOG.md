@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Java and Kotlin imports stay external when a known JVM package does not declare the imported name, instead of guessing a same-named file by path. Java no longer creates a dependency on `Hidden.kt` for a Kotlin function named `Hidden` or a different declared type; declared types and nested-type imports still resolve.
+
 ## [3.1.3] - 2026-11-04
 
 ### Added

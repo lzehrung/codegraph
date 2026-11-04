@@ -259,9 +259,9 @@ export async function resolveImportSpecifier(
     const lookup = await lookupJvmImport(projectRoot, spec, { languageId, fromFile });
     const jvmHit = await confineLanguageHit(projectRoot, lookup.file, spec);
     if (jvmHit) return jvmHit;
-    // A file that may declare the name was not read, so no file is proven. The path-shaped fallbacks below would name
-    // one by its filename, which proves nothing about what it declares.
-    if (lookup.incomplete) return { external: spec };
+    // A known package's declarations are authoritative, and an unread file may still declare the name. Neither miss
+    // permits a filename guess. Unknown packages can still name nested types through the path of their owner.
+    if (lookup.incomplete || lookup.packageKnown) return { external: spec };
   }
   if (languageId === "php") {
     const phpHit = await confineLanguageHit(

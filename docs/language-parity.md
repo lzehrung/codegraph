@@ -116,6 +116,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ### Imports and dependency edges
 
 - Java, Kotlin, C#, PHP, and Python symbol indexes start at the nearest language manifest, so same-named sibling-workspace packages do not bind.
+- A named import missing from a fully read JVM package stays external, with no guessed file edge or parser degradation; package membership combines Java and Kotlin declarations. Java imports Kotlin types, not top-level functions, and a matching filename alone does not prove a declaration in a complete file. Path fallback remains available for an unknown package-shaped owner such as `p.Outer.Inner`.
 - A directory is a file edge only where the runtime treats it as a module (Python packages, PEP 420 namespace directories, Go packages).
 - Opt-in dynamic import heuristics (`graph.dynamicImportHeuristics`, `--dynamic-import-heuristics`) fold only static paths (`path.join`, `importlib.import_module`, `require File.join(__dir__, ...)`, `__DIR__`-rooted PHP includes); computed names are not inferred.
 

@@ -81,8 +81,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * call that passed no path aliases (the module-level import of a Vue block) no longer decides the answer of a later call
  * for the same file and specifier that did, so a style import through a path alias gets its file edge. Edges cached by
  * an older build kept the external answer.
+ * Epoch 105 keeps a missing Java or Kotlin import external once either language declares its package, instead of
+ * guessing a file from the import path. A complete Java file with no declarations no longer proves its filename's type.
  */
-export const CORE_ALGORITHM_EPOCH = 103;
+export const CORE_ALGORITHM_EPOCH = 105;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

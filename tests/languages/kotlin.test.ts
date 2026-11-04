@@ -16,6 +16,7 @@ import { KOTLIN_UNICODE_NAMES } from "../helpers/kotlin-unicode-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 
 type TokenRange = {
   start: { line: number; column: number; index: number };
@@ -876,6 +877,35 @@ describe("Kotlin extension and generic top-level functions", () => {
         column: columnInLines(consumer, 8, "String"),
       });
       expect(receiver.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin authoritative package imports", () => {
+  it("keeps undeclared package names external while importing declared functions and types", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-authoritative-package-"));
+    try {
+      const paths = await writeFixtureFiles(root, JVM_PACKAGE_IMPORT_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const row of JVM_PACKAGE_IMPORT_CASES.filter((entry) => entry.file.endsWith(".kt"))) {
+        const file = paths[row.file]!;
+        const module = index.byFile.get(fileIdentityKey(file));
+        expect(module?.imports, row.file).toHaveLength(1);
+        const resolved = module?.imports[0]?.resolved;
+        if (row.target) {
+          expect(resolved, row.file).toBe(paths[row.target.file]);
+        } else {
+          expect(resolved, row.file).toEqual({ external: row.specifier });
+        }
+        expect(module?.parserDegraded, row.file).toBeUndefined();
+        expect(module?.importLookupIncomplete, row.file).toBeUndefined();
+        const fileEdges = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
+          .flatMap((edge) => (edge.to.type === "file" ? [normalizePath(edge.to.path)] : []));
+        expect(fileEdges, row.file).toEqual(row.target ? [paths[row.target.file]] : []);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
