@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- C# alias and static-using type lookups stay partial beside oversized scan candidates with workers on or off, including ignored files and files outside an explicit index list. Cached results rebuild with the consistent source-size policy.
 - Java and Kotlin imports stay external when a known JVM package does not declare the imported name, instead of guessing a same-named file by path. Java no longer creates a dependency on `Hidden.kt` for a Kotlin function named `Hidden` or a different declared type; declared types and nested-type imports still resolve.
 - `buildSymbolGraphDetailed`, `callers`, and `callees` keep receiver proofs separate at each call site. A block, closure, or parameter that shadows a receiver no longer reuses another binding's type or adds a wrong call edge; cached graphs rebuild.
 - Reference coverage reports affected files in deterministic path order.

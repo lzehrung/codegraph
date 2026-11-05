@@ -1,10 +1,11 @@
+import fsp from "node:fs/promises";
 import {
   languageExtensionPatterns,
   normalizeLanguageExtensions,
   supportForFileWithoutHeaderSample,
   type LanguageExtensionMap,
 } from "../../languages.js";
-import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
+import { confineResolvedPath, fileIdentityKey, stripBom } from "../paths.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
@@ -15,6 +16,7 @@ import {
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../native/source-limits.js";
 import type { BuildReport } from "../../indexer/types.js";
 import type { ParsedFileContext } from "../../indexer/parse-context.js";
 import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, type CsharpNamespaceFacts } from "../csharp-tree.js";
@@ -116,7 +118,19 @@ async function readCsharpNamespaceFacts(
   const retained = parsedFiles?.get(fileKey);
   let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   if (!tree) {
-    const parsed = parseSyntaxTree(await readUtf8WithoutBom(filePath), support);
+    const source = await fsp.readFile(filePath, "utf8");
+    const sourceBytes = Buffer.byteLength(source, "utf8");
+    if (sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+      recordParserBackendDegradation(report, {
+        file: slashPath(filePath),
+        languageId: support.id,
+        nativeFallbackReason: "sourceTooLarge",
+        nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
+      });
+      csharpNamespaceFileCache.set(cacheKey, null);
+      return null;
+    }
+    const parsed = parseSyntaxTree(stripBom(source), support);
     if (!parsed.tree) {
       recordParserBackendDegradation(report, {
         file: slashPath(filePath),

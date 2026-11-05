@@ -317,6 +317,57 @@ describe("project facts extracted before import resolution", () => {
     expect(semanticResult(workers, root)).toEqual(semanticResult(serial, root));
   }, 60_000);
 
+  it.each(["ignored", "outside-file-list"] as const)(
+    "keeps an oversized %s C# scan candidate partial with workers on or off",
+    async (mode) => {
+      const root = await temporaryProject();
+      await writeProject(root, {
+        "a/Use.cs": "using Alias = Core.Target;\nclass Use { Alias value; }\n",
+        "z/Target.cs": "namespace Core;\npublic class Target {}\n",
+        "z/Unknown.cs": `namespace Other;\n/*${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}*/\n`,
+      });
+      const calls = recordMainThreadParses();
+      const build = (useNativeWorkers: boolean, report?: BuildReport) => {
+        const options = {
+          cache: "off" as const,
+          useNativeWorkers,
+          nativeThreads: 1,
+          threads: 1,
+          ...(report ? { report } : {}),
+        };
+        if (mode === "ignored") {
+          return buildProjectIndex(root, {
+            ...options,
+            discovery: { ignoreGlobs: ["z/Unknown.cs"], globRoot: root },
+          });
+        }
+        return buildProjectIndexFromFiles(
+          root,
+          ["a/Use.cs", "z/Target.cs"].map((file) => path.join(root, file)),
+          options,
+        );
+      };
+      const serial = await build(false);
+      const report: BuildReport = { timings: {} };
+      const workers = await build(true, report);
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+      expect(report.workerPool?.tasksSubmitted).toBe(3);
+      for (const index of [serial, workers]) {
+        expect(index.byFile.size).toBe(2);
+        const use = moduleOf(index, root, "a/Use.cs");
+        expect(use?.imports.find((binding) => binding.kind === "named")?.resolved).toEqual({ external: "Core.Target" });
+        expect(use?.importLookupIncomplete).toBe(true);
+        expect(index.graph.edges.some((edge) => edge.from === use?.file && edge.to.type === "file")).toBe(false);
+      }
+      expect(semanticResult(workers, root)).toEqual(semanticResult(serial, root));
+      expect(
+        calls.standalone.some((source) => Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES),
+      ).toBe(false);
+    },
+    60_000,
+  );
+
   it("preserves failed requested files without blocking later extraction tasks", async () => {
     const root = await temporaryProject();
     await writeProject(root, sources);
