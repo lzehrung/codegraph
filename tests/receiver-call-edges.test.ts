@@ -18,6 +18,17 @@ import * as filePrep from "../src/languages/file-prep.js";
 import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { cppCells } from "./call-form-matrix/languages/cpp.js";
+import { goCells } from "./call-form-matrix/languages/go.js";
+import { phpCells } from "./call-form-matrix/languages/php.js";
+import { pythonCells } from "./call-form-matrix/languages/python.js";
+import { rustCells } from "./call-form-matrix/languages/rust.js";
+import { tsCells } from "./call-form-matrix/languages/ts.js";
+import {
+  assertConsumerAgreement,
+  buildConsumerAgreementFixture,
+  disposeConsumerAgreementFixture,
+} from "./helpers/consumer-agreement.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const roots: string[] = [];
@@ -123,6 +134,186 @@ const TS_REPORTER_FIXTURE: Record<string, string> = {
     "\n",
   ),
 };
+
+nativeDescribe("receiver proof syntax-site isolation", () => {
+  it.each([
+    {
+      language: "TypeScript",
+      cells: tsCells,
+      id: "ts/typed-local-receiver-block-shadow",
+      innerLine: 9,
+      innerDefinitionLine: 2,
+    },
+    {
+      language: "Go",
+      cells: goCells,
+      id: "go/typed-local-receiver-closure-shadow",
+      innerLine: 12,
+      innerDefinitionLine: 5,
+    },
+    {
+      language: "Rust",
+      cells: rustCells,
+      id: "rust/typed-local-receiver-closure-shadow",
+      innerLine: 15,
+      innerDefinitionLine: 7,
+    },
+    {
+      language: "PHP",
+      cells: phpCells,
+      id: "php/typed-local-receiver-closure-shadow",
+      innerLine: 10,
+      innerDefinitionLine: 3,
+    },
+    {
+      language: "C++",
+      cells: cppCells,
+      id: "cpp/typed-local-receiver-block-shadow",
+      innerLine: 9,
+      innerDefinitionLine: 2,
+    },
+  ])("keeps $language shadowed and enclosing receiver calls on their own types", async (testCase) => {
+    const cell = testCase.cells.find((candidate) => candidate.id === testCase.id);
+    if (!cell || cell.expected === "not_found") throw new Error(`missing resolved matrix cell ${testCase.id}`);
+    const fixture = await buildConsumerAgreementFixture("cg-receiver-site-shadow-", cell.files);
+    try {
+      const outer = membersOwnedBy(fixture.graph, "A", "run");
+      const inner = membersOwnedBy(fixture.graph, "B", "run");
+      expect(outer).toHaveLength(1);
+      expect(inner).toHaveLength(1);
+      await assertConsumerAgreement(fixture, {
+        file: cell.use.file,
+        line: testCase.innerLine,
+        token: "run",
+        expected: { file: cell.use.file, line: testCase.innerDefinitionLine },
+        requireCompleteCoverage: true,
+      });
+      await assertConsumerAgreement(fixture, {
+        file: cell.use.file,
+        line: cell.use.line,
+        token: "run",
+        expected: { file: cell.expected.file, line: cell.expected.line },
+        requireCompleteCoverage: true,
+      });
+      // Both members legitimately have an incoming edge from the same enclosing function.
+      // Match exact sites, not just the caller/target pair, to reject cross-site proof sharing.
+      const calls = fixture.graph.edges
+        .filter((edge) => edge.label === "calls" && fixture.graph.nodes.get(edge.to)?.name === "run")
+        .sort((a, b) => (a.site?.range.start.index ?? 0) - (b.site?.range.start.index ?? 0))
+        .map((edge) => ({ line: edge.site?.range.start.line, target: edge.to }));
+      expect(calls).toEqual([
+        { line: testCase.innerLine, target: inner[0] },
+        { line: cell.use.line, target: outer[0] },
+      ]);
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+
+  it("does not share proven or unproven receivers across blocks and preserves callable closure scopes", async () => {
+    const fixture = await buildConsumerAgreementFixture("cg-receiver-site-unproven-", {
+      "scope.ts": [
+        "class A { run(): number { return 1; } }",
+        "class B { run(): number { return 2; } }",
+        "export function after(flag: boolean, value: { run(): number }): void {",
+        "  const z = new A();",
+        "  z.run();",
+        "  if (flag) {",
+        "    const z = value;",
+        "    z.run();",
+        "  }",
+        "  z.run();",
+        "}",
+        "export function before(flag: boolean, value: { run(): number }): void {",
+        "  const z = new A();",
+        "  if (flag) {",
+        "    const z = value;",
+        "    z.run();",
+        "  }",
+        "  z.run();",
+        "}",
+        "export function closures(): number {",
+        "  const z = new A();",
+        "  const inner = () => {",
+        "    const z = new B();",
+        "    return z.run();",
+        "  };",
+        "  return inner() + z.run();",
+        "}",
+      ].join("\n"),
+    });
+    try {
+      for (const line of [8, 16]) {
+        await assertConsumerAgreement(fixture, { file: "scope.ts", line, token: "run", expected: "not_found" });
+      }
+      for (const line of [5, 10, 18, 26]) {
+        await assertConsumerAgreement(fixture, {
+          file: "scope.ts",
+          line,
+          token: "run",
+          expected: { file: "scope.ts", line: 1 },
+        });
+      }
+      await assertConsumerAgreement(fixture, {
+        file: "scope.ts",
+        line: 24,
+        token: "run",
+        expected: { file: "scope.ts", line: 2 },
+      });
+      const outer = membersOwnedBy(fixture.graph, "A", "run");
+      const inner = membersOwnedBy(fixture.graph, "B", "run");
+      expect(outer).toHaveLength(1);
+      expect(inner).toHaveLength(1);
+      const calls = fixture.graph.edges
+        .filter((edge) => edge.label === "calls" && fixture.graph.nodes.get(edge.to)?.name === "run")
+        .sort((a, b) => (a.site?.range.start.index ?? 0) - (b.site?.range.start.index ?? 0))
+        .map((edge) => ({ line: edge.site?.range.start.line, target: edge.to }));
+      expect(calls).toEqual([
+        { line: 5, target: outer[0] },
+        { line: 10, target: outer[0] },
+        { line: 18, target: outer[0] },
+        { line: 24, target: inner[0] },
+        { line: 26, target: outer[0] },
+      ]);
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+
+  it("keeps Python default-expression proof out of a same-named keyword-only parameter's body", async () => {
+    const cell = pythonCells.find((candidate) => candidate.id === "python/static-receiver-keyword-only-shadow");
+    if (!cell) throw new Error("missing Python keyword-only receiver matrix cell");
+    const fixture = await buildConsumerAgreementFixture("cg-receiver-site-default-", cell.files);
+    try {
+      await assertConsumerAgreement(fixture, {
+        file: "scope.py",
+        line: 9,
+        token: "target",
+        expected: "not_found",
+      });
+      await assertConsumerAgreement(fixture, {
+        file: "scope.py",
+        line: 12,
+        token: "target",
+        expected: { file: "scope.py", line: 2 },
+      });
+      const target = membersOwnedBy(fixture.graph, "Box", "target");
+      expect(target).toHaveLength(1);
+      const calls = fixture.graph.edges
+        .filter((edge) => edge.label === "calls" && fixture.graph.nodes.get(edge.to)?.name === "target")
+        .sort((a, b) => (a.site?.range.start.index ?? 0) - (b.site?.range.start.index ?? 0))
+        .map((edge) => ({ line: edge.site?.range.start.line, target: edge.to }));
+      // Navigation's existing default-expression limitation is separate: preserve the graph's
+      // proven class call before the parameter, but never reuse that proof in the body.
+      expect(calls).toEqual([
+        { line: 8, target: target[0] },
+        { line: 12, target: target[0] },
+      ]);
+    } finally {
+      await disposeConsumerAgreementFixture(fixture);
+    }
+  });
+});
 
 nativeDescribe("receiver method call edges", () => {
   it("records a calls edge for a TypeScript instance method invoked on a constructed receiver", async () => {

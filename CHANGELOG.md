@@ -11,6 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- `buildSymbolGraphDetailed`, `callers`, and `callees` keep receiver proofs separate at each call site. A block, closure, or parameter that shadows a receiver no longer reuses another binding's type or adds a wrong call edge; cached graphs rebuild.
 - Reference coverage reports affected files in deterministic path order.
 
 ## [3.1.3] - 2026-11-04

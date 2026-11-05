@@ -75,7 +75,7 @@ Go-to-definition, find references, and the detailed call graph share one impleme
   - The search stops at the first type that declares the name, because that declaration hides the ones above it.
   - Java, Kotlin, and C# overloads span the class hierarchy. There the search continues to ancestors for an overload that accepts the call, and it skips an ancestor method that a same-signature override replaces.
   - In JavaScript, TypeScript, Ruby, Swift, and Kotlin, static and instance members are separate, so a member of the other kind does not hide the name.
-- **Receivers.** One classifier decides what a receiver is: `this` or `self`, a declared type, a constructed value, a type name, or a module.
+- **Receivers.** One classifier decides what a receiver is: `this` or `self`, a declared type, a constructed value, a type name, or a module. Proofs are reused only for the same receiver syntax site, so block, closure, and parameter shadowing cannot borrow another binding's type.
 - **Callables.** Each indexed function stores its identity in `SymbolDef.callable`: a key, its owner, and the argument counts it accepts. A C++ prototype and its definition share a key, also across files, unless the function has internal linkage. C declarations share a key only within one file; navigation joins a header prototype and its definition through includes. TypeScript overload signatures and their implementation in one file share a key.
 - **Imports.** `src/util/resolution/specifier-targets.ts` maps an import specifier to its target files for both import bindings and file-graph edges.
 
