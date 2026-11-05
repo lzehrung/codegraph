@@ -17,6 +17,12 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
+import {
+  jvmIncompleteWildcardSources,
+  JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
+  JVM_INCOMPLETE_WILDCARD_TYPES,
+} from "../helpers/jvm-incomplete-wildcard-fixture.js";
 
 type TokenRange = {
   start: { line: number; column: number; index: number };
@@ -1064,6 +1070,40 @@ describe("Kotlin package files without a usable syntax tree", () => {
       expect(starFiles("app/UseQuiet.kt")).toEqual(["Other.kt"]);
       expect(moduleOf("app/UseQuiet.kt")?.parserDegraded).toBeUndefined();
       expect(moduleOf("app/UseQuiet.kt")?.importLookupIncomplete).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prove wildcard calls past unread overloads or factories, while retaining class type navigation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unread-wildcard-calls-"));
+    try {
+      const sources = jvmIncompleteWildcardSources();
+      const paths = await writeFixtureFiles(root, sources);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(index.byFile.get(fileIdentityKey(paths["gap/Gap.kt"]!))?.parseErrorRanges?.length).toBeTruthy();
+      for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
+        const text = sources[row.file]!.split("\n")[row.line - 1]!;
+        const result = await goToDefinition(index, {
+          file: paths[row.file]!,
+          line: row.line,
+          column: text.lastIndexOf(row.name) + 1,
+        });
+        expect(result.status, row.caller).toBe(row.target ? "ok" : "not_found");
+        if (row.target && result.status === "ok") {
+          expect(result.definition.file, row.caller).toBe(paths[row.target.file]);
+          expect(result.definition.range.start.line, row.caller).toBe(row.target.line);
+        }
+      }
+      for (const row of JVM_INCOMPLETE_WILDCARD_TYPES) {
+        const result = await goToDefinition(index, {
+          file: paths[row.file]!,
+          line: row.line,
+          column: columnInLines(sources[row.file]!.split("\n"), row.line, row.name),
+        });
+        expect(result.status, row.file).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file, row.file).toBe(paths[row.target.file]);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

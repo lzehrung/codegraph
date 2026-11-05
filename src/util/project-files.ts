@@ -1074,6 +1074,68 @@ export async function listProjectFilesWithGitCandidates(
   return await listProjectFilesInternal(projectRoot, patterns, options);
 }
 
+async function loadDiscoveryIgnoreState(
+  root: string,
+  realRoot: string,
+  options: InternalProjectFileDiscoveryOptions | undefined,
+  discovery: ProjectDiscoveryContext,
+): Promise<{ gitCandidates: GitCandidateSet | null; gitignoreIndex: GitignoreIndex }> {
+  const useGitignore = options?.useGitignore ?? true;
+  // Enumerate through Git when Git's ignore rules are the ones this call wants anyway.
+  // Git applies them while walking, so ignored trees are never descended into and never
+  // reach the realpath and gitignore checks below. Scanning instead costs O(files on
+  // disk): on an Unreal project holding 100,168 files (818 tracked) the scan produced
+  // 55,983 pattern-matching candidates, nearly all generated sources under a gitignored
+  // `Intermediate/` tree, and discovery took 26.1s. Git lists 4,010 in about 111ms.
+  // An aliased root or a gitignore-root override that points elsewhere means Git's notion
+  // of the project is not this call's, so those fall back to the scan. Passing
+  // `gitignoreRoot` equal to the scan root (the CLI's historical whole-project form) still
+  // wants this repository's ignore rules, so keep the Git candidate path. On a 501-file
+  // Git repo with a 20,000-file gitignored tree, `gitignoreRoot: scanRoot` otherwise
+  // forced a filesystem scan plus a full-tree symlink probe (~403ms) instead of Git
+  // listing (~66ms) of the 502 tracked paths.
+  // Compare by identity key, not slash normalization: on a case-insensitive filesystem a
+  // casing or drive-letter difference still names the same directory, and calling that a
+  // mismatch would silently drop back to the slow scan this fast path exists to avoid.
+  const scanRootKey = fileIdentityKey(root);
+  const gitignoreRootMatchesScanRoot =
+    options?.gitignoreRoot === undefined || fileIdentityKey(options.gitignoreRoot) === scanRootKey;
+  const attemptedGitCandidates =
+    useGitignore && gitignoreRootMatchesScanRoot && fileIdentityKey(realRoot) === scanRootKey;
+  const gitDiscoveryCallbacks: DiscoveryWorkCallbacks = {
+    ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
+    ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
+  };
+  const gitCandidates = attemptedGitCandidates
+    ? await getSharedGitCandidates(discovery, root, options?.logLevel, gitDiscoveryCallbacks)
+    : null;
+  // Report only when this call actually asked Git, including a null result. Callers that
+  // already enumerated candidates (build-index) can hand the same set to metadata discovery
+  // and skip a second Git spawn; omitting the callback keeps prior caller behavior.
+  if (attemptedGitCandidates) {
+    options?.onGitCandidatesDiscovered?.(gitCandidates);
+  }
+  let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
+  if (useGitignore && gitCandidates) {
+    gitignoreIndex = await sharedGitignoreIndex(discovery, `git:${fileIdentityKey(root)}`, () =>
+      buildGitignoreIndex(
+        gitCandidates.gitignoreFiles,
+        gitCandidates.gitignoreRoots,
+        gitCandidates.gitignoreAliases,
+        discovery,
+      ),
+    );
+  } else if (useGitignore) {
+    const gitignoreRoot = options?.gitignoreRoot
+      ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
+      : root;
+    gitignoreIndex = await sharedGitignoreIndex(discovery, `fs:${fileIdentityKey(gitignoreRoot)}`, () =>
+      loadGitignoreIndexForRootAliases(gitignoreRoot, discovery),
+    );
+  }
+  return { gitCandidates, gitignoreIndex };
+}
+
 async function listProjectFilesInternal(
   projectRoot: string,
   patterns = DEFAULT_PROJECT_PATTERNS,
@@ -1106,61 +1168,9 @@ async function listProjectFilesInternal(
     : fastGlobIgnoreGlobs;
 
   try {
-    const useGitignore = options?.useGitignore ?? true;
     const realRoot = await fsp.realpath(root);
-    // Enumerate through Git when Git's ignore rules are the ones this call wants anyway.
-    // Git applies them while walking, so ignored trees are never descended into and never
-    // reach the realpath and gitignore checks below. Scanning instead costs O(files on
-    // disk): on an Unreal project holding 100,168 files (818 tracked) the scan produced
-    // 55,983 pattern-matching candidates, nearly all generated sources under a gitignored
-    // `Intermediate/` tree, and discovery took 26.1s. Git lists 4,010 in about 111ms.
-    // An aliased root or a gitignore-root override that points elsewhere means Git's notion
-    // of the project is not this call's, so those fall back to the scan. Passing
-    // `gitignoreRoot` equal to the scan root (the CLI's historical whole-project form) still
-    // wants this repository's ignore rules, so keep the Git candidate path. On a 501-file
-    // Git repo with a 20,000-file gitignored tree, `gitignoreRoot: scanRoot` otherwise
-    // forced a filesystem scan plus a full-tree symlink probe (~403ms) instead of Git
-    // listing (~66ms) of the 502 tracked paths.
-    // Compare by identity key, not slash normalization: on a case-insensitive filesystem a
-    // casing or drive-letter difference still names the same directory, and calling that a
-    // mismatch would silently drop back to the slow scan this fast path exists to avoid.
-    const scanRootKey = fileIdentityKey(root);
-    const gitignoreRootMatchesScanRoot =
-      options?.gitignoreRoot === undefined || fileIdentityKey(options.gitignoreRoot) === scanRootKey;
-    const attemptedGitCandidates =
-      useGitignore && gitignoreRootMatchesScanRoot && fileIdentityKey(realRoot) === scanRootKey;
-    const gitDiscoveryCallbacks: DiscoveryWorkCallbacks = {
-      ...(options?.onDiscoveryProgress ? { onDiscoveryProgress: options.onDiscoveryProgress } : {}),
-      ...(options?.onDiscoveryTiming ? { onDiscoveryTiming: options.onDiscoveryTiming } : {}),
-    };
     const discovery = options?.discoveryContext ?? createProjectDiscoveryContext(root);
-    const gitCandidates = attemptedGitCandidates
-      ? await getSharedGitCandidates(discovery, root, options?.logLevel, gitDiscoveryCallbacks)
-      : null;
-    // Report only when this call actually asked Git, including a null result. Callers that
-    // already enumerated candidates (build-index) can hand the same set to metadata discovery
-    // and skip a second Git spawn; omitting the callback keeps prior caller behavior.
-    if (attemptedGitCandidates) {
-      options?.onGitCandidatesDiscovered?.(gitCandidates);
-    }
-    let gitignoreIndex = EMPTY_GITIGNORE_INDEX;
-    if (useGitignore && gitCandidates) {
-      gitignoreIndex = await sharedGitignoreIndex(discovery, `git:${fileIdentityKey(root)}`, () =>
-        buildGitignoreIndex(
-          gitCandidates.gitignoreFiles,
-          gitCandidates.gitignoreRoots,
-          gitCandidates.gitignoreAliases,
-          discovery,
-        ),
-      );
-    } else if (useGitignore) {
-      const gitignoreRoot = options?.gitignoreRoot
-        ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
-        : root;
-      gitignoreIndex = await sharedGitignoreIndex(discovery, `fs:${fileIdentityKey(gitignoreRoot)}`, () =>
-        loadGitignoreIndexForRootAliases(gitignoreRoot, discovery),
-      );
-    }
+    const { gitCandidates, gitignoreIndex } = await loadDiscoveryIgnoreState(root, realRoot, options, discovery);
     // Git returns a candidate set, not a filtered result: the pattern, include,
     // default-ignore, and gitignore checks below still decide what is indexable.
     let files: string[];
@@ -1322,6 +1332,43 @@ export function createDiscoveredFileMatcher(
     }
     return !userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher));
   };
+}
+
+/** Apply discovery rules to an existing candidate list, including logical and physical Git ignores. */
+export async function filterDiscoveredProjectFileCandidates(
+  projectRoot: string,
+  candidatePaths: readonly string[],
+  patterns: readonly string[] = DEFAULT_PROJECT_PATTERNS,
+  options?: InternalProjectFileDiscoveryOptions,
+): Promise<string[]> {
+  if (!candidatePaths.length) return [];
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
+  const globRoot = options?.globRoot ? await ensureDirectoryReadable(options.globRoot, "Glob root") : root;
+  const matchesDiscovery = createDiscoveredFileMatcher(root, globRoot, patterns, options);
+  const matchingCandidates = candidatePaths.filter(matchesDiscovery);
+  if (!matchingCandidates.length) return [];
+  const realRoot = await fsp.realpath(root);
+  const discovery = options?.discoveryContext ?? createProjectDiscoveryContext(root);
+  const { gitCandidates, gitignoreIndex } = await loadDiscoveryIgnoreState(root, realRoot, options, discovery);
+  let indexableCandidates = matchingCandidates.filter((file) => !isIgnoredByGitignore(file, gitignoreIndex));
+  if (!gitCandidates) {
+    // Filesystem discovery does not follow file symlinks; safe directory links are crawled separately.
+    const regularFiles = await mapLimitSemaphore(indexableCandidates, REALPATH_FILTER_CONCURRENCY, async (file) => {
+      try {
+        return (await fsp.lstat(file)).isFile() ? file : null;
+      } catch {
+        return null;
+      }
+    });
+    indexableCandidates = regularFiles.filter((file): file is string => file !== null);
+  }
+  const rootSafeFiles = await filterRealPathsWithinRootEntries(indexableCandidates, realRoot);
+  return rootSafeFiles
+    .filter(
+      ({ path: filePath, realPath }) =>
+        normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex),
+    )
+    .map(({ path: filePath }) => filePath);
 }
 
 /**

@@ -123,6 +123,8 @@ A cached module is keyed by its own content, but its import targets depend on ot
 
 With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
 
+Incremental indexing applies the full build's discovery patterns, includes, and ignores, including `.gitignore` and repository/configured excludes, to changed and untracked Git candidates; `buildGraphDelta` uses the same filters for changed paths. Editing or staging an ignored file does not add it to the index. `buildGraphDelta` reports removed manifest files and their edges even when a rename destination is ignored. Explicit library file inputs remain explicit overrides.
+
 An incremental update (`codegraph index`, `buildProjectIndexIncremental`, agent sessions) extracts the importers of a changed file again only when the file's public surface changed:
 
 - The public surface is the file's exported names and kinds, its re-export sources, and, for a file with no exports, the names that a star import would bind. Bodies, parameters, and positions are not part of it, so a body or signature edit extracts only the edited file.

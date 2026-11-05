@@ -356,6 +356,7 @@ export async function applyJvmImportDirective(
     undefined,
     packageWildcard ? { jvmPackageWildcard: true } : undefined,
   );
+  let jvmPackageIncomplete: boolean | undefined;
   // A file that was not read in full may declare what an import names, and a file whose package could not be read may
   // be one of a package's files. The module records that, so a later build resolves the import again once every file
   // reads. A resolved import names a file that proves it, except a package wildcard, which names every file of its
@@ -364,7 +365,9 @@ export async function applyJvmImportDirective(
     const lookupOptions = { languageId: context.languageId, fromFile: context.file };
     let incomplete = false;
     if (packageWildcard) {
-      incomplete = (await lookupJvmImport(context.projectRoot, `${from}.*`, lookupOptions)).incomplete;
+      const lookup = await lookupJvmImport(context.projectRoot, `${from}.*`, lookupOptions);
+      incomplete = lookup.incomplete;
+      if (lookup.packageKnown) jvmPackageIncomplete = incomplete;
     }
     if (!incomplete && typeof resolved !== "string") {
       incomplete = (await lookupJvmImport(context.projectRoot, from, lookupOptions)).incomplete;
@@ -378,6 +381,7 @@ export async function applyJvmImportDirective(
       from,
       resolved,
       ...(isStatic ? { jvmStaticWildcardName: owner } : { jvmTypeWildcardName: owner }),
+      ...(jvmPackageIncomplete !== undefined ? { jvmPackageIncomplete } : {}),
       typeOnly: false,
     });
     return;

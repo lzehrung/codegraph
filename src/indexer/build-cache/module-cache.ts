@@ -528,6 +528,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     csharpDirectiveStartIndex?: unknown;
     jvmPackageFiles?: unknown;
     jvmPackageLanguageId?: unknown;
+    jvmPackageIncomplete?: unknown;
     jvmSamePackage?: unknown;
     rubyLoadForm?: unknown;
   };
@@ -544,6 +545,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     (binding.jvmPackageLanguageId === undefined ||
       binding.jvmPackageLanguageId === "java" ||
       binding.jvmPackageLanguageId === "kotlin") &&
+    (binding.jvmPackageIncomplete === undefined || typeof binding.jvmPackageIncomplete === "boolean") &&
     (binding.jvmSamePackage === undefined || typeof binding.jvmSamePackage === "boolean") &&
     (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );

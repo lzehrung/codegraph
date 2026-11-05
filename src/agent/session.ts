@@ -201,7 +201,7 @@ async function resolveAgentSessionFilePlan(
     ...(languageExtensions ? { languageExtensions } : {}),
     ...(cacheLocation ? { cacheLocation } : {}),
   };
-  const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions, discoveryContext.git);
+  const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions, discoveryContext);
   if (incrementalPlan) {
     return {
       files: incrementalPlan.files,

@@ -81,6 +81,8 @@ export type ResolveExportOptions = {
    * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
    */
   argumentCount?: number;
+  /** Whether the name is called (even with an unknown argument count) or is a callable-reference target. */
+  isCallableUse?: boolean;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -980,6 +982,8 @@ function resolveJvmPackageExport(
   argumentCount?: number,
   importerLanguageId?: "java" | "kotlin",
   samePackage?: boolean,
+  incomplete = false,
+  isCallableUse = argumentCount !== undefined,
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
@@ -997,6 +1001,14 @@ function resolveJvmPackageExport(
       candidates.push(target);
     }
   }
+  // An unread declaration can overload any Kotlin call or callable reference, including a class name with a factory
+  // function. Class type navigation remains safe: another class cannot redeclare the proven type.
+  if (
+    incomplete &&
+    importerLanguageId !== "java" &&
+    (isCallableUse || candidates.some((candidate) => candidate.kind === SymbolKind.Function))
+  )
+    return null;
   if (candidates.length === 1) return candidates[0]!;
   return argumentCount === undefined ? null : selectFunctionOverloadByArity(candidates, argumentCount);
 }
@@ -1029,6 +1041,11 @@ export function resolveImported(
 ): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
+  if (imp.kind === "named" && imp.jvmPackageIncomplete && imp.jvmPackageLanguageId === "kotlin") {
+    if (opts?.isCallableUse || opts?.argumentCount !== undefined) return null;
+    const hit = resolveExport(index, targetFile, exportedName, opts);
+    return hit?.kind === "resolved" && hit.def.kind !== SymbolKind.Function ? hit.def : null;
+  }
   if (imp.kind === "star" && imp.jvmPackageFiles) {
     return resolveJvmPackageExport(
       index,
@@ -1037,6 +1054,8 @@ export function resolveImported(
       opts?.argumentCount,
       imp.jvmPackageLanguageId,
       imp.jvmSamePackage,
+      imp.jvmPackageIncomplete,
+      opts?.isCallableUse ?? opts?.argumentCount !== undefined,
     );
   }
   if (
