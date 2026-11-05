@@ -3524,7 +3524,7 @@ describe("Find References", () => {
   });
 
   describe("Kotlin", () => {
-    it("excludes unread wildcard overload and factory calls from reference sets", async () => {
+    it("excludes unread wildcard overload calls and callable references from reference sets", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-incomplete-wildcard-refs-"));
       try {
         const sources = jvmIncompleteWildcardSources();
@@ -3546,7 +3546,9 @@ describe("Find References", () => {
           if (row.file === "big/Small.kt" || row.file === "gap/Small.kt") {
             expect(
               consumerSites.every(
-                (ref) => ref.range.start.column === sources[row.consumer]!.split("\n")[3]!.indexOf("Service") + 1,
+                (ref) =>
+                  ref.range.start.column ===
+                  sources[row.consumer]!.split("\n")[ref.range.start.line - 1]!.indexOf("Service") + 1,
               ),
               row.file,
             ).toBe(true);

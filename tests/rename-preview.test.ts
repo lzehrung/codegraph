@@ -1155,7 +1155,7 @@ describe("rename preview", () => {
     await expect(renameSnapshotForFiles(root, [aliasFile])).rejects.toThrow("Index file is outside project root");
   });
 
-  it("does not propose renaming unread wildcard overload or factory call inputs", async () => {
+  it("does not propose renaming unread wildcard calls or callable-reference inputs", async () => {
     const root = await mkTmpDir("cg-rename-unread-wildcards-");
     const sources = jvmIncompleteWildcardSources();
     await writeFixtureFiles(root, sources);
@@ -1184,7 +1184,11 @@ describe("rename preview", () => {
           .filter((edit) => edit.file === consumer)
           .map((edit) => [edit.range.start.line, edit.range.start.column]);
         const expectedSites: number[][] = [];
-        if (name === "Service") expectedSites.push([4, sources[consumer]!.split("\n")[3]!.indexOf(name) + 1]);
+        if (name === "Service") {
+          for (const line of [4, 7, 8]) {
+            expectedSites.push([line, sources[consumer]!.split("\n")[line - 1]!.indexOf(name) + 1]);
+          }
+        }
         expect(sites, `${file}::${name}`).toEqual(expectedSites);
       }
     } finally {

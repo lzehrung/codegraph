@@ -81,8 +81,8 @@ export type ResolveExportOptions = {
    * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
    */
   argumentCount?: number;
-  /** Whether the name is a callee, including calls whose spread arguments have an unknown count. */
-  isCall?: boolean;
+  /** Whether the name is called (even with an unknown argument count) or is a callable-reference target. */
+  isCallableUse?: boolean;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -983,7 +983,7 @@ function resolveJvmPackageExport(
   importerLanguageId?: "java" | "kotlin",
   samePackage?: boolean,
   incomplete = false,
-  isCall = argumentCount !== undefined,
+  isCallableUse = argumentCount !== undefined,
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
@@ -1001,12 +1001,12 @@ function resolveJvmPackageExport(
       candidates.push(target);
     }
   }
-  // An unread declaration can overload any Kotlin call, including a constructor-looking class name with a factory
-  // function. Non-call class navigation remains safe: another class cannot redeclare the proven type.
+  // An unread declaration can overload any Kotlin call or callable reference, including a class name with a factory
+  // function. Class type navigation remains safe: another class cannot redeclare the proven type.
   if (
     incomplete &&
     importerLanguageId !== "java" &&
-    (isCall || candidates.some((candidate) => candidate.kind === SymbolKind.Function))
+    (isCallableUse || candidates.some((candidate) => candidate.kind === SymbolKind.Function))
   )
     return null;
   if (candidates.length === 1) return candidates[0]!;
@@ -1042,7 +1042,7 @@ export function resolveImported(
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
   if (imp.kind === "named" && imp.jvmPackageIncomplete && imp.jvmPackageLanguageId === "kotlin") {
-    if (opts?.isCall || opts?.argumentCount !== undefined) return null;
+    if (opts?.isCallableUse || opts?.argumentCount !== undefined) return null;
     const hit = resolveExport(index, targetFile, exportedName, opts);
     return hit?.kind === "resolved" && hit.def.kind !== SymbolKind.Function ? hit.def : null;
   }
@@ -1055,7 +1055,7 @@ export function resolveImported(
       imp.jvmPackageLanguageId,
       imp.jvmSamePackage,
       imp.jvmPackageIncomplete,
-      opts?.isCall ?? opts?.argumentCount !== undefined,
+      opts?.isCallableUse ?? opts?.argumentCount !== undefined,
     );
   }
   if (

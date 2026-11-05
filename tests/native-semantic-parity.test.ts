@@ -25,6 +25,7 @@ import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
@@ -2610,7 +2611,7 @@ nativeDescribe("native semantic coverage", () => {
       ["warm", warm],
     ] as const) {
       const graph = await buildSymbolGraphDetailed(index);
-      for (const row of JVM_INCOMPLETE_WILDCARD_CALLS) {
+      for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
         const result = await goToDefinition(index, {
           file: paths[row.file]!,
           line: row.line,
@@ -2622,8 +2623,9 @@ nativeDescribe("native semantic coverage", () => {
           (node) => node.name === row.caller && fileIdentityKey(node.file) === fileIdentityKey(paths[row.file]!),
         );
         expect(caller, `${phase}: ${row.caller}`).toBeDefined();
+        const label = "reference" in row ? "uses" : "calls";
         const targets = graph.edges
-          .filter((edge) => edge.from === caller!.id && edge.label === "calls")
+          .filter((edge) => edge.from === caller!.id && edge.label === label)
           .map((edge) => graph.nodes.get(edge.to)?.file);
         expect(targets, `${phase}: ${row.caller}`).toEqual(row.target ? [paths[row.target.file]] : []);
       }

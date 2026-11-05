@@ -161,13 +161,13 @@ export function resolveStarImportedDefinition(
   languageId: string,
   cNamespace?: "tag" | "ordinary",
   argumentCount?: number,
-  isCall = argumentCount !== undefined,
+  isCallableUse = argumentCount !== undefined,
 ): SymbolDef | null {
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
-    ...(isCall ? { isCall } : {}),
+    ...(isCallableUse ? { isCallableUse } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),
@@ -366,12 +366,12 @@ export function decideStarImportCandidates(
   candidates: readonly StarImportCandidate[],
   useFile?: string,
   blocked = false,
-  isCall = false,
+  isCallableUse = false,
 ): StarImportDecision {
   if (!candidates.length) return { status: "none" };
   const incompleteKotlinWildcard =
     languageId === "kotlin" &&
-    (isCall || candidates.some((candidate) => candidate.def.kind === SymbolKind.Function)) &&
+    (isCallableUse || candidates.some((candidate) => candidate.def.kind === SymbolKind.Function)) &&
     !!useFile &&
     index.byFile
       .get(fileIdentityKey(useFile))

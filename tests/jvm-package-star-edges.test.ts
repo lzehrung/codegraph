@@ -17,6 +17,7 @@ import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
 const files = {
@@ -1416,10 +1417,12 @@ describe("JVM package wildcard graph edges", () => {
         "p/Gap.kt": "package p\nclass Before\n)\nfun select(x: String) = x\nfun Service(x: String) = x\n",
         "q/Target.kt": "package q\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
         "app/Forward.kt":
-          'package app\nimport p.*\nimport q.*\nfun forward() = select("x")\nfun makeForward() = Service("x")\n',
+          'package app\nimport p.*\nimport q.*\nfun forward() = select("x")\nfun makeForward() = Service("x")\nfun referenceForward(): (String) -> Any = ::Service\n',
         "app/Reverse.kt":
-          'package app\nimport q.*\nimport p.*\nfun reverse() = select("x")\nfun makeReverse() = Service("x")\n',
+          'package app\nimport q.*\nimport p.*\nfun reverse() = select("x")\nfun makeReverse() = Service("x")\nfun referenceReverse(): (String) -> Any = ::Service\n',
         "app/Explicit.kt": "package app\nimport p.*\nimport q.select\nfun explicit() = select(1)\n",
+        "app/ExplicitType.kt":
+          "package app\nimport p.*\nimport q.Service\nfun explicitReference(): (Int) -> Any = ::Service\n",
       };
       const paths = await writeFixtureFiles(root, sources);
       const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
@@ -1428,6 +1431,7 @@ describe("JVM package wildcard graph edges", () => {
         for (const [line, name] of [
           [4, "select"],
           [5, "Service"],
+          [6, "Service"],
         ] as const) {
           const result = await goToDefinition(index, {
             file: paths[file]!,
@@ -1437,7 +1441,10 @@ describe("JVM package wildcard graph edges", () => {
           expect(result.status).toBe("not_found");
         }
         expect(
-          graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === paths[file]),
+          graph.edges.filter(
+            (edge) =>
+              (edge.label === "calls" || edge.label === "uses") && graph.nodes.get(edge.from)?.file === paths[file],
+          ),
         ).toEqual([]);
       }
       const explicit = await goToDefinition(index, {
@@ -1447,12 +1454,41 @@ describe("JVM package wildcard graph edges", () => {
       });
       expect(explicit.status).toBe("ok");
       if (explicit.status === "ok") expect(explicit.definition.file).toBe(paths["q/Target.kt"]);
+      const explicitReference = await goToDefinition(index, {
+        file: paths["app/ExplicitType.kt"]!,
+        line: 4,
+        column: sources["app/ExplicitType.kt"].split("\n")[3]!.indexOf("Service") + 1,
+      });
+      expect(explicitReference.status).toBe("ok");
+      if (explicitReference.status === "ok") {
+        expect(explicitReference.definition.file).toBe(paths["q/Target.kt"]);
+      }
+      const referenceCaller = [...graph.nodes.values()].find((node) => node.name === "explicitReference");
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.from === referenceCaller?.id &&
+            edge.label === "uses" &&
+            graph.nodes.get(edge.to)?.file === paths["q/Target.kt"],
+        ),
+      ).toBe(true);
       const refs = await findReferences(index, { file: paths["q/Target.kt"]!, line: 2, column: 5 });
       expect(refs.status).toBe("ok");
       if (refs.status !== "ok") throw new Error("expected function references");
       expect(
         refs.references.filter((ref) => ref.file === paths["app/Forward.kt"] || ref.file === paths["app/Reverse.kt"]),
       ).toEqual([]);
+      const classRefs = await findReferences(index, { file: paths["q/Target.kt"]!, line: 3, column: 7 });
+      expect(classRefs.status).toBe("ok");
+      if (classRefs.status !== "ok") throw new Error("expected class references");
+      expect(
+        classRefs.references.filter(
+          (ref) => ref.file === paths["app/Forward.kt"] || ref.file === paths["app/Reverse.kt"],
+        ),
+      ).toEqual([]);
+      expect(
+        classRefs.references.some((ref) => ref.file === paths["app/ExplicitType.kt"] && ref.range.start.line === 4),
+      ).toBe(true);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1468,7 +1504,7 @@ describe("JVM package wildcard graph edges", () => {
         const paths = await writeFixtureFiles(root, sources);
         const inspect = async (index: ProjectIndex, repaired: boolean) => {
           const graph = await buildSymbolGraphDetailed(index);
-          for (const row of JVM_INCOMPLETE_WILDCARD_CALLS) {
+          for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
             let target: string | null = row.target?.file ?? null;
             if (repaired && row.file === "app/BigUse.kt") target = "big/Small.kt";
             if (repaired && row.file === "app/GapUse.kt") target = "gap/Small.kt";
@@ -1483,10 +1519,11 @@ describe("JVM package wildcard graph edges", () => {
               (node) => node.name === row.caller && fileIdentityKey(node.file) === fileIdentityKey(paths[row.file]!),
             );
             expect(caller, row.caller).toBeDefined();
-            const callTargets = graph.edges
-              .filter((edge) => edge.from === caller!.id && edge.label === "calls")
+            const label = "reference" in row ? "uses" : "calls";
+            const targets = graph.edges
+              .filter((edge) => edge.from === caller!.id && edge.label === label)
               .map((edge) => graph.nodes.get(edge.to)?.file);
-            expect(callTargets, row.caller).toEqual(target ? [paths[target]] : []);
+            expect(targets, row.caller).toEqual(target ? [paths[target]] : []);
             // The return annotation of makeBig/makeGap still has a proven class type-use edge.
             const hasProvenReturnType = row.name === "Service" && row.line === 4;
             if (!target && !hasProvenReturnType) {

@@ -492,10 +492,16 @@ export function resolveNamedDefinition(
   const callArgumentCount = callSite
     ? explicitCallArgumentCount(support.id, callSite.source, callSite.node)
     : undefined;
-  const isCall = callArgumentCount !== undefined;
+  const callableReference = callSite?.node.parent;
+  // `::Name` may name a constructor or factory; the type receiver in `Name::member` is not that target.
+  const isCallableUse =
+    callArgumentCount !== undefined ||
+    (support.id === "kotlin" &&
+      callableReference?.type === "callable_reference" &&
+      callableReference.namedChildren.at(-1)?.id === callSite?.node.id);
   const argumentCount = callArgumentCount ?? undefined;
   const arityOptions = {
-    ...(isCall ? { isCall } : {}),
+    ...(isCallableUse ? { isCallableUse } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
   };
   const normalizedName = support.normalizeIdentifier(name);
@@ -653,7 +659,7 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCall);
+      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCallableUse);
       if (def) {
         const starResult = starImportGoTo(index, imp, def, name);
         if (precedence === "last-wins") {
@@ -770,7 +776,7 @@ export function resolveNamedDefinition(
     }
     if (!starCandidates.length) return null;
     const blocked = support.id === "csharp" && csharpShadowedStarsMayHold(index, mod, name);
-    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, blocked, isCall);
+    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, blocked, isCallableUse);
     if (decision.status === "ambiguous") {
       return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
     }

@@ -7,7 +7,7 @@ export function jvmIncompleteWildcardSources(): Record<string, string> {
     "big/Small.kt": "package big\n\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
     "big/Big.kt": `package big\n\nclass Before\n${padding}fun select(x: String) = x\nfun Service(x: String) = Service(0)\n`,
     "gap/Small.kt": "package gap\n\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
-    "gap/Gap.kt": "package gap\n\nclass Before\n)\nfun select(x: String) = x\n",
+    "gap/Gap.kt": "package gap\n\nclass Before\n)\nfun select(x: String) = x\nfun Service(x: String) = Service(0)\n",
     "overlap/A.kt": "package overlap\n\nfun select(x: Int) = x\n",
     "overlap/B.kt": "package overlap\n\nfun select(x: String) = x\n",
     "single/Only.kt": "package single\n\nfun select(x: Int) = x\n",
@@ -21,6 +21,9 @@ export function jvmIncompleteWildcardSources(): Record<string, string> {
       'fun useBig() = select("x")',
       'fun makeBig(): Service = Service("x")',
       "fun spreadBig(args: Array<String>) = Service(*args)",
+      "fun referenceBig(): (String) -> Any = ::Service",
+      "fun literalBig() = Service::class",
+      "fun memberBig() = Service::hashCode",
     ].join("\n"),
     "app/GapUse.kt": [
       "package gapapp",
@@ -28,10 +31,14 @@ export function jvmIncompleteWildcardSources(): Record<string, string> {
       'fun useGap() = select("x")',
       'fun makeGap(): Service = Service("x")',
       "fun spreadGap(args: Array<String>) = Service(*args)",
+      "fun referenceGap(): (String) -> Any = ::Service",
+      "fun literalGap() = Service::class",
+      "fun memberGap() = Service::hashCode",
     ].join("\n"),
     "app/OverlapUse.kt": "package overlapapp\nimport overlap.*\nfun useOverlap() = select(1)\n",
     "app/SingleUse.kt": "package singleapp\nimport single.*\nfun useSingle() = select(1)\n",
-    "app/ClassUse.kt": "package classapp\nimport classes.*\nfun makeClass(): Service = Service(1)\n",
+    "app/ClassUse.kt":
+      "package classapp\nimport classes.*\nfun makeClass(): Service = Service(1)\nfun referenceClass(): (Int) -> Any = ::Service\n",
     "app/ShapeUse.java": "package shapeapp;\nimport shapes.*;\nclass JavaUse { Shape value; }\n",
   };
 }
@@ -60,9 +67,26 @@ export const JVM_INCOMPLETE_WILDCARD_CALLS = [
   },
 ] as const;
 
+export const JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES = [
+  { file: "app/BigUse.kt", line: 6, name: "Service", caller: "referenceBig", target: null, reference: true },
+  { file: "app/GapUse.kt", line: 6, name: "Service", caller: "referenceGap", target: null, reference: true },
+  {
+    file: "app/ClassUse.kt",
+    line: 4,
+    name: "Service",
+    caller: "referenceClass",
+    target: { file: "classes/Only.kt", line: 3 },
+    reference: true,
+  },
+] as const;
+
 export const JVM_INCOMPLETE_WILDCARD_TYPES = [
   { file: "app/BigUse.kt", line: 4, name: "Service", target: { file: "big/Small.kt", line: 4 } },
+  { file: "app/BigUse.kt", line: 7, name: "Service", target: { file: "big/Small.kt", line: 4 } },
+  { file: "app/BigUse.kt", line: 8, name: "Service", target: { file: "big/Small.kt", line: 4 } },
   { file: "app/GapUse.kt", line: 4, name: "Service", target: { file: "gap/Small.kt", line: 4 } },
+  { file: "app/GapUse.kt", line: 7, name: "Service", target: { file: "gap/Small.kt", line: 4 } },
+  { file: "app/GapUse.kt", line: 8, name: "Service", target: { file: "gap/Small.kt", line: 4 } },
   { file: "app/ClassUse.kt", line: 3, name: "Service", target: { file: "classes/Only.kt", line: 3 } },
   { file: "app/ShapeUse.java", line: 3, name: "Shape", target: { file: "shapes/Shape.java", line: 3 } },
 ] as const;
@@ -70,12 +94,12 @@ export const JVM_INCOMPLETE_WILDCARD_TYPES = [
 export const JVM_INCOMPLETE_WILDCARD_REFERENCES = [
   { file: "big/Small.kt", line: 3, name: "select", consumer: "app/BigUse.kt", lines: [], partial: true },
   { file: "gap/Small.kt", line: 3, name: "select", consumer: "app/GapUse.kt", lines: [], partial: true },
-  { file: "big/Small.kt", line: 4, name: "Service", consumer: "app/BigUse.kt", lines: [4], partial: true },
-  { file: "gap/Small.kt", line: 4, name: "Service", consumer: "app/GapUse.kt", lines: [4], partial: true },
+  { file: "big/Small.kt", line: 4, name: "Service", consumer: "app/BigUse.kt", lines: [4, 7, 8], partial: true },
+  { file: "gap/Small.kt", line: 4, name: "Service", consumer: "app/GapUse.kt", lines: [4, 7, 8], partial: true },
   { file: "overlap/A.kt", line: 3, name: "select", consumer: "app/OverlapUse.kt", lines: [], partial: false },
   { file: "overlap/B.kt", line: 3, name: "select", consumer: "app/OverlapUse.kt", lines: [], partial: false },
   { file: "single/Only.kt", line: 3, name: "select", consumer: "app/SingleUse.kt", lines: [3], partial: false },
-  { file: "classes/Only.kt", line: 3, name: "Service", consumer: "app/ClassUse.kt", lines: [3, 3], partial: false },
+  { file: "classes/Only.kt", line: 3, name: "Service", consumer: "app/ClassUse.kt", lines: [3, 3, 4], partial: false },
   { file: "shapes/Shape.java", line: 3, name: "Shape", consumer: "app/ShapeUse.java", lines: [3], partial: true },
   { file: "decoy/Decoy.kt", line: 3, name: "select", consumer: "app/BigUse.kt", lines: [], partial: false },
 ] as const;

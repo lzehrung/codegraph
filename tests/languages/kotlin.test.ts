@@ -20,6 +20,7 @@ import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_TYPES,
 } from "../helpers/jvm-incomplete-wildcard-fixture.js";
 
@@ -1081,7 +1082,7 @@ describe("Kotlin package files without a usable syntax tree", () => {
       const paths = await writeFixtureFiles(root, sources);
       const index = await buildProjectIndex(root, { cache: "off" });
       expect(index.byFile.get(fileIdentityKey(paths["gap/Gap.kt"]!))?.parseErrorRanges?.length).toBeTruthy();
-      for (const row of JVM_INCOMPLETE_WILDCARD_CALLS) {
+      for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
         const text = sources[row.file]!.split("\n")[row.line - 1]!;
         const result = await goToDefinition(index, {
           file: paths[row.file]!,
