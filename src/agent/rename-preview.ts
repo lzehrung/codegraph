@@ -20,7 +20,7 @@ import {
 } from "../indexer/types.js";
 import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
 import type { Range } from "../types.js";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../indexer/parsed-cache.js";
 import { openConfinedReadableFile } from "../util/confined-file.js";
 import { errorMessage } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -220,6 +220,7 @@ export async function previewRenameInSnapshot(
       referenceFailure = referenceResult.reason;
     }
   } catch (error: unknown) {
+    rethrowStaleQuerySource(error);
     referenceFailure = errorMessage(error);
   }
   const semanticDefinitions = new Map<string, SymbolDef>([[resolved.id, resolved.def]]);
@@ -296,6 +297,7 @@ export async function previewRenameInSnapshot(
           referenceFailure ??= memberReferences.reason;
         }
       } catch (error: unknown) {
+        rethrowStaleQuerySource(error);
         referenceFailure ??= errorMessage(error);
       }
     }
@@ -812,7 +814,8 @@ async function addScopeConflicts(
         (candidate) => sameName(candidate.localName) && candidate.range.start.index === collisionDef.start.index,
       );
     }
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     localCollision = moduleIndex.locals.find((candidate) => candidate !== target && sameName(candidate.localName));
   }
   if (localCollision) {
@@ -880,7 +883,8 @@ async function addScopeConflicts(
         : undefined;
       const collisionBinding = activeScope?.map.get(parsed.sup.normalizeIdentifier(newName));
       collides = !!collisionBinding && collisionBinding !== activeBinding;
-    } catch {
+    } catch (error) {
+      rethrowStaleQuerySource(error);
       collides =
         consumer.locals.some((candidate) => candidate.localName === newName) ||
         consumer.imports.some((binding) => {
@@ -1060,6 +1064,7 @@ async function collectTextualRenameEdits(
     try {
       parsed = await ensureParsedContextForIndex(input.snapshot.index, file);
     } catch (error: unknown) {
+      rethrowStaleQuerySource(error);
       input.unsafeSites.push({
         location: { file: loaded.displayPath, range: zeroRange() },
         text: "",

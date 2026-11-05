@@ -4,7 +4,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { assertQuerySourceForIndex, ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
@@ -159,6 +159,7 @@ export async function goToDefinition(
   const { file, line, column } = req;
   const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return { status: "not_found", reason: "File not indexed" };
+  assertQuerySourceForIndex(index, file);
 
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
@@ -563,7 +564,8 @@ export async function recoverIncludedCallableStar(
     if (parsedByFile.has(key)) continue;
     try {
       parsedByFile.set(key, await ensureParsedContextForIndex(index, candidate.def.file));
-    } catch {
+    } catch (error) {
+      rethrowStaleQuerySource(error);
       return languageId === "cpp"
         ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
         : { status: "not_found", reason: "No matching local or imported definition" };
@@ -642,6 +644,7 @@ async function findReferencesInternal(
   opts: FindReferencesOptions | undefined,
   collectionMode: "all" | "usages" | "rename",
 ): Promise<FindReferencesResult> {
+  assertQuerySourceForIndex(index, "def" in req ? req.def.file : req.file);
   let def: SymbolDef | null = null;
   let provenance: ResolutionProvenance | undefined;
   if ("def" in req) {
@@ -2056,7 +2059,8 @@ async function cIncludeLinkedCallableEquivalents(index: ProjectIndex, def: Symbo
     let candidateParsed: ParsedFileContext;
     try {
       candidateParsed = await ensureParsedContextForIndex(index, moduleEntry.file);
-    } catch {
+    } catch (error) {
+      rethrowStaleQuerySource(error);
       continue;
     }
     if (candidateParsed.sup.id !== "c") continue;

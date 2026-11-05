@@ -87,8 +87,9 @@ Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
 - Projected tree views and their scope indexes share a 2 GiB estimated budget. Eviction drops both together; retained compact data can reconstruct the view without another native parse.
-- At most 32,768 file entries are retained. Concurrent requests share an in-flight parse; an incremental index starts with fresh query caches.
-- These are retention estimates, not process RSS limits. Active requests, graph data, build-time `keepParsed` retention, and allocator overhead are separate.
+- At most 32,768 syntax entries are retained. Concurrent requests share an in-flight parse; an incremental index starts with fresh query caches.
+- A small source fingerprint per queried indexed file survives syntax eviction. If a later read finds different source or a missing file, the query fails and requires an index rebuild instead of mixing snapshots. The fingerprint cannot prove that source was unchanged before its first query.
+- These are retention estimates, not process RSS limits. Source fingerprints, active requests, graph data, build-time `keepParsed` retention, and allocator overhead are separate.
 
 A test matrix in `tests/call-form-matrix/` checks each language and call form against all three consumers, with a same-named decoy that must not match. The [call-form coverage matrix](./coverage/call-forms.md) reports the results.
 

@@ -16,7 +16,7 @@ import {
 } from "./navigation-php.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { definitionIdentityKey } from "./reference-context.js";
@@ -345,7 +345,8 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
       try {
         const parsed = await ensureParsedContextForIndex(index, moduleEntry.file);
         parsedByFile.set(key, parsed.sup.id === "php" ? parsed : null);
-      } catch {
+      } catch (error) {
+        rethrowStaleQuerySource(error);
         parsedByFile.set(key, null);
       }
       if (index.projectRoot) {

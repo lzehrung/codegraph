@@ -95,6 +95,8 @@ Public-legacy APIs remain exported for existing callers but are lower-level
 building blocks. New integrations should prefer the documented higher-level APIs
 unless they specifically need these shapes.
 
+After a queried file's syntax is evicted, `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` reject a changed or deleted file with an error named `StaleQuerySourceError`; rebuild the `ProjectIndex` before retrying. The first query records a source fingerprint, so this check cannot prove that a file was unchanged between index construction and its first query. Syntax retained explicitly with `keepParsed` continues to use its build-time source.
+
 Internal-only modules (anything outside the documented entry points above) are
 not covered by semver.
 
@@ -529,6 +531,9 @@ Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plu
 Files that disappear between discovery and signature capture remain detectable as deletions on the next freshness check.
 A host that learns of an edit sooner than the 5-second check interval, for example from its own file watcher, can call `session.markChanged()`. It drops the cached freshness result and any check that is still running, so the next `checkFreshness()` scans again; the call itself does not invalidate the snapshot. A check that started before the call does not cache its result. A check that finishes after `invalidate()` and a rebuild reports `fresh` and leaves the newer snapshot alone.
 `manual` skips freshness bookkeeping entirely: `checkFreshness()` returns `{ state: "unchecked", reason }` without comparing anything, the snapshot is reused until the caller calls `invalidate()`, and consumers that handle every freshness state must handle `unchecked`. Rename previews and refactor plans report `safe: false` for an unchecked session. Because it records no file signatures, a manual session cannot build a SQLite artifact, and `query_sqlite` rejects a stale artifact instead of rebuilding it; rebuild it from a `check` or `auto` session.
+
+If a session query reports `StaleQuerySourceError`, call `session.invalidate()` and retry so the next call builds a new snapshot.
+
 Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers use at most
 eight threads and reserve at least one quarter of available CPU capacity when more than one CPU
 is available; a single-CPU host uses one worker. Set `buildOptions.nativeThreads` to override

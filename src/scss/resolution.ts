@@ -1,5 +1,9 @@
 import path from "node:path";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import {
+  assertQuerySourceForIndex,
+  ensureParsedContextForIndex,
+  rethrowStaleQuerySource,
+} from "../indexer/parsed-cache.js";
 import { sameDef } from "../indexer/reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -204,6 +208,7 @@ async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<S
     if (parsed.sup.id !== SCSS_LANGUAGE_ID) return null;
     return extractScssFacts(parsed.source);
   } catch (error) {
+    rethrowStaleQuerySource(error);
     if (isNativeRequiredUnavailableError(error)) throw error;
     return null;
   }
@@ -213,6 +218,7 @@ async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<S
 export function scssFactsForFile(index: ProjectIndex, file: FileId): Promise<ScssFileFacts | null> {
   const module = index.byFile.get(fileIdentityKey(file));
   if (!module || !isScssFile(index, module.file)) return Promise.resolve(null);
+  assertQuerySourceForIndex(index, file);
   let facts = factsByModule.get(module);
   if (!facts) {
     facts = computeFacts(index, module);

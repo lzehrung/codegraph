@@ -8,7 +8,11 @@ import { sliceText } from "../util/ast.js";
 import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "./parsed-cache.js";
+import {
+  cachedParsedContextForIndexSync,
+  readQuerySourceForIndexSync,
+  retainParsedContextForIndexSync,
+} from "./parsed-cache.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./types.js";
 
 import { definitionIdentityKey } from "./reference-context.js";
@@ -291,49 +295,22 @@ function sharedOwnerIdentityKey(identity: SharedOwnerIdentity): string {
   return `${identity.languageId}\0${identity.fullPath}\0${identity.declarationKind ?? ""}\0${identity.genericArity ?? 0}\0${identity.fileLocalTo ?? ""}`;
 }
 
-function sourceForIdentity(index: ProjectIndex, file: string, fileKey: string): string | null {
-  const retained = index.parsed?.get(fileKey)?.source;
-  if (retained !== undefined) return retained;
-  try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-const identityParsedCaches = new WeakMap<ProjectIndex, Map<string, ParsedFileContext | null>>();
-
 function parsedContextForIdentity(index: ProjectIndex, file: string): ParsedFileContext | null {
-  const fileKey = fileIdentityKey(file);
   const retained = cachedParsedContextForIndexSync(index, file);
   if (retained) return retained;
 
-  let cache = identityParsedCaches.get(index);
-  if (!cache) {
-    cache = new Map();
-    identityParsedCaches.set(index, cache);
-  }
-  if (cache.has(fileKey)) return cache.get(fileKey) ?? null;
-
-  const source = sourceForIdentity(index, file, fileKey);
+  const source = readQuerySourceForIndexSync(index, file);
   const sup = supportForFileWithoutHeaderSample(file, index.languageExtensions);
-  if (source === null || !sup || sup.id !== "csharp") {
-    cache.set(fileKey, null);
-    return null;
-  }
+  if (source === null || !sup || sup.id !== "csharp") return null;
   const execution = getNativeSyntaxTreeExecution(source, sup);
-  if (!execution.tree) {
-    cache.set(fileKey, null);
-    return null;
-  }
+  if (!execution.tree) return null;
   const context: ParsedFileContext = {
     source,
     tree: new ProjectedSyntaxTree(source, execution.tree),
     sup,
     nativeQueries: null,
   };
-  void ensureParsedContextForIndex(index, file, context);
-  cache.set(fileKey, context);
+  retainParsedContextForIndexSync(index, file, context);
   return context;
 }
 

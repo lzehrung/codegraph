@@ -38,7 +38,12 @@ import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { ensureParsedContextForIndex, tryEnsureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import {
+  assertQuerySourceForIndex,
+  ensureParsedContextForIndex,
+  rethrowStaleQuerySource,
+  tryEnsureParsedContextForIndex,
+} from "../indexer/parsed-cache.js";
 
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import {
@@ -316,7 +321,10 @@ export async function buildSymbolGraphDetailed(
     const fileKey = fileIdentityKey(file);
     const cached = ownershipParsedContexts.get(fileKey);
     if (cached) return cached;
-    const pending = ensureParsedContextForIndex(index, file).catch(() => null);
+    const pending = ensureParsedContextForIndex(index, file).catch((error: unknown) => {
+      rethrowStaleQuerySource(error);
+      return null;
+    });
     ownershipParsedContexts.set(fileKey, pending);
     return pending;
   };
@@ -354,6 +362,7 @@ export async function buildSymbolGraphDetailed(
   for (const moduleEntry of index.byFile.values()) {
     const file = moduleEntry.file;
     if (optionFileKeys && !optionFileKeys.has(fileIdentityKey(file))) continue;
+    assertQuerySourceForIndex(index, file);
     if (scopeMode === "imported") {
       const hasFuncOrClass = moduleEntry.locals.some(
         (local) => local.kind === SymbolKind.Function || local.kind === SymbolKind.Class,
@@ -576,6 +585,7 @@ export async function buildSymbolGraphDetailed(
       await emitClassInheritanceEdges(edgePassContext, classNodes);
       SPECIALIZED_EDGE_PASSES[sup.id]?.afterModule?.(edgePassContext, tree.rootNode);
     } catch (error) {
+      rethrowStaleQuerySource(error);
       if (isNativeRequiredUnavailableError(error)) {
         throw error;
       }

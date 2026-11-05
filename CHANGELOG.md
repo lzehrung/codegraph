@@ -11,7 +11,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
-- Query-time syntax trees and scope indexes no longer grow without a retention limit. Separate bounded caches retain compact native data and live views; evicted views reuse retained columns instead of parsing again.
+- Query-time syntax and scope caches are bounded; evicted views reuse retained native columns. Re-reading a previously queried file that changed or disappeared now reports that the project index needs rebuilding.
 - Java and Kotlin imports stay external when a known JVM package does not declare the imported name, instead of guessing a same-named file by path. Java no longer creates a dependency on `Hidden.kt` for a Kotlin function named `Hidden` or a different declared type; declared types and nested-type imports still resolve.
 - `buildSymbolGraphDetailed`, `callers`, and `callees` keep receiver proofs separate at each call site. A block, closure, or parameter that shadows a receiver no longer reuses another binding's type or adds a wrong call edge; cached graphs rebuild.
 - Reference coverage reports affected files in deterministic path order.

@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import { isMissingPathError } from "../util/errors.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { detectSFCFramework } from "../languages/sfc.js";
 import type { NativeMatch, NativeSyntaxTree } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { ByteToStringIndexMap } from "../native/byte-index.js";
@@ -87,10 +92,17 @@ type PendingParsedContext = {
   promise: Promise<ParsedFileContext>;
 };
 
+type QuerySourceIdentity = {
+  signature: string | undefined;
+  fingerprint: string;
+  stale: boolean;
+};
+
 type QuerySyntaxCache = {
   entries: Map<string, CachedParsedContext>;
   liveEntries: Map<string, CachedParsedContext>;
   inFlight: Map<string, PendingParsedContext>;
+  sourceIdentities: Map<string, QuerySourceIdentity>;
   compactBytes: number;
   liveBytes: number;
   compactEntries: number;
@@ -108,6 +120,7 @@ function querySyntaxCacheFor(index: ProjectIndex): QuerySyntaxCache {
       entries: new Map(),
       liveEntries: new Map(),
       inFlight: new Map(),
+      sourceIdentities: new Map(),
       compactBytes: 0,
       liveBytes: 0,
       compactEntries: 0,
@@ -126,6 +139,121 @@ function indexFileSignature(index: ProjectIndex, fileKey: string): string | unde
   const entry = index.manifestEntries?.get(file);
   if (!entry) return undefined;
   return `${entry.sig}\0${entry.cacheSig ?? ""}\0${entry.gitSig ?? ""}`;
+}
+
+/** A previously queried file no longer belongs to this index snapshot. */
+export class StaleQuerySourceError extends Error {
+  constructor(file: string) {
+    super(`Query source changed or disappeared: ${file}. Rebuild the project index before querying it again.`);
+    this.name = "StaleQuerySourceError";
+  }
+}
+
+export function rethrowStaleQuerySource(error: unknown): void {
+  if (error instanceof StaleQuerySourceError) throw error;
+}
+
+export function ignoreQueryParseFailure(error: unknown): null {
+  rethrowStaleQuerySource(error);
+  return null;
+}
+
+function markQuerySourceStale(index: ProjectIndex, cache: QuerySyntaxCache, fileKey: string, file: string): never {
+  const identity = cache.sourceIdentities.get(fileKey);
+  if (identity) {
+    identity.stale = true;
+  } else if (index.byFile.has(fileKey)) {
+    cache.sourceIdentities.set(fileKey, {
+      signature: indexFileSignature(index, fileKey),
+      fingerprint: "",
+      stale: true,
+    });
+  }
+  const entry = cache.entries.get(fileKey);
+  if (entry) evictEntry(index, cache, fileKey, entry);
+  throw new StaleQuerySourceError(file);
+}
+
+function assertQuerySourceCurrent(
+  index: ProjectIndex,
+  cache: QuerySyntaxCache,
+  fileKey: string,
+  file: string,
+  signature: string | undefined,
+): void {
+  const identity = cache.sourceIdentities.get(fileKey);
+  if (identity && (identity.stale || identity.signature !== signature)) {
+    markQuerySourceStale(index, cache, fileKey, file);
+  }
+}
+
+/** Reject a source already known to have left this index snapshot. */
+export function assertQuerySourceForIndex(index: ProjectIndex, file: string): void {
+  const cache = querySyntaxCaches.get(index);
+  if (!cache) return;
+  const fileKey = fileIdentityKey(file);
+  if (!cache.sourceIdentities.has(fileKey)) return;
+  assertQuerySourceCurrent(index, cache, fileKey, file, indexFileSignature(index, fileKey));
+}
+
+function recordQuerySource(
+  index: ProjectIndex,
+  cache: QuerySyntaxCache,
+  fileKey: string,
+  file: string,
+  signature: string | undefined,
+  source: string,
+): void {
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  if (indexFileSignature(index, fileKey) !== signature) markQuerySourceStale(index, cache, fileKey, file);
+  const fingerprint = createHash("sha256").update(source).digest("hex");
+  const identity = cache.sourceIdentities.get(fileKey);
+  if (identity && identity.fingerprint !== fingerprint) markQuerySourceStale(index, cache, fileKey, file);
+  if (!identity && index.byFile.has(fileKey)) {
+    cache.sourceIdentities.set(fileKey, { signature, fingerprint, stale: false });
+  }
+}
+
+/** Read and validate a source needed by a synchronous query consumer. */
+export function readQuerySourceForIndexSync(index: ProjectIndex, file: string): string | null {
+  const fileKey = fileIdentityKey(file);
+  const cache = querySyntaxCacheFor(index);
+  const signature = indexFileSignature(index, fileKey);
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error) && cache.sourceIdentities.has(fileKey)) {
+      markQuerySourceStale(index, cache, fileKey, file);
+    }
+    return null;
+  }
+  recordQuerySource(index, cache, fileKey, file, signature, source);
+  return source;
+}
+
+async function parseQuerySource(
+  index: ProjectIndex,
+  cache: QuerySyntaxCache,
+  fileKey: string,
+  file: string,
+  signature: string | undefined,
+): Promise<ParsedFileContext> {
+  let source: string;
+  try {
+    source = await fsp.readFile(file, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error) && cache.sourceIdentities.has(fileKey)) {
+      markQuerySourceStale(index, cache, fileKey, file);
+    }
+    throw error;
+  }
+  recordQuerySource(index, cache, fileKey, file, signature, source);
+  const parsed = await parseNavigationContext(file, index.languageExtensions, source);
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  if (indexFileSignature(index, fileKey) !== signature) markQuerySourceStale(index, cache, fileKey, file);
+  return parsed;
 }
 
 function stringBytes(value: string): number {
@@ -308,6 +436,33 @@ function cacheEntryFor(
   return entry;
 }
 
+function retainCompactContext(cache: QuerySyntaxCache, entry: CachedParsedContext, parsed: ParsedFileContext): void {
+  const tree = parsed.tree;
+  if (
+    entry.compact &&
+    tree instanceof ProjectedSyntaxTree &&
+    entry.compact.columns === tree.columns &&
+    entry.compact.byteIndexMap === tree.byteIndexMap &&
+    entry.compact.source === parsed.source &&
+    entry.compact.nativeQueries === parsed.nativeQueries &&
+    entry.compact.embeddedBlocks === parsed.embeddedBlocks
+  ) {
+    return;
+  }
+  if (entry.compact) {
+    cache.compactBytes -= entry.compactBytes;
+    cache.compactEntries -= 1;
+    delete entry.compact;
+    entry.compactBytes = 0;
+  }
+  const compact = compactContextFor(parsed);
+  if (!compact) return;
+  entry.compact = compact;
+  entry.compactBytes = compact.bytes;
+  cache.compactBytes += compact.bytes;
+  cache.compactEntries += 1;
+}
+
 function retainParsedContext(
   index: ProjectIndex,
   cache: QuerySyntaxCache,
@@ -325,13 +480,7 @@ function retainParsedContext(
     entry = { signature, signatureBytes: retainedSignatureBytes(signature), compactBytes: 0, liveBytes: 0 };
     cache.entries.set(fileKey, entry);
   }
-  const compact = entry.compact ?? compactContextFor(parsed);
-  if (compact && !entry.compact) {
-    entry.compact = compact;
-    entry.compactBytes = compact.bytes;
-    cache.compactBytes += compact.bytes;
-    cache.compactEntries += 1;
-  }
+  retainCompactContext(cache, entry, parsed);
   if (entry.parsed !== parsed) {
     if (entry.liveBytes) cache.liveBytes -= entry.liveBytes;
     entry.parsed = parsed;
@@ -341,6 +490,15 @@ function retainParsedContext(
   }
   touchEntry(cache, fileKey, entry);
   trimQuerySyntaxCache(index, cache);
+}
+
+/** Register a synchronously parsed context after its source has been validated. */
+export function retainParsedContextForIndexSync(index: ProjectIndex, file: string, parsed: ParsedFileContext): void {
+  const fileKey = fileIdentityKey(file);
+  const cache = querySyntaxCacheFor(index);
+  const signature = indexFileSignature(index, fileKey);
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  retainParsedContext(index, cache, fileKey, signature, parsed);
 }
 
 function parsedContextFromCompact(compact: CompactSyntaxContext): ParsedFileContext {
@@ -387,6 +545,7 @@ export function cachedParsedContextForIndexSync(index: ProjectIndex, file: strin
   }
   const cache = querySyntaxCaches.get(index);
   if (!cache) return undefined;
+  assertQuerySourceCurrent(index, cache, fileKey, file, indexFileSignature(index, fileKey));
   const entry = cacheEntryFor(index, cache, fileKey, indexFileSignature(index, fileKey));
   if (!entry) return undefined;
   if (entry.parsed) {
@@ -401,6 +560,9 @@ export function cachedParsedContextForIndexSync(index: ProjectIndex, file: strin
 export function cachedScopeIndexForIndex(index: ProjectIndex, file: string): ScopeIndex | undefined {
   const fileKey = fileIdentityKey(file);
   const cache = querySyntaxCaches.get(index);
+  if (cache?.sourceIdentities.has(fileKey)) {
+    assertQuerySourceCurrent(index, cache, fileKey, file, indexFileSignature(index, fileKey));
+  }
   if (cache) {
     const entry = cacheEntryFor(index, cache, fileKey, indexFileSignature(index, fileKey));
     if (entry) touchEntry(cache, fileKey, entry);
@@ -418,6 +580,10 @@ export function retainScopeIndexForIndex(
   const fileKey = fileIdentityKey(file);
   const cache = querySyntaxCacheFor(index);
   const signature = indexFileSignature(index, fileKey);
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  if (!cache.sourceIdentities.has(fileKey) && !index.parsed?.has(fileKey) && !detectSFCFramework(file)) {
+    recordQuerySource(index, cache, fileKey, file, signature, parsed.source);
+  }
   let entry = cacheEntryFor(index, cache, fileKey, signature);
   if (!entry) {
     entry = { signature, signatureBytes: retainedSignatureBytes(signature), compactBytes: 0, liveBytes: 0 };
@@ -431,13 +597,7 @@ export function retainScopeIndexForIndex(
     const indexedParsed = index.parsed?.get(fileKey);
     const retainedIndexedParsed = indexedParsed?.tree === parsed.tree ? indexedParsed : undefined;
     retainedParsed = retainedIndexedParsed ?? parsed;
-    const compact = entry.compact ?? compactContextFor(retainedParsed);
-    if (compact && !entry.compact) {
-      entry.compact = compact;
-      entry.compactBytes = compact.bytes;
-      cache.compactBytes += compact.bytes;
-      cache.compactEntries += 1;
-    }
+    retainCompactContext(cache, entry, retainedParsed);
     entry.parsed = retainedIndexedParsed ? undefined : retainedParsed;
   }
   const previousLiveBytes = entry.liveBytes;
@@ -451,11 +611,7 @@ export function retainScopeIndexForIndex(
 }
 
 /** Reuse one query-time syntax parse per file, including files loaded from a disk-cached index. */
-export function ensureParsedContextForIndex(
-  index: ProjectIndex,
-  file: string,
-  parsed?: ParsedFileContext,
-): Promise<ParsedFileContext> {
+export function ensureParsedContextForIndex(index: ProjectIndex, file: string): Promise<ParsedFileContext> {
   const fileKey = fileIdentityKey(file);
   const retained = index.parsed?.get(fileKey);
   if (retained) {
@@ -466,6 +622,7 @@ export function ensureParsedContextForIndex(
 
   const cache = querySyntaxCacheFor(index);
   const signature = indexFileSignature(index, fileKey);
+  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
   const entry = cacheEntryFor(index, cache, fileKey, signature);
   if (entry?.parsed) {
     touchEntry(cache, fileKey, entry);
@@ -476,13 +633,14 @@ export function ensureParsedContextForIndex(
   const pending = cache.inFlight.get(fileKey);
   if (pending && pending.signature === signature) return pending.promise;
 
-  const promise = parsed ? Promise.resolve(parsed) : parseNavigationContext(file, index.languageExtensions);
+  const promise = parseQuerySource(index, cache, fileKey, file, signature);
   const pendingEntry: PendingParsedContext = { signature, promise };
   cache.inFlight.set(fileKey, pendingEntry);
   void promise.then(
     (context) => {
       if (cache.inFlight.get(fileKey) !== pendingEntry) return;
       cache.inFlight.delete(fileKey);
+      if (cache.sourceIdentities.get(fileKey)?.stale) return;
       retainParsedContext(index, cache, fileKey, signature, context);
     },
     () => {
@@ -517,7 +675,7 @@ export function __setQuerySyntaxCacheLimitsForTests(
   trimQuerySyntaxCache(index, cache);
 }
 
-/** Byte components overlap compact/live budgets; entry and in-flight metadata are separate. */
+/** Byte components overlap compact/live budgets; entry, source-identity, and in-flight metadata are separate. */
 export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   compactBytes: number;
   liveBytes: number;
@@ -525,6 +683,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   liveEntries: number;
   entries: number;
   inFlight: number;
+  sourceIdentityEntries: number;
   nativeBufferBytes: number;
   sourceBytes: number;
   positionMapBytes: number;
@@ -535,6 +694,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   signatureBytes: number;
   entryMetadataBytes: number;
   inFlightMetadataBytes: number;
+  sourceIdentityMetadataBytes: number;
 } {
   const cache = querySyntaxCacheFor(index);
   let liveEntries = 0;
@@ -547,6 +707,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   let signatureBytes = 0;
   let entryMetadataBytes = 0;
   let inFlightMetadataBytes = 0;
+  let sourceIdentityMetadataBytes = 0;
   for (const [fileKey, entry] of cache.entries) {
     if (entry.liveBytes) {
       liveEntries += 1;
@@ -571,6 +732,10 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   for (const [fileKey, pending] of cache.inFlight) {
     inFlightMetadataBytes += stringBytes(fileKey) + retainedSignatureBytes(pending.signature) + 96;
   }
+  for (const [fileKey, identity] of cache.sourceIdentities) {
+    sourceIdentityMetadataBytes += stringBytes(fileKey) + stringBytes(identity.fingerprint);
+    sourceIdentityMetadataBytes += retainedSignatureBytes(identity.signature) + 96;
+  }
   return {
     compactBytes: cache.compactBytes,
     liveBytes: cache.liveBytes,
@@ -578,6 +743,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
     liveEntries,
     entries: cache.entries.size,
     inFlight: cache.inFlight.size,
+    sourceIdentityEntries: cache.sourceIdentities.size,
     nativeBufferBytes,
     sourceBytes,
     positionMapBytes,
@@ -588,5 +754,6 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
     signatureBytes,
     entryMetadataBytes,
     inFlightMetadataBytes,
+    sourceIdentityMetadataBytes,
   };
 }

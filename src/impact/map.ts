@@ -1,6 +1,6 @@
 import type { FileId, Range } from "../types.js";
 import { type ProjectIndex, SymbolKind, type SymbolDef, type SymbolHandle } from "../indexer/types.js";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../indexer/parsed-cache.js";
 import {
   buildTrackedSymbolPositions,
   findLocalByStartPosition,
@@ -69,7 +69,8 @@ export async function locateChangedSymbolsWithLines(
   let parsedEntry;
   try {
     parsedEntry = await ensureParsedContextForIndex(index, file);
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return { changedSymbols: [], changedLines, parseFailed: true };
   }
   if (!parsedEntry) return { changedSymbols: [], changedLines, parseFailed: true };
@@ -314,7 +315,8 @@ export async function mapChangedLinesToSymbols(
   let parsedEntry;
   try {
     parsedEntry = await ensureParsedContextForIndex(index, file);
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return new Map();
   }
   if (!parsedEntry) return new Map();

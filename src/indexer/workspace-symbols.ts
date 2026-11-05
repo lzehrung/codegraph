@@ -1,7 +1,7 @@
 import picomatch from "picomatch";
 import type { Range } from "../types.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
@@ -195,7 +195,8 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
           imported: true,
         });
       }
-    } catch {
+    } catch (error) {
+      rethrowStaleQuerySource(error);
       failedFiles += 1;
       omitted += moduleIndex.imports.length;
     }
