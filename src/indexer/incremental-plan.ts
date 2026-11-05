@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { languageExtensionPatterns } from "../languages.js";
 import {
   diffBuildOptions,
   loadManifest,
@@ -404,6 +405,19 @@ export function collectDirectDependents(
   return dependents;
 }
 
+/** Apply full-build discovery rules to changed paths reported by Git. */
+export function createIncrementalDiscoveryMatcher(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+): (file: string) => boolean {
+  return createDiscoveredFileMatcher(
+    projectRoot,
+    opts?.discovery?.globRoot ?? projectRoot,
+    [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(opts?.languageExtensions)],
+    opts?.discovery,
+  );
+}
+
 /**
  * List new, untracked files that Git sees but the manifest does not yet know about,
  * filtered to the same discovery patterns/ignores a full scan would apply.
@@ -479,7 +493,9 @@ export async function resolveIncrementalFilePlan(
   const manifest = await loadManifest(projectRoot, opts);
   if (!manifest) return null;
   if (!manifest.buildOptions) return null;
-  if (diffBuildOptions(manifest.buildOptions, opts).includes("discovery")) return null;
+  const changedOptions = diffBuildOptions(manifest.buildOptions, opts);
+  if (changedOptions.some((option) => ["discovery", "languageExtensions", "coreAlgorithm"].includes(option)))
+    return null;
 
   if (opts?.cacheStrict) return null;
 
@@ -494,10 +510,14 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const [workingTreeDiffFiles, untrackedFiles] = await Promise.all([
+    const [diffFiles, untrackedFiles] = await Promise.all([
       manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, discoveryCache),
     ]);
+    const isDiscoveredFile = createIncrementalDiscoveryMatcher(projectRoot, opts);
+    const workingTreeDiffFiles = diffFiles.filter(
+      (file) => Object.hasOwn(trackedEntries, file) || isDiscoveredFile(file),
+    );
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
     const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();

@@ -85,8 +85,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * cannot reuse another site's proof. Detailed call graphs cached with the old cross-site proof sharing are rebuilt.
  * Epoch 105 keeps a missing Java or Kotlin import external once either language declares its package, instead of
  * guessing a file from the import path. A complete Java file with no declarations no longer proves its filename's type.
+ * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
  */
-export const CORE_ALGORITHM_EPOCH = 105;
+export const CORE_ALGORITHM_EPOCH = 109;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

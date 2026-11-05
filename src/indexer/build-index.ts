@@ -161,6 +161,7 @@ import {
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
+  createIncrementalDiscoveryMatcher,
   partitionTrackedManifestFiles,
   probePathExistence,
 } from "./incremental-plan.js";
@@ -2460,7 +2461,12 @@ async function buildProjectIndexIncrementalInProbeCache(
         manifest.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
     }
     const requiresFullRebuild = optionDiffs.some(
-      (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
+      (diff) =>
+        diff === "discovery" ||
+        diff === "native" ||
+        diff === "implementation" ||
+        diff === "coreAlgorithm" ||
+        diff === "languageExtensions",
     );
     const graphOptionsChanged = !graphOptionsEqual(manifest?.graphOptions, graphOptions);
     if (
@@ -2666,6 +2672,10 @@ async function buildProjectIndexIncrementalInProbeCache(
         }),
       );
     }
+    const isDiscoveredFile = createIncrementalDiscoveryMatcher(projectRoot, opts);
+    const isProjectCandidate = (file: string): boolean => Object.hasOwn(trackedEntries, file) || isDiscoveredFile(file);
+    manifestDiffFiles = manifestDiffFiles.filter(isProjectCandidate);
+    gitFiles = gitFiles.filter(isProjectCandidate);
     if (discoveryTimings && sourceDiscoveryPerformed) {
       discoveryTimings.sourceDiscoveryMs = Math.round(sourceDiscoveryMs);
     }
@@ -3371,7 +3381,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     "Additional graph delta file",
   );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-  const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+  let gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
   const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
@@ -3395,6 +3405,10 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
+  const isDiscoveredFile = createIncrementalDiscoveryMatcher(projectRoot, opts);
+  const isProjectCandidate = (file: string): boolean => Object.hasOwn(trackedEntries, file) || isDiscoveredFile(file);
+  manifestDiffFiles = manifestDiffFiles.filter(isProjectCandidate);
+  gitFiles = gitFiles.filter(isProjectCandidate);
   const candidateExistence = await probePathExistence(
     [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles],
     buildConcurrency(opts),
