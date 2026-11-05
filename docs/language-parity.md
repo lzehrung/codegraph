@@ -103,9 +103,10 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ### Calls and call compatibility
 
 - A receiver call is never matched by bare member name against module locals or import aliases.
+- Receiver type proof belongs to its syntax site, not just its enclosing function and name; a shadowing block, closure, or parameter cannot reuse another binding's proof.
 - An unproven receiver emits no edge: structural types, non-constructor assignments (`auto b = Box::make()`), generic type parameters, unbound globals (`Math.max()`).
 - Several same-name members on one type are dropped unless argument count picks one; an ambiguous inheritance level emits nothing.
-- Go-to-definition and the detailed graph agree on call sites, except module top-level calls and computed or parenthesized callees (`(a ?? b)()`, `(f)()`).
+- Go-to-definition and the detailed graph agree on call sites, except module top-level calls, computed or parenthesized callees (`(a ?? b)()`, `(f)()`), and the Python default-expression limitation below.
 - A callback resolving to a parameter or local may have no edge; a literal-valued binding never gets one.
 - A call the only candidate cannot accept by argument count still navigates to it; the graph records no edge.
 - Call hierarchy follows only resolved `calls` edges between indexed callables; ambiguous or unproven bindings emit no edge.
@@ -154,6 +155,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Conditional and function-suite imports are not module re-exports; an unresolved relative import keeps its written specifier (`.missing`).
 - Qualified value patterns in `match` are not captures.
 - `self`/`cls` members resolve, including `__init__` attributes and `svc = Service()` locals; factory-assigned and unannotated receivers stay unproven.
+- A class member called in a default expression before a same-named keyword-only parameter can have a detailed call edge while go-to-definition remains `not_found`. Calls through that parameter in the body stay unproven and emit no edge.
 - A `self.x` or instance receiver reaches a property (`@property`, `property(...)`, or a replacing `@x.getter`/`@x.setter`) of its class or a base class before an instance attribute set by `self.x = value`. The last class-level binding of the name decides: `property(...)`, `@property`, and `@x.getter` each make a new property and are its target, `@x.setter` and `@x.deleter` keep the earlier one as the target, and any other binding, such as a later `x = 0`, replaces it. An annotation without a value (`x: int`) binds nothing, so it hides no base property; a plain class attribute found first does. With several bases the method resolution order is not rebuilt: the property is the one of the class that every other class binding `x` derives from, at whatever level it sits, and `self.x` stays unresolved when the nearest bindings disagree (a plain attribute in one base, a property in an unrelated one) or when unrelated bases each bind a property. References to a property accessor are `partial`.
 
 ## PHP

@@ -81,6 +81,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * call that passed no path aliases (the module-level import of a Vue block) no longer decides the answer of a later call
  * for the same file and specifier that did, so a style import through a path alias gets its file edge. Edges cached by
  * an older build kept the external answer.
+ * Epoch 104 keeps receiver proofs at their syntax sites, so a block, closure, or parameter that shadows a receiver
+ * cannot reuse another site's proof. Detailed call graphs cached with the old cross-site proof sharing are rebuilt. 
  * Epoch 105 keeps a missing Java or Kotlin import external once either language declares its package, instead of
  * guessing a file from the import path. A complete Java file with no declarations no longer proves its filename's type.
  */

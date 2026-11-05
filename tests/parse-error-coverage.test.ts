@@ -96,6 +96,55 @@ describe("parse-error reference coverage", () => {
   afterEach(() => {
     __resetNativeTreeSitterBindingForTests();
   });
+  it("returns parse-error affected files in path order", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-order-"));
+    const definition = path.join(root, "definition.ts").replace(/\\/g, "/");
+    const a = path.join(root, "a.ts").replace(/\\/g, "/");
+    const z = path.join(root, "z.ts").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(definition, "export function name() { return 1; }\n");
+      const broken = 'import { name } from "./definition";\nconst broken = <name;\n';
+      await fsp.writeFile(a, broken);
+      await fsp.writeFile(z, broken);
+      const index = await createTestIndexFromFiles(root, [definition, z, a]);
+      const result = await findReferences(index, { file: definition, line: 1, column: 17 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("reference lookup failed");
+      expect(result.referenceCoverage?.affectedFiles).toEqual([a, z]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns member affected files in path order regardless of input order", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-member-coverage-order-"));
+    const definition = path.join(root, "definition.ts").replace(/\\/g, "/");
+    const a = path.join(root, "a.ts").replace(/\\/g, "/");
+    const z = path.join(root, "z.ts").replace(/\\/g, "/");
+    try {
+      const source = "export class Service { run() { return 1; } }\n";
+      await fsp.writeFile(definition, source);
+      const broken = 'import { Service } from "./definition";\nnew Service().run();\nconst broken = <unrelated;\n';
+      await fsp.writeFile(a, broken);
+      await fsp.writeFile(z, broken);
+      for (const files of [
+        [definition, z, a],
+        [a, definition, z],
+      ]) {
+        const index = await createTestIndexFromFiles(root, files);
+        const result = await findReferences(index, { file: definition, line: 1, column: source.indexOf("run") + 1 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("member reference lookup failed");
+        expect(result.referenceCoverage).toMatchObject({ state: "partial", affectedFiles: [a, z] });
+        expect(
+          result.references.filter((reference) => reference.file !== definition).map((reference) => reference.file),
+        ).toEqual([a, z]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(languages.filter((language) => language.name !== "SCSS"))(
     "marks an affected $name file partial when it has an ERROR/MISSING range",
     async (language) => {
