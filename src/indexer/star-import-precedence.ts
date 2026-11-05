@@ -161,11 +161,13 @@ export function resolveStarImportedDefinition(
   languageId: string,
   cNamespace?: "tag" | "ordinary",
   argumentCount?: number,
+  isCallableUse = argumentCount !== undefined,
 ): SymbolDef | null {
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
     ...(cNamespace ? { cNamespace } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
+    ...(isCallableUse ? { isCallableUse } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),
@@ -355,8 +357,8 @@ function representativeDefinition(
 }
 
 /**
- * `blocked` marks a star import that may hold the name but resolved nothing, a C# `using N;` that an enclosing
- * namespace shadows: it leaves any candidate the other star imports supply unproven.
+ * `blocked` marks a star import that may hold the name but resolved nothing. Unread Kotlin package
+ * declarations likewise prevent another wildcard from proving a callable target.
  */
 export function decideStarImportCandidates(
   index: ProjectIndex,
@@ -364,9 +366,17 @@ export function decideStarImportCandidates(
   candidates: readonly StarImportCandidate[],
   useFile?: string,
   blocked = false,
+  isCallableUse = false,
 ): StarImportDecision {
   if (!candidates.length) return { status: "none" };
-  if (blocked) return { status: "ambiguous" };
+  const incompleteKotlinWildcard =
+    languageId === "kotlin" &&
+    (isCallableUse || candidates.some((candidate) => candidate.def.kind === SymbolKind.Function)) &&
+    !!useFile &&
+    index.byFile
+      .get(fileIdentityKey(useFile))
+      ?.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
+  if (blocked || incompleteKotlinWildcard) return { status: "ambiguous" };
   const groups = groupStarDefinitions(
     index,
     languageId,

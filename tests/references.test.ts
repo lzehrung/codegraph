@@ -37,6 +37,10 @@ import {
 } from "./helpers/kotlin-unicode-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import {
+  jvmIncompleteWildcardSources,
+  JVM_INCOMPLETE_WILDCARD_REFERENCES,
+} from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -3520,6 +3524,41 @@ describe("Find References", () => {
   });
 
   describe("Kotlin", () => {
+    it("excludes unread wildcard overload calls and callable references from reference sets", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-incomplete-wildcard-refs-"));
+      try {
+        const sources = jvmIncompleteWildcardSources();
+        const paths = await writeFixtureFiles(root, sources);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        for (const row of JVM_INCOMPLETE_WILDCARD_REFERENCES) {
+          const result = await indexer.findReferences(index, {
+            file: paths[row.file]!,
+            line: row.line,
+            column: columnInLines(sources[row.file]!.split("\n"), row.line, row.name),
+          });
+          expect(result.status, row.file).toBe("ok");
+          if (result.status !== "ok") throw new Error(`missing reference definition: ${row.file}`);
+          const consumerSites = result.references.filter(
+            (ref) => fileIdentityKey(ref.file) === fileIdentityKey(paths[row.consumer]!),
+          );
+          expect(consumerSites.map((ref) => ref.range.start.line).sort(), row.file).toEqual([...row.lines]);
+          if (row.partial) expect(result.referenceCoverage.state, row.file).toBe("partial");
+          if (row.file === "big/Small.kt" || row.file === "gap/Small.kt") {
+            expect(
+              consumerSites.every(
+                (ref) =>
+                  ref.range.start.column ===
+                  sources[row.consumer]!.split("\n")[ref.range.start.line - 1]!.indexOf("Service") + 1,
+              ),
+              row.file,
+            ).toBe(true);
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find all references to imported function", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "kotlin");
       const utilsFile = path.join(samplePath, "utils", "helperFunction.kt").replace(/\\/g, "/");

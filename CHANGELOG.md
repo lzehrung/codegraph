@@ -9,8 +9,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Changed
+
+- Cold C#, Java, and Kotlin builds reuse native worker extraction trees for namespace and package scans instead of parsing indexed files again on the main thread. Unindexed scan candidates use facts-only worker tasks.
+
 ### Fixed
 
+- JVM package wildcard imports keep known file dependencies but no longer prove Kotlin calls or callable references while unread package declarations may add an overload or factory. Go-to-definition, references, detailed symbol edges, and rename previews agree; class type navigation and fully read packages remain supported.
+- Incremental indexing and `buildGraphDelta` apply project discovery filters, including Git ignore rules, to changed and untracked Git files. Editing an ignored tracked file no longer adds it to the index or manifest; older contaminated caches rebuild. Graph deltas retain removed files and edges when a rename destination is ignored.
+- C# alias and static-using type lookups stay partial beside oversized scan candidates with workers on or off, including ignored files and files outside an explicit index list. Cached results rebuild with the consistent source-size policy.
 - Query-time syntax and scope caches are bounded; evicted views reuse retained native columns. Re-reading a previously queried file that changed or disappeared now reports that the project index needs rebuilding.
 - Java and Kotlin imports stay external when a known JVM package does not declare the imported name, instead of guessing a same-named file by path. Java no longer creates a dependency on `Hidden.kt` for a Kotlin function named `Hidden` or a different declared type; declared types and nested-type imports still resolve.
 - `buildSymbolGraphDetailed`, `callers`, and `callees` keep receiver proofs separate at each call site. A block, closure, or parameter that shadows a receiver no longer reuses another binding's type or adds a wrong call edge; cached graphs rebuild.

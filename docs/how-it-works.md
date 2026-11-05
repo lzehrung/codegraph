@@ -111,6 +111,15 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
+C#, Java, and Kotlin builds prepare per-file facts before resolving imports:
+
+- Native workers reuse each indexed file's extraction tree for namespace and package facts.
+- Scan candidates outside indexed discovery use facts-only tasks without retaining source or tree payloads.
+- Warm builds reuse unchanged indexed files' persisted facts.
+- Cold builds retain raw extraction payloads until resolution consumes them; this avoids repeated parsing but can increase peak memory.
+
+`buildProjectIndex`, `buildProjectIndexFromFiles`, and `buildProjectIndexIncremental` apply the same 8 MiB limit to C# scan candidates with workers on or off, including ignored files and files outside an explicit list. An oversized candidate leaves C# alias and static-using type lookups partial.
+
 The detailed symbol graph that `callers`, `callees`, `supertypes`, `subtypes`, `explain`, `packet get`, `rename-preview`, `refactor-plan`, and `artifact build` read persists beside them as `detailed-symbol-graph.bin`, a compressed binary file of typed columns that holds each file once as a project-relative path. A load builds the graph without parsing source: it checks a SHA-256 of the whole file, header and payload, then the project snapshot identity and the implementation fingerprint, then rebases each file once and checks that the index holds it and that it lies inside the project root, not once per symbol and edge. No step builds the graph as one text string, so a graph of millions of edges persists. A changed project, configuration, or build, a damaged file (a byte changed anywhere in it), or an earlier format rebuilds the graph, and the earlier `detailed-symbol-graph.json` is ignored and removed by the next write.
 
 A cached module is keyed by its own content, but its import targets depend on other files. A warm build extracts a module again when:
@@ -121,6 +130,8 @@ A cached module is keyed by its own content, but its import targets depend on ot
 - it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
 
 With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+
+Incremental indexing applies the full build's discovery patterns, includes, and ignores, including `.gitignore` and repository/configured excludes, to changed and untracked Git candidates; `buildGraphDelta` uses the same filters for changed paths. Editing or staging an ignored file does not add it to the index. `buildGraphDelta` reports removed manifest files and their edges even when a rename destination is ignored. Explicit library file inputs remain explicit overrides.
 
 An incremental update (`codegraph index`, `buildProjectIndexIncremental`, agent sessions) extracts the importers of a changed file again only when the file's public surface changed:
 

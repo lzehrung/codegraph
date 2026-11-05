@@ -1,10 +1,11 @@
+import fsp from "node:fs/promises";
 import {
   languageExtensionPatterns,
   normalizeLanguageExtensions,
   supportForFileWithoutHeaderSample,
   type LanguageExtensionMap,
 } from "../../languages.js";
-import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
+import { confineResolvedPath, fileIdentityKey, stripBom } from "../paths.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
@@ -15,6 +16,7 @@ import {
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
 import { recordParserBackendDegradation } from "../../native/native-backend-report.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../native/source-limits.js";
 import type { BuildReport } from "../../indexer/types.js";
 import type { ParsedFileContext } from "../../indexer/parse-context.js";
 import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, type CsharpNamespaceFacts } from "../csharp-tree.js";
@@ -40,9 +42,15 @@ export type CsharpNamespaceTypeResolution =
   | { status: "partial" };
 
 /** The namespace facts known per file during one build, from a reused module or from the file's own tree. */
-const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts>();
+const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts | null>();
 const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
 const NO_CSHARP_NAMESPACE_FACTS: CsharpNamespaceFacts = { regions: [], types: [] };
+let namespaceFactsReader: ((file: string) => Promise<CsharpNamespaceFacts | null>) | undefined;
+
+/** Routes unprimed project-scan files through the active build's worker pool. */
+export function setCsharpNamespaceFactsReader(reader: typeof namespaceFactsReader): void {
+  namespaceFactsReader = reader;
+}
 function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
   const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
   return anchor + "\0" + JSON.stringify(mappings);
@@ -64,7 +72,7 @@ function csharpCandidateGlobs(languageExtensions: LanguageExtensionMap | undefin
  */
 export function primeCsharpNamespaceFacts(
   file: string,
-  facts: CsharpNamespaceFacts,
+  facts: CsharpNamespaceFacts | null,
   languageExtensions?: LanguageExtensionMap,
 ): void {
   csharpNamespaceFileCache.set(csharpNamespaceCacheKey(fileIdentityKey(file), languageExtensions), facts);
@@ -97,15 +105,32 @@ async function readCsharpNamespaceFacts(
   const fileKey = fileIdentityKey(filePath);
   const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
   const cached = csharpNamespaceFileCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached !== undefined) return cached;
 
   const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
   // An active mapping can give a C# suffix to another language; such a file declares no namespace.
   if (support?.id !== "csharp") return NO_CSHARP_NAMESPACE_FACTS;
+  if (namespaceFactsReader) {
+    const facts = await namespaceFactsReader(filePath);
+    csharpNamespaceFileCache.set(cacheKey, facts);
+    return facts;
+  }
   const retained = parsedFiles?.get(fileKey);
   let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   if (!tree) {
-    const parsed = parseSyntaxTree(await readUtf8WithoutBom(filePath), support);
+    const source = await fsp.readFile(filePath, "utf8");
+    const sourceBytes = Buffer.byteLength(source, "utf8");
+    if (sourceBytes > DEFAULT_NATIVE_SOURCE_MAX_BYTES) {
+      recordParserBackendDegradation(report, {
+        file: slashPath(filePath),
+        languageId: support.id,
+        nativeFallbackReason: "sourceTooLarge",
+        nativeError: `source exceeds native byte limit (${sourceBytes} > ${DEFAULT_NATIVE_SOURCE_MAX_BYTES})`,
+      });
+      csharpNamespaceFileCache.set(cacheKey, null);
+      return null;
+    }
+    const parsed = parseSyntaxTree(stripBom(source), support);
     if (!parsed.tree) {
       recordParserBackendDegradation(report, {
         file: slashPath(filePath),
@@ -314,4 +339,5 @@ export async function csharpTypeNameQualifierDeclared(
 export function clearCsharpResolutionCaches(): void {
   csharpNamespaceFileCache.clear();
   csharpProjectNamespaceIndexCache.clear();
+  namespaceFactsReader = undefined;
 }
