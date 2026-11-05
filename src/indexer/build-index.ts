@@ -161,7 +161,7 @@ import {
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
-  createIncrementalDiscoveryMatcher,
+  filterIncrementalDiscoveryCandidates,
   partitionTrackedManifestFiles,
   probePathExistence,
 } from "./incremental-plan.js";
@@ -2630,7 +2630,7 @@ async function buildProjectIndexIncrementalInProbeCache(
           untrackedFiles = reconciledUntrackedFiles;
         } else {
           untrackedFiles = await measureSourceDiscovery(() =>
-            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext.git),
+            listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext),
           );
         }
       } catch (error) {
@@ -2672,10 +2672,17 @@ async function buildProjectIndexIncrementalInProbeCache(
         }),
       );
     }
-    const isDiscoveredFile = createIncrementalDiscoveryMatcher(projectRoot, opts);
-    const isProjectCandidate = (file: string): boolean => Object.hasOwn(trackedEntries, file) || isDiscoveredFile(file);
-    manifestDiffFiles = manifestDiffFiles.filter(isProjectCandidate);
-    gitFiles = gitFiles.filter(isProjectCandidate);
+    const projectCandidates = new Set(
+      await filterIncrementalDiscoveryCandidates(
+        projectRoot,
+        [...manifestDiffFiles, ...gitFiles],
+        trackedEntries,
+        opts,
+        discoveryContext,
+      ),
+    );
+    manifestDiffFiles = manifestDiffFiles.filter((file) => projectCandidates.has(file));
+    gitFiles = gitFiles.filter((file) => projectCandidates.has(file));
     if (discoveryTimings && sourceDiscoveryPerformed) {
       discoveryTimings.sourceDiscoveryMs = Math.round(sourceDiscoveryMs);
     }
@@ -3367,6 +3374,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const manifest = await loadManifest(projectRoot, opts);
   const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   const graphOptions = normalizeGraphOptions(opts?.graph);
+  const discoveryContext = opts?.discoveryContext ?? createProjectDiscoveryContext(projectRoot);
   const previousLanguageExtensions = normalizeLanguageExtensions(manifest?.buildOptions?.languageExtensions);
   const currentLanguageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const languageExtensionsChanged = manifest
@@ -3382,7 +3390,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   let gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
-  const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
+  const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
@@ -3405,10 +3413,17 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
-  const isDiscoveredFile = createIncrementalDiscoveryMatcher(projectRoot, opts);
-  const isProjectCandidate = (file: string): boolean => Object.hasOwn(trackedEntries, file) || isDiscoveredFile(file);
-  manifestDiffFiles = manifestDiffFiles.filter(isProjectCandidate);
-  gitFiles = gitFiles.filter(isProjectCandidate);
+  const projectCandidates = new Set(
+    await filterIncrementalDiscoveryCandidates(
+      projectRoot,
+      [...manifestDiffFiles, ...gitFiles],
+      trackedEntries,
+      opts,
+      discoveryContext,
+    ),
+  );
+  manifestDiffFiles = manifestDiffFiles.filter((file) => projectCandidates.has(file));
+  gitFiles = gitFiles.filter((file) => projectCandidates.has(file));
   const candidateExistence = await probePathExistence(
     [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles],
     buildConcurrency(opts),
@@ -3443,6 +3458,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   existingExplicitFiles.forEach(addChangedFile);
   normalizedManifestDiffFiles.forEach(addChangedFile);
   normalizedGitFiles.forEach(addChangedFile);
+  deletedTrackedFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {
     for (const file of trackedFiles) {
       if (languageSupportChangedForFile(file)) addChangedFile(file);
@@ -3479,7 +3495,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       }
     }
   }
-  const index = await buildProjectIndexIncremental(projectRoot, opts);
+  const index = await buildProjectIndexIncremental(projectRoot, { ...opts, discoveryContext });
   if (languageExtensionsChanged) {
     for (const file of index.modules.keys()) {
       if (!languageSupportChangedForFile(file)) continue;
