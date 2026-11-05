@@ -1297,6 +1297,15 @@ function isImportBinding(value: unknown): value is ImportBinding {
   ) {
     return false;
   }
+  if (binding.kind === "star" || binding.kind === "named") {
+    if (
+      (binding.jvmPackageLanguageId !== undefined &&
+        binding.jvmPackageLanguageId !== "java" &&
+        binding.jvmPackageLanguageId !== "kotlin") ||
+      !isOptionalBoolean(binding.jvmPackageIncomplete)
+    )
+      return false;
+  }
   if (binding.kind === "default") {
     return typeof binding.local === "string" && isOptionalRange(binding.localRange);
   }
@@ -1328,9 +1337,6 @@ function isImportBinding(value: unknown): value is ImportBinding {
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
       (Array.isArray(binding.jvmPackageFiles) && binding.jvmPackageFiles.every((file) => typeof file === "string"))) &&
-    (binding.jvmPackageLanguageId === undefined ||
-      binding.jvmPackageLanguageId === "java" ||
-      binding.jvmPackageLanguageId === "kotlin") &&
     isOptionalBoolean(binding.jvmSamePackage) &&
     (binding.rubyLoadForm === undefined || isRubyLoadForm(binding.rubyLoadForm))
   );

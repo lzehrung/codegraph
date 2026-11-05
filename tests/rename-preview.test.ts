@@ -9,6 +9,8 @@ import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
+import { jvmIncompleteWildcardSources } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -1151,6 +1153,44 @@ describe("rename preview", () => {
     }
 
     await expect(renameSnapshotForFiles(root, [aliasFile])).rejects.toThrow("Index file is outside project root");
+  });
+
+  it("does not propose renaming unread wildcard overload or factory call inputs", async () => {
+    const root = await mkTmpDir("cg-rename-unread-wildcards-");
+    const sources = jvmIncompleteWildcardSources();
+    await writeFixtureFiles(root, sources);
+    const session = createAgentSession({
+      root,
+      buildOptions: { cache: "off", threads: 1 },
+      freshness: { policy: "check" },
+    });
+    try {
+      for (const [file, name, consumer] of [
+        ["big/Small.kt", "select", "app/BigUse.kt"],
+        ["gap/Small.kt", "select", "app/GapUse.kt"],
+        ["big/Small.kt", "Service", "app/BigUse.kt"],
+        ["gap/Small.kt", "Service", "app/GapUse.kt"],
+      ] as const) {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: name });
+        const target = symbols.symbols.find((symbol) => symbol.name === name && symbol.location.file === file);
+        expect(target, file).toBeDefined();
+        const result = await previewRenameWithSession(session, {
+          root,
+          handle: target!.handle,
+          newName: `renamed${name}`,
+        });
+        expect(result.safe, `${file}::${name}`).toBe(false);
+        const sites = result.edits
+          .filter((edit) => edit.file === consumer)
+          .map((edit) => [edit.range.start.line, edit.range.start.column]);
+        const expectedSites: number[][] = [];
+        if (name === "Service") expectedSites.push([4, sources[consumer]!.split("\n")[3]!.indexOf(name) + 1]);
+        expect(sites, `${file}::${name}`).toEqual(expectedSites);
+      }
+    } finally {
+      session.invalidate();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("is not safe when the native parser skipped a file, but is safe on the same complete snapshot", async () => {

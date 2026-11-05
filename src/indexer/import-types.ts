@@ -34,6 +34,9 @@ export type ImportBinding =
       jvmTypeOwnerStartIndex?: number;
       /** Static Java type owner when expanded from a static star import. */
       jvmStaticWildcardName?: string;
+      /** Scalar package wildcard provenance retained without duplicating its file list. */
+      jvmPackageLanguageId?: "java" | "kotlin";
+      jvmPackageIncomplete?: boolean;
       /** Whether the importer shares the declaring JVM package. */
       jvmSamePackage?: boolean;
       phpImportType?: "class" | "function" | "const";
@@ -103,6 +106,8 @@ export type ImportBinding =
       jvmPackageFiles?: FileId[];
       /** Consumer language needed to keep Java package stars limited to JVM-visible types. */
       jvmPackageLanguageId?: "java" | "kotlin";
+      /** Whether unread declarations can add another callable of an imported name. */
+      jvmPackageIncomplete?: boolean;
       /** Whether the importer shares the imported JVM package or type's package. */
       jvmSamePackage?: boolean;
     };

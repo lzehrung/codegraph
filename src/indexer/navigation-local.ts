@@ -466,14 +466,17 @@ const CALL_ARGUMENT_PARENT_TYPES: ReadonlySet<string> = new Set([
   "scoped_call_expression",
 ]);
 
-/** Argument count when `node` is the callee of a call; undefined for every other use. */
-function explicitCallArgumentCount(languageId: string, source: string, node: SyntaxNodeLike): number | undefined {
+/** Argument count when `node` is a callee: null for an unknown count, undefined for a non-call. */
+function explicitCallArgumentCount(
+  languageId: string,
+  source: string,
+  node: SyntaxNodeLike,
+): number | null | undefined {
   const call = node.parent;
   if (!call || !CALL_ARGUMENT_PARENT_TYPES.has(call.type)) return undefined;
   const callee = call.childForFieldName("name") ?? call.childForFieldName("function") ?? call.namedChildren[0] ?? null;
   if (!callee || node.startIndex < callee.startIndex || node.endIndex > callee.endIndex) return undefined;
-  const count = getCallArgumentCount({ languageId, source, call });
-  return count === null ? undefined : count;
+  return getCallArgumentCount({ languageId, source, call });
 }
 
 export function resolveNamedDefinition(
@@ -486,8 +489,15 @@ export function resolveNamedDefinition(
   referenceIndex?: number,
   callSite?: { node: SyntaxNodeLike; source: string },
 ): GoToResult | null {
-  const argumentCount = callSite ? explicitCallArgumentCount(support.id, callSite.source, callSite.node) : undefined;
-  const arityOptions = argumentCount === undefined ? {} : { argumentCount };
+  const callArgumentCount = callSite
+    ? explicitCallArgumentCount(support.id, callSite.source, callSite.node)
+    : undefined;
+  const isCall = callArgumentCount !== undefined;
+  const argumentCount = callArgumentCount ?? undefined;
+  const arityOptions = {
+    ...(isCall ? { isCall } : {}),
+    ...(argumentCount !== undefined ? { argumentCount } : {}),
+  };
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
   const directExport =
@@ -643,7 +653,7 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
-      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount);
+      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCall);
       if (def) {
         const starResult = starImportGoTo(index, imp, def, name);
         if (precedence === "last-wins") {
@@ -760,7 +770,7 @@ export function resolveNamedDefinition(
     }
     if (!starCandidates.length) return null;
     const blocked = support.id === "csharp" && csharpShadowedStarsMayHold(index, mod, name);
-    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, blocked);
+    const decision = decideStarImportCandidates(index, support.id, starCandidates, file, blocked, isCall);
     if (decision.status === "ambiguous") {
       return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
     }

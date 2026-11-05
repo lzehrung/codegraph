@@ -21,6 +21,11 @@ import {
 } from "./helpers/kotlin-unicode-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import {
+  jvmIncompleteWildcardSources,
+  JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_TYPES,
+} from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -2414,6 +2419,37 @@ describe("Go to Definition", () => {
   });
 
   describe("JVM authoritative package imports", () => {
+    it("withholds incomplete wildcard function and factory calls without losing proven types", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-incomplete-wildcard-goto-"));
+      try {
+        const sources = jvmIncompleteWildcardSources();
+        const paths = await writeFixtureFiles(root, sources);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        for (const row of JVM_INCOMPLETE_WILDCARD_CALLS) {
+          const text = sources[row.file]!.split("\n")[row.line - 1]!;
+          const result = await goToDefinition(index, {
+            file: paths[row.file]!,
+            line: row.line,
+            column: text.lastIndexOf(row.name) + 1,
+          });
+          expect(result.status, row.caller).toBe(row.target ? "ok" : "not_found");
+          if (row.target && result.status === "ok") expect(result.definition.file).toBe(paths[row.target.file]);
+        }
+        for (const row of JVM_INCOMPLETE_WILDCARD_TYPES) {
+          await testGoToDefinition(
+            index,
+            paths[row.file]!,
+            row.line,
+            columnInLines(sources[row.file]!.split("\n"), row.line, row.name),
+            paths[row.target.file]!,
+            row.target.line,
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("navigates only to declared imports while retaining nested-type fallback", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-authoritative-package-goto-"));
       try {
