@@ -36,6 +36,7 @@ import {
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -6632,6 +6633,40 @@ describe("Find References: imported superclass member through super", () => {
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
+    }
+  });
+});
+
+describe("Find References: authoritative JVM package imports", () => {
+  it("includes declared imports and excludes undeclared names and Java imports of Kotlin functions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-authoritative-package-refs-"));
+    try {
+      const paths = await writeFixtureFiles(root, JVM_PACKAGE_IMPORT_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      for (const row of JVM_PACKAGE_IMPORT_CASES) {
+        if (!row.target) continue;
+        const lines = JVM_PACKAGE_IMPORT_SOURCES[row.target.file]!.split("\n");
+        const result = await indexer.findReferences(index, {
+          file: paths[row.target.file]!,
+          line: row.target.line,
+          column: columnInLines(lines, row.target.line, row.name),
+        });
+        expect(result.status, row.file).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.referenceCoverage.state, row.file).toBe("complete");
+        const sites = result.references.map((reference) => `${reference.file}:${reference.range.start.line}`);
+        expect(sites, row.file).toContain(`${paths[row.file]}:2`);
+        expect(sites, row.file).toContain(`${paths[row.file]}:3`);
+        for (const other of JVM_PACKAGE_IMPORT_CASES) {
+          if (other.target?.file === row.target.file) continue;
+          expect(
+            sites.some((site) => site.startsWith(`${paths[other.file]}:`)),
+            other.file,
+          ).toBe(false);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

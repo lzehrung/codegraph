@@ -20,6 +20,7 @@ import {
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -2409,6 +2410,33 @@ describe("Go to Definition", () => {
       const index = await createTestIndexFromFiles(samplePath, [mainFile, helpersFile, mathFile]);
 
       await testGoToDefinition(index, mainFile, 5, 23, mathFile, 1);
+    });
+  });
+
+  describe("JVM authoritative package imports", () => {
+    it("navigates only to declared imports while retaining nested-type fallback", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-authoritative-package-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, JVM_PACKAGE_IMPORT_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        for (const row of JVM_PACKAGE_IMPORT_CASES) {
+          const lines = JVM_PACKAGE_IMPORT_SOURCES[row.file]!.split("\n");
+          for (const line of [2, 3]) {
+            const result = await goToDefinition(index, {
+              file: paths[row.file]!,
+              line,
+              column: columnInLines(lines, line, row.name),
+            });
+            expect(result.status, `${row.file}:${line}`).toBe(row.target ? "ok" : "not_found");
+            if (row.target && result.status === "ok") {
+              expect(result.definition.file, row.file).toBe(paths[row.target.file]);
+              expect(result.definition.range.start.line, row.file).toBe(row.target.line);
+            }
+          }
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 

@@ -19,6 +19,9 @@ import {
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
+import { fileIdentityKey } from "../src/util/paths.js";
+import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -2058,6 +2061,82 @@ nativeDescribe("native semantic coverage", () => {
       column: queries[1]!.indexOf("users.id") + 1,
     });
     expect(unmatched.status).toBe("not_found");
+  });
+
+  it("keeps authoritative JVM package imports consistent across a disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-authoritative-jvm-package-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-authoritative-jvm-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, JVM_PACKAGE_IMPORT_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      for (const row of JVM_PACKAGE_IMPORT_CASES) {
+        const label = `${phase}: ${row.file}`;
+        const file = paths[row.file]!;
+        const module = index.byFile.get(fileIdentityKey(file));
+        expect(module?.imports, label).toHaveLength(1);
+        if (row.target) {
+          expect(module?.imports[0]?.resolved, label).toBe(paths[row.target.file]);
+        } else {
+          expect(module?.imports[0]?.resolved, label).toEqual({ external: row.specifier });
+        }
+        expect(module?.parserDegraded, label).toBeUndefined();
+        expect(module?.importLookupIncomplete, label).toBeUndefined();
+        const expectedFiles = row.target ? [paths[row.target.file]] : [];
+        const fileEdges = index.graph.edges
+          .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
+          .flatMap((edge) => (edge.to.type === "file" ? [normalizeFile(edge.to.path)] : []));
+        expect(fileEdges, label).toEqual(expectedFiles);
+        const result = await goToDefinition(index, {
+          file,
+          line: 3,
+          column: columnOf(JVM_PACKAGE_IMPORT_SOURCES[row.file]!.split("\n"), 3, row.name),
+        });
+        expect(result.status, label).toBe(row.target ? "ok" : "not_found");
+        if (row.target && result.status === "ok") {
+          expect(result.definition.file, label).toBe(paths[row.target.file]);
+          expect(result.definition.range.start.line, label).toBe(row.target.line);
+        }
+        const importNode = nodes.find((node) => node.file === file && node.name === row.name && node.kind === "import");
+        if (row.target) expect(importNode, label).toBeDefined();
+        const bindingTargets = graph.edges
+          .filter((edge) => edge.from === importNode?.id)
+          .flatMap((edge) => {
+            const target = graph.nodes.get(edge.to);
+            if (!target || target.file === file || !index.byFile.has(fileIdentityKey(target.file))) return [];
+            return [normalizeFile(target.file)];
+          });
+        expect([...new Set(bindingTargets)], label).toEqual(expectedFiles);
+        if (!row.target) continue;
+        const targetLines = JVM_PACKAGE_IMPORT_SOURCES[row.target.file]!.split("\n");
+        const references = await findReferences(index, {
+          file: paths[row.target.file]!,
+          line: row.target.line,
+          column: columnOf(targetLines, row.target.line, row.name),
+        });
+        expect(references.status, label).toBe("ok");
+        if (references.status !== "ok") continue;
+        expect(references.referenceCoverage.state, label).toBe("complete");
+        expect(
+          references.references.some((reference) => reference.file === file && reference.range.start.line === 3),
+          label,
+        ).toBe(true);
+        for (const other of JVM_PACKAGE_IMPORT_CASES) {
+          if (other.target?.file === row.target.file) continue;
+          expect(
+            references.references.some((reference) => reference.file === paths[other.file]),
+            `${label}: excludes ${other.file}`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 
   it("keeps cross-unit peers and shared owners consistent across a disk-cache reload", async () => {
