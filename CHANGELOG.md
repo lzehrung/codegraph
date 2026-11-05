@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- Reference coverage reports affected files in deterministic path order.
+
 ## [3.1.3] - 2026-11-04
 
 ### Added
