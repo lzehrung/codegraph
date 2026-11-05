@@ -83,6 +83,13 @@ References verify each candidate through go-to-definition. The graph applies two
 
 References choose the files they verify from the importers of each file, which every index build records, and from two tables that the first lookup of an index builds and every later lookup reuses: the modules that re-export each file, and the modules sorted once. A lookup tests the files that can reach the definition (its re-exporters, their importers, and its compilation-unit peers), not every indexed module, so a definition with no importers costs the same on a project of 17,000 files as on one of 1,800. The indexes belong to one index object and are never stored in a module entry or on disk, so an incremental update returns a new index that starts without them.
 
+Query-time syntax uses two per-index least-recently-used caches:
+
+- Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
+- Projected tree views and their scope indexes share a 2 GiB estimated budget. Eviction drops both together; retained compact data can reconstruct the view without another native parse.
+- At most 32,768 file entries are retained. Concurrent requests share an in-flight parse; an incremental index starts with fresh query caches.
+- These are retention estimates, not process RSS limits. Active requests, graph data, build-time `keepParsed` retention, and allocator overhead are separate.
+
 A test matrix in `tests/call-form-matrix/` checks each language and call form against all three consumers, with a same-named decoy that must not match. The [call-form coverage matrix](./coverage/call-forms.md) reports the results.
 
 Only proven semantic links are reported. Dynamic dispatch, unresolved symbols, and unsupported language features stay absent or appear as limitations; bounds report exact omissions. See the [language parity matrix](./language-parity.md) for per-language coverage.

@@ -507,6 +507,7 @@ export async function buildSymbolGraphDetailed(
         source: src,
         tree,
         moduleEntry,
+        scopeIndex,
         nodes,
         membersOnly,
         memberExpressionType,
