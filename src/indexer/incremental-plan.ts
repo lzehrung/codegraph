@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { languageExtensionPatterns } from "../languages.js";
 import {
   diffBuildOptions,
   loadManifest,
@@ -7,17 +7,18 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { listChangedFiles, listUntrackedFiles, type GitDiscoveryCache } from "../util/git.js";
+import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
 import { fileIdentityKey, normalizePath, pathExists } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
 import {
-  createDiscoveredFileMatcher,
+  createProjectDiscoveryContext,
+  filterDiscoveredProjectFileCandidates,
   DEFAULT_PROJECT_PATTERNS,
-  filterRealPathsWithinRoot,
   type ProjectFileDiscoveryOptions,
+  type ProjectDiscoveryContext,
 } from "../util/project-files.js";
 
 export type IncrementalGitDiffOptions = {
@@ -404,6 +405,30 @@ export function collectDirectDependents(
   return dependents;
 }
 
+/** Apply full-build discovery rules to new Git candidates while preserving manifest and explicit-file membership. */
+export async function filterIncrementalDiscoveryCandidates(
+  projectRoot: string,
+  files: readonly string[],
+  trackedEntries: Record<string, ManifestFileEntry>,
+  opts: BuildOptions | undefined,
+  discoveryContext?: ProjectDiscoveryContext,
+): Promise<string[]> {
+  const newCandidates = Array.from(new Set(files.filter((file) => !Object.hasOwn(trackedEntries, file))));
+  const discoveredFiles = new Set(
+    await filterDiscoveredProjectFileCandidates(
+      projectRoot,
+      newCandidates,
+      [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(opts?.languageExtensions)],
+      {
+        ...opts?.discovery,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(discoveryContext ? { discoveryContext } : {}),
+      },
+    ),
+  );
+  return files.filter((file) => Object.hasOwn(trackedEntries, file) || discoveredFiles.has(file));
+}
+
 /**
  * List new, untracked files that Git sees but the manifest does not yet know about,
  * filtered to the same discovery patterns/ignores a full scan would apply.
@@ -418,29 +443,27 @@ export function collectDirectDependents(
  * When `discovery.useGitignore` is `false`, Git's `--exclude-standard` is dropped too:
  * that mode explicitly wants gitignored files included, so filtering untracked
  * candidates through `.gitignore` here would be exactly backwards. The default
- * project-file ignores (`node_modules`, `.git`, build output, ...) still apply via
- * `createDiscoveredFileMatcher()` below regardless of this setting.
+ * project-file ignores (`node_modules`, `.git`, build output, ...) and the full
+ * scan's symlink policy still apply regardless of this setting.
  */
 export async function listUntrackedProjectFiles(
   projectRoot: string,
   discovery: ProjectFileDiscoveryOptions | undefined,
   gitAvailable: boolean,
-  discoveryCache?: GitDiscoveryCache,
+  discoveryContext?: ProjectDiscoveryContext,
 ): Promise<string[]> {
   if (!gitAvailable) return [];
+  const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
   const respectGitignore = discovery?.useGitignore !== false;
   const candidates = await listUntrackedFiles(projectRoot, {
     gitAvailable,
     respectGitignore,
-    ...(discoveryCache ? { discoveryCache } : {}),
+    discoveryCache: context.git,
   });
-  if (!candidates.length) return [];
-  const globRoot = discovery?.globRoot ?? projectRoot;
-  const isDiscoveredFile = createDiscoveredFileMatcher(projectRoot, globRoot, DEFAULT_PROJECT_PATTERNS, discovery);
-  const matchingCandidates = candidates.filter(isDiscoveredFile);
-  if (!matchingCandidates.length) return [];
-  const realRoot = await fs.promises.realpath(projectRoot);
-  return filterRealPathsWithinRoot(matchingCandidates, realRoot);
+  return filterDiscoveredProjectFileCandidates(projectRoot, candidates, DEFAULT_PROJECT_PATTERNS, {
+    ...discovery,
+    discoveryContext: context,
+  });
 }
 
 /**
@@ -474,17 +497,20 @@ export type IncrementalFilePlan = {
 export async function resolveIncrementalFilePlan(
   projectRoot: string,
   opts: BuildOptions | undefined,
-  discoveryCache?: GitDiscoveryCache,
+  discoveryContext?: ProjectDiscoveryContext,
 ): Promise<IncrementalFilePlan | null> {
   const manifest = await loadManifest(projectRoot, opts);
   if (!manifest) return null;
   if (!manifest.buildOptions) return null;
-  if (diffBuildOptions(manifest.buildOptions, opts).includes("discovery")) return null;
+  const changedOptions = diffBuildOptions(manifest.buildOptions, opts);
+  if (changedOptions.some((option) => ["discovery", "languageExtensions", "coreAlgorithm"].includes(option)))
+    return null;
 
   if (opts?.cacheStrict) return null;
 
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
+    const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
     const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
 
     // Diff against the working tree, not just the current commit: a file that was
@@ -494,10 +520,17 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const [workingTreeDiffFiles, untrackedFiles] = await Promise.all([
+    const [diffFiles, untrackedFiles] = await Promise.all([
       manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
-      listUntrackedProjectFiles(projectRoot, opts?.discovery, true, discoveryCache),
+      listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
     ]);
+    const workingTreeDiffFiles = await filterIncrementalDiscoveryCandidates(
+      projectRoot,
+      diffFiles,
+      trackedEntries,
+      opts,
+      context,
+    );
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
     const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();

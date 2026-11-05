@@ -3,6 +3,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, buildGraphDelta } from "../src/index.js";
 import type { IndexManifest } from "../src/indexer/build-cache.js";
+import type { BuildOptions } from "../src/indexer/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
@@ -81,6 +82,57 @@ describe("Graph delta export", () => {
 
     expect(delta.changedFiles).toContain("removed.ts");
     expect(hasFileEdge(delta.removed, "removed.ts", "dep.ts", "./dep")).toBe(true);
+  });
+
+  describe.each([false, true])("rename discovery parity (committed: %s)", (committed) => {
+    it.each([
+      { name: "default-ignored destination", destination: "dist/renamed.ts", discovery: undefined, included: false },
+      {
+        name: "configured-ignored destination",
+        destination: "ignored/renamed.ts",
+        discovery: { ignoreGlobs: ["ignored/**"] },
+        included: false,
+      },
+      { name: "discovered destination", destination: "src/renamed.ts", discovery: undefined, included: true },
+    ])("reports the source removal for a $name", async ({ destination, discovery, included }) => {
+      const root = await mkTmpDir("dg-graph-delta-rename-discovery-");
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "test@example.com"]);
+        runGit(root, ["config", "user.name", "Test User"]);
+        await fsp.writeFile(path.join(root, "a.ts"), 'import "external-package";\n');
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "base"]);
+        const options: BuildOptions = {
+          cache: "disk",
+          threads: 1,
+          logLevel: "silent",
+          ...(discovery ? { discovery } : {}),
+        };
+        const before = await buildProjectIndex(root, options);
+        expect(before.byFile.size).toBe(1);
+        expect(before.graph.edges).toHaveLength(1);
+        await fsp.mkdir(path.dirname(path.join(root, destination)), { recursive: true });
+        runGit(root, ["mv", "a.ts", destination]);
+        if (committed) runGit(root, ["commit", "-m", "rename"]);
+        const delta = await buildGraphDelta(root, {
+          ...options,
+          ...(!committed ? { gitBase: "HEAD", gitHead: "WORKTREE" } : {}),
+        });
+        const removed = { from: "a.ts", to: { type: "external", name: "external-package" }, raw: "external-package" };
+        expect(delta.changedFiles).toEqual(["a.ts", ...(included ? [destination] : [])].sort());
+        expect(delta.removed).toEqual([removed]);
+        expect(delta.added).toEqual(included ? [{ ...removed, from: destination }] : []);
+        const manifest = JSON.parse(await fsp.readFile(manifestPathFor(root), "utf8")) as IndexManifest;
+        expect(Object.keys(manifest.files)).toEqual(included ? [destination] : []);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(Array.from(cold.byFile.keys(), (file) => path.relative(root, file).replace(/\\/g, "/"))).toEqual(
+          included ? [destination] : [],
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it("reports exact edge changes when unchanged custom files gain or change mappings", async () => {

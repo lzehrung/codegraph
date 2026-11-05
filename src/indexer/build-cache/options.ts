@@ -87,8 +87,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * guessing a file from the import path. A complete Java file with no declarations no longer proves its filename's type.
  * Epoch 106 carries JVM wildcard-package completeness through import bindings and expansion. Unread declarations
  * cannot prove a Kotlin call or callable reference, including a class name that may also name a factory function.
+ * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
  */
-export const CORE_ALGORITHM_EPOCH = 106;
+export const CORE_ALGORITHM_EPOCH = 109;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

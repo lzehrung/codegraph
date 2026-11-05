@@ -12,7 +12,8 @@ import {
   resolveIncrementalFileList,
 } from "../src/indexer/incremental-plan.js";
 import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
-import { buildProjectIndex } from "../src/indexer/build-index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, buildGraphDelta } from "../src/indexer/build-index.js";
+import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import type { Edge } from "../src/types.js";
 import * as projectFilesModule from "../src/util/project-files.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
@@ -415,5 +416,270 @@ describe("added-file specifier stems", () => {
     const typescript = addedResolutionStems(["/proj/lib/_index.scss"], "ts");
     expect(externalSpecifierMatchesAddedStem("lib", "ts", typescript)).toBe(false);
     expect(externalSpecifierMatchesAddedStem("_index", "ts", typescript)).toBe(true);
+  });
+});
+
+describe("incremental discovery parity", () => {
+  it.each([
+    {
+      name: "configured ignore",
+      file: "samples/changed.ts",
+      discovery: { ignoreGlobs: ["samples/**"] },
+      included: false,
+    },
+    { name: "default ignore", file: "dist/changed.ts", discovery: undefined, included: false },
+    {
+      name: "explicit include of output",
+      file: "dist/changed.ts",
+      discovery: { includeGlobs: ["**/*.ts"] },
+      included: true,
+    },
+    { name: "custom extension", file: "src/changed.custom", discovery: undefined, included: true },
+  ])("keeps $name consistent across Git reconciliation, delta, and rebuild", async ({ file, discovery, included }) => {
+    const root = await mkTmpDir("cg-incremental-discovery-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      const dependency = path.join(root, "src", "dependency.ts");
+      const changed = path.join(root, file);
+      await fs.mkdir(path.dirname(dependency), { recursive: true });
+      await fs.mkdir(path.dirname(changed), { recursive: true });
+      await fs.writeFile(dependency, "export const dependency = 1;\n");
+      await fs.writeFile(changed, "export const value = 1;\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const options: BuildOptions = {
+        cache: "disk",
+        threads: 1,
+        logLevel: "silent",
+        ...(discovery ? { discovery } : {}),
+        languageExtensions: { ".custom": "ts" },
+      };
+      await buildProjectIndex(root, options);
+      await fs.writeFile(changed, 'import "../src/dependency";\nexport const value = 2;\n');
+      const staged = path.join(root, "src", "staged.ts");
+      await fs.writeFile(staged, "export const staged = 1;\n");
+      git(root, ["add", "src/staged.ts"]);
+      const expected = ["src/dependency.ts", "src/staged.ts", ...(included ? [file] : [])].sort();
+      const relativeFiles = (files: Iterable<string>): string[] =>
+        Array.from(files, (entry) => path.relative(root, entry).replace(/\\/g, "/")).sort();
+      expect(relativeFiles((await resolveIncrementalFileList(root, options)) ?? [])).toEqual(expected);
+
+      const delta = await buildGraphDelta(root, { ...options, gitBase: "HEAD", gitHead: "WORKTREE" });
+      expect(delta.changedFiles).toEqual(["src/staged.ts", ...(included ? [file] : [])].sort());
+      expect(delta.added).toEqual(
+        included ? [{ from: file, to: { type: "file", path: "src/dependency.ts" }, raw: "../src/dependency" }] : [],
+      );
+      const report: BuildReport = { timings: {} };
+      const incremental = await buildProjectIndexIncremental(root, { ...options, report });
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(relativeFiles(incremental.byFile.keys())).toEqual(expected);
+      expect(relativeFiles(incremental.graph.nodes)).toEqual(relativeFiles(cold.graph.nodes));
+      expect(incremental.graph.edges).toEqual(cold.graph.edges);
+      expect(report.files?.total).toBe(expected.length);
+      const manifest = JSON.parse(await fs.readFile(manifestPathFor(root), "utf8")) as {
+        files: Record<string, ManifestFileEntry>;
+      };
+      expect(Object.keys(manifest.files).sort()).toEqual(expected);
+      const repeated = await buildProjectIndexIncremental(root, options);
+      expect(relativeFiles(repeated.byFile.keys())).toEqual(expected);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([".gitignore", ".git/info/exclude", "core.excludesFile"])(
+    "keeps tracked files excluded by %s out of every discovery consumer",
+    async (ignoreSource) => {
+      const root = await mkTmpDir("cg-incremental-git-ignore-");
+      try {
+        git(root, ["init"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        const dependency = path.join(root, "src", "dependency.ts");
+        const ignored = path.join(root, "samples", "drop.ts");
+        const kept = path.join(root, "samples", "keep.ts");
+        await fs.mkdir(path.dirname(dependency), { recursive: true });
+        await fs.mkdir(path.dirname(ignored), { recursive: true });
+        const ignoreFile = path.join(root, ignoreSource === "core.excludesFile" ? "global-excludes.txt" : ignoreSource);
+        await fs.writeFile(ignoreFile, "samples/*.ts\nsamples/.gitignore\n");
+        if (ignoreSource === "core.excludesFile") git(root, ["config", "core.excludesFile", ignoreFile]);
+        await fs.writeFile(path.join(root, "samples", ".gitignore"), "!keep.ts\n");
+        await fs.writeFile(dependency, "export const dependency = 1;\n");
+        await fs.writeFile(ignored, "export const dropped = 1;\n");
+        await fs.writeFile(kept, "export const kept = 1;\n");
+        git(root, ["add", "-f", "."]);
+        git(root, ["commit", "-m", "base"]);
+        const options: BuildOptions = {
+          cache: "disk",
+          threads: 1,
+          logLevel: "silent",
+          discovery: { includeGlobs: ["**/*.ts"] },
+        };
+        const relativeFiles = (files: Iterable<string>): string[] =>
+          Array.from(files, (file) => path.relative(root, file).replace(/\\/g, "/")).sort();
+        const expected = ["samples/keep.ts", "src/dependency.ts"];
+        expect(relativeFiles((await buildProjectIndex(root, options)).byFile.keys())).toEqual(expected);
+        await fs.writeFile(ignored, 'import "../src/dependency";\nexport const dropped = 2;\n');
+        await fs.writeFile(kept, 'import "../src/dependency";\nexport const kept = 2;\n');
+        expect(relativeFiles((await resolveIncrementalFileList(root, options)) ?? [])).toEqual(expected);
+        const delta = await buildGraphDelta(root, { ...options, gitBase: "HEAD", gitHead: "WORKTREE" });
+        expect(delta.changedFiles).toEqual(["samples/keep.ts"]);
+        expect(delta.added).toEqual([
+          { from: "samples/keep.ts", to: { type: "file", path: "src/dependency.ts" }, raw: "../src/dependency" },
+        ]);
+        expect(delta.removed).toEqual([]);
+        const incremental = await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(relativeFiles(incremental.byFile.keys())).toEqual(expected);
+        expect(incremental.graph.edges).toEqual(cold.graph.edges);
+        const manifest = JSON.parse(await fs.readFile(manifestPathFor(root), "utf8")) as {
+          files: Record<string, ManifestFileEntry>;
+        };
+        expect(Object.keys(manifest.files).sort()).toEqual(expected);
+        const explicitDelta = await buildGraphDelta(root, { ...options, files: [ignored] });
+        expect(explicitDelta.changedFiles).toEqual(["samples/drop.ts"]);
+        expect(explicitDelta.added).toEqual([
+          { from: "samples/drop.ts", to: { type: "file", path: "src/dependency.ts" }, raw: "../src/dependency" },
+        ]);
+        const explicit = await buildProjectIndexIncremental(root, { ...options, files: [ignored] });
+        expect(relativeFiles(explicit.byFile.keys())).toEqual(["samples/drop.ts", ...expected]);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { useGitignore: true, ignoredTarget: true, origin: "default" },
+    { useGitignore: true, ignoredTarget: false, origin: "default" },
+    { useGitignore: false, ignoredTarget: true, origin: "default" },
+    { useGitignore: false, ignoredTarget: false, origin: "default" },
+    { useGitignore: true, ignoredTarget: true, origin: "override" },
+    { useGitignore: true, ignoredTarget: true, origin: "alias" },
+    { useGitignore: true, ignoredTarget: false, origin: "alias" },
+  ])(
+    "keeps symlink discovery consistent with useGitignore=$useGitignore, ignoredTarget=$ignoredTarget, origin=$origin",
+    async ({ useGitignore, ignoredTarget, origin }) => {
+      const root = await mkTmpDir("cg-incremental-physical-ignore-");
+      let scanRoot = root;
+      let aliasParent: string | undefined;
+      try {
+        git(root, ["init"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        const target = path.join(root, "physical", "drop.ts");
+        const linked = path.join(root, "linked.ts");
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(path.join(root, ".gitignore"), ignoredTarget ? "physical/\n" : "# no ignores\n");
+        await fs.writeFile(path.join(root, "keep.ts"), "export const kept = 1;\n");
+        await fs.writeFile(target, 'import "external-package";\n');
+        let gitignoreRoot: string | undefined;
+        if (origin === "override") {
+          gitignoreRoot = path.join(root, "rules");
+          await fs.mkdir(gitignoreRoot);
+          await fs.writeFile(path.join(gitignoreRoot, ".gitignore"), "# override\n");
+        }
+        git(root, ["add", "-f", "."]);
+        git(root, ["commit", "-m", "base"]);
+        if (origin === "alias") {
+          aliasParent = await mkTmpDir("cg-incremental-ignore-alias-");
+          const alias = path.join(aliasParent, "project");
+          try {
+            await fs.symlink(root, alias, "dir");
+          } catch (error) {
+            if (isSymlinkUnavailable(error)) return;
+            throw error;
+          }
+          scanRoot = alias;
+        }
+        const options: BuildOptions = {
+          cache: "disk",
+          threads: 1,
+          logLevel: "silent",
+          discovery: {
+            includeGlobs: ["**/*.ts"],
+            useGitignore,
+            ...(gitignoreRoot ? { gitignoreRoot } : {}),
+          },
+        };
+        await buildProjectIndex(scanRoot, options);
+        try {
+          await fs.symlink(target, linked, "file");
+        } catch (error) {
+          if (isSymlinkUnavailable(error)) return;
+          throw error;
+        }
+        const includesTarget = !useGitignore || !ignoredTarget || origin === "override";
+        const includesLink = useGitignore && !ignoredTarget && origin === "default";
+        const expected = [
+          "keep.ts",
+          ...(includesLink ? ["linked.ts"] : []),
+          ...(includesTarget ? ["physical/drop.ts"] : []),
+        ];
+        const relativeFiles = (files: Iterable<string>): string[] =>
+          Array.from(files, (file) => path.relative(scanRoot, file).replace(/\\/g, "/")).sort();
+        expect(relativeFiles(await listUntrackedProjectFiles(scanRoot, options.discovery, true))).toEqual(
+          includesLink ? ["linked.ts"] : [],
+        );
+        expect(relativeFiles((await resolveIncrementalFileList(scanRoot, options)) ?? [])).toEqual(expected);
+        git(root, ["add", "linked.ts"]);
+        expect(relativeFiles((await resolveIncrementalFileList(scanRoot, options)) ?? [])).toEqual(expected);
+        const delta = await buildGraphDelta(scanRoot, { ...options, gitBase: "HEAD", gitHead: "WORKTREE" });
+        expect(delta.changedFiles).toEqual(includesLink ? ["linked.ts"] : []);
+        const incremental = await buildProjectIndexIncremental(scanRoot, options);
+        const cold = await buildProjectIndex(scanRoot, { ...options, cache: "off" });
+        expect(relativeFiles(incremental.byFile.keys())).toEqual(expected);
+        expect(relativeFiles(cold.byFile.keys())).toEqual(expected);
+        expect(new Set(incremental.graph.edges)).toEqual(new Set(cold.graph.edges));
+      } finally {
+        if (scanRoot !== root) await fs.unlink(scanRoot);
+        if (aliasParent) await fs.rm(aliasParent, { recursive: true, force: true });
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps explicit files but rebuilds an older contaminated discovery manifest", async () => {
+    const root = await mkTmpDir("cg-incremental-discovery-upgrade-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      const source = path.join(root, "source.ts");
+      const ignored = path.join(root, "ignored.ts");
+      await fs.writeFile(source, "export const source = 1;\n");
+      await fs.writeFile(ignored, "export const ignored = 1;\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const options: BuildOptions = {
+        cache: "disk",
+        threads: 1,
+        logLevel: "silent",
+        discovery: { ignoreGlobs: ["ignored.ts"] },
+      };
+      await buildProjectIndex(root, options);
+      const explicit = await buildProjectIndexIncremental(root, { ...options, files: [ignored] });
+      expect(explicit.byFile.size).toBe(2);
+      await fs.writeFile(ignored, "export const ignored = 2;\n");
+      const updated = await buildProjectIndexIncremental(root, options);
+      expect(updated.byFile.size).toBe(2);
+      const manifestPath = manifestPathFor(root);
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+        buildOptions: { coreAlgorithmEpoch: number };
+      };
+      manifest.buildOptions.coreAlgorithmEpoch -= 1;
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      expect(await resolveIncrementalFileList(root, options)).toBeNull();
+      const repaired = await buildProjectIndexIncremental(root, options);
+      expect(Array.from(repaired.byFile.keys(), (file) => path.basename(file))).toEqual(["source.ts"]);
+      const repairedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+        files: Record<string, ManifestFileEntry>;
+      };
+      expect(Object.keys(repairedManifest.files)).toEqual(["source.ts"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
