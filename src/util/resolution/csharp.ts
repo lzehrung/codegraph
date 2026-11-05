@@ -40,9 +40,15 @@ export type CsharpNamespaceTypeResolution =
   | { status: "partial" };
 
 /** The namespace facts known per file during one build, from a reused module or from the file's own tree. */
-const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts>();
+const csharpNamespaceFileCache = new Map<string, CsharpNamespaceFacts | null>();
 const csharpProjectNamespaceIndexCache = new Map<string, Promise<CsharpProjectNamespaceIndexResult>>();
 const NO_CSHARP_NAMESPACE_FACTS: CsharpNamespaceFacts = { regions: [], types: [] };
+let namespaceFactsReader: ((file: string) => Promise<CsharpNamespaceFacts | null>) | undefined;
+
+/** Routes unprimed project-scan files through the active build's worker pool. */
+export function setCsharpNamespaceFactsReader(reader: typeof namespaceFactsReader): void {
+  namespaceFactsReader = reader;
+}
 function csharpNamespaceCacheKey(anchor: string, languageExtensions?: LanguageExtensionMap): string {
   const mappings = Object.entries(normalizeLanguageExtensions(languageExtensions) ?? {});
   return anchor + "\0" + JSON.stringify(mappings);
@@ -64,7 +70,7 @@ function csharpCandidateGlobs(languageExtensions: LanguageExtensionMap | undefin
  */
 export function primeCsharpNamespaceFacts(
   file: string,
-  facts: CsharpNamespaceFacts,
+  facts: CsharpNamespaceFacts | null,
   languageExtensions?: LanguageExtensionMap,
 ): void {
   csharpNamespaceFileCache.set(csharpNamespaceCacheKey(fileIdentityKey(file), languageExtensions), facts);
@@ -97,11 +103,16 @@ async function readCsharpNamespaceFacts(
   const fileKey = fileIdentityKey(filePath);
   const cacheKey = csharpNamespaceCacheKey(fileKey, languageExtensions);
   const cached = csharpNamespaceFileCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached !== undefined) return cached;
 
   const support = supportForFileWithoutHeaderSample(filePath, languageExtensions);
   // An active mapping can give a C# suffix to another language; such a file declares no namespace.
   if (support?.id !== "csharp") return NO_CSHARP_NAMESPACE_FACTS;
+  if (namespaceFactsReader) {
+    const facts = await namespaceFactsReader(filePath);
+    csharpNamespaceFileCache.set(cacheKey, facts);
+    return facts;
+  }
   const retained = parsedFiles?.get(fileKey);
   let tree = retained?.sup?.id === "csharp" ? retained.tree : undefined;
   if (!tree) {
@@ -314,4 +325,5 @@ export async function csharpTypeNameQualifierDeclared(
 export function clearCsharpResolutionCaches(): void {
   csharpNamespaceFileCache.clear();
   csharpProjectNamespaceIndexCache.clear();
+  namespaceFactsReader = undefined;
 }

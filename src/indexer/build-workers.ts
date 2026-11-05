@@ -1,9 +1,14 @@
 import { performance } from "node:perf_hooks";
 import { isGraphOnlyLanguage } from "../document-links.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import {
+  supportById,
+  supportForFileWithoutHeaderSample,
+  type LanguageExtensionMap,
+  type LanguageSupport,
+} from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
-import { recordNativeExecutionOutcome } from "../native/native-backend-report.js";
+import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import {
   getNativeWorkerBindingHandoff,
   isNativeRequiredUnavailableError,
@@ -17,7 +22,15 @@ import type {
 } from "../worker/native-extract-worker.js";
 import { NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
-import { prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
+import { collectProjectFileFacts, type ProjectFileFacts } from "../util/project-file-facts.js";
+import { parseSyntaxTree, readsSyntaxTree } from "../util/syntax-tree.js";
+import {
+  attemptParsePreparedFileContext,
+  prepareFileForIndexing,
+  type PreparedFileContext,
+  type PreparedFileParseAttempt,
+} from "./parse-context.js";
 import {
   decodeModuleRecord,
   isModuleRecordLanguage,
@@ -124,6 +137,9 @@ function buildWorkerTask(
 
 export type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
   workerBloomFilter?: NativeBloomFilterPayload;
+  projectFacts?: ProjectFileFacts;
+  /** A whole-tree fallback needed before facts can be primed; the module builder reuses its outcome. */
+  projectFactsParse?: PreparedFileParseAttempt;
   moduleRecord?: undefined;
   /** Why a worker that was asked for the file's module record returned the extraction instead. */
   moduleRecordFallback?: ModuleRecordFallback;
@@ -159,6 +175,7 @@ function workerResultToPrepared(
     ...(result.error ? { nativeError: result.error } : {}),
     ...(result.bloomFilter ? { workerBloomFilter: result.bloomFilter } : {}),
     ...(result.moduleRecordFallback ? { moduleRecordFallback: result.moduleRecordFallback } : {}),
+    ...(result.projectFacts ? { projectFacts: result.projectFacts } : {}),
   };
 }
 
@@ -351,6 +368,79 @@ export async function prepareFileContextForBuild(
   }
   recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;
+}
+
+/** Uses a worker's facts, or the same extraction tree when workers are disabled or failed. */
+export function preparedProjectFileFacts(
+  prepared: PreparedFileContextWithWorkerBloomFilter,
+): ProjectFileFacts | undefined {
+  if (prepared.projectFacts && prepared.syntaxTree) return prepared.projectFacts;
+  if (!readsSyntaxTree(prepared.sup.id)) return undefined;
+  let tree = prepared.syntaxTree ? new ProjectedSyntaxTree(prepared.source, prepared.syntaxTree) : null;
+  if (!tree && prepared.nativeFallbackReason !== "sourceTooLarge") {
+    prepared.projectFactsParse ??= attemptParsePreparedFileContext(prepared);
+    const parsedTree = prepared.projectFactsParse.parsed?.tree;
+    if (parsedTree instanceof ProjectedSyntaxTree) tree = parsedTree;
+  }
+  if (!tree && prepared.projectFacts) return prepared.projectFacts;
+  const facts = collectProjectFileFacts(
+    prepared.source,
+    prepared.sup.id,
+    tree,
+    (head, languageId) => parseSyntaxTree(head, supportById(languageId)!).tree,
+  );
+  if (facts) prepared.projectFacts = facts;
+  return facts;
+}
+
+/** Project scans also see ignored or out-of-scope files, whose facts need no module or transferred tree. */
+export async function readProjectFileFactsWithWorker(
+  file: string,
+  languageId: string,
+  setup: WorkerPoolSetupResult,
+  report: BuildReport | undefined,
+): Promise<ProjectFileFacts | undefined> {
+  const support = supportById(languageId);
+  if (!support || !setup.pool) throw new Error("Project facts require an active native worker pool.");
+  let result: NativeExtractResult | undefined;
+  if (setup.report) setup.report.tasksSubmitted++;
+  try {
+    result = (await setup.pool.run({
+      filePath: file,
+      languageId,
+      projectFactsOnly: true,
+      includeSourceInResult: false,
+    })) as NativeExtractResult;
+  } catch (error) {
+    if (isNativeRequiredUnavailableError(error)) throw error;
+    if (setup.report) {
+      setup.report.tasksFailed++;
+      setup.report.errors ??= [];
+      if (setup.report.errors.length < 20) setup.report.errors.push({ file, message: stringifyUnknown(error) });
+    }
+  }
+  if (!result || result.fallbackReason === "unavailable" || result.fallbackReason === "unsupportedLanguage") {
+    const prepared = await prepareFileForIndexing(file, undefined, undefined, support);
+    const facts = preparedProjectFileFacts(prepared);
+    if (languageId === "csharp" && !facts?.csharpNamespaceFacts) {
+      recordParserBackendDegradation(report, {
+        file,
+        languageId,
+        ...(prepared.nativeFallbackReason ? { nativeFallbackReason: prepared.nativeFallbackReason } : {}),
+        ...(prepared.nativeError ? { nativeError: prepared.nativeError } : {}),
+      });
+    }
+    return facts;
+  }
+  if (languageId === "csharp" && !result.projectFacts?.csharpNamespaceFacts) {
+    recordParserBackendDegradation(report, {
+      file,
+      languageId,
+      ...(result.fallbackReason ? { nativeFallbackReason: result.fallbackReason } : {}),
+      ...(result.error ? { nativeError: result.error } : {}),
+    });
+  }
+  return result.projectFacts;
 }
 
 export async function prepareFileContextsForBuildBatch(

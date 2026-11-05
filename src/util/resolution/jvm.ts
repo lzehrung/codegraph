@@ -12,6 +12,7 @@ import { parseSyntaxTree, type JvmLanguageId } from "../syntax-tree.js";
 import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
+import { jvmPackageHead } from "../project-file-facts.js";
 
 type JvmImportResolutionOptions = {
   languageId: JvmLanguageId;
@@ -42,21 +43,16 @@ const javaImportResolutionCache = new Map<string, JvmImportLookup>();
 const javaProjectSymbolIndexCache = new Map<string, Promise<JvmProjectSymbolIndex>>();
 /** The facts known per file during one build: a reused module's, a built module's, or those of a fresh parse. */
 const jvmFileFactsCache = new Map<string, JvmFileFacts | null>();
+let fileFactsReader: ((file: string, languageId: JvmLanguageId) => Promise<JvmFileFacts | null>) | undefined;
 
-/** Gives the project scan the facts a build already holds for `file`, so the scan parses nothing for it. */
-export function primeJvmFileFacts(file: string, facts: JvmFileFacts): void {
-  jvmFileFactsCache.set(fileIdentityKey(file), facts);
+/** Routes unprimed project-scan files through the active build's worker pool. */
+export function setJvmFileFactsReader(reader: typeof fileFactsReader): void {
+  fileFactsReader = reader;
 }
 
-/** How much of a file's start is parsed for its package clause when the whole file has no usable tree. */
-const PACKAGE_HEAD_CHARS = 64 * 1024;
-
-/** The start of a file that is parsed for its package clause, ended at a line break so no clause is cut short. Empty
- * when no whole line fits, so the package stays unknown. */
-function packageHead(source: string): string {
-  if (source.length <= PACKAGE_HEAD_CHARS) return source;
-  const head = source.slice(0, PACKAGE_HEAD_CHARS);
-  return head.slice(0, head.lastIndexOf("\n") + 1);
+/** Gives the project scan the facts a build already holds for `file`, so the scan parses nothing for it. */
+export function primeJvmFileFacts(file: string, facts: JvmFileFacts | null): void {
+  jvmFileFactsCache.set(fileIdentityKey(file), facts);
 }
 
 /**
@@ -68,12 +64,17 @@ async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Pr
   const key = fileIdentityKey(filePath);
   const cached = jvmFileFactsCache.get(key);
   if (cached !== undefined) return cached;
+  if (fileFactsReader) {
+    const facts = await fileFactsReader(filePath, languageId);
+    jvmFileFactsCache.set(key, facts);
+    return facts;
+  }
 
   const source = await readUtf8WithoutBom(filePath);
   const support = supportById(languageId);
   const tooLarge = Buffer.byteLength(source, "utf8") > DEFAULT_NATIVE_SOURCE_MAX_BYTES;
   const tree = support && !tooLarge ? parseSyntaxTree(source, support).tree : null;
-  const head = support && !tree ? parseSyntaxTree(packageHead(source), support).tree : null;
+  const head = support && !tree ? parseSyntaxTree(jvmPackageHead(source), support).tree : null;
   let facts: JvmFileFacts | null = null;
   if (tree) facts = collectJvmFileFacts(tree, languageId);
   else if (head) facts = { packageName: jvmPackageName(head, languageId), symbols: [], incomplete: true };
@@ -338,4 +339,5 @@ export function clearJvmResolutionCaches(): void {
   javaImportResolutionCache.clear();
   javaProjectSymbolIndexCache.clear();
   jvmFileFactsCache.clear();
+  fileFactsReader = undefined;
 }

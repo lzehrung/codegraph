@@ -30,6 +30,9 @@ import { adoptLoadedNativeBinding } from "../native/runtime.js";
 import { supportById } from "../languages.js";
 import { buildBloomFilterFromSource } from "../util/bloom-filter.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
+import { collectProjectFileFacts, JVM_PACKAGE_HEAD_CHARS, type ProjectFileFacts } from "../util/project-file-facts.js";
+import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
 
 export type NativeBloomFilterPayload = {
   bits: Uint8Array;
@@ -65,6 +68,8 @@ export type NativeExtractTask = {
   includeBloomFilter?: boolean | undefined;
   compact?: boolean | undefined;
   limits?: NativeExtractLimits | undefined;
+  /** Reads only project-scan facts for a file outside module extraction; returns neither source nor tree. */
+  projectFactsOnly?: boolean | undefined;
   /**
    * Build the file's module record (`module-record.ts`) from this extraction and return it in place of the native
    * results and the syntax tree. A file the record does not cover returns the extraction as usual.
@@ -86,6 +91,7 @@ export type NativeExtractResult = {
   moduleRecord?: ModuleRecordPayload;
   /** Why the task asked for a module record and got the extraction instead. */
   moduleRecordFallback?: ModuleRecordFallback;
+  projectFacts?: ProjectFileFacts;
 };
 
 export type NativeExtractBatchTask = {
@@ -116,6 +122,7 @@ type NativeExtractorDeps = {
   loadBinding: () => NativeBindingLoadResult<NativeBinding>;
   readFile: (filePath: string, encoding: BufferEncoding) => Promise<string>;
   statFile?: (filePath: string) => Promise<{ size: number }>;
+  readPackageHead?: (filePath: string) => Promise<string>;
   /** Called once with the binding the extractor loaded and accepted. */
   onBindingLoaded?: (loaded: { binding: NativeBinding; origin: NativeBindingOrigin }) => void;
 };
@@ -218,7 +225,7 @@ function resourceLimitFallback(
   reason: NativeFallbackReason,
   bloomFilter?: NativeBloomFilterPayload,
 ): NativeExtractResult {
-  const includeSource = task.includeSourceInResult ?? true;
+  const includeSource = !task.projectFactsOnly && (task.includeSourceInResult ?? true);
   return {
     filePath: task.filePath,
     languageId: task.languageId,
@@ -300,14 +307,39 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     return { ok: true, source };
   }
 
+  async function withProjectFacts(
+    task: NativeExtractTask,
+    source: string,
+    extracted: NativeExtractResult,
+  ): Promise<NativeExtractResult> {
+    if (!readsSyntaxTree(task.languageId)) return extracted;
+    let factsSource = source;
+    // Oversized files are rejected before reading. JVM scans still need their bounded package-only fallback.
+    if (!source && extracted.fallbackReason === "sourceTooLarge" && isJvmLanguage(task.languageId)) {
+      if (task.source !== undefined) factsSource = task.source;
+      else if (deps.readPackageHead) factsSource = await deps.readPackageHead(task.filePath);
+      else factsSource = await deps.readFile(task.filePath, "utf8");
+    }
+    const tree = extracted.syntaxTree ? new ProjectedSyntaxTree(source, extracted.syntaxTree) : null;
+    const projectFacts = collectProjectFileFacts(factsSource, task.languageId, tree, (head, languageId) => {
+      const syntaxTree = binding?.parseSyntaxTree?.(head, languageId);
+      return syntaxTree && isColumnarSyntaxTree(syntaxTree) ? new ProjectedSyntaxTree(head, syntaxTree) : null;
+    });
+    return { ...extracted, ...(projectFacts ? { projectFacts } : {}) };
+  }
+
   return async function runExtraction(task: NativeExtractTask): Promise<NativeExtractResult> {
     ensureBinding();
 
     const loaded = await loadSource(task);
     if (!loaded.ok) {
-      return resourceLimitFallback(task, loaded.source, loaded.error, "sourceTooLarge");
+      return await withProjectFacts(
+        task,
+        loaded.source,
+        resourceLimitFallback(task, loaded.source, loaded.error, "sourceTooLarge"),
+      );
     }
-    const includeSource = task.includeSourceInResult ?? true;
+    const includeSource = !task.projectFactsOnly && (task.includeSourceInResult ?? true);
     const source = loaded.source;
     const bloomFilter = task.includeBloomFilter ? buildBloomFilterPayload(source, task.languageId) : undefined;
 
@@ -342,6 +374,18 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
 
     let extracted: NativeExtractResult;
     try {
+      if (task.projectFactsOnly) {
+        const syntaxTree = binding.parseSyntaxTree?.(source, task.languageId);
+        if (!syntaxTree || !isColumnarSyntaxTree(syntaxTree)) throw new Error(nativeShapeMismatchMessage());
+        const facts = await withProjectFacts(task, source, {
+          filePath: task.filePath,
+          languageId: task.languageId,
+          nativeResults: null,
+          compactResults: null,
+          syntaxTree,
+        });
+        return { ...facts, syntaxTree: null };
+      }
       if (task.compact && binding.runImportsQueryCompact) {
         const compactResults = binding.runImportsQueryCompact(source, getNativeQuerySetId(binding, support, "imports"));
         return {
@@ -388,9 +432,13 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (/max (node|depth) limit/i.test(message)) {
-        return resourceLimitFallback(task, source, message, "queryFailure", bloomFilter);
+        return await withProjectFacts(
+          task,
+          source,
+          resourceLimitFallback(task, source, message, "queryFailure", bloomFilter),
+        );
       }
-      return {
+      return await withProjectFacts(task, source, {
         filePath: task.filePath,
         languageId: task.languageId,
         ...(includeSource ? { source } : {}),
@@ -400,8 +448,9 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         ...(bloomFilter ? { bloomFilter } : {}),
         fallbackReason: "queryFailure",
         error: message,
-      };
+      });
     }
+    if (readsSyntaxTree(task.languageId)) extracted = await withProjectFacts(task, source, extracted);
     return task.moduleRecord ? await withModuleRecord(task.moduleRecord, task, support, source, extracted) : extracted;
   };
 }
@@ -409,6 +458,23 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
 const runExtraction = createNativeExtractor({
   loadBinding: loadProductionBinding,
   readFile: fsp.readFile,
+  readPackageHead: async (filePath) => {
+    const file = await fsp.open(filePath, "r");
+    try {
+      // UTF-8 needs at most three bytes per UTF-16 unit. Look ahead past the prefix (and an optional BOM), so the
+      // shared whole-line cutoff cannot mistake a truncated package clause for the end of the source.
+      const buffer = Buffer.allocUnsafe(3 * (JVM_PACKAGE_HEAD_CHARS + 2));
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      return buffer.toString("utf8", 0, offset);
+    } finally {
+      await file.close();
+    }
+  },
   statFile: async (filePath) => {
     const stat = await fsp.stat(filePath);
     return { size: stat.size };
