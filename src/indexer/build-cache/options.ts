@@ -88,8 +88,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 106 carries JVM wildcard-package completeness through import bindings and expansion. Unread declarations
  * cannot prove a Kotlin call or callable reference, including a class name that may also name a factory function.
  * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
+ * Epoch 110 applies the native source byte limit to every C# namespace candidate, including ignored and unindexed
+ * files, so serial and worker builds leave the same alias and static-using lookups partial beside oversized files.
  */
-export const CORE_ALGORITHM_EPOCH = 109;
+export const CORE_ALGORITHM_EPOCH = 110;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

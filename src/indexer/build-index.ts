@@ -26,8 +26,8 @@ import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/re
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import { collectJvmFileFacts } from "../util/jvm-tree.js";
 import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
-import { primeCsharpNamespaceFacts } from "../util/resolution/csharp.js";
-import { primeJvmFileFacts, resolveJvmPackageImportPaths } from "../util/resolution/jvm.js";
+import { primeCsharpNamespaceFacts, setCsharpNamespaceFactsReader } from "../util/resolution/csharp.js";
+import { primeJvmFileFacts, resolveJvmPackageImportPaths, setJvmFileFactsReader } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import {
@@ -145,6 +145,9 @@ import {
   shouldEnableNativeWorkers,
   teardownWorkerPool,
   type WorkerPoolSetupResult,
+  preparedProjectFileFacts,
+  readProjectFileFactsWithWorker,
+  type PreparedFileContextWithWorkerBloomFilter,
 } from "./build-workers.js";
 import {
   buildIncrementalGitDiffOptions,
@@ -201,7 +204,72 @@ type IndexedFileBuildArgs = {
   trustedSource?: string | undefined;
   /** Index JavaScript and TypeScript files through module records; without it every file is indexed as before them. */
   moduleRecords?: ModuleRecordPolicy;
+  preparedFile?: PreparedFileContextWithWorkerBloomFilter;
 };
+
+type ProjectFileExtraction = { prepared: PreparedFileContextWithWorkerBloomFilter } | { error: unknown };
+
+/**
+ * C#/JVM extraction finishes before any import lookup can scan the project. No capped task waits for an unstarted
+ * file: workers return each file's own facts with its extraction, then the normal build consumes that extraction once.
+ */
+async function extractProjectFilesBeforeResolution(args: {
+  files: readonly string[];
+  opts: BuildOptions | undefined;
+  report: BuildReport | undefined;
+  workerSetup: WorkerPoolSetupResult;
+  concurrency: number;
+  projectRoot: string;
+  confinedRoot?: string;
+  trustedSources?: ReadonlyMap<string, string> | undefined;
+}): Promise<Map<string, ProjectFileExtraction>> {
+  const candidates = args.files.filter((file) =>
+    readsSyntaxTree(supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id),
+  );
+  const extracted = await mapLimit(candidates, args.concurrency, async (file) => {
+    const support = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)!;
+    try {
+      const prepared = await prepareFileContextForBuild(
+        file,
+        support,
+        args.opts,
+        args.workerSetup,
+        args.report,
+        args.confinedRoot,
+        args.projectRoot,
+        args.trustedSources?.get(file),
+        args.opts?.useBloomFilters ?? true,
+      );
+      const facts = preparedProjectFileFacts(prepared);
+      if (support.id === "csharp") {
+        primeCsharpNamespaceFacts(file, facts?.csharpNamespaceFacts ?? null, args.opts?.languageExtensions);
+      } else {
+        primeJvmFileFacts(file, facts?.jvmFacts ?? null);
+      }
+      return [file, { prepared }] as const;
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
+      if (isConfinedFileReadError(error)) throw error;
+      if (support.id === "csharp") primeCsharpNamespaceFacts(file, null, args.opts?.languageExtensions);
+      else primeJvmFileFacts(file, null);
+      return [file, { error }] as const;
+    }
+  });
+  return new Map<string, ProjectFileExtraction>(extracted);
+}
+
+/** Unindexed project-scan candidates use facts-only tasks; indexed files have already primed their facts. */
+function installProjectFileFactsReaders(workerSetup: WorkerPoolSetupResult, report: BuildReport | undefined): void {
+  if (!workerSetup.pool) return;
+  setJvmFileFactsReader(
+    async (file, languageId) =>
+      (await readProjectFileFactsWithWorker(file, languageId, workerSetup, report))?.jvmFacts ?? null,
+  );
+  setCsharpNamespaceFactsReader(
+    async (file) =>
+      (await readProjectFileFactsWithWorker(file, "csharp", workerSetup, report))?.csharpNamespaceFacts ?? null,
+  );
+}
 
 function isConfinedFileReadError(error: unknown): boolean {
   return (
@@ -487,18 +555,20 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
           ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
         }
       : undefined;
-  const prepared = await prepareFileContextForBuild(
-    args.file,
-    args.support,
-    args.opts,
-    args.workerSetup,
-    args.report,
-    args.confinedRoot,
-    args.projectRoot,
-    args.trustedSource,
-    !!args.bloomFilterCache,
-    args.moduleRecords?.inWorkers ? recordTask : undefined,
-  );
+  const prepared =
+    args.preparedFile ??
+    (await prepareFileContextForBuild(
+      args.file,
+      args.support,
+      args.opts,
+      args.workerSetup,
+      args.report,
+      args.confinedRoot,
+      args.projectRoot,
+      args.trustedSource,
+      !!args.bloomFilterCache,
+      args.moduleRecords?.inWorkers ? recordTask : undefined,
+    ));
   if (prepared.moduleRecord) {
     if (args.bloomFilterCache && prepared.workerBloomFilter) {
       args.bloomFilterCache.set(args.file, bloomFilterFromWorker(prepared.workerBloomFilter));
@@ -520,8 +590,11 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id),
     nativeSourceLimitSkip = prepared.nativeFallbackReason === "sourceTooLarge";
 
-  if (prepared.syntaxTree) {
-    const parsedTree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
+  const extractionTree =
+    prepared.projectFactsParse?.parsed?.tree ??
+    (prepared.syntaxTree ? new ProjectedSyntaxTree(source, prepared.syntaxTree) : undefined);
+  if (extractionTree) {
+    const parsedTree = extractionTree;
     tree = parsedTree;
     setParsedCacheEntry(
       args.parsedMap,
@@ -536,7 +609,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       args.parsedCacheMaxEntries,
     );
   } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitSkip) {
-    const parseAttempt = attemptParsePreparedFileContext(prepared);
+    const parseAttempt = prepared.projectFactsParse ?? attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
       tree = parsed.tree;
@@ -552,7 +625,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     }
   } else if (nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
     // A native query without a transferred tree can still use the native syntax tree.
-    const parseAttempt = attemptParsePreparedFileContext(prepared);
+    const parseAttempt = prepared.projectFactsParse ?? attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
       tree = parsed.tree;
@@ -575,10 +648,15 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     });
   }
 
-  // The package scan reads this file's facts when its own imports resolve, so they are known before then.
   const jvmLanguageId = isJvmLanguage(sup.id) ? sup.id : undefined;
-  const jvmFacts = jvmLanguageId && tree ? collectJvmFileFacts(tree, jvmLanguageId) : undefined;
+  const jvmFacts =
+    jvmLanguageId && tree ? (prepared.projectFacts?.jvmFacts ?? collectJvmFileFacts(tree, jvmLanguageId)) : undefined;
+  const csharpFacts =
+    sup.id === "csharp" && tree
+      ? (prepared.projectFacts?.csharpNamespaceFacts ?? collectCsharpNamespaceFacts(tree))
+      : undefined;
   if (jvmFacts) primeJvmFileFacts(args.file, jvmFacts);
+  if (csharpFacts) primeCsharpNamespaceFacts(args.file, csharpFacts, args.opts?.languageExtensions);
 
   const lacksParserContext = !graphOnlyLanguage && !nativeQueries;
 
@@ -633,7 +711,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
           sup,
-          ...(readsSyntaxTree(sup.id) && tree ? { tree } : {}),
+          ...(readsSyntaxTree(sup.id) ? { tree: tree ?? null } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           ...sharedImportOptions,
         });
@@ -674,7 +752,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     const declaredContainers = collectCppDeclaredModules(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
-  if (sup.id === "csharp" && tree) mod.csharpNamespaceFacts = collectCsharpNamespaceFacts(tree);
+  if (csharpFacts) mod.csharpNamespaceFacts = csharpFacts;
   if (jvmFacts) mod.jvmFacts = jvmFacts;
   await resolveCrossModuleSymbolExports(
     args.file,
@@ -1726,88 +1804,117 @@ async function buildIndexFromFileListInProbeCache(
     }
     return matchPath;
   };
-  let retiredDeletionFiles: string[] = [];
-  // Set when a stale importer row could not be deleted. The build then keeps its previous disk
-  // state (manifest, snapshot, deletion evidence), so the next build finds the same staleness.
-  let staleRowRemovalFailed = false;
-  if (cacheEnabled) {
-    const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
-    const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
-    // The stale rows of changed files hold the previous declarations.
-    // Deleted files leave no miss. The build finds their rows separately.
-    const previousModules = new Map<string, ModuleIndex>();
-    const previousUnavailable: string[] = [];
-    for (const [file, probe] of cacheProbes) {
-      if ("error" in probe) continue;
-      if (probe.mod) cachedModules.set(file, { sigInfo: probe.sigInfo, mod: probe.mod });
-      else if (probe.previouslyCached) {
-        cacheMissesByState.changed.push(file);
-        if (probe.staleMod) previousModules.set(file, probe.staleMod);
-        else previousUnavailable.push(file);
-      } else cacheMissesByState.added.push(file);
-    }
-    // The stale check scans package and namespace declarations, so it reads each reused module's own facts
-    // instead of parsing the file again. A module's facts depend only on its own source, which its signature proves.
-    for (const [file, { mod }] of cachedModules) primeReusedFileFacts(file, mod, opts);
-    const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
-      files: normalizedFiles,
-      cachedModules,
-      cacheMisses: cacheMissesByState,
-      previousModules,
-      previousUnavailable,
-      signatures: new Map(
-        Array.from(cacheProbes, ([file, probe]) => ("error" in probe ? null : ([file, probe.sigInfo] as const))).filter(
-          (entry): entry is readonly [string, FileSignature] => entry !== null,
-        ),
-      ),
-      manifestFiles: manifest ? manifestFiles : null,
-      manifest,
-      projectRoot,
-      workspaceConfig,
-      graphOptions,
-      opts,
-      loadMatchPathForFile,
-      concurrency: conc,
-      ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
-    });
-    retiredDeletionFiles = retiredDeletions;
-    // A stale importer's row still matches its source signature.
-    // If the rebuild or the cache write fails, a later build would reuse the row. Delete it now.
-    staleRowRemovalFailed = !removeModulesFromCache(
-      projectRoot,
-      [...staleCachedModules].filter((file) => cachedModules.has(file)),
-      opts,
-    );
-    for (const file of staleCachedModules) {
-      const probe = cacheProbes.get(file);
-      if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
-      cachedGraphEntries?.delete(file);
-    }
-  }
-  const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
-    !("error" in probe) && !probe.mod ? file : null,
-  ).filter((file): file is string => file !== null);
-  const workerSetup = await setupWorkerPool(
-    opts,
-    countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions),
-  );
-  // A worker that builds a file's module record keeps the file's syntax tree. Count only misses that can retain a
-  // parsed tree; unsupported and graph-only files cannot use the parsed-file cache.
-  let parsedCacheMisses = 0;
-  if (opts?.keepParsed) {
-    for (const file of cacheMisses) {
-      const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
-      if (support && !isGraphOnlyLanguage(support.id)) parsedCacheMisses += 1;
-    }
-  }
-  const moduleRecords: ModuleRecordPolicy = {
-    inWorkers: !opts?.keepParsed || parsedCacheMisses > parsedCacheMaxEntries(opts),
-  };
-  // With module records, twice the pool's files in flight keep workers busy while the main thread finishes the
-  // others. An explicit `threads` keeps its own limit, even when smaller than the worker pool.
-  const threadsRequested = Number(opts?.threads || 0) > 0;
-  const parseConcurrency = workerSetup.pool && !threadsRequested ? 2 * (workerSetup.report?.threads ?? 0) : conc;
+  let workerSetup = emptyWorkerPoolSetup();
   try {
+    const initialCacheMisses = Array.from(cacheProbes, ([file, probe]) =>
+      !("error" in probe) && !probe.mod ? file : null,
+    ).filter((file): file is string => file !== null);
+    for (const [file, probe] of cacheProbes) {
+      if (!("error" in probe) && probe.mod) primeReusedFileFacts(file, probe.mod, opts);
+    }
+    const hasProjectFactMisses = initialCacheMisses.some((file) =>
+      readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id),
+    );
+    let projectFileExtractions = new Map<string, ProjectFileExtraction>();
+    let projectExtractionMs = 0;
+    let projectExtractionStartedAt: number | undefined;
+    if (hasProjectFactMisses) {
+      workerSetup = await setupWorkerPool(
+        opts,
+        countNativeWorkerEligibleFiles(initialCacheMisses, opts?.languageExtensions),
+      );
+      installProjectFileFactsReaders(workerSetup, report);
+      projectExtractionStartedAt = performance.now();
+      emitIndexLifecycleProgress(opts, "start", "build", normalizedFiles.length);
+      projectFileExtractions = await extractProjectFilesBeforeResolution({
+        files: initialCacheMisses,
+        opts,
+        report,
+        workerSetup,
+        concurrency: conc,
+        projectRoot,
+        ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
+      });
+      projectExtractionMs = performance.now() - projectExtractionStartedAt;
+    }
+    let retiredDeletionFiles: string[] = [];
+    // Set when a stale importer row could not be deleted. The build then keeps its previous disk
+    // state (manifest, snapshot, deletion evidence), so the next build finds the same staleness.
+    let staleRowRemovalFailed = false;
+    if (cacheEnabled) {
+      const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
+      const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
+      // The stale rows of changed files hold the previous declarations.
+      // Deleted files leave no miss. The build finds their rows separately.
+      const previousModules = new Map<string, ModuleIndex>();
+      const previousUnavailable: string[] = [];
+      for (const [file, probe] of cacheProbes) {
+        if ("error" in probe) continue;
+        if (probe.mod) cachedModules.set(file, { sigInfo: probe.sigInfo, mod: probe.mod });
+        else if (probe.previouslyCached) {
+          cacheMissesByState.changed.push(file);
+          if (probe.staleMod) previousModules.set(file, probe.staleMod);
+          else previousUnavailable.push(file);
+        } else cacheMissesByState.added.push(file);
+      }
+      const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
+        files: normalizedFiles,
+        cachedModules,
+        cacheMisses: cacheMissesByState,
+        previousModules,
+        previousUnavailable,
+        signatures: new Map(
+          Array.from(cacheProbes, ([file, probe]) =>
+            "error" in probe ? null : ([file, probe.sigInfo] as const),
+          ).filter((entry): entry is readonly [string, FileSignature] => entry !== null),
+        ),
+        manifestFiles: manifest ? manifestFiles : null,
+        manifest,
+        projectRoot,
+        workspaceConfig,
+        graphOptions,
+        opts,
+        loadMatchPathForFile,
+        concurrency: conc,
+        ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
+      });
+      retiredDeletionFiles = retiredDeletions;
+      // A stale importer's row still matches its source signature.
+      // If the rebuild or the cache write fails, a later build would reuse the row. Delete it now.
+      staleRowRemovalFailed = !removeModulesFromCache(
+        projectRoot,
+        [...staleCachedModules].filter((file) => cachedModules.has(file)),
+        opts,
+      );
+      for (const file of staleCachedModules) {
+        const probe = cacheProbes.get(file);
+        if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
+        cachedGraphEntries?.delete(file);
+      }
+    }
+    const cacheMisses = Array.from(cacheProbes, ([file, probe]) =>
+      !("error" in probe) && !probe.mod ? file : null,
+    ).filter((file): file is string => file !== null);
+    if (!workerSetup.pool) {
+      workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions));
+    }
+    installProjectFileFactsReaders(workerSetup, report);
+    // A worker that builds a file's module record keeps the file's syntax tree. Count only misses that can retain a
+    // parsed tree; unsupported and graph-only files cannot use the parsed-file cache.
+    let parsedCacheMisses = 0;
+    if (opts?.keepParsed) {
+      for (const file of cacheMisses) {
+        const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
+        if (support && !isGraphOnlyLanguage(support.id)) parsedCacheMisses += 1;
+      }
+    }
+    const moduleRecords: ModuleRecordPolicy = {
+      inWorkers: !opts?.keepParsed || parsedCacheMisses > parsedCacheMaxEntries(opts),
+    };
+    // With module records, twice the pool's files in flight keep workers busy while the main thread finishes the
+    // others. An explicit `threads` keeps its own limit, even when smaller than the worker pool.
+    const threadsRequested = Number(opts?.threads || 0) > 0;
+    const parseConcurrency = workerSetup.pool && !threadsRequested ? 2 * (workerSetup.report?.threads ?? 0) : conc;
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
       ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
@@ -1827,7 +1934,7 @@ async function buildIndexFromFileListInProbeCache(
       : undefined;
     let processedFiles = 0;
     const totalFiles = normalizedFiles.length;
-    let buildStartedAt: number | undefined;
+    let buildStartedAt: number | undefined = projectExtractionStartedAt;
     const ensureBuildProgressStarted = (): void => {
       if (buildStartedAt !== undefined) return;
       buildStartedAt = performance.now();
@@ -1888,6 +1995,9 @@ async function buildIndexFromFileListInProbeCache(
         let cacheWrite: PendingModuleCacheWrite | undefined;
         const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
+          const extraction = projectFileExtractions.get(file);
+          projectFileExtractions.delete(file);
+          if (extraction && "error" in extraction) throw extraction.error;
           const built = await buildIndexedModuleForFile({
             file,
             support,
@@ -1907,6 +2017,7 @@ async function buildIndexFromFileListInProbeCache(
             cacheEnabled,
             ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
             moduleRecords,
+            ...(extraction && "prepared" in extraction ? { preparedFile: extraction.prepared } : {}),
           });
           mod = built.module;
           graphContext = built.graphContext;
@@ -1954,7 +2065,7 @@ async function buildIndexFromFileListInProbeCache(
         }
       }
     });
-    if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
+    if (timings) timings.parseMs = Math.round(projectExtractionMs + performance.now() - parseStart);
     const graphStart = performance.now();
     const seenGraphEdges = new Set<string>();
     const appendUniqueGraphEdges = (edges: readonly Edge[]) => {
@@ -2127,6 +2238,8 @@ async function buildIndexFromFileListInProbeCache(
     }
     return index;
   } finally {
+    setJvmFileFactsReader(undefined);
+    setCsharpNamespaceFactsReader(undefined);
     await teardownWorkerPool(workerSetup, report);
   }
 }
@@ -3024,6 +3137,32 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
       }
       invalidateCachedDependents();
+      let projectFileExtractions = new Map<string, ProjectFileExtraction>();
+      let projectExtractionMs = 0;
+      let updateStartedAt: number | undefined;
+      const initialChangedFiles = Array.from(changedFiles);
+      if (
+        initialChangedFiles.some((file) =>
+          readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id),
+        )
+      ) {
+        workerSetup = await setupWorkerPool(
+          opts,
+          countNativeWorkerEligibleFiles(initialChangedFiles, opts?.languageExtensions),
+        );
+        installProjectFileFactsReaders(workerSetup, report);
+        updateStartedAt = performance.now();
+        emitIndexLifecycleProgress(opts, "start", "update", initialChangedFiles.length);
+        projectFileExtractions = await extractProjectFilesBeforeResolution({
+          files: initialChangedFiles,
+          opts,
+          report,
+          workerSetup,
+          concurrency: conc,
+          projectRoot,
+        });
+        projectExtractionMs = performance.now() - updateStartedAt;
+      }
       // A deletion cannot make an unresolved specifier start resolving. Dependents of a
       // deleted file are already rebuilt by collectDeletedTrackedFileDependents. An added
       // file can: re-resolve only specifiers whose stem matches an added file. Edges that
@@ -3080,9 +3219,14 @@ async function buildProjectIndexIncrementalInProbeCache(
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
       // touching a handful of files gets a handful of threads, or none.
-      workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(changedList, opts?.languageExtensions));
-      let updateStartedAt: number | undefined;
-      if (changedList.length || deletedTrackedFiles.size) {
+      if (!workerSetup.pool) {
+        workerSetup = await setupWorkerPool(
+          opts,
+          countNativeWorkerEligibleFiles(changedList, opts?.languageExtensions),
+        );
+      }
+      installProjectFileFactsReaders(workerSetup, report);
+      if (updateStartedAt === undefined && (changedList.length || deletedTrackedFiles.size)) {
         updateStartedAt = performance.now();
         emitIndexLifecycleProgress(opts, "start", "update", changedList.length);
       }
@@ -3092,7 +3236,7 @@ async function buildProjectIndexIncrementalInProbeCache(
       const freshSurfaces = new Map<string, string>();
       let processedFiles = 0;
       let plannedFiles = changedList.length;
-      let parseMs = 0;
+      let parseMs = projectExtractionMs;
       // Importers that must extract again because a file in `extractedFiles` changed what an importer can cache from it:
       // its public surface differs from the one the previous build recorded in the manifest (a dropped loaded module
       // supplies it when the manifest has none), or neither is known. A file that re-exports from such a file exposes
@@ -3117,6 +3261,16 @@ async function buildProjectIndexIncrementalInProbeCache(
       let wave = changedList;
       while (wave.length) {
         const parseStart = performance.now();
+        const unpreparedProjectFiles = wave.filter((file) => !projectFileExtractions.has(file));
+        const nextExtractions = await extractProjectFilesBeforeResolution({
+          files: unpreparedProjectFiles,
+          opts,
+          report,
+          workerSetup,
+          concurrency: conc,
+          projectRoot,
+        });
+        for (const [file, extraction] of nextExtractions) projectFileExtractions.set(file, extraction);
         const fileResults = await mapLimit(wave, conc, async (file) => {
           try {
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
@@ -3124,6 +3278,9 @@ async function buildProjectIndexIncrementalInProbeCache(
             if (!support) return [file, unparsedModuleIndex(file)] as const;
             const matchPath =
               support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
+            const extraction = projectFileExtractions.get(file);
+            projectFileExtractions.delete(file);
+            if (extraction && "error" in extraction) throw extraction.error;
             const built = await buildIndexedModuleForFile({
               file,
               support,
@@ -3141,6 +3298,7 @@ async function buildProjectIndexIncrementalInProbeCache(
               fileSignatures,
               cacheEnabled,
               ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
+              ...(extraction && "prepared" in extraction ? { preparedFile: extraction.prepared } : {}),
             });
             return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
@@ -3359,6 +3517,8 @@ async function buildProjectIndexIncrementalInProbeCache(
       }
       return index;
     } finally {
+      setJvmFileFactsReader(undefined);
+      setCsharpNamespaceFactsReader(undefined);
       await teardownWorkerPool(workerSetup, report);
     }
   } finally {
