@@ -2479,6 +2479,84 @@ describe("Cache invalidation and strict hashing", () => {
     expect(await buildCache.tryLoadFromCache(root, normalizedFile, sig, { cache: "disk" })).toBeNull();
   });
 
+  it.each(["star", "named"] as const)(
+    "rejects malformed JVM package completeness in a %s module binding",
+    async (kind) => {
+      const root = await mkTmpDir("cg-jvm-package-completeness-row-");
+      const declaration = path.join(root, "Only.kt");
+      const consumer = path.join(root, "Use.kt");
+      const imported = kind === "star" ? "*" : "select";
+      const call = "fun use() = select(1)";
+      await fsp.writeFile(declaration, "package p\n\nfun select(x: Int) = x\n");
+      await fsp.writeFile(consumer, `package app\nimport p.${imported}\n${call}\n`);
+      const options = { cache: "disk", threads: 1 } as const;
+      await buildProjectIndexFromFiles(root, [declaration, consumer], options);
+      const sig = readModuleCacheSignature(root, consumer);
+      if (!sig) throw new Error("expected cached JVM importer");
+      expect(await buildCache.tryLoadFromCache(root, normalize(consumer), sig, options)).not.toBeNull();
+      buildCache.closeDiskCacheDatabase(root, options);
+      const db = new DatabaseSync(diskCacheDbPathFor(root));
+      try {
+        const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, consumer)) as {
+          payload: Uint8Array;
+        };
+        const module = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+          imports: Array<Record<string, unknown>>;
+        };
+        if (!module.imports[0]) throw new Error("expected JVM binding");
+        module.imports[0].jvmPackageIncomplete = "false";
+        db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+          brotliCompressSync(JSON.stringify(module)),
+          cacheFile(root, consumer),
+        );
+      } finally {
+        db.close();
+      }
+      expect(await buildCache.tryLoadFromCache(root, normalize(consumer), sig, options)).toBeNull();
+      const rebuilt = await buildProjectIndexFromFiles(root, [declaration, consumer], options);
+      const result = await goToDefinition(rebuilt, { file: consumer, line: 3, column: call.indexOf("select") + 1 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") expect(result.definition.file).toBe(normalize(declaration));
+    },
+  );
+
+  it.each(["star", "named"] as const)(
+    "rejects malformed JVM package completeness in a %s snapshot binding",
+    async (kind) => {
+      const root = await mkTmpDir("cg-jvm-package-completeness-snapshot-");
+      const declaration = path.join(root, "Only.kt");
+      const consumer = path.join(root, "Use.kt");
+      const imported = kind === "star" ? "*" : "select";
+      const call = "fun use() = select(1)";
+      await fsp.writeFile(declaration, "package p\n\nfun select(x: Int) = x\n");
+      await fsp.writeFile(consumer, `package app\nimport p.${imported}\n${call}\n`);
+      const options = { cache: "disk", threads: 1 } as const;
+      await buildProjectIndex(root, options);
+      const snapshotPath = projectSnapshotPathFor(root);
+      const snapshot = (await readProjectSnapshot(snapshotPath)) as {
+        modules?: Array<{ file?: string; imports?: Array<Record<string, unknown>> }>;
+      };
+      embedSqliteModulesInSnapshot(root, snapshot);
+      const binding = snapshot.modules?.find((module) => module.file === "Use.kt")?.imports?.[0];
+      if (!binding) throw new Error("expected snapshot JVM importer");
+      binding.jvmPackageIncomplete = "false";
+      await writeProjectSnapshot(snapshotPath, snapshot);
+      const report: BuildReport = { timings: {} };
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const rebuilt = await buildProjectIndexIncremental(root, { ...options, report });
+        expect(
+          report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+        ).toBe(true);
+        const result = await goToDefinition(rebuilt, { file: consumer, line: 3, column: call.indexOf("select") + 1 });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(normalize(declaration));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    },
+  );
+
   it("rebuilds module rows missing or corrupting indexed callable identity", async () => {
     for (const damage of ["missing", "malformed"] as const) {
       const root = await mkTmpDir("dg-callable-identity-row-");

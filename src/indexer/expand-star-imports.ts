@@ -123,6 +123,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
         binding.cNamespace,
         binding.jvmTypeOwnerStartIndex,
         binding.jvmStaticWildcardName,
+        binding.jvmPackageIncomplete,
       ]);
     }
     if (binding.kind === "namespace") {
@@ -215,6 +216,12 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
                   ? { jvmStaticWildcardName: imp.jvmStaticWildcardName }
                   : {}),
                 ...(imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
+                ...(packageFiles
+                  ? {
+                      jvmPackageLanguageId: imp.jvmPackageLanguageId,
+                      jvmPackageIncomplete: imp.jvmPackageIncomplete,
+                    }
+                  : {}),
                 ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
               };
           const expandedImportKeyValue = expandedImportKey(expandedImport);
