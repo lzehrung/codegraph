@@ -30,9 +30,9 @@ export class ProjectedSyntaxTree {
   private readonly nodes: Array<ProjectedSyntaxNode | undefined>;
   private fieldNameIds: Map<string, number> | undefined;
 
-  constructor(source: string, tree: NativeSyntaxTree) {
+  constructor(source: string, tree: NativeSyntaxTree, byteIndexMap?: ByteToStringIndexMap) {
     this.source = source;
-    this.byteIndexMap = buildByteToStringIndexMap(source);
+    this.byteIndexMap = byteIndexMap ?? buildByteToStringIndexMap(source);
     this.columns = tree;
     this.nodes = new Array<ProjectedSyntaxNode | undefined>(tree.nodeCount);
     const rootNode = this.nodeById(tree.rootId);

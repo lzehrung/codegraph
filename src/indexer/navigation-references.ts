@@ -13,7 +13,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import {
@@ -255,7 +255,8 @@ async function readPhpDefinitionNames(index: ProjectIndex, definitionFile: strin
     }
     const phpNamespace = readPhpNamespaceFromRange(definitionParsed.tree, definitionParsed.source, def.range);
     return [phpNamespace ? `${phpNamespace}\\${def.localName}` : def.localName];
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return [];
   }
 }
@@ -515,7 +516,8 @@ async function collectNamedNodeReferences(
     };
     walk(parsed.tree.rootNode);
     return { matched, parsed, nameEquivalenceUnavailable };
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return null;
   }
 }

@@ -18,7 +18,7 @@ import {
   closestContainingScope,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
-import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "./parsed-cache.js";
+import { cachedParsedContextForIndexSync, cachedScopeIndexForIndex, retainScopeIndexForIndex } from "./parsed-cache.js";
 import {
   cjsRequireValueBinding,
   csharpShadowedStarsMayHold,
@@ -190,19 +190,17 @@ export function getOrBuildScopeIndex(
   mod: ModuleIndex,
   tree: SyntaxTreeLike,
 ): ScopeIndex {
-  const fileKey = fileIdentityKey(file);
-  let scopeIndex = index.scopeCache.get(fileKey);
+  let scopeIndex = cachedScopeIndexForIndex(index, file);
   if (scopeIndex) return scopeIndex;
   const shared = cachedParsedContextForIndexSync(index, file);
+  const parsed = shared ?? { source, sup, tree, nativeQueries: null };
   if (shared) {
     source = shared.source;
     sup = shared.sup;
     tree = shared.tree;
-  } else {
-    void ensureParsedContextForIndex(index, file, { source, sup, tree, nativeQueries: null });
   }
   scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree, locals: mod.locals });
-  index.scopeCache.set(fileKey, scopeIndex);
+  retainScopeIndexForIndex(index, file, parsed, scopeIndex);
   return scopeIndex;
 }
 
@@ -488,6 +486,7 @@ export function resolveNamedDefinition(
   cNamespace?: "tag" | "ordinary",
   referenceIndex?: number,
   callSite?: { node: SyntaxNodeLike; source: string },
+  scopeIndex?: ScopeIndex,
 ): GoToResult | null {
   const callArgumentCount = callSite
     ? explicitCallArgumentCount(support.id, callSite.source, callSite.node)
@@ -547,7 +546,7 @@ export function resolveNamedDefinition(
     hit?.kind === "resolved" &&
     referenceIndex !== undefined &&
     fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
-    !!index.scopeCache.get(fileIdentityKey(file))?.allScopes.some((scope) => {
+    !!(scopeIndex ?? cachedScopeIndexForIndex(index, file))?.allScopes.some((scope) => {
       if (scope.kind !== "function") return false;
       const body = scope.node.childForFieldName("body");
       return !!body && referenceIndex >= body.startIndex && referenceIndex < body.endIndex;

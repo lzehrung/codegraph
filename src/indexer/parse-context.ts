@@ -197,8 +197,9 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
 export async function parseNavigationContext(
   file: string,
   languageExtensions?: LanguageExtensionMap,
+  source?: string,
 ): Promise<ParsedFileContext> {
-  const prepared = await prepareSourceInput(file, { languageExtensions });
+  const prepared = await prepareSourceInput(file, { languageExtensions, ...(source !== undefined ? { source } : {}) });
   const context: PreparedFileContext = { file, source: prepared.source, sup: prepared.sup, nativeQueries: null };
   if (prepared.embeddedBlocks) context.embeddedBlocks = prepared.embeddedBlocks;
   return parsePreparedFileContext(context);

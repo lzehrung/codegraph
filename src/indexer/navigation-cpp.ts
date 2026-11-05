@@ -4,7 +4,7 @@ import { cppOutOfLineOwnerPath, cppQualifiedNameSegments } from "../graphs/symbo
 import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import {
   cppEquivalentCallableBindings,
   cppSelectCallableByCallArity,
@@ -897,7 +897,10 @@ async function resolveCppQualifiedMemberContainerUncached(
       if (loadParsedFile) {
         parsed = await loadParsedFile(candidate.file);
       } else {
-        parsed = await ensureParsedContextForIndex(index, candidate.file).catch(() => null);
+        parsed = await ensureParsedContextForIndex(index, candidate.file).catch((error: unknown) => {
+          rethrowStaleQuerySource(error);
+          return null;
+        });
       }
       if (!parsed) continue;
       const container = cppMemberContainerForDefinition(parsed.tree, candidate);

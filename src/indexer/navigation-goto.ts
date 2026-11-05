@@ -70,7 +70,7 @@ import {
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, ignoreQueryParseFailure, rethrowStaleQuerySource } from "./parsed-cache.js";
 import {
   csharpLookupName,
   csharpQualifiedNameNode,
@@ -265,7 +265,8 @@ export async function resolveSharedOwnerContainers(params: {
     let peerContext: ParsedFileContext;
     try {
       peerContext = await ensureParsedContextForIndex(index, peer.file);
-    } catch {
+    } catch (error) {
+      rethrowStaleQuerySource(error);
       continue;
     }
     if (peerContext.sup.id !== languageId) continue;
@@ -304,7 +305,8 @@ export async function sharedOwnerMemberUnitComplete(index: ProjectIndex, def: Sy
   let context: ParsedFileContext;
   try {
     context = await ensureParsedContextForIndex(index, def.file);
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return null;
   }
   const languageId = context.sup.id;
@@ -333,7 +335,8 @@ export async function findCsharpPartialTypeEquivalents(index: ProjectIndex, def:
   let context: ParsedFileContext;
   try {
     context = await ensureParsedContextForIndex(index, def.file);
-  } catch {
+  } catch (error) {
+    rethrowStaleQuerySource(error);
     return [];
   }
   if (context.sup.id !== "csharp") return [];
@@ -1898,7 +1901,18 @@ async function baseRefsFromContainer(
         ? resolveNamedMemberContainer(index, mod, base.name, normalize)
         : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
     if (!def && base.kind === "simple" && sup.id !== "php") {
-      const named = resolveNamedDefinition(index, mod, mod.file, sup, base.name, undefined, container.startIndex);
+      const scope = sup.id === "python" ? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree) : undefined;
+      const named = resolveNamedDefinition(
+        index,
+        mod,
+        mod.file,
+        sup,
+        base.name,
+        undefined,
+        container.startIndex,
+        undefined,
+        scope,
+      );
       if (named?.status === "ok") def = asMemberContainer(index, named.definition);
     }
     if (!def && sup.id === "php" && base.kind === "simple") {
@@ -2098,7 +2112,7 @@ async function resolveKeywordReceiverMember(
 
 /** The parameter list of a Java, Kotlin, or C# method declaration. */
 async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise<SyntaxNodeLike | null> {
-  const context = await ensureParsedContextForIndex(index, def.file).catch(() => null);
+  const context = await ensureParsedContextForIndex(index, def.file).catch(ignoreQueryParseFailure);
   const start = def.range.start.index;
   if (!context || start === undefined) return null;
   const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
@@ -2135,7 +2149,7 @@ function importedTypeSource(module: ModuleIndex, name: string): string {
 /** Type parameter names declared by a method or any type enclosing it. */
 async function typeParameterNamesAround(index: ProjectIndex, def: SymbolDef): Promise<Set<string>> {
   const names = new Set<string>();
-  const context = await ensureParsedContextForIndex(index, def.file).catch(() => null);
+  const context = await ensureParsedContextForIndex(index, def.file).catch(ignoreQueryParseFailure);
   const start = def.range.start.index;
   if (!context || start === undefined) return names;
   let current: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start);
@@ -2215,7 +2229,7 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
   ]);
   if (!leftTypes || !rightTypes || leftTypes.length !== rightTypes.length) return false;
   const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
-  const leftContext = await ensureParsedContextForIndex(index, left.file).catch(() => null);
+  const leftContext = await ensureParsedContextForIndex(index, left.file).catch(ignoreQueryParseFailure);
   if (!leftContext) return false;
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
@@ -2232,7 +2246,7 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
         .split(".")
         .pop() ?? text;
     if (BUILTIN_PARAMETER_TYPES[leftContext.sup.id]?.has(base)) continue;
-    const rightContext = await ensureParsedContextForIndex(index, right.file).catch(() => null);
+    const rightContext = await ensureParsedContextForIndex(index, right.file).catch(ignoreQueryParseFailure);
     const leftModule = index.byFile.get(fileIdentityKey(left.file));
     const rightModule = index.byFile.get(fileIdentityKey(right.file));
     if (!rightContext || !leftModule || !rightModule) return false;
@@ -2356,7 +2370,7 @@ async function isUninheritedPrivateMember(
     const usePackage = getPackageDeclarationName(index, mod.file, useLanguage === "kotlin" ? "kotlin" : "java");
     if (memberPackage !== usePackage) return true;
   }
-  const parsed = await ensureParsedContextForIndex(index, member.file).catch(() => null);
+  const parsed = await ensureParsedContextForIndex(index, member.file).catch(ignoreQueryParseFailure);
   const nameNode = parsed?.tree.rootNode.descendantForIndex(start, member.range.end.index ?? start);
   return !!parsed && !!nameNode && isPrivateDeclaration(parsed.sup.id, nameNode);
 }

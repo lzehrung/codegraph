@@ -1,6 +1,6 @@
 import path from "node:path";
 import { findUsageReferences, getCppEquivalentCallableDefinitions, goToDefinition } from "../indexer/navigation.js";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../indexer/parsed-cache.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
@@ -667,7 +667,8 @@ function tryEnsureParsedContext(
   file: string,
   diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
 ): Promise<ParsedFileContext | null> {
-  return ensureParsedContextForIndex(index, file).catch(() => {
+  return ensureParsedContextForIndex(index, file).catch((error: unknown) => {
+    rethrowStaleQuerySource(error);
     incrementSkippedReason(diagnostics, "parse-failed");
     return null;
   });

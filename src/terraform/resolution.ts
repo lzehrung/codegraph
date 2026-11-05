@@ -1,6 +1,10 @@
 import path from "node:path";
 import { getCompilationUnitPeers } from "../indexer/compilation-units.js";
-import { ensureParsedContextForIndex } from "../indexer/parsed-cache.js";
+import {
+  assertQuerySourceForIndex,
+  ensureParsedContextForIndex,
+  rethrowStaleQuerySource,
+} from "../indexer/parsed-cache.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isNativeRequiredUnavailableError } from "../native/runtime.js";
@@ -59,6 +63,7 @@ async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<T
     if (parsed.sup.id !== TERRAFORM_LANGUAGE_ID) return null;
     return extractTerraformFacts(parsed.tree.rootNode);
   } catch (error) {
+    rethrowStaleQuerySource(error);
     if (isNativeRequiredUnavailableError(error)) throw error;
     return null;
   }
@@ -71,6 +76,7 @@ async function computeFacts(index: ProjectIndex, module: ModuleIndex): Promise<T
 export function terraformFactsForFile(index: ProjectIndex, file: FileId): Promise<TerraformFileFacts | null> {
   const module = index.byFile.get(fileIdentityKey(file));
   if (!module) return Promise.resolve(null);
+  assertQuerySourceForIndex(index, file);
   let facts = factsByModule.get(module);
   if (!facts) {
     facts = computeFacts(index, module);
