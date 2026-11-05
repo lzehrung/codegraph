@@ -2,10 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
-import { buildProjectIndex, buildProjectIndexFromFiles, findReferences, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+  findReferences,
+  goToDefinition,
+} from "../src/index.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { clearMemoryCache, closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import {
+  jvmIncompleteWildcardSources,
+  JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
+} from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
 const files = {
   "kotlin/utils/Helper.kt": "package utils\nfun helperFunction(value: Int): Int = value + 1\n",
@@ -1362,6 +1375,216 @@ describe("JVM package wildcard graph edges", () => {
         expect(importTargets(warm)).not.toContain(normalizePath(q));
       } finally {
         await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+  it("keeps fully read single-function and class-only packages resolvable with complete references", async () => {
+    const root = await mkTmpDir("cg-readable-package-stars-");
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "functions/Only.kt": "package functions\n\nfun select(x: Int) = x\n",
+        "types/Only.kt": "package types\n\nclass Service(val value: Int)\n",
+        "app/Use.kt": [
+          "package app",
+          "import functions.*",
+          "import types.*",
+          "fun use() = select(1)",
+          "fun make(): Service = Service(1)",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [file, name, line, column, definitionColumn] of [
+        ["functions/Only.kt", "select", 4, 13, 5],
+        ["types/Only.kt", "Service", 5, 23, 7],
+      ] as const) {
+        const result = await goToDefinition(index, { file: paths["app/Use.kt"]!, line, column });
+        expect(result.status, name).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(paths[file]);
+        const refs = await findReferences(index, { file: paths[file]!, line: 3, column: definitionColumn });
+        expect(refs.status, name).toBe("ok");
+        if (refs.status === "ok") expect(refs.referenceCoverage.state, name).toBe("complete");
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not promote another wildcard past unread callables, but preserves explicit imports", async () => {
+    const root = await mkTmpDir("cg-unread-competing-stars-");
+    try {
+      const sources = {
+        "p/Small.kt": "package p\nfun select(x: Int) = x\n",
+        "p/Gap.kt": "package p\nclass Before\n)\nfun select(x: String) = x\nfun Service(x: String) = x\n",
+        "q/Target.kt": "package q\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
+        "app/Forward.kt":
+          'package app\nimport p.*\nimport q.*\nfun forward() = select("x")\nfun makeForward() = Service("x")\nfun referenceForward(): (String) -> Any = ::Service\n',
+        "app/Reverse.kt":
+          'package app\nimport q.*\nimport p.*\nfun reverse() = select("x")\nfun makeReverse() = Service("x")\nfun referenceReverse(): (String) -> Any = ::Service\n',
+        "app/Explicit.kt": "package app\nimport p.*\nimport q.select\nfun explicit() = select(1)\n",
+        "app/ExplicitType.kt":
+          "package app\nimport p.*\nimport q.Service\nfun explicitReference(): (Int) -> Any = ::Service\n",
+      };
+      const paths = await writeFixtureFiles(root, sources);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const file of ["app/Forward.kt", "app/Reverse.kt"] as const) {
+        for (const [line, name] of [
+          [4, "select"],
+          [5, "Service"],
+          [6, "Service"],
+        ] as const) {
+          const result = await goToDefinition(index, {
+            file: paths[file]!,
+            line,
+            column: sources[file].split("\n")[line - 1]!.indexOf(name) + 1,
+          });
+          expect(result.status).toBe("not_found");
+        }
+        expect(
+          graph.edges.filter(
+            (edge) =>
+              (edge.label === "calls" || edge.label === "uses") && graph.nodes.get(edge.from)?.file === paths[file],
+          ),
+        ).toEqual([]);
+      }
+      const explicit = await goToDefinition(index, {
+        file: paths["app/Explicit.kt"]!,
+        line: 4,
+        column: sources["app/Explicit.kt"].split("\n")[3]!.indexOf("select") + 1,
+      });
+      expect(explicit.status).toBe("ok");
+      if (explicit.status === "ok") expect(explicit.definition.file).toBe(paths["q/Target.kt"]);
+      const explicitReference = await goToDefinition(index, {
+        file: paths["app/ExplicitType.kt"]!,
+        line: 4,
+        column: sources["app/ExplicitType.kt"].split("\n")[3]!.indexOf("Service") + 1,
+      });
+      expect(explicitReference.status).toBe("ok");
+      if (explicitReference.status === "ok") {
+        expect(explicitReference.definition.file).toBe(paths["q/Target.kt"]);
+      }
+      const referenceCaller = [...graph.nodes.values()].find((node) => node.name === "explicitReference");
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.from === referenceCaller?.id &&
+            edge.label === "uses" &&
+            graph.nodes.get(edge.to)?.file === paths["q/Target.kt"],
+        ),
+      ).toBe(true);
+      const refs = await findReferences(index, { file: paths["q/Target.kt"]!, line: 2, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("expected function references");
+      expect(
+        refs.references.filter((ref) => ref.file === paths["app/Forward.kt"] || ref.file === paths["app/Reverse.kt"]),
+      ).toEqual([]);
+      const classRefs = await findReferences(index, { file: paths["q/Target.kt"]!, line: 3, column: 7 });
+      expect(classRefs.status).toBe("ok");
+      if (classRefs.status !== "ok") throw new Error("expected class references");
+      expect(
+        classRefs.references.filter(
+          (ref) => ref.file === paths["app/Forward.kt"] || ref.file === paths["app/Reverse.kt"],
+        ),
+      ).toEqual([]);
+      expect(
+        classRefs.references.some((ref) => ref.file === paths["app/ExplicitType.kt"] && ref.range.start.line === 4),
+      ).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const cache of ["memory", "disk"] as const) {
+    it(`retains incomplete package file edges without false targets, then repairs unchanged importers (${cache})`, async () => {
+      const root = await mkTmpDir("cg-unread-package-star-");
+      const cacheDir = await mkTmpDir("cg-unread-package-star-cache-");
+      const options = { cache, cacheDir, threads: 1, useNativeWorkers: false };
+      try {
+        const sources = jvmIncompleteWildcardSources();
+        const paths = await writeFixtureFiles(root, sources);
+        const inspect = async (index: ProjectIndex, repaired: boolean) => {
+          const graph = await buildSymbolGraphDetailed(index);
+          for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
+            let target: string | null = row.target?.file ?? null;
+            if (repaired && row.file === "app/BigUse.kt") target = "big/Small.kt";
+            if (repaired && row.file === "app/GapUse.kt") target = "gap/Small.kt";
+            const result = await goToDefinition(index, {
+              file: paths[row.file]!,
+              line: row.line,
+              column: sources[row.file]!.split("\n")[row.line - 1]!.lastIndexOf(row.name) + 1,
+            });
+            expect(result.status, row.caller).toBe(target ? "ok" : "not_found");
+            if (target && result.status === "ok") expect(result.definition.file, row.caller).toBe(paths[target]);
+            const caller = [...graph.nodes.values()].find(
+              (node) => node.name === row.caller && fileIdentityKey(node.file) === fileIdentityKey(paths[row.file]!),
+            );
+            expect(caller, row.caller).toBeDefined();
+            const label = "reference" in row ? "uses" : "calls";
+            const targets = graph.edges
+              .filter((edge) => edge.from === caller!.id && edge.label === label)
+              .map((edge) => graph.nodes.get(edge.to)?.file);
+            expect(targets, row.caller).toEqual(target ? [paths[target]] : []);
+            // The return annotation of makeBig/makeGap still has a proven class type-use edge.
+            const hasProvenReturnType = row.name === "Service" && row.line === 4;
+            if (!target && !hasProvenReturnType) {
+              expect(
+                graph.edges.filter(
+                  (edge) =>
+                    edge.from === caller!.id && edge.label === "uses" && graph.nodes.get(edge.to)?.name === row.name,
+                ),
+                `${row.caller}: no alias-table target`,
+              ).toEqual([]);
+            }
+          }
+          for (const [consumer, packageName, unread] of [
+            ["app/BigUse.kt", "big", "Big.kt"],
+            ["app/GapUse.kt", "gap", "Gap.kt"],
+          ] as const) {
+            const module = index.byFile.get(fileIdentityKey(paths[consumer]!));
+            const star = module?.imports.find((binding) => binding.kind === "star");
+            expect(star?.kind).toBe("star");
+            if (star?.kind !== "star") throw new Error("expected package wildcard");
+            expect(star.jvmPackageIncomplete).toBe(!repaired);
+            expect(star.jvmPackageFiles?.map((file) => path.basename(file)).sort()).toEqual(
+              [unread, "Small.kt"].sort(),
+            );
+            const targets = index.graph.edges
+              .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(paths[consumer]!))
+              .flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : []));
+            expect(targets).toContain(paths[`${packageName}/Small.kt`]);
+            expect(targets).toContain(paths[`${packageName}/${unread}`]);
+            const refs = await findReferences(index, { file: paths[`${packageName}/Small.kt`]!, line: 3, column: 5 });
+            expect(refs.status).toBe("ok");
+            if (refs.status !== "ok") throw new Error("expected readable function");
+            expect(
+              refs.references
+                .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(paths[consumer]!))
+                .map((ref) => ref.range.start.line)
+                .sort(),
+            ).toEqual(repaired ? [3] : []);
+          }
+        };
+        await inspect(await buildProjectIndex(root, options), false);
+        if (cache === "disk") {
+          clearMemoryCache();
+          closeDiskCacheDatabase(root, options);
+        }
+        await inspect(await buildProjectIndexIncremental(root, options), false);
+
+        await fs.writeFile(paths["big/Big.kt"]!, "package big\n\nclass After\n");
+        await fs.writeFile(paths["gap/Gap.kt"]!, "package gap\n\nclass After\n");
+        // The importers do not change. The package is now fully known and declares no second callable.
+        if (cache === "disk") {
+          clearMemoryCache();
+          closeDiskCacheDatabase(root, options);
+        }
+        await inspect(await buildProjectIndexIncremental(root, options), true);
+        await inspect(await buildProjectIndex(root, { cache: "off", threads: 1 }), true);
+      } finally {
+        clearMemoryCache();
+        closeDiskCacheDatabase(root, options);
+        await fs.rm(root, { recursive: true, force: true });
+        await fs.rm(cacheDir, { recursive: true, force: true });
       }
     });
   }

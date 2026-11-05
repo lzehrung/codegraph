@@ -22,6 +22,12 @@ import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import {
+  jvmIncompleteWildcardSources,
+  JVM_INCOMPLETE_WILDCARD_CALLS,
+  JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
+  JVM_INCOMPLETE_WILDCARD_REFERENCES,
+} from "./helpers/jvm-incomplete-wildcard-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -2589,6 +2595,56 @@ nativeDescribe("native semantic coverage", () => {
         peerCase.edge.label,
       );
       expect(warmTargets, `${peerCase.name}: warm call edge`).toEqual(coldTargets);
+    }
+  });
+  it("keeps unread wildcard calls and references conservative on a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-unread-wildcards-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-unread-wildcards-cache-"));
+    tempDirs.push(root, cacheDir);
+    const sources = jvmIncompleteWildcardSources();
+    const paths = await writeFixtureFiles(root, sources);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const row of [...JVM_INCOMPLETE_WILDCARD_CALLS, ...JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES]) {
+        const result = await goToDefinition(index, {
+          file: paths[row.file]!,
+          line: row.line,
+          column: sources[row.file]!.split("\n")[row.line - 1]!.lastIndexOf(row.name) + 1,
+        });
+        expect(result.status, `${phase}: ${row.caller}`).toBe(row.target ? "ok" : "not_found");
+        if (row.target && result.status === "ok") expect(result.definition.file).toBe(paths[row.target.file]);
+        const caller = [...graph.nodes.values()].find(
+          (node) => node.name === row.caller && fileIdentityKey(node.file) === fileIdentityKey(paths[row.file]!),
+        );
+        expect(caller, `${phase}: ${row.caller}`).toBeDefined();
+        const label = "reference" in row ? "uses" : "calls";
+        const targets = graph.edges
+          .filter((edge) => edge.from === caller!.id && edge.label === label)
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+        expect(targets, `${phase}: ${row.caller}`).toEqual(row.target ? [paths[row.target.file]] : []);
+      }
+      for (const row of JVM_INCOMPLETE_WILDCARD_REFERENCES) {
+        const result = await findReferences(index, {
+          file: paths[row.file]!,
+          line: row.line,
+          column: columnOf(sources[row.file]!.split("\n"), row.line, row.name),
+        });
+        expect(result.status, `${phase}: ${row.file}`).toBe("ok");
+        if (result.status !== "ok") throw new Error(`missing native reference definition: ${row.file}`);
+        expect(
+          result.references
+            .filter((ref) => fileIdentityKey(ref.file) === fileIdentityKey(paths[row.consumer]!))
+            .map((ref) => ref.range.start.line)
+            .sort(),
+          `${phase}: ${row.file}`,
+        ).toEqual([...row.lines]);
+      }
     }
   });
 });
