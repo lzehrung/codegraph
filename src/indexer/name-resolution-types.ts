@@ -96,8 +96,8 @@ export type NameLookupPolicy = {
   /** Whether a file import alias remains visible at this use, after lexical shadowing. */
   moduleAliasIsUnshadowed?(state: NameLookupState): boolean;
   /**
-   * Whether a language rule hides a file import alias at this use (C#: a member of an enclosing namespace, or a
-   * project file whose declarations are unknown).
+   * Whether a language rule hides a file import alias at this use, such as an unmodeled Python generic
+   * annotation binding, a C# enclosing namespace member, or a project file whose declarations are unknown.
    */
   shadowsModuleAlias?(use: BareNameUse): boolean;
   /** Files a synchronous consumer loads before resolving names in a module of this language. */

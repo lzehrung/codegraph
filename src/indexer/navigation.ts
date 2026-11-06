@@ -223,6 +223,7 @@ export async function goToDefinition(
     const declNameNode = findDeclarationNameNode(sup, node);
     if (declNameNode) {
       name = sliceText(declNameNode, source);
+      node = declNameNode;
     }
   }
 

@@ -3,6 +3,7 @@
  * `pythonOmissions` below states why one form has no cell.
  */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import { PYTHON_ANNOTATION_SOURCES } from "../../helpers/python-annotation-fixture.js";
 
 export const pythonOmissions: readonly CallFormOmission[] = [
   {
@@ -291,5 +292,20 @@ export const pythonCells: MatrixCell[] = [
     decoy: { file: "use.py", line: 4, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.py", fromName: "run" },
+  },
+  {
+    id: "python/bare-call-annotation-outside-parameter-binding",
+    language: "python",
+    callForm: "bare-call",
+    files: {
+      "models.py": PYTHON_ANNOTATION_SOURCES["models.py"]!,
+      "calls.py": PYTHON_ANNOTATION_SOURCES["calls.py"]!,
+      "decoy.py": PYTHON_ANNOTATION_SOURCES["decoy.py"]!,
+    },
+    use: { file: "calls.py", line: 2, token: "annotation_type", occurrence: 2 },
+    expected: { file: "models.py", line: 3, token: "annotation_type" },
+    decoy: { file: "decoy.py", line: 3, token: "annotation_type" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "calls.py", fromName: "called" },
   },
 ];

@@ -28,6 +28,12 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { __setQuerySyntaxCacheLimitsForTests } from "../src/indexer/parsed-cache.js";
+import {
+  assertPythonAnnotationNavigation,
+  assertPythonAnnotationReferences,
+  PYTHON_ANNOTATION_SOURCES,
+} from "./helpers/python-annotation-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -2873,5 +2879,22 @@ nativeDescribe("native semantic coverage", () => {
         ).toEqual([...row.lines]);
       }
     }
+  });
+
+  it("preserves Python signature annotation targets across cold, warm, and evicted native views", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-annotations-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-annotations-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1, keepParsed: false } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    for (const index of [cold, warm]) {
+      await assertPythonAnnotationNavigation(index, paths);
+      await assertPythonAnnotationReferences(index, paths);
+    }
+    __setQuerySyntaxCacheLimitsForTests(warm, { compactBytes: 0, liveBytes: 0 });
+    await assertPythonAnnotationNavigation(warm, paths);
+    await assertPythonAnnotationReferences(warm, paths);
   });
 });

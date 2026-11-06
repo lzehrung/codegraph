@@ -11,6 +11,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 import { jvmIncompleteWildcardSources } from "./helpers/jvm-incomplete-wildcard-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { PYTHON_ANNOTATION_BINDINGS, PYTHON_ANNOTATION_SOURCES } from "./helpers/python-annotation-fixture.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -92,6 +93,34 @@ describe("rename preview", () => {
     expect(result.edits.some((edit) => edit.range.start.line === 4 || edit.range.start.line === 5)).toBe(false);
     expect(await fsp.readFile(serviceFile, "utf8")).toBe(beforeService);
     expect(await fsp.readFile(consumerFile, "utf8")).toBe(beforeConsumer);
+  });
+  it("renames Python annotation references without renaming parameters or body locals", async () => {
+    const root = await mkTmpDir("cg-rename-python-annotations-");
+    const sources = Object.fromEntries(
+      ["models.py", "main.py", "decoy.py"].map((file) => [file, PYTHON_ANNOTATION_SOURCES[file]!]),
+    );
+    const paths = await writeFixtureFiles(root, sources);
+    const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "T" });
+    const target = symbols.symbols.find((symbol) => symbol.name === "T" && symbol.location.file === "models.py");
+    expect(target).toBeDefined();
+    const result = await previewRenameInSnapshot(snapshot, {
+      root,
+      handle: target!.handle,
+      newName: "ImportedType",
+    });
+    expect(result.safe).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(result.unsafeSites).toEqual([]);
+    const imported = PYTHON_ANNOTATION_BINDINGS[0]!;
+    const expected = [imported.declaration, ...imported.reads]
+      .filter((site) => site.file in sources)
+      .map((site) => `${site.file}:${site.line}:${site.column}`)
+      .sort();
+    expect(
+      result.edits.map((edit) => `${edit.file}:${edit.range.start.line}:${edit.range.start.column}`).sort(),
+    ).toEqual(expected);
+    expect(result.edits.every((edit) => edit.oldText === "T")).toBe(true);
   });
   it("marks renaming a Python property getter unsafe when accessor references are partial", async () => {
     const root = await mkTmpDir("cg-rename-python-property-");

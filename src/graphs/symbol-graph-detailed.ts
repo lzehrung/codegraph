@@ -9,6 +9,7 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
+import { nameLookupPolicyFor } from "../indexer/name-lookup-policies/index.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { detectSFCFramework } from "../languages/sfc.js";
@@ -506,6 +507,7 @@ export async function buildSymbolGraphDetailed(
         });
         return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };
+      const lookupPolicy = nameLookupPolicyFor(sup.id);
       const hasIncompleteJvmPackage =
         sup.id === "kotlin" &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
@@ -513,6 +515,7 @@ export async function buildSymbolGraphDetailed(
       // Reuse the positioned lookup rather than letting the file-wide alias table restore that target.
       const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
         if (sup.id === "csharp") return csharpAliasTableAnswers(moduleEntry, name, node);
+        if (lookupPolicy.shadowsModuleAlias?.(bareNameUse(name, node))) return false;
         if (hasIncompleteJvmPackage) {
           const target = aliasToTargetDef.get(name);
           const resolved = resolveIdentifier(name, node);

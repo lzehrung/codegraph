@@ -7,6 +7,11 @@ import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { buildSymbolGraphDetailed, findReferences, goToDefinition, type Reference } from "../src/index.js";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import {
+  assertPythonAnnotationNavigation,
+  assertPythonAnnotationReferences,
+  PYTHON_ANNOTATION_SOURCES,
+} from "./helpers/python-annotation-fixture.js";
 
 /**
  * Python import navigation regressions:
@@ -2423,6 +2428,201 @@ describe("Python module-level use before a later same-named local declaration", 
           column: columnOf(guardedSource, callLine, "helper"),
         });
         expect(immediate.status).toBe("not_found");
+      },
+    );
+  });
+});
+
+describe("Python signature annotation scope", () => {
+  it("keeps annotation reads outside their function's parameters and body locals", async () => {
+    await withFixture("cg-py-signature-annotations-", { ...PYTHON_ANNOTATION_SOURCES }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const paths = Object.fromEntries(Object.keys(PYTHON_ANNOTATION_SOURCES).map((file) => [file, f(file)]));
+      await assertPythonAnnotationNavigation(index, paths);
+    });
+  });
+
+  it("partitions annotation, default, parameter, and body-local reference sites exactly", async () => {
+    await withFixture("cg-py-signature-references-", { ...PYTHON_ANNOTATION_SOURCES }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const paths = Object.fromEntries(Object.keys(PYTHON_ANNOTATION_SOURCES).map((file) => [file, f(file)]));
+      await assertPythonAnnotationReferences(index, paths);
+    });
+  });
+
+  it("records actual annotation calls to the enclosing callable, not the parameter", async () => {
+    await withFixture("cg-py-annotation-calls-", { ...PYTHON_ANNOTATION_SOURCES }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const called = [...graph.nodes.values()].find(
+        (node) => node.name === "called" && fileIdentityKey(node.file) === fileIdentityKey(f("calls.py")),
+      );
+      expect(called).toBeDefined();
+      const targets = graph.edges
+        .filter((edge) => edge.from === called?.id && edge.label === "calls")
+        .map((edge) => [
+          fileIdentityKey(graph.nodes.get(edge.to)?.file ?? ""),
+          graph.nodes.get(edge.to)?.name,
+          edge.site?.range.start.line,
+          edge.site?.range.start.column,
+        ])
+        .sort((left, right) => Number(left[3]) - Number(right[3]));
+      const signature = PYTHON_ANNOTATION_SOURCES["calls.py"]!.split("\n")[1]!;
+      expect(targets).toEqual([
+        [fileIdentityKey(f("models.py")), "annotation_type", 2, signature.indexOf("annotation_type()") + 1],
+        [fileIdentityKey(f("models.py")), "annotation_type", 2, signature.lastIndexOf("annotation_type()") + 1],
+      ]);
+    });
+  });
+
+  it("does not confuse declared generic types with value parameters or unrelated imported annotations", async () => {
+    const mainSource = [
+      "from models import T, U, Bound, Imported, Ts, P",
+      "def generic[T, U: Bound, *Ts, **P](T, value: T, other: Imported, *args: Ts, **kw: P) -> U:",
+      "    return T, value",
+      "def defaults[T](T: T = T) -> T:",
+      "    return T",
+      "def outer[T]():",
+      "    def inner(value: T) -> T:",
+      "        return value",
+      "    return inner",
+      "def shadowed_outer[T](T):",
+      "    def inner(value: T) -> T:",
+      "        return value",
+      "    return inner",
+      "",
+    ].join("\n");
+    const modelsSource = [
+      "class T: pass",
+      "class U: pass",
+      "class Bound: pass",
+      "class Imported: pass",
+      "class Ts: pass",
+      "class P: pass",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-generic-annotations-",
+      { "main.py": mainSource, "models.py": modelsSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const [line, column] of [
+          [2, columnOf(mainSource, 2, "T")],
+          [2, columnOf(mainSource, 2, "value: T") + 7],
+          [2, columnOf(mainSource, 2, "Ts", true)],
+          [2, columnOf(mainSource, 2, "P", true)],
+          [2, columnOf(mainSource, 2, "U", true)],
+          [4, columnOf(mainSource, 4, ": T") + 2],
+          [4, columnOf(mainSource, 4, "T", true)],
+          [6, columnOf(mainSource, 6, "T")],
+          [7, columnOf(mainSource, 7, "T")],
+          [7, columnOf(mainSource, 7, "T", true)],
+        ]) {
+          expect((await goToDefinition(index, { file: f("main.py"), line: line!, column: column! })).status).toBe(
+            "not_found",
+          );
+        }
+        for (const [token, definitionLine] of [
+          ["Bound", 3],
+          ["Imported", 4],
+        ] as const) {
+          const result = await goToDefinition(index, {
+            file: f("main.py"),
+            line: 2,
+            column: columnOf(mainSource, 2, token),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error(`Expected unrelated imported annotation ${token}`);
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("models.py")));
+          expect(result.definition.range.start.line).toBe(definitionLine);
+        }
+        for (const [declarationLine, bodyLine] of [
+          [2, 3],
+          [4, 5],
+        ]) {
+          const result = await goToDefinition(index, {
+            file: f("main.py"),
+            line: bodyLine!,
+            column: columnOf(mainSource, bodyLine!, "T"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected the generic function's value parameter");
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(result.definition.range.start.line).toBe(declarationLine);
+          expect(result.definition.range.start.column).toBe(columnOf(mainSource, declarationLine!, "](T") + 2);
+          const references = await findReferences(index, {
+            file: f("main.py"),
+            line: bodyLine!,
+            column: columnOf(mainSource, bodyLine!, "T"),
+          });
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected generic value-parameter references");
+          expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual([
+            [declarationLine, columnOf(mainSource, declarationLine!, "](T") + 2],
+            [bodyLine, columnOf(mainSource, bodyLine!, "T")],
+          ]);
+        }
+        const defaultUse = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "= T") + 2,
+        });
+        expect(defaultUse.status).toBe("ok");
+        if (defaultUse.status !== "ok") throw new Error("Expected the enclosing default-expression type");
+        expect(fileIdentityKey(defaultUse.definition.file)).toBe(fileIdentityKey(f("models.py")));
+        expect(defaultUse.definition.range.start.line).toBe(1);
+        for (const column of [columnOf(mainSource, 11, "T"), columnOf(mainSource, 11, "T", true)]) {
+          const shadowed = await goToDefinition(index, { file: f("main.py"), line: 11, column });
+          expect(shadowed.status).toBe("ok");
+          if (shadowed.status !== "ok") throw new Error("Expected the nearer enclosing value parameter");
+          expect(fileIdentityKey(shadowed.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(shadowed.definition.range.start.line).toBe(10);
+          expect(shadowed.definition.range.start.column).toBe(columnOf(mainSource, 10, "](T") + 2);
+        }
+        const shadowedReferences = await findReferences(index, {
+          file: f("main.py"),
+          line: 10,
+          column: columnOf(mainSource, 10, "](T") + 2,
+        });
+        expect(shadowedReferences.status).toBe("ok");
+        if (shadowedReferences.status !== "ok") throw new Error("Expected enclosing value-parameter references");
+        expect(sitesOf(shadowedReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+          [10, columnOf(mainSource, 10, "](T") + 2],
+          [11, columnOf(mainSource, 11, "T")],
+          [11, columnOf(mainSource, 11, "T", true)],
+        ]);
+        const imported = await findReferences(index, { file: f("models.py"), line: 1, column: 7 });
+        expect(imported.status).toBe("ok");
+        if (imported.status !== "ok") throw new Error("Expected the imported generic-name decoy");
+        expect(sitesOf(imported.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(mainSource, 1, "T")],
+          [4, columnOf(mainSource, 4, "= T") + 2],
+        ]);
+      },
+    );
+  });
+
+  it("keeps annotations unresolved when generic type-parameter defaults fail to parse", async () => {
+    const mainSource = [
+      "from models import T",
+      "def unsupported[T = int](T, value: T) -> T:",
+      "    return T, value",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-generic-default-annotation-",
+      { "main.py": mainSource, "models.py": "class T: pass\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const column of [columnOf(mainSource, 2, "value: T") + 7, columnOf(mainSource, 2, "T", true)]) {
+          const result = await goToDefinition(index, { file: f("main.py"), line: 2, column });
+          expect(result.status).toBe("not_found");
+        }
+        const body = await goToDefinition(index, { file: f("main.py"), line: 3, column: columnOf(mainSource, 3, "T") });
+        expect(body.status).toBe("ok");
+        if (body.status !== "ok") throw new Error("Expected the ordinary body parameter");
+        expect(fileIdentityKey(body.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(body.definition.range.start.column).toBe(columnOf(mainSource, 2, "](T") + 2);
       },
     );
   });

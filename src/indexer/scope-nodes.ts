@@ -15,6 +15,7 @@
  */
 
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { pythonFunctionAnnotationOwner } from "../languages/definitions/python.js";
 
 import type { Range } from "../types.js";
 import { SymbolKind } from "./types.js";
@@ -131,6 +132,8 @@ export type ScopeNodeRow = {
   wholeScopeMemberDeclarationTypes?: ReadonlySet<string>;
   /** Module names used inside function bodies resolve after module initialization (Python). */
   moduleBindingsAtFunctionRuntime?: boolean;
+  /** Parameter defaults and annotations, including return annotations, use the enclosing scope (Python). */
+  functionSignatureInEnclosingScope?: boolean;
   /**
    * Put a variable declaration in the nearest scope of one of these kinds. Python: an assignment
    * anywhere in a function makes that name local to the whole function, not to the block that
@@ -162,19 +165,20 @@ const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
 const CPP_MEMBER_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["member"]);
 const WHOLE_LEXICAL_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module", "function", "block", "type"]);
 
-/** A Python function's own default runs before that function replaces its previous binding. */
-export function pythonFunctionPendingInDefault(defStart: number | undefined, use: SyntaxNodeLike): boolean {
+/** Only eager signature reads precede the new function's binding; explicit future annotations are deferred. */
+export function pythonFunctionPendingInSignature(
+  defStart: number | undefined,
+  use: SyntaxNodeLike,
+  annotationsPostponed = false,
+): boolean {
   if (defStart === undefined) return false;
-  let inDefaultValue = false;
+  if (annotationsPostponed && pythonFunctionAnnotationOwner(use)) return false;
   for (let current = use.parent; current; current = current.parent) {
-    if (current.type === "default_parameter" || current.type === "typed_default_parameter") {
-      const value = current.childForFieldName("value");
-      if (value && use.startIndex >= value.startIndex && use.endIndex <= value.endIndex) inDefaultValue = true;
-    }
     if (current.type !== "function_definition" && current.type !== "lambda") continue;
     const body = current.childForFieldName("body");
     if (body && use.startIndex >= body.startIndex && use.endIndex <= body.endIndex) return false;
-    if (inDefaultValue && current.childForFieldName("name")?.startIndex === defStart) return true;
+    const name = current.childForFieldName("name");
+    if (name?.startIndex === defStart && use.startIndex >= name.endIndex) return true;
   }
   return false;
 }
@@ -182,7 +186,7 @@ export function pythonFunctionPendingInDefault(defStart: number | undefined, use
 /**
  * Whether `binding` in a scope of `scopeKind` names a use at `useStartIndex`.
  * Whole-scope bindings name every use in the scope. Every other binding names only uses at
- * or after its declaration. Python also rejects a function's own eager default before its
+ * or after its declaration. Python also rejects a function's own signature before its
  * name is bound; other declaration-type coverage is recorded when the binding is registered.
  */
 export function bindingCoversUse(
@@ -191,9 +195,16 @@ export function bindingCoversUse(
   binding: { def?: Range; coversEnclosingScope?: boolean; kind?: Binding["kind"] },
   useStartIndex: number,
   useNode?: SyntaxNodeLike,
+  annotationsPostponed = false,
 ): boolean {
   const pythonFunction = row.moduleBindingsAtFunctionRuntime && binding.kind === "function";
-  if (pythonFunction && useNode && pythonFunctionPendingInDefault(binding.def?.start.index, useNode)) return false;
+  if (
+    pythonFunction &&
+    useNode &&
+    pythonFunctionPendingInSignature(binding.def?.start.index, useNode, annotationsPostponed)
+  ) {
+    return false;
+  }
   if (binding.coversEnclosingScope || row.wholeScopeKinds?.has(scopeKind)) return true;
   const defIndex = binding.def?.start.index;
   if (defIndex === undefined) return true;
@@ -258,7 +269,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   tsx: TYPESCRIPT_SCOPE_NODES,
   python: {
     parameterParents: new Set(["parameter", "lambda_parameters"]),
-    destructuringTypeFieldTypes: new Set(["default_parameter", "typed_default_parameter"]),
+    destructuringTypeFieldTypes: new Set(["typed_parameter", "default_parameter", "typed_default_parameter"]),
     functionNameTypes: new Set(["function_definition"]),
     classNameTypes: new Set(["class_definition", "module"]),
     variableDeclarationTypes: new Set(["assignment"]),
@@ -269,6 +280,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     moduleRootTypes: new Set(["module"]),
     wholeScopeKinds: new Set(["function"]),
     moduleBindingsAtFunctionRuntime: true,
+    functionSignatureInEnclosingScope: true,
     variableTargetScopeKinds: new Set(["function"]),
     variableScopeBoundaryTypes: new Set(["class_definition"]),
     classScopeBoundaryTypes: new Set(["function_definition", "lambda", "class_definition"]),
@@ -535,21 +547,19 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
   return !!method && node.startIndex >= method.startIndex && node.endIndex <= method.endIndex;
 }
 
-/** Python defaults use enclosing scopes; class bodies are not closures for nested runtime scopes. */
+/** The source region in which a scope's value bindings can own reads. */
+export function scopeUseBoundary(row: ScopeNodeRow, scope: Scope): SyntaxNodeLike {
+  if (row.functionSignatureInEnclosingScope && scope.kind === "function") {
+    return scope.node.childForFieldName("body") ?? scope.node;
+  }
+  return scope.node;
+}
+
+/** Python signatures use enclosing scopes; class bodies are not closures for nested runtime scopes. */
 export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeLike): boolean {
-  if (row.moduleBindingsAtFunctionRuntime && scope.kind === "function") {
-    const body = scope.node.childForFieldName("body");
-    const isFunctionBodyUse = !!body && use.startIndex >= body.startIndex && use.endIndex <= body.endIndex;
-    if (!isFunctionBodyUse) {
-      for (let current = use.parent; current; current = current.parent) {
-        const isScopeNode = current.startIndex === scope.node.startIndex && current.endIndex === scope.node.endIndex;
-        if (isScopeNode) break;
-        if (!row.destructuringTypeFieldTypes?.has(current.type)) continue;
-        const value = current.childForFieldName("value");
-        const isDefaultValueUse = !!value && use.startIndex >= value.startIndex && use.endIndex <= value.endIndex;
-        if (isDefaultValueUse) return false;
-      }
-    }
+  if (row.functionSignatureInEnclosingScope && scope.kind === "function") {
+    const boundary = scopeUseBoundary(row, scope);
+    if (use.startIndex < boundary.startIndex || use.endIndex > boundary.endIndex) return false;
   }
   const boundaries = row.classScopeBoundaryTypes;
   if (!boundaries || !scope.node.parent || !row.variableScopeBoundaryTypes?.has(scope.node.parent.type)) return true;
@@ -576,6 +586,7 @@ export function laterLocalBlocksOuterUse(
   canonicalName: string,
   useStartIndex: number,
   useNode?: SyntaxNodeLike,
+  annotationsPostponed = false,
 ): boolean {
   const pythonFunctionScope =
     row.moduleBindingsAtFunctionRuntime &&
@@ -585,7 +596,7 @@ export function laterLocalBlocksOuterUse(
     if (
       binding?.kind === "function" &&
       !binding.earlierSameScope &&
-      pythonFunctionPendingInDefault(binding.def?.start.index, useNode)
+      pythonFunctionPendingInSignature(binding.def?.start.index, useNode, annotationsPostponed)
     ) {
       return true;
     }

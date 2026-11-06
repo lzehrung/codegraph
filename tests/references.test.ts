@@ -43,6 +43,7 @@ import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { assertPythonAnnotationReferences, PYTHON_ANNOTATION_SOURCES } from "./helpers/python-annotation-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -8081,6 +8082,19 @@ describe("Find References: Python module-level use before a later local declarat
       expect(local.status === "ok" ? local.referenceCoverage?.state : undefined).toBe("complete");
       const localSites = local.status === "ok" ? local.references.map((ref) => ref.range.start.line) : [];
       expect(localSites).not.toContain(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: Python signature annotations", () => {
+  it("excludes parameter and body-local decoys from enclosing annotation references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-annotation-refs-"));
+    try {
+      const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await assertPythonAnnotationReferences(index, paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -22,6 +22,79 @@ function isTypeAliasLeftName(node: SyntaxNodeLike): boolean {
   return false;
 }
 
+/** The generic owner whose unmodeled type parameter shadows this annotation read. */
+export function pythonTypeParameterAnnotationOwner(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let inParameterAnnotation = false;
+  let inAnnotation = false;
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "typed_parameter" || current.type === "typed_default_parameter") {
+      const annotation = current.childForFieldName("type");
+      if (annotation && node.startIndex >= annotation.startIndex && node.endIndex <= annotation.endIndex) {
+        inParameterAnnotation = true;
+      }
+    }
+    if (current.type !== "function_definition") continue;
+    const parameters = current.childForFieldName("type_parameters");
+    const returnType = current.childForFieldName("return_type");
+    const inReturnAnnotation =
+      !!returnType && node.startIndex >= returnType.startIndex && node.endIndex <= returnType.endIndex;
+    const inTypeParameters =
+      !!parameters && node.startIndex >= parameters.startIndex && node.endIndex <= parameters.endIndex;
+    inAnnotation ||= inParameterAnnotation || inReturnAnnotation || inTypeParameters;
+    if (!inAnnotation) return null;
+    if (!parameters) continue;
+    const name = hasNonAsciiCodePoint(node.text) ? node.text.normalize("NFKC") : node.text;
+    for (const parameter of parameters.namedChildren) {
+      // The pinned grammar rejects type-parameter defaults; an ERROR cannot prove any binder.
+      if (parameter.type === "ERROR") return current;
+      let binder: SyntaxNodeLike | null = parameter;
+      while (binder && binder.type !== "identifier") binder = binder.namedChildren[0] ?? null;
+      if (!binder) continue;
+      const declaredName = hasNonAsciiCodePoint(binder.text) ? binder.text.normalize("NFKC") : binder.text;
+      if (declaredName === name) return current;
+    }
+  }
+  return null;
+}
+
+/** Generic annotation scopes are not modeled; declared type names cannot fall back to imports. */
+export function pythonTypeParameterShadowsAnnotation(node: SyntaxNodeLike): boolean {
+  return pythonTypeParameterAnnotationOwner(node) !== null;
+}
+
+/** The function whose parameter or return annotation contains `node`, excluding default values. */
+export function pythonFunctionAnnotationOwner(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let inParameterAnnotation = false;
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "typed_parameter" || current.type === "typed_default_parameter") {
+      const annotation = current.childForFieldName("type");
+      if (annotation && node.startIndex >= annotation.startIndex && node.endIndex <= annotation.endIndex) {
+        inParameterAnnotation = true;
+      }
+    }
+    if (current.type !== "function_definition") continue;
+    if (inParameterAnnotation) return current;
+    const returnType = current.childForFieldName("return_type");
+    if (returnType && node.startIndex >= returnType.startIndex && node.endIndex <= returnType.endIndex) {
+      return current;
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Read the native future-import nodes once while constructing this file's scope index. */
+export function pythonPostponesAnnotations(module: SyntaxNodeLike): boolean {
+  for (const statement of module.namedChildren) {
+    if (statement.type !== "future_import_statement") continue;
+    for (const imported of statement.namedChildren) {
+      const name = imported.childForFieldName("name") ?? imported;
+      if (name.type === "dotted_name" && name.text === "annotations") return true;
+    }
+  }
+  return false;
+}
+
 function isPythonImplicitReceiverName(name: string): boolean {
   return name === "self" || name === "cls";
 }

@@ -7,12 +7,13 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
+import { pythonFunctionAnnotationOwner, pythonTypeParameterAnnotationOwner } from "../languages/definitions/python.js";
 import {
   bindingCoversUse,
   fileScopeDefinitionCoversUse,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
-  pythonFunctionPendingInDefault,
+  pythonFunctionPendingInSignature,
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
@@ -146,8 +147,8 @@ const DYNAMIC_THIS_FUNCTION_TYPES = new Set([
  * space between them), and the enclosing class name for a JavaScript/TypeScript `this` whose
  * value is lexically that class (not inside an ordinary nested function).
  *
- * A position inside the body or initializer is a use, not the declaration: `trim` in
- * `const handle = value?.trim()` must never resolve to `handle`.
+ * A position after the declared name is a use, not the declaration: annotations, parameter
+ * defaults, bodies, and initializers must not resolve to the enclosing declaration.
  */
 export function findDeclarationNameNode(
   sup: LanguageSupport,
@@ -168,14 +169,9 @@ export function findDeclarationNameNode(
           named = left;
         }
       }
-      const tail =
-        current.childForFieldName("body") ??
-        current.childForFieldName("value") ??
-        (current.type === "assignment" ? current.childForFieldName("right") : null);
-      const headerEnd = tail ? tail.startIndex : current.endIndex;
-      const onHeader = currentNode === current || currentNode.endIndex <= headerEnd;
+      const onDeclarationPrefix = currentNode === current || (!!named && currentNode.endIndex <= named.endIndex);
       const ownClass = isThis && FALLBACK_CLASS_TYPES.has(current.type);
-      if (named && sup.nodeTypes.identifier.includes(named.type) && (onHeader || ownClass)) {
+      if (named && sup.nodeTypes.identifier.includes(named.type) && (onDeclarationPrefix || ownClass)) {
         return named;
       }
     }
@@ -207,7 +203,12 @@ export function getOrBuildScopeIndex(
 }
 
 /** Python function bodies resolve module names when called, after module initialization. */
-function pythonModuleLookupUsesRuntimeBindings(scope: Scope | undefined, node: SyntaxNodeLike): boolean {
+function pythonModuleLookupUsesRuntimeBindings(
+  scope: Scope | undefined,
+  node: SyntaxNodeLike,
+  annotationsPostponed = false,
+): boolean {
+  if (annotationsPostponed && pythonFunctionAnnotationOwner(node)) return true;
   for (let current = scope; current; current = current.parent) {
     if (current.kind !== "function") continue;
     const body = current.node.childForFieldName("body");
@@ -220,6 +221,7 @@ function effectivePythonModuleScopeBinding(
   binding: Binding,
   useNode: SyntaxNodeLike,
   moduleLookupAtRuntime: boolean,
+  annotationsPostponed = false,
 ): Binding | null {
   const useStartIndex = useNode.startIndex;
   let importBinding: ImportBinding | undefined;
@@ -229,7 +231,8 @@ function effectivePythonModuleScopeBinding(
   for (let candidate: Binding | undefined = binding; candidate; candidate = candidate.earlierSameScope) {
     const localStart = candidate.def?.start.index;
     const pendingFunction =
-      candidate.kind === "function" && pythonFunctionPendingInDefault(candidate.def?.start.index, useNode);
+      candidate.kind === "function" &&
+      pythonFunctionPendingInSignature(candidate.def?.start.index, useNode, annotationsPostponed);
     if (
       !pendingFunction &&
       localStart !== undefined &&
@@ -277,6 +280,7 @@ export function findClosestScopeBinding(
     }
     return owner;
   }
+  const genericOwner = support.id === "python" ? pythonTypeParameterAnnotationOwner(currentNode) : null;
   const row = scopeNodesFor(support.id);
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
@@ -284,9 +288,24 @@ export function findClosestScopeBinding(
 
   const methodCall = isExplicitMethodCall(row, currentNode);
   const pythonModuleLookupAtRuntime =
-    !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
+    !!row.moduleBindingsAtFunctionRuntime &&
+    pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode, scopeIndex.pythonPostponedAnnotations);
   while (currentScope) {
+    const outsideGenericOwner =
+      genericOwner &&
+      (currentScope.node.startIndex < genericOwner.startIndex || currentScope.node.endIndex > genericOwner.endIndex);
+    if (outsideGenericOwner) return null;
     if (!scopeAllowsUse(row, currentScope, currentNode)) {
+      for (
+        let declaration = currentScope.map.get(normalizedName);
+        declaration;
+        declaration = declaration.earlierSameScope
+      ) {
+        const range = declaration.def;
+        const ownsDeclaration =
+          range?.start.index === currentNode.startIndex && range.end.index === currentNode.endIndex;
+        if (ownsDeclaration) return declaration;
+      }
       currentScope = currentScope.parent;
       continue;
     }
@@ -296,19 +315,41 @@ export function findClosestScopeBinding(
         binding &&
         ((methodCall && binding.kind === "local") ||
           ((!pythonModuleLookupAtRuntime || currentScope.kind !== "module") &&
-            !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode)))
+            !bindingCoversUse(
+              row,
+              currentScope.kind,
+              binding,
+              currentNode.startIndex,
+              currentNode,
+              scopeIndex.pythonPostponedAnnotations,
+            )))
       ) {
         binding = binding.earlierSameScope;
       }
     }
     if (support.id === "python" && currentScope.kind === "module" && binding) {
-      const effectiveBinding = effectivePythonModuleScopeBinding(binding, currentNode, pythonModuleLookupAtRuntime);
+      const effectiveBinding = effectivePythonModuleScopeBinding(
+        binding,
+        currentNode,
+        pythonModuleLookupAtRuntime,
+        scopeIndex.pythonPostponedAnnotations,
+      );
       if (effectiveBinding) return effectiveBinding;
       currentScope = currentScope.parent;
       continue;
     }
     if (binding) return binding;
-    if (laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode)) return null;
+    if (
+      laterLocalBlocksOuterUse(
+        row,
+        currentScope,
+        normalizedName,
+        currentNode.startIndex,
+        currentNode,
+        scopeIndex.pythonPostponedAnnotations,
+      )
+    )
+      return null;
     currentScope = currentScope.parent;
   }
 
@@ -331,9 +372,30 @@ export function laterLocalShadowsUse(
       scope = scope.parent;
       continue;
     }
-    if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex, currentNode)) return true;
+    if (
+      laterLocalBlocksOuterUse(
+        row,
+        scope,
+        canonicalName,
+        currentNode.startIndex,
+        currentNode,
+        scopeIndex.pythonPostponedAnnotations,
+      )
+    ) {
+      return true;
+    }
     let binding = scope.map.get(canonicalName);
-    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex, currentNode)) {
+    while (
+      binding &&
+      !bindingCoversUse(
+        row,
+        scope.kind,
+        binding,
+        currentNode.startIndex,
+        currentNode,
+        scopeIndex.pythonPostponedAnnotations,
+      )
+    ) {
       binding = binding.earlierSameScope;
     }
     if (binding) return false;
@@ -478,6 +540,31 @@ function explicitCallArgumentCount(
   return getCallArgumentCount({ languageId, source, call });
 }
 
+/** A file-wide fallback cannot promote another function's or class's lexical local. */
+function moduleScopeOwnsDefinition(
+  scopeIndex: ScopeIndex,
+  canonicalName: string,
+  definition: SymbolDef,
+  support: LanguageSupport,
+): boolean {
+  const row = scopeNodesFor(support.id);
+  if (!row.classScopeBoundaryTypes) return true;
+  const bindings = scopeIndex.bindings.get(canonicalName);
+  if (!bindings) return true;
+  for (const binding of bindings) {
+    const range = binding.def;
+    if (!range || range.start.index !== definition.range.start.index) continue;
+    let owner = binding.node?.parent;
+    const namesOwner = owner?.childForFieldName("name")?.startIndex === range.start.index;
+    if (namesOwner) owner = owner?.parent;
+    for (; owner; owner = owner.parent) {
+      if (row.classScopeBoundaryTypes.has(owner.type)) return false;
+    }
+    return true;
+  }
+  return true;
+}
+
 export function resolveNamedDefinition(
   index: ProjectIndex,
   mod: ModuleIndex,
@@ -546,20 +633,35 @@ export function resolveNamedDefinition(
     localDefinition = hit.def;
   }
   const row = scopeNodesFor(support.id);
-  const moduleLookupAtRuntime =
-    !!row.moduleBindingsAtFunctionRuntime &&
-    !!localDefinition &&
-    referenceIndex !== undefined &&
-    !!(scopeIndex ?? cachedScopeIndexForIndex(index, file))?.allScopes.some((scope) => {
+  const lookupScope = scopeIndex ?? cachedScopeIndexForIndex(index, file);
+  if (
+    localDefinition &&
+    lookupScope &&
+    !moduleScopeOwnsDefinition(lookupScope, normalizedName, localDefinition, support)
+  ) {
+    hit = null;
+    localDefinition = undefined;
+  }
+  const annotationsPostponed = !!lookupScope?.pythonPostponedAnnotations;
+  const postponedAnnotation = annotationsPostponed && !!callSite && !!pythonFunctionAnnotationOwner(callSite.node);
+  let moduleLookupAtRuntime = false;
+  if (row.moduleBindingsAtFunctionRuntime && referenceIndex !== undefined) {
+    const inFunctionBody = !!lookupScope?.allScopes.some((scope) => {
       if (scope.kind !== "function") return false;
       const body = scope.node.childForFieldName("body");
       return !!body && referenceIndex >= body.startIndex && referenceIndex < body.endIndex;
     });
+    moduleLookupAtRuntime = postponedAnnotation || inFunctionBody;
+  }
   let pendingOwnFunction = false;
   if (support.id === "python" && hit?.kind === "resolved" && hit.def.kind === SymbolKind.Function) {
     const sameFile = fileIdentityKey(file) === fileIdentityKey(hit.def.file);
     if (sameFile && callSite) {
-      pendingOwnFunction = pythonFunctionPendingInDefault(hit.def.range.start.index, callSite.node);
+      pendingOwnFunction = pythonFunctionPendingInSignature(
+        hit.def.range.start.index,
+        callSite.node,
+        annotationsPostponed,
+      );
     }
   }
   const effectiveBinding = effectiveExplicitOrLocalBinding(
