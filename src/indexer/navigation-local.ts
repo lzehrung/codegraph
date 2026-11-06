@@ -31,6 +31,7 @@ import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
 import {
   decideStarImportCandidates,
   effectiveExplicitOrLocalBinding,
+  explicitBindingStartIndex,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
   starImportPrecedence,
@@ -560,15 +561,19 @@ export function resolveNamedDefinition(
     moduleLookupAtRuntime,
   );
   const effectiveExplicitImport = effectiveBinding?.kind === "explicit" ? effectiveBinding.binding : undefined;
+  const declarationOutOfScope =
+    hit?.kind === "resolved" &&
+    referenceIndex !== undefined &&
+    fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
+    !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime);
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
-    const sameFileFallback = referenceIndex !== undefined && fileIdentityKey(file) === fileIdentityKey(hit.def.file);
-    if (
-      sameFileFallback &&
-      !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime)
-    ) {
-      return null;
-    }
-    if (support.id !== "python" || effectiveBinding?.kind === "local") {
+    // Under last-wins order the module binding in force at this use may be an import that a later
+    // same-file declaration replaces, so the source-order veto must not answer for it. Only a
+    // module-level import binds the module scope; a conditional, type-checking, or function-suite
+    // import keeps the veto, and an arbitration that names neither side stays unresolved.
+    const earlierModuleImportWins = precedence === "last-wins" && !!effectiveExplicitImport?.moduleLevel;
+    if (declarationOutOfScope && !earlierModuleImportWins) return null;
+    if (!declarationOutOfScope && (support.id !== "python" || effectiveBinding?.kind === "local")) {
       const importedFrom =
         support.id === "c" && fileIdentityKey(file) !== fileIdentityKey(hit.def.file) ? hit.def.file : undefined;
       return okGoToResult(index, hit.def, {
@@ -658,7 +663,43 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
+      let targetModule: ModuleIndex | undefined;
+      // This fallback is for an earlier explicit module binding, not a star that executes later.
+      if (declarationOutOfScope && referenceIndex !== undefined) {
+        if (imp.pythonStatementStartIndex === undefined) {
+          return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+        }
+        if (imp.pythonStatementStartIndex > referenceIndex) continue;
+        const explicitStartIndex = effectiveExplicitImport
+          ? explicitBindingStartIndex(effectiveExplicitImport)
+          : undefined;
+        // A subsequent explicit import overwrites even an unchecked star.
+        if (explicitStartIndex !== undefined && imp.pythonStatementStartIndex < explicitStartIndex) continue;
+        if (!imp.moduleLevel) return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+        targetModule = typeof imp.resolved === "string" ? index.byFile.get(fileIdentityKey(imp.resolved)) : undefined;
+        if (
+          !targetModule ||
+          targetModule.parserDegraded ||
+          targetModule.nativeOutcome === "skipped" ||
+          targetModule.parseErrorRanges?.length
+        ) {
+          return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+        }
+      }
       const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCallableUse);
+      // A missing forwarded definition is not proof that the star leaves the earlier import alone.
+      // Only a closed module whose own indexed tables exclude the name proves absence here.
+      if (
+        !def &&
+        targetModule &&
+        (targetModule.imports.length ||
+          targetModule.exports.some(
+            (entry) => entry.type !== "local" || support.normalizeIdentifier(entry.exportedAs) === normalizedName,
+          ) ||
+          targetModule.locals.some((local) => support.normalizeIdentifier(local.localName) === normalizedName))
+      ) {
+        return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+      }
       if (def) {
         const starResult = starImportGoTo(index, imp, def, name);
         if (precedence === "last-wins") {

@@ -3,6 +3,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer.js";
+import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { buildSymbolGraphDetailed, findReferences, goToDefinition, type Reference } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -1554,6 +1555,444 @@ describe("Python module names a later import rebinds", () => {
           if (result.status !== "ok") continue;
           expect(sitesOf(result.references, fileIdentityKey(f("main.py")))).toEqual(expected);
         }
+      },
+    );
+  });
+});
+
+describe("Python module-level use before a later same-named local declaration", () => {
+  const otherSource = "def helper():\n    return 2\n";
+  // 1: the import that binds `helper` at module scope.
+  // 2: a module-level read before the local `def` exists, so it names the imported function.
+  // 3-4: a deferred read in a function body, which resolves after module initialization and so
+  //      names the local declaration that replaced the import.
+  // 5-6: the local declaration that rebinds the name, the same-name decoy for line 2.
+  const source = [
+    "from other import helper",
+    "print(helper())",
+    "def run():",
+    "    return helper()",
+    "def helper():",
+    "    return 3",
+    "",
+  ].join("\n");
+
+  it("resolves the module-level call to the import and the deferred call to the local", async () => {
+    await withFixture("cg-py-later-local-", { "main.py": source, "other.py": otherSource }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const immediate = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 2,
+        column: columnOf(source, 2, "helper"),
+      });
+      expect(immediate.status).toBe("ok");
+      if (immediate.status === "ok") {
+        expect(fileIdentityKey(immediate.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        expect(immediate.definition.range.start.line).toBe(1);
+      }
+
+      const deferred = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 4,
+        column: columnOf(source, 4, "helper"),
+      });
+      expect(deferred.status).toBe("ok");
+      if (deferred.status === "ok") {
+        expect(fileIdentityKey(deferred.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(deferred.definition.range.start.line).toBe(5);
+      }
+    });
+  });
+
+  it("lists the module-level call as an imported reference and keeps it off the local declaration", async () => {
+    await withFixture("cg-py-later-local-refs-", { "main.py": source, "other.py": otherSource }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const imported = await findReferences(index, {
+        file: f("other.py"),
+        line: 1,
+        column: columnOf(otherSource, 1, "helper"),
+      });
+      expect(imported.status).toBe("ok");
+      if (imported.status !== "ok") return;
+      expect(imported.referenceCoverage.state).toBe("complete");
+      expect(sitesOf(imported.references, fileIdentityKey(f("main.py")))).toEqual([
+        [1, columnOf(source, 1, "helper")],
+        [2, columnOf(source, 2, "helper")],
+      ]);
+
+      const local = await findReferences(index, {
+        file: f("main.py"),
+        line: 5,
+        column: columnOf(source, 5, "helper"),
+      });
+      expect(local.status).toBe("ok");
+      if (local.status !== "ok") return;
+      expect(local.referenceCoverage.state).toBe("complete");
+      expect(sitesOf(local.references, fileIdentityKey(f("main.py")))).toEqual([
+        [4, columnOf(source, 4, "helper")],
+        [5, columnOf(source, 5, "helper")],
+      ]);
+    });
+  });
+
+  it("keeps a star-only module-level call before a later local declaration unresolved", async () => {
+    // The source-order fallback below supports explicit imports only; star/local arbitration is
+    // unchanged and must not confidently choose the later local declaration.
+    const starSource = ["from other import *", "print(helper())", "def helper():", "    return 3", ""].join("\n");
+    await withFixture(
+      "cg-py-later-local-star-",
+      { "main.py": starSource, "other.py": otherSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+
+        const immediate = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 2,
+          column: columnOf(starSource, 2, "helper"),
+        });
+        expect(immediate.status).toBe("not_found");
+
+        const local = await findReferences(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(starSource, 3, "helper"),
+        });
+        expect(local.status).toBe("ok");
+        if (local.status !== "ok") return;
+        expect(local.referenceCoverage.state).toBe("complete");
+        expect(sitesOf(local.references, fileIdentityKey(f("main.py")))).toEqual([
+          [3, columnOf(starSource, 3, "helper")],
+        ]);
+      },
+    );
+  });
+
+  it("does not let a later star import replace the earlier explicit binding", async () => {
+    const starSource = [
+      "from other import helper",
+      "print(helper())",
+      "from decoy import *",
+      "def run():",
+      "    return helper()",
+      "def helper():",
+      "    return 3",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-later-local-star-order-",
+      { "main.py": starSource, "other.py": otherSource, "decoy.py": "def helper():\n    return 99\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const immediate = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 2,
+          column: columnOf(starSource, 2, "helper"),
+        });
+        expect(immediate.status).toBe("ok");
+        if (immediate.status !== "ok") throw new Error("Expected the earlier explicit import");
+        expect(fileIdentityKey(immediate.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        expect(immediate.definition.range.start.line).toBe(1);
+
+        const deferred = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 5,
+          column: columnOf(starSource, 5, "helper"),
+        });
+        expect(deferred.status).toBe("ok");
+        if (deferred.status !== "ok") throw new Error("Expected the later local declaration");
+        expect(fileIdentityKey(deferred.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(deferred.definition.range.start.line).toBe(6);
+
+        for (const [file, expectedSites] of [
+          [
+            "other.py",
+            [
+              [1, columnOf(starSource, 1, "helper")],
+              [2, columnOf(starSource, 2, "helper")],
+            ],
+          ],
+          ["decoy.py", []],
+        ] as const) {
+          const refs = await findReferences(index, { file: f(file), line: 1, column: 5 });
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error("Expected helper references");
+          expect(refs.referenceCoverage.state).toBe("complete");
+          expect(sitesOf(refs.references, fileIdentityKey(f("main.py")))).toEqual(expectedSites);
+        }
+      },
+    );
+  });
+
+  it("lets a preceding module-level star import replace the earlier explicit binding", async () => {
+    const starSource = [
+      "from other import helper",
+      "from decoy import *",
+      "print(helper())",
+      "def helper():",
+      "    return 3",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-earlier-star-order-",
+      { "main.py": starSource, "other.py": otherSource, "decoy.py": "def helper():\n    return 99\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(starSource, 3, "helper"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected the preceding star import");
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("decoy.py")));
+        expect(result.definition.range.start.line).toBe(1);
+      },
+    );
+  });
+
+  it("does not prove a module binding through an earlier conditional star import", async () => {
+    const conditionalSource = [
+      "from other import helper",
+      "if True:",
+      "    from decoy import *",
+      "print(helper())",
+      "def helper():",
+      "    return 3",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-conditional-star-order-",
+      { "main.py": conditionalSource, "other.py": otherSource, "decoy.py": "def helper():\n    return 99\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(conditionalSource, 4, "helper"),
+        });
+        expect(result.status).toBe("not_found");
+
+        const refs = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected explicit import references");
+        expect(refs.referenceCoverage.state).toBe("partial");
+        expect(sitesOf(refs.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(conditionalSource, 1, "helper")],
+        ]);
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "an intervening external star",
+      lines: ["from other import exists", "from os.path import *", 'print(exists("."))'],
+      expectedStatus: "not_found",
+      referenceLines: [1],
+      coverage: "partial",
+    },
+    {
+      label: "an external star after the use",
+      lines: ["from other import exists", 'print(exists("."))', "from os.path import *"],
+      expectedStatus: "ok",
+      referenceLines: [1, 2],
+      coverage: "complete",
+    },
+    {
+      label: "an external star overwritten by an explicit import",
+      lines: ["from os.path import *", "from other import exists", 'print(exists("."))'],
+      expectedStatus: "ok",
+      referenceLines: [2, 3],
+      coverage: "complete",
+    },
+  ])("keeps source-order proof honest with $label", async ({ lines, expectedStatus, referenceLines, coverage }) => {
+    const mainSource = [...lines, "def exists(path):", "    return False", ""].join("\n");
+    const existsSource = "def exists(path):\n    return True\n";
+    await withFixture(
+      "cg-py-external-star-order-",
+      { "main.py": mainSource, "other.py": existsSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const useLine = lines.findIndex((line) => line.startsWith("print(")) + 1;
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: useLine,
+          column: columnOf(mainSource, useLine, "exists"),
+        });
+        expect(result.status).toBe(expectedStatus);
+        if (result.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        } else {
+          expect(result.reason).toBe("Ambiguous star import");
+        }
+        const references = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected explicit exists import references");
+        expect(references.referenceCoverage.state).toBe(coverage);
+        expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual(
+          referenceLines.map((line) => [line, columnOf(mainSource, line, "exists")]),
+        );
+      },
+    );
+  });
+
+  it.each(["unindexed", "incomplete"])("rejects an %s star target before the use", async (state) => {
+    const mainSource = [
+      "from other import exists",
+      "from decoy import *",
+      'print(exists("."))',
+      "def exists(path):",
+      "    return False",
+      "",
+    ].join("\n");
+    const existsSource = "def exists(path):\n    return True\n";
+    let decoySource = existsSource;
+    if (state === "incomplete") decoySource += "\ndef broken(:\n    pass\n";
+    await withFixture(
+      "cg-py-unchecked-star-target-",
+      { "main.py": mainSource, "other.py": existsSource, "decoy.py": decoySource },
+      async (root, f) => {
+        const index = await buildProjectIndexFromFiles(
+          root,
+          state === "unindexed" ? [f("main.py"), f("other.py")] : [f("main.py"), f("other.py"), f("decoy.py")],
+          { cache: "off" },
+        );
+        const decoy = index.byFile.get(fileIdentityKey(f("decoy.py")));
+        if (state === "unindexed") {
+          expect(decoy).toBeUndefined();
+        } else {
+          expect(decoy?.parseErrorRanges?.length).toBeGreaterThan(0);
+        }
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(mainSource, 3, "exists"),
+        });
+        expect(result.status).toBe("not_found");
+        if (result.status !== "ok") expect(result.reason).toBe("Ambiguous star import");
+        const references = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected explicit exists import references");
+        expect(references.referenceCoverage.state).toBe("partial");
+        expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(mainSource, 1, "exists")],
+        ]);
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "an unresolved explicit re-export",
+      decoy: "from os.path import exists\n",
+      expectedStatus: "not_found",
+      referenceLines: [1],
+      coverage: "partial",
+    },
+    {
+      label: "an unresolved star re-export",
+      decoy: "from os.path import *\n",
+      expectedStatus: "not_found",
+      referenceLines: [1],
+      coverage: "partial",
+    },
+    {
+      label: "a known-absent name in a closed module",
+      decoy: "def unrelated():\n    return True\n",
+      expectedStatus: "ok",
+      referenceLines: [1, 3],
+      coverage: "complete",
+    },
+  ])("handles $label without guessing", async ({ decoy, expectedStatus, referenceLines, coverage }) => {
+    const mainSource = [
+      "from other import exists",
+      "from decoy import *",
+      'print(exists("."))',
+      "def exists(path):",
+      "    return False",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-forwarded-star-proof-",
+      {
+        "main.py": mainSource,
+        "other.py": "def exists(path):\n    return True\n",
+        "decoy.py": decoy,
+      },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 3,
+          column: columnOf(mainSource, 3, "exists"),
+        });
+        expect(result.status).toBe(expectedStatus);
+        if (result.status === "ok") {
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        } else {
+          expect(result.reason).toBe("Ambiguous star import");
+        }
+        const references = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected explicit exists import references");
+        expect(references.referenceCoverage.state).toBe(coverage);
+        expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual(
+          referenceLines.map((line) => [line, columnOf(mainSource, line, "exists")]),
+        );
+      },
+    );
+  });
+
+  it("keeps a local-only module-level call unresolved when its declaration follows", async () => {
+    const localOnlySource = ["print(helper())", "def helper():", "    return 3", ""].join("\n");
+    await withFixture("cg-py-later-local-only-", { "main.py": localOnlySource }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const immediate = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 1,
+        column: columnOf(localOnlySource, 1, "helper"),
+      });
+      expect(immediate.status).toBe("not_found");
+    });
+  });
+
+  it.each([
+    [
+      "a conditional suite",
+      ["if True:", "    from other import helper", "print(helper())", "def helper():", "    return 3", ""],
+    ],
+    [
+      "a type-checking guard",
+      [
+        "from typing import TYPE_CHECKING",
+        "if TYPE_CHECKING:",
+        "    from other import helper",
+        "print(helper())",
+        "def helper():",
+        "    return 3",
+        "",
+      ],
+    ],
+    [
+      "another function's suite",
+      ["def setup():", "    from other import helper", "print(helper())", "def helper():", "    return 3", ""],
+    ],
+  ])("leaves a module-level call unresolved after %s import", async (_label, lines) => {
+    const guardedSource = lines.join("\n");
+    await withFixture(
+      "cg-py-guarded-import-",
+      { "main.py": guardedSource, "other.py": otherSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const callLine = lines.findIndex((line) => line.startsWith("print(helper())")) + 1;
+        const immediate = await goToDefinition(index, {
+          file: f("main.py"),
+          line: callLine,
+          column: columnOf(guardedSource, callLine, "helper"),
+        });
+        expect(immediate.status).toBe("not_found");
       },
     );
   });

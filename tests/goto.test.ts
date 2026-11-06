@@ -908,6 +908,38 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("resolves a module-level call to the import a later local declaration replaces", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-later-local-goto-"));
+      const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(otherFile, "def helper():\n    return 2\n", "utf8");
+        const mainLines = [
+          "from other import helper",
+          "print(helper())",
+          "def run():",
+          "    return helper()",
+          "def helper():",
+          "    return 3",
+          "",
+        ];
+        await fsp.writeFile(mainFile, mainLines.join("\n"), "utf8");
+
+        const index = await createTestIndexFromFiles(root, [otherFile, mainFile]);
+        const immediateColumn = mainLines[1]!.indexOf("helper") + 1;
+        await testGoToDefinition(index, mainFile, 2, immediateColumn, otherFile, 1);
+        await testGoToDefinition(index, mainFile, 4, mainLines[3]!.indexOf("helper") + 1, mainFile, 5);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const runCallSites = graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+          .map((edge) => `${graph.nodes.get(edge.to)?.file}:${edge.site?.range.start.line}`);
+        expect(runCallSites).toEqual([`${mainFile}:4`]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("PHP", () => {

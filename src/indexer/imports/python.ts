@@ -42,6 +42,7 @@ async function pushStarImport(
   moduleSpec: string,
   moduleLevel: boolean,
   typeOnly: boolean,
+  statementStartIndex?: number,
 ): Promise<void> {
   const resolved = await resolvePythonImportTarget(context.projectRoot, context.file, moduleSpec);
   context.pushBinding({
@@ -50,6 +51,7 @@ async function pushStarImport(
     resolved,
     mechanism: "python",
     moduleLevel,
+    ...(statementStartIndex !== undefined ? { pythonStatementStartIndex: statementStartIndex } : {}),
     ...(typeOnly ? { typeOnly: true } : {}),
   });
 }
@@ -247,7 +249,7 @@ async function collectPythonImportStatement(
       .map((x) => x.trim())
       .filter(Boolean)) {
       if (item === "*") {
-        await pushStarImport(context, moduleSpec, moduleLevel, typeOnly);
+        await pushStarImport(context, moduleSpec, moduleLevel, typeOnly, statementStartIndex);
         continue;
       }
       const aliasMatch = item.match(PYTHON_NAMED_IMPORT_PATTERN);

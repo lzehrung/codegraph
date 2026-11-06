@@ -324,6 +324,78 @@ describe("bounded query syntax retention", () => {
     }
   });
 
+  it("preserves Python module-level uses before a later local declaration when the scope is evicted", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-query-syntax-python-later-local-"));
+    const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+    const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+    const mainLines = [
+      "from other import helper",
+      "print(helper())",
+      "def run():",
+      "    return helper()",
+      "def helper():",
+      "    return 3",
+      "",
+    ];
+    try {
+      await fsp.writeFile(mainFile, mainLines.join("\n"), "utf8");
+      await fsp.writeFile(otherFile, "def helper():\n    return 2\n", "utf8");
+      const importedSitesByRetention: string[][] = [];
+      for (const evict of [true, false]) {
+        const index = await buildProjectIndex(root, { cache: "off", keepParsed: false });
+        if (evict) __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: 0 });
+
+        const immediate = await goToDefinition(index, {
+          file: mainFile,
+          line: 2,
+          column: mainLines[1]!.indexOf("helper") + 1,
+        });
+        expect(immediate.status).toBe("ok");
+        if (immediate.status !== "ok") throw new Error("Expected the imported helper");
+        expect(immediate.definition.file).toBe(otherFile);
+
+        const deferred = await goToDefinition(index, {
+          file: mainFile,
+          line: 4,
+          column: mainLines[3]!.indexOf("helper") + 1,
+        });
+        expect(deferred.status).toBe("ok");
+        if (deferred.status !== "ok") throw new Error("Expected the later local helper");
+        expect(deferred.definition.file).toBe(mainFile);
+        expect(deferred.definition.range.start.line).toBe(5);
+
+        const imported = await findReferences(index, { file: otherFile, line: 1, column: 5 });
+        expect(imported.status).toBe("ok");
+        if (imported.status !== "ok") throw new Error("Expected imported helper references");
+        expect(
+          imported.references.some((reference) => reference.file === mainFile && reference.range.start.line === 2),
+        ).toBe(true);
+        expect(
+          imported.references.some((reference) => reference.file === mainFile && reference.range.start.line === 4),
+        ).toBe(false);
+        importedSitesByRetention.push(
+          imported.references.map((reference) => `${reference.file}:${reference.range.start.line}`),
+        );
+
+        const local = await findReferences(index, { file: mainFile, line: 5, column: 5 });
+        expect(local.status).toBe("ok");
+        if (local.status !== "ok") throw new Error("Expected local helper references");
+        expect(local.references.some((reference) => reference.range.start.line === 2)).toBe(false);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run" && edge.site?.range.start.line === 4,
+        );
+        expect(calls).toHaveLength(1);
+        expect(graph.nodes.get(calls[0]!.to)?.file).toBe(mainFile);
+      }
+      expect(importedSitesByRetention[0]).toEqual(importedSitesByRetention[1]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["off", "disk"] as const)(
     "rejects changed previously queried source after eviction with %s cache",
     async (cache) => {
