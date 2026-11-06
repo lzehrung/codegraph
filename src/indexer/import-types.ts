@@ -98,6 +98,8 @@ export type ImportBinding =
        * written in, which can declare the first segment of its target (see `csharpUsingTargetShadowed`).
        */
       csharpDirectiveStartIndex?: number;
+      /** UTF-16 start index of a Python star import statement. */
+      pythonStatementStartIndex?: number;
       /** The requested type for a non-static JVM type-on-demand import. */
       jvmTypeWildcardName?: string;
       /** Declaring type for a Java static star import, not a type-on-demand import. */

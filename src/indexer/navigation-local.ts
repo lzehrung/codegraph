@@ -12,6 +12,7 @@ import {
   fileScopeDefinitionCoversUse,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
+  pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
@@ -31,6 +32,7 @@ import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
 import {
   decideStarImportCandidates,
   effectiveExplicitOrLocalBinding,
+  explicitBindingStartIndex,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
   starImportPrecedence,
@@ -209,24 +211,27 @@ function pythonModuleLookupUsesRuntimeBindings(scope: Scope | undefined, node: S
   for (let current = scope; current; current = current.parent) {
     if (current.kind !== "function") continue;
     const body = current.node.childForFieldName("body");
-    if (!body) return false;
-    return node.startIndex >= body.startIndex && node.endIndex <= body.endIndex;
+    if (body && node.startIndex >= body.startIndex && node.endIndex <= body.endIndex) return true;
   }
   return false;
 }
 
 function effectivePythonModuleScopeBinding(
   binding: Binding,
-  useStartIndex: number,
+  useNode: SyntaxNodeLike,
   moduleLookupAtRuntime: boolean,
 ): Binding | null {
+  const useStartIndex = useNode.startIndex;
   let importBinding: ImportBinding | undefined;
   let importSource: Binding | undefined;
   let localBinding: Binding | undefined;
   let latestLocalStart = -1;
   for (let candidate: Binding | undefined = binding; candidate; candidate = candidate.earlierSameScope) {
     const localStart = candidate.def?.start.index;
+    const pendingFunction =
+      candidate.kind === "function" && pythonFunctionPendingInDefault(candidate.def?.start.index, useNode);
     if (
+      !pendingFunction &&
       localStart !== undefined &&
       (moduleLookupAtRuntime || localStart <= useStartIndex) &&
       localStart > latestLocalStart
@@ -291,30 +296,26 @@ export function findClosestScopeBinding(
         binding &&
         ((methodCall && binding.kind === "local") ||
           ((!pythonModuleLookupAtRuntime || currentScope.kind !== "module") &&
-            !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex)))
+            !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode)))
       ) {
         binding = binding.earlierSameScope;
       }
     }
     if (support.id === "python" && currentScope.kind === "module" && binding) {
-      const effectiveBinding = effectivePythonModuleScopeBinding(
-        binding,
-        currentNode.startIndex,
-        pythonModuleLookupAtRuntime,
-      );
+      const effectiveBinding = effectivePythonModuleScopeBinding(binding, currentNode, pythonModuleLookupAtRuntime);
       if (effectiveBinding) return effectiveBinding;
       currentScope = currentScope.parent;
       continue;
     }
     if (binding) return binding;
-    if (laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex)) return null;
+    if (laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode)) return null;
     currentScope = currentScope.parent;
   }
 
   return null;
 }
 
-/** A later C# local makes an earlier use invalid rather than binding to an outer member. */
+/** A later or not-yet-bound local can make an earlier outer-name read invalid. */
 export function laterLocalShadowsUse(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -322,7 +323,7 @@ export function laterLocalShadowsUse(
   support: LanguageSupport,
 ): boolean {
   const row = scopeNodesFor(support.id);
-  if (!row.laterLocalBlocksOuterKinds) return false;
+  if (!row.laterLocalBlocksOuterKinds && !row.moduleBindingsAtFunctionRuntime) return false;
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   let scope = closestContainingScope(scopeIndex, currentNode);
   while (scope) {
@@ -330,9 +331,9 @@ export function laterLocalShadowsUse(
       scope = scope.parent;
       continue;
     }
-    if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex)) return true;
+    if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex, currentNode)) return true;
     let binding = scope.map.get(canonicalName);
-    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex)) {
+    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex, currentNode)) {
       binding = binding.earlierSameScope;
     }
     if (binding) return false;
@@ -554,24 +555,36 @@ export function resolveNamedDefinition(
       const body = scope.node.childForFieldName("body");
       return !!body && referenceIndex >= body.startIndex && referenceIndex < body.endIndex;
     });
+  let pendingOwnFunction = false;
+  if (support.id === "python" && hit?.kind === "resolved" && hit.def.kind === SymbolKind.Function) {
+    const sameFile = fileIdentityKey(file) === fileIdentityKey(hit.def.file);
+    if (sameFile && callSite) {
+      pendingOwnFunction = pythonFunctionPendingInDefault(hit.def.range.start.index, callSite.node);
+    }
+  }
   const effectiveBinding = effectiveExplicitOrLocalBinding(
     mod.imports,
     support.id,
     matchesExplicitBinding,
-    localDefinition?.range.start.index,
+    pendingOwnFunction ? undefined : localDefinition?.range.start.index,
     referenceIndex,
     moduleLookupAtRuntime,
   );
   const effectiveExplicitImport = effectiveBinding?.kind === "explicit" ? effectiveBinding.binding : undefined;
+  const declarationOutOfScope =
+    hit?.kind === "resolved" &&
+    referenceIndex !== undefined &&
+    fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
+    (pendingOwnFunction ||
+      !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime));
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
-    const sameFileFallback = referenceIndex !== undefined && !!localDefinition;
-    if (
-      sameFileFallback &&
-      !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime)
-    ) {
-      return null;
-    }
-    if (support.id !== "python" || effectiveBinding?.kind === "local") {
+    // Under last-wins order the module binding in force at this use may be an import that a later
+    // same-file declaration replaces, so the source-order veto must not answer for it. Only a
+    // module-level import binds the module scope; a conditional, type-checking, or function-suite
+    // import keeps the veto, and an arbitration that names neither side stays unresolved.
+    const earlierModuleImportWins = precedence === "last-wins" && !!effectiveExplicitImport?.moduleLevel;
+    if (declarationOutOfScope && !earlierModuleImportWins) return null;
+    if (!declarationOutOfScope && (support.id !== "python" || effectiveBinding?.kind === "local")) {
       const importedFrom =
         support.id === "c" && fileIdentityKey(file) !== fileIdentityKey(hit.def.file) ? hit.def.file : undefined;
       return okGoToResult(index, hit.def, {
@@ -595,6 +608,7 @@ export function resolveNamedDefinition(
 
   const starCandidates: StarImportCandidate[] = [];
   let lastWinsResult: GoToResult | null = null;
+  const checksEarlierModuleBinding = declarationOutOfScope && precedence === "last-wins";
   const acceptBinding = (result: GoToResult, imp: ImportBinding): GoToResult | null => {
     // A click on the binding's own token names that import, not a later rebinding.
     if (precedence === "last-wins" && referenceIndex !== undefined && importBindingCoversIndex(imp, referenceIndex)) {
@@ -661,7 +675,60 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "star") {
+      let targetModule: ModuleIndex | undefined;
+      // This fallback is for an earlier explicit module binding, not a star that executes later.
+      if (checksEarlierModuleBinding && referenceIndex !== undefined) {
+        if (imp.pythonStatementStartIndex === undefined) {
+          lastWinsResult = { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+          continue;
+        }
+        if (imp.pythonStatementStartIndex > referenceIndex) continue;
+        const explicitStartIndex = effectiveExplicitImport
+          ? explicitBindingStartIndex(effectiveExplicitImport)
+          : undefined;
+        // A subsequent explicit import overwrites even an unchecked star.
+        if (explicitStartIndex !== undefined && imp.pythonStatementStartIndex < explicitStartIndex) continue;
+        if (!imp.moduleLevel) {
+          lastWinsResult = { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+          continue;
+        }
+        targetModule = typeof imp.resolved === "string" ? index.byFile.get(fileIdentityKey(imp.resolved)) : undefined;
+        if (
+          !targetModule ||
+          targetModule.parserDegraded ||
+          targetModule.nativeOutcome === "skipped" ||
+          targetModule.parseErrorRanges?.length
+        ) {
+          lastWinsResult = { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+          continue;
+        }
+      }
       const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCallableUse);
+      // A resolved export can still be replaced by forwarding of the same name. Keep that
+      // uncertainty until a later proven binding overwrites it; unrelated imports are harmless.
+      if (targetModule) {
+        const hasUncheckedNameImports = targetModule.imports.some((binding) => {
+          if (binding.kind === "star") return true;
+          const bindingName = binding.kind === "namespace" ? binding.localNS : binding.local;
+          return support.normalizeIdentifier(bindingName) === normalizedName;
+        });
+        const hasUncheckedNameExports =
+          hasUncheckedNameImports ||
+          targetModule.exports.some((entry) => {
+            if (entry.type === "exportStar") return true;
+            const exportsRequestedName = support.normalizeIdentifier(entry.exportedAs) === normalizedName;
+            if (entry.type === "local") return !def && exportsRequestedName;
+            return exportsRequestedName;
+          });
+        const cannotProveStarBinding =
+          hasUncheckedNameExports ||
+          (!def &&
+            targetModule.locals.some((local) => support.normalizeIdentifier(local.localName) === normalizedName));
+        if (cannotProveStarBinding) {
+          lastWinsResult = { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+          continue;
+        }
+      }
       if (def) {
         const starResult = starImportGoTo(index, imp, def, name);
         if (precedence === "last-wins") {

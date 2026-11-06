@@ -90,6 +90,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
  * Epoch 110 applies the native source byte limit to every C# namespace candidate, including ignored and unindexed
  * files, so serial and worker builds leave the same alias and static-using lookups partial beside oversized files.
+ * Epoch 111 retains Python star-import statement positions so a later import cannot replace an
+ * earlier module-level use of an explicit import before a same-named local declaration. Python
+ * default-argument reads are excluded from parameter bindings and resolve in their enclosing scope,
+ * before the function being defined replaces any earlier same-named binding.
  * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
  * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
  * import statement in source order and do not revive locals excluded from the target's exports.

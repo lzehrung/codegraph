@@ -287,6 +287,12 @@ nativeDescribe("receiver proof syntax-site isolation", () => {
     try {
       await assertConsumerAgreement(fixture, {
         file: "scope.py",
+        line: 8,
+        token: "target",
+        expected: { file: "scope.py", line: 2 },
+      });
+      await assertConsumerAgreement(fixture, {
+        file: "scope.py",
         line: 9,
         token: "target",
         expected: "not_found",
@@ -303,8 +309,6 @@ nativeDescribe("receiver proof syntax-site isolation", () => {
         .filter((edge) => edge.label === "calls" && fixture.graph.nodes.get(edge.to)?.name === "target")
         .sort((a, b) => (a.site?.range.start.index ?? 0) - (b.site?.range.start.index ?? 0))
         .map((edge) => ({ line: edge.site?.range.start.line, target: edge.to }));
-      // Navigation's existing default-expression limitation is separate: preserve the graph's
-      // proven class call before the parameter, but never reuse that proof in the body.
       expect(calls).toEqual([
         { line: 8, target: target[0] },
         { line: 12, target: target[0] },

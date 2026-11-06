@@ -2649,6 +2649,47 @@ nativeDescribe("native semantic coverage", () => {
           absentTargets: ["pyrebind/main.py::helper"],
         },
       },
+      {
+        name: "Python module-level call before a later star import and local declaration",
+        files: {
+          "pylater/other.py": ["def helper():", "    return 2"],
+          "pylater/decoy.py": ["def helper():", "    return 99"],
+          "pylater/main.py": [
+            "from other import helper",
+            "print(helper())",
+            "from decoy import *",
+            "def run():",
+            "    return helper()",
+            "def helper():",
+            "    return 3",
+          ],
+        },
+        goto: {
+          file: "pylater/main.py",
+          line: 2,
+          token: "helper",
+          expectedFile: "pylater/other.py",
+          expectedLine: 1,
+        },
+        references: {
+          file: "pylater/other.py",
+          line: 1,
+          token: "helper",
+          expectedSites: ["pylater/other.py:1", "pylater/main.py:1", "pylater/main.py:2"],
+          decoyDeclaration: {
+            file: "pylater/main.py",
+            line: 6,
+            token: "helper",
+            absentSites: ["pylater/main.py:1", "pylater/main.py:2"],
+          },
+        },
+        edge: {
+          caller: "run",
+          callerFile: "pylater/main.py",
+          expectedTarget: "pylater/main.py::helper",
+          absentTargets: ["pylater/other.py::helper", "pylater/decoy.py::helper"],
+        },
+      },
     ];
 
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cross-unit-reload-"));
@@ -2664,6 +2705,13 @@ nativeDescribe("native semantic coverage", () => {
     const buildOptions = { cache: "disk", cacheDir, threads: 1 } as const;
     const cold = await buildProjectIndex(root, buildOptions);
     const warm = await buildProjectIndexIncremental(root, buildOptions);
+    for (const index of [cold, warm]) {
+      const main = index.byFile.get(fileIdentityKey(path.join(root, "pylater/main.py")));
+      const star = main?.imports.find((binding) => binding.kind === "star" && binding.from === "decoy");
+      expect(star?.kind).toBe("star");
+      if (star?.kind !== "star") throw new Error("Expected the Python star import");
+      expect(star.pythonStatementStartIndex).toBe("from other import helper\nprint(helper())\n".length);
+    }
 
     const columnAt = (lines: readonly string[], line: number, token: string): number => {
       const text = lines[line - 1] ?? "";

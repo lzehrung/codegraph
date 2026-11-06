@@ -15,6 +15,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- Python go-to-definition and references resolve a module-level use to the explicit import that a later same-named `def` replaces; star imports after the use do not change its target. An intervening star with unchecked forwarding of the requested name stays unresolved with partial reference coverage unless a later explicit import or proven star binding overrides it; unrelated imports in the star target do not hide the earlier binding. The later declaration still owns deferred function-body uses.
+- Python default-argument calls resolve in their enclosing scope instead of becoming fictitious parameter declarations; same-named parameters keep only their body references. A redefined function's own default sees the earlier binding in its enclosing scope, while its body sees the new function.
 - Python references exclude calls rebound by a later module import from the original local declaration. Reference lookup uses the same source-order and function-runtime binding decisions as go-to-definition.
 - JVM package wildcard imports keep known file dependencies but no longer prove Kotlin calls or callable references while unread package declarations may add an overload or factory. Go-to-definition, references, detailed symbol edges, and rename previews agree; class type navigation and fully read packages remain supported.
 - Incremental indexing and `buildGraphDelta` apply project discovery filters, including Git ignore rules, to changed and untracked Git files. Editing an ignored tracked file no longer adds it to the index or manifest; older contaminated caches rebuild. Graph deltas retain removed files and edges when a rename destination is ignored.

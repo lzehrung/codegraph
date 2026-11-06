@@ -8037,3 +8037,52 @@ describe("Find References: star-export cycles", () => {
     }
   });
 });
+
+describe("Find References: Python module-level use before a later local declaration", () => {
+  // The import binds `helper` first, so the module-level call on line 2 names the imported
+  // function. The local `def` on line 5 replaces that binding, so only the deferred call inside
+  // `run` names the local. Each declaration is the other's same-name decoy.
+  const lines = [
+    "from other import helper",
+    "print(helper())",
+    "def run():",
+    "    return helper()",
+    "def helper():",
+    "    return 3",
+    "",
+  ];
+  const mainSource = lines.join("\n");
+  const otherSource = "def helper():\n    return 2\n";
+
+  it("attributes the module-level call to the import and keeps it off the later local declaration", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-later-local-refs-"));
+    const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+    const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(mainFile, mainSource, "utf8");
+      await fsp.writeFile(otherFile, otherSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [mainFile, otherFile]);
+
+      const imported = await testFindReferences(index, otherFile, 1, tokenColumn("def helper():", "helper"), [
+        { file: otherFile, line: 1, column: tokenColumn("def helper():", "helper") },
+        { file: mainFile, line: 1, column: tokenColumn(lines[0]!, "helper") },
+        { file: mainFile, line: 2, column: tokenColumn(lines[1]!, "helper") },
+      ]);
+      expect(imported.status === "ok" ? imported.referenceCoverage?.state : undefined).toBe("complete");
+      const importedSites = imported.status === "ok" ? imported.references.map((ref) => ref.range.start.line) : [];
+      expect(importedSites).not.toContain(4);
+      expect(importedSites).not.toContain(5);
+
+      const localColumn = tokenColumn(lines[4]!, "helper");
+      const local = await testFindReferences(index, mainFile, 5, localColumn, [
+        { file: mainFile, line: 4, column: tokenColumn(lines[3]!, "helper") },
+        { file: mainFile, line: 5, column: localColumn },
+      ]);
+      expect(local.status === "ok" ? local.referenceCoverage?.state : undefined).toBe("complete");
+      const localSites = local.status === "ok" ? local.references.map((ref) => ref.range.start.line) : [];
+      expect(localSites).not.toContain(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

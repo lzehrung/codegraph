@@ -526,6 +526,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     jvmTypeWildcardName?: unknown;
     jvmStaticWildcardName?: unknown;
     csharpDirectiveStartIndex?: unknown;
+    pythonStatementStartIndex?: unknown;
     jvmPackageFiles?: unknown;
     jvmPackageLanguageId?: unknown;
     jvmPackageIncomplete?: unknown;
@@ -538,6 +539,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     isOptionalRange(binding.localRange) &&
     (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
     (binding.csharpDirectiveStartIndex === undefined || typeof binding.csharpDirectiveStartIndex === "number") &&
+    (binding.pythonStatementStartIndex === undefined || typeof binding.pythonStatementStartIndex === "number") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&
     (binding.jvmPackageFiles === undefined ||
