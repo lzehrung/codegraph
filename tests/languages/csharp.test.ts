@@ -3585,6 +3585,166 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  /**
+   * What every consumer of a type alias reports for the `Run` call in Use.cs: navigation on `Run`,
+   * the Use.cs lines that reference each file's declared `Run`, the detailed-graph call edges out
+   * of `M`, and the source text each alias binding range covers. Fixture files declare
+   * `N.Second.Nested.Run`, the `Other.B.Nested.Run` decoy, and one Use.cs built from `useLines`.
+   */
+  type VerbatimAliasOutcome = {
+    goto: string;
+    secondReferences: number[];
+    otherReferences: number[];
+    calls: string[];
+    aliasText: string;
+    importedText: string;
+  };
+
+  async function verbatimAliasOutcome(root: string, useLines: string[]): Promise<VerbatimAliasOutcome> {
+    const nested = "public class Nested { public static void Run() {} }";
+    const secondSource = `namespace N; public class Second { ${nested} }\n`;
+    const otherSource = `namespace Other; public class B { ${nested} }\n`;
+    const useSource = useLines.join("\n") + "\n";
+    const paths = await writeFixtureFiles(root, {
+      "Second.cs": secondSource,
+      "Other.cs": otherSource,
+      "Use.cs": useSource,
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const useFile = paths["Use.cs"]!;
+    const callLine = useLines.findIndex((text) => text.includes("Run()")) + 1;
+    const run = await goToDefinition(index, {
+      file: useFile,
+      line: callLine,
+      column: columnOf(useLines, callLine, "Run"),
+    });
+    const useLinesFor = async (file: string, source: string): Promise<number[]> => {
+      const result = await findReferences(index, {
+        file: paths[file]!,
+        line: 1,
+        column: source.indexOf("Run()") + 1,
+      });
+      if (result.status !== "ok") throw new Error(`Expected references for ${file}`);
+      const lines = new Set(
+        result.references
+          .filter((reference) => normalizePath(reference.file) === useFile)
+          .map((reference) => reference.range.start.line),
+      );
+      return [...lines].sort((left, right) => left - right);
+    };
+    const alias = index.byFile
+      .get(fileIdentityKey(useFile))
+      ?.imports.find((binding) => binding.kind === "named" && binding.explicitAlias);
+    if (alias?.kind !== "named") throw new Error("Expected the explicit type alias binding");
+    const rangeText = (range: { start: { index?: number }; end: { index?: number } } | undefined): string => {
+      const start = range?.start.index;
+      const end = range?.end.index;
+      return start === undefined || end === undefined ? "" : useSource.slice(start, end);
+    };
+    const graph = await buildSymbolGraphDetailed(index);
+    const calls = graph.edges
+      .flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || !from || !to) return [];
+        if (from.name !== "M" || normalizePath(from.file) !== useFile) return [];
+        return [`${to.name}@${path.basename(to.file)}`];
+      })
+      .sort();
+    return {
+      goto:
+        run.status === "ok" ? `${path.basename(run.definition.file)}:${run.definition.range.start.line}` : run.status,
+      secondReferences: await useLinesFor("Second.cs", secondSource),
+      otherReferences: await useLinesFor("Other.cs", otherSource),
+      calls,
+      aliasText: rangeText(alias.localRange),
+      importedText: rangeText(alias.importedRange),
+    };
+  }
+
+  it.each([
+    { name: "a verbatim alias with a plain use", alias: "@B", use: "B" },
+    { name: "a plain alias with a verbatim use", alias: "B", use: "@B" },
+    { name: "a verbatim alias with a verbatim use", alias: "@B", use: "@B" },
+    { name: "a plain alias with a plain use", alias: "B", use: "B" },
+  ])("binds $name to the aliased type at file scope", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-"));
+    try {
+      const useLines = [
+        `using ${alias} = N.Second;`,
+        "using Other;",
+        `class Use { void M() { ${use}.Nested.Run(); } }`,
+      ];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "Second.cs:1",
+        secondReferences: [3],
+        otherReferences: [],
+        calls: ["Run@Second.cs"],
+        aliasText: alias,
+        importedText: "Second",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a verbatim alias with a plain use", alias: "@B", use: "B" },
+    { name: "a plain alias with a verbatim use", alias: "B", use: "@B" },
+    { name: "a verbatim alias with a verbatim use", alias: "@B", use: "@B" },
+  ])("binds $name to the aliased type inside its namespace block", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-scoped-"));
+    try {
+      const useLines = [
+        "namespace C {",
+        `  using ${alias} = N.Second;`,
+        "  using Other;",
+        `  class Use { void M() { ${use}.Nested.Run(); } }`,
+        "}",
+      ];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "Second.cs:1",
+        secondReferences: [4],
+        otherReferences: [],
+        calls: ["Run@Second.cs"],
+        aliasText: alias,
+        importedText: "Second",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a plain use", alias: "@B", use: "B", scoped: false },
+    { name: "a verbatim use", alias: "B", use: "@B", scoped: false },
+    { name: "a plain use in a namespace block", alias: "@B", use: "B", scoped: true },
+    { name: "a verbatim use in a namespace block", alias: "B", use: "@B", scoped: true },
+  ])("keeps an alias with no indexed target bound for $name", async ({ alias, use, scoped }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-missing-"));
+    try {
+      const useLines = scoped
+        ? [
+            "namespace C {",
+            `  using ${alias} = Missing.Box;`,
+            "  using Other;",
+            `  class Use { void M() { ${use}.Nested.Run(); } }`,
+            "}",
+          ]
+        : [`using ${alias} = Missing.Box;`, "using Other;", `class Use { void M() { ${use}.Nested.Run(); } }`];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "not_found",
+        secondReferences: [],
+        otherReferences: [],
+        calls: [],
+        aliasText: alias,
+        importedText: "Box",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps C# file-local types inside their declaring file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-local-"));
     try {

@@ -101,6 +101,8 @@ type EdgePassContext = {
   optionalMemberTypes: Set<string>;
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
+  /** The key both alias tables above are stored under; a use-site spelling must go through it. */
+  aliasKey: (name: string) => string;
   /** Whether the two alias tables above, built for the whole file, answer for `name` at `node`. */
   aliasTableAnswers: (name: string, node: SyntaxNodeLike) => boolean;
   resolveIdentifier: (name: string, node: SyntaxNodeLike) => SymbolDef | null;
@@ -681,7 +683,7 @@ function resolveNamedType(
     (local) => context.sup.normalizeIdentifier(local.localName) === normalized && declaresMembers(local),
   );
   if (typed.length === 1) return typed[0]!;
-  const imported = context.aliasToTargetDef.get(name);
+  const imported = context.aliasToTargetDef.get(context.aliasKey(name));
   if (imported && context.aliasTableAnswers(name, node) && declaresMembers(imported)) return imported;
   // A constructed `Klass.new` type, or (Ruby only) a bare capitalized constant receiver
   // (`Calc.add(1, 2)`), uses Ruby's bare-constant visibility, and only when this file does not
@@ -1171,10 +1173,11 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (seenAliases.has(name)) return;
-      const tableDef = context.aliasToTargetDef.get(name);
+      const nameKey = context.aliasKey(name);
+      const tableDef = context.aliasToTargetDef.get(nameKey);
       let target: SymbolDef | null = tableDef && context.aliasTableAnswers(name, node) ? tableDef : null;
       if (!target) {
-        const modFile = context.aliasToTargetModule.get(name);
+        const modFile = context.aliasToTargetModule.get(nameKey);
         if (modFile && context.aliasTableAnswers(name, node) && context.moduleAliasIsUnshadowed(name, node)) {
           let exportedName: string | null = null;
           const parent = node.parent;
@@ -1227,7 +1230,7 @@ export async function emitFunctionBodyEdges(
           return "module-import";
         }
       }
-      if (context.aliasToTargetModule.has(name) && context.moduleAliasIsUnshadowed(name, node)) {
+      if (context.aliasToTargetModule.has(context.aliasKey(name)) && context.moduleAliasIsUnshadowed(name, node)) {
         return "module-import";
       }
       return null;
@@ -1411,6 +1414,15 @@ export async function emitFunctionBodyEdges(
         );
         if (recordImportTypeCall(context, access, fromId, receiverProof)) return;
         if (supportsDeclaredFieldChains(context.sup.id) && isMemberAccessNode(context.sup, access.receiver)) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
+        const scopedCsharpAlias =
+          context.sup.id === "csharp" &&
+          isIdentifierType(context.sup, access.receiver.type) &&
+          !context.aliasTableAnswers(sliceText(access.receiver, context.source), access.receiver);
+        if (scopedCsharpAlias) {
+          // Let the shared member resolver select the alias in scope, not a file-wide receiver type.
           dottedReceiverCalls.push({ fromId, access });
           return;
         }

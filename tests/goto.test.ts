@@ -11,6 +11,7 @@ import {
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { clearTsconfigCache } from "../src/util/resolution/tsconfig.js";
 import {
   createTestIndex,
@@ -3030,6 +3031,49 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, mainFile, 4, 5, mainFile, 3);
         // "Local();" in RunB (line 8) resolves to RunB's own local function (line 7), not RunA's.
         await testGoToDefinition(index, mainFile, 8, 5, mainFile, 7);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("selects the nearest C# alias across verbatim spellings and namespace blocks", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-scope-"));
+      try {
+        const api = path.join(root, "Api.cs").replace(/\\/g, "/");
+        const use = path.join(root, "Use.cs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          api,
+          [
+            "namespace N { public class First { public static void Run() {} }",
+            "public class Second { public static void Run() {} } }",
+          ].join("\n"),
+        );
+        const lines = [
+          "using @B = N.First;",
+          "namespace Outer {",
+          "  class One { void M() { B.Run(); } }",
+          "  namespace Inner { using B = N.Second;",
+          "    class Two { void M() { @B.Run(); } }",
+          "  }",
+          "}",
+          "namespace Sibling { class Three { void M() { @B.Run(); } } }",
+        ];
+        await fsp.writeFile(use, lines.join("\n"));
+        const index = await createTestIndexFromFiles(root, [api, use]);
+        const graph = await buildSymbolGraphDetailed(index);
+        for (const [line, targetLine] of [
+          [3, 1],
+          [5, 2],
+          [8, 1],
+        ] as const) {
+          await testGoToDefinition(index, use, line, lines[line - 1]!.indexOf("Run") + 1, api, targetLine);
+          const target = index.byFile
+            .get(fileIdentityKey(api))
+            ?.locals.find((definition) => definition.localName === "Run" && definition.range.start.line === targetLine);
+          if (!target) throw new Error("Missing alias target declaration");
+          const calls = graph.edges.filter((edge) => edge.label === "calls" && edge.site?.range.start.line === line);
+          expect(calls.map((edge) => edge.to)).toEqual([defNodeId(target)]);
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

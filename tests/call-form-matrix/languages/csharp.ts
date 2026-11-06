@@ -194,7 +194,7 @@ export const csharpCells: MatrixCell[] = [
     callForm: "imported-alias",
     files: {
       "calc2.cs": [
-        "using Fast = Utilities.Calculator;",
+        "using @Fast = Utilities.Calculator;",
         "",
         "namespace Utilities {",
         "  public class Calculator {",
@@ -209,7 +209,7 @@ export const csharpCells: MatrixCell[] = [
         "namespace App {",
         "  public class Program {",
         "    public int SumPair() {",
-        "      return Fast.Add(1, 2);",
+        "      return @Fast.Add(1, 2);",
         "    }",
         "  }",
         "}",

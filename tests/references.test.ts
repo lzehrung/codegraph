@@ -1628,6 +1628,22 @@ describe("Find References", () => {
         usageName: "AliasType",
       },
       {
+        label: "C# verbatim alias with plain use",
+        files: {
+          "Utils.cs": "namespace Utils { public class Target {} }\n",
+          "Consumer.cs": "using @AliasType = Utils.Target;\nclass Consumer { AliasType value; }\n",
+        },
+        sourceFile: "Utils.cs",
+        consumerFile: "Consumer.cs",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "@AliasType",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "AliasType",
+      },
+      {
         label: "Swift dotted symbol import",
         files: {
           "Utils.swift": ["public struct Target {}", ""].join("\n"),

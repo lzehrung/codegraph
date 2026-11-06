@@ -1433,7 +1433,7 @@ function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeL
     return false;
   }
   if (!isReceiverNameNode(sup, receiver.type)) return false;
-  const first = text[0];
+  const first = (sup.id === "csharp" ? sup.normalizeIdentifier(text) : text)[0];
   return !!first && first === first.toUpperCase() && first !== first.toLowerCase();
 }
 

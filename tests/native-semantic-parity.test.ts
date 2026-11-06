@@ -2365,6 +2365,27 @@ nativeDescribe("native semantic coverage", () => {
         },
       },
       {
+        name: "C# verbatim type alias with a plain use",
+        files: {
+          "verbatim/Api.cs": ["namespace VerbatimApi;", "public class Target { public static void Run() {} }"],
+          "verbatim/Use.cs": [
+            "using @B = VerbatimApi.Target;",
+            "using VerbatimOther;",
+            "class UseVerbatim { void M() { B.Run(); } }",
+          ],
+          "verbatim/decoy/B.cs": ["namespace VerbatimOther;", "public class B { public static void Run() {} }"],
+        },
+        goto: { file: "verbatim/Use.cs", line: 3, token: "Run", expectedFile: "verbatim/Api.cs", expectedLine: 2 },
+        references: {
+          file: "verbatim/Api.cs",
+          line: 2,
+          token: "Run",
+          expectedSites: ["verbatim/Api.cs:2", "verbatim/Use.cs:3"],
+          decoyFile: "verbatim/decoy/B.cs",
+        },
+        edge: { caller: "M", callerFile: "verbatim/Use.cs", expectedTarget: "verbatim/Api.cs::Run" },
+      },
+      {
         name: "Swift extension member over a base type in another file",
         files: {
           "swift/A.swift": ["struct Box {", "  func helper() {}", "}"],
