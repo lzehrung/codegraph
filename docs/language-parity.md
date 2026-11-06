@@ -144,6 +144,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ## TypeScript, TSX, and JavaScript
 
 - Class fields, declaration-only overloads, and named `namespace`/`module` declarations are indexed; `declare module "ambient"` is a chunk, not a named export.
+- TypeScript and TSX export metadata includes public type aliases and interfaces; named type re-exports and their source tokens resolve only those explicit exports, not private same-named declarations.
 - `package.json#exports` follows Node; custom `--conditions`, `browser`, `types`, `deno`, `worker`, import attributes, and `#imports` are not modeled.
 - `module.exports = { ...source }` expands static imports and local literals; unresolved spreads stay namespace-reexport markers; `obj.prop = localVar` is not an export.
 - The AngularJS heuristic needs `angular.module(...)` registration; generic `controller` or `templateUrl` objects do not count.

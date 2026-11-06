@@ -47,6 +47,7 @@ import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import {
   csharpNamespaceImportDirectories,
+  EXPORT_ONLY_LOOKUP_OPTIONS,
   hasNamespaceReexport,
   javaKotlinFunctionOverloadIncludes,
   javaStaticNamedImportIncludes,
@@ -716,7 +717,12 @@ export async function collectVerifiedNamedNodeReferences(
     }
     const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
     if (exportFrom?.entry) {
-      const reexported = resolveExport(index, exportFrom.entry.fromModule, exportFrom.entry.sourceSpecifier);
+      const reexported = resolveExport(
+        index,
+        exportFrom.entry.fromModule,
+        exportFrom.entry.sourceSpecifier,
+        EXPORT_ONLY_LOOKUP_OPTIONS,
+      );
       if (reexported?.kind === "resolved") {
         if (matchesExpectedDefinition(reexported.def)) {
           pushVerified({ range, via: { reexport: true } });
@@ -997,27 +1003,33 @@ export function importCanReferenceDefinition(
   return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
 }
 
-/** The export names a module can answer for `exportedNames`: those names, the names it re-exports, and its `export *` targets'. */
+/** Probe names only: walk star exports in depth-first entry order; `resolveExport` decides which names are visible. */
 export function moduleExportProbeNames(
   index: ProjectIndex,
   moduleIndex: ModuleIndex,
   exportedNames: readonly string[],
-  visited: ReadonlySet<string> = new Set(),
 ): string[] {
   const names = new Set(exportedNames);
-  const nextVisited = new Set([...visited, fileIdentityKey(moduleIndex.file)]);
-  for (const entry of moduleIndex.exports) {
+  const visited = new Set<string>([fileIdentityKey(moduleIndex.file)]);
+  const stack: Array<{ module: ModuleIndex; nextExport: number }> = [{ module: moduleIndex, nextExport: 0 }];
+  while (stack.length) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.nextExport === frame.module.exports.length) {
+      stack.pop();
+      continue;
+    }
+    const entry = frame.module.exports[frame.nextExport++]!;
     if (entry.type === "reexport" || entry.type === "namespaceReexport") {
       names.add(entry.exportedAs);
       continue;
     }
-    if (entry.type === "exportStar") {
-      const targetModule = index.byFile.get(fileIdentityKey(entry.fromModule));
-      if (!targetModule || nextVisited.has(fileIdentityKey(targetModule.file))) continue;
-      for (const exportedName of moduleExportProbeNames(index, targetModule, exportedNames, nextVisited)) {
-        names.add(exportedName);
-      }
-    }
+    if (entry.type !== "exportStar") continue;
+    const targetModule = index.byFile.get(fileIdentityKey(entry.fromModule));
+    if (!targetModule) continue;
+    const targetKey = fileIdentityKey(targetModule.file);
+    if (visited.has(targetKey)) continue;
+    visited.add(targetKey);
+    stack.push({ module: targetModule, nextExport: 0 });
   }
   return [...names];
 }

@@ -6,13 +6,15 @@ import {
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
   findReferences,
+  goToDefinition,
   listSymbols,
   resolveSymbolId,
 } from "../src/index.js";
 import { previewRenameInSnapshot } from "../src/agent/rename-preview.js";
 import type { AgentProjectSnapshot } from "../src/agent/session.js";
 import { supportForFileWithoutHeaderSample } from "../src/languages.js";
-import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import { getCachedReferenceCandidateFiles, moduleExportProbeNames } from "../src/indexer/navigation-references.js";
+import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import {
   coverageFacts,
   exportEdgeIndex,
@@ -110,6 +112,47 @@ const CYCLE_PROJECTS: Record<string, Record<string, string>> = {
     "use-y.ts": 'import { foo } from "./y";\nexport const b = foo();\n',
   },
 };
+
+function denseStarProject(): Record<string, string> {
+  const files: Record<string, string> = {
+    "def.ts": "export function target(): number { return 1; }\n",
+    "decoy.ts": "export function target(): number { return 2; }\n",
+    "hidden.ts": "function target(): number { return 3; }\nexport const hiddenCall = target();\n",
+    "shadow.ts": 'export * from "./m0";\nexport { target } from "./decoy";\n',
+    "ambiguous.ts": 'export * from "./m0";\nexport * from "./decoy";\n',
+    "consumer.ts": [
+      'import { target } from "./m0";',
+      'import { target as localTarget } from "./m1";',
+      'import { forwarded } from "./m0";',
+      'import * as ns from "./m0";',
+      'import { target as shadowed } from "./shadow";',
+      'import { target as ambiguous } from "./ambiguous";',
+      "export const direct = target();",
+      "export const aliased = localTarget();",
+      "export const forwardedCall = forwarded();",
+      "export const member = ns.target();",
+      "export const shadowedCall = shadowed();",
+      "export const ambiguousCall = ambiguous();",
+      "export function local(target: () => number) { return target(); }",
+      "",
+    ].join("\n"),
+  };
+  for (let module = 0; module < 10; module += 1) {
+    const exports: string[] = [];
+    for (let neighbor = 0; neighbor < 10; neighbor += 1) {
+      if (module !== neighbor) exports.push(`export * from "./m${neighbor}";`);
+    }
+    if (module === 2) exports.push('export * from "./hidden";');
+    if (module === 3) exports.push('export { target as masked } from "./decoy";');
+    if (module === 4) exports.push('export * from "./absent";');
+    if (module === 9) {
+      exports.push('export * from "./def";');
+      exports.push('export { target as forwarded } from "./def";');
+    }
+    files[`m${module}.ts`] = `${exports.join("\n")}\n`;
+  }
+  return files;
+}
 
 const CHAIN_PROJECT: Record<string, string> = {
   "src/def.ts": "export function helper(value: number): number {\n  return value + 1;\n}\nexport const other = 2;\n",
@@ -526,4 +569,111 @@ describe("lookups through a star-export cycle on a cold index", () => {
       "import",
     );
   });
+});
+
+describe("dense star-export candidate discovery", () => {
+  it("visits each reachable star edge at most once while retaining DFS alias order", async () => {
+    const root = await writeProject(denseStarProject());
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const start = index.byFile.get(fileIdentityKey(path.join(root, "m0.ts")));
+    if (!start) throw new Error("Expected the first star-export module");
+    const starEdges = [...index.byFile.values()].reduce(
+      (count, module) => count + module.exports.filter((entry) => entry.type === "exportStar").length,
+      0,
+    );
+    class BoundedReads<K, V> extends Map<K, V> {
+      reads = 0;
+      override get(key: K): V | undefined {
+        this.reads += 1;
+        if (this.reads > starEdges) throw new Error(`Repeated star traversal: more than ${starEdges} module reads`);
+        return super.get(key);
+      }
+    }
+    const reads = new BoundedReads(index.byFile);
+    index.byFile = reads;
+    // A candidate name is not proof of an export: `masked` resolves to the decoy.
+    expect(moduleExportProbeNames(index, start, ["target"])).toEqual(["target", "forwarded", "masked"]);
+    expect(reads.reads).toBeLessThanOrEqual(starEdges);
+  }, 30_000);
+
+  it("keeps cold and repeated references and rename edits for aliases, without shadowed or ambiguous decoys", async () => {
+    const files = denseStarProject();
+    const root = await writeProject(files);
+    const projectFiles = Object.keys(files).map((name) => path.join(root, name).replace(/\\/g, "/"));
+    const index = await buildProjectIndexFromFiles(root, projectFiles, { cache: "off", keepParsed: true });
+    const def = definitionOf(index, "target", "def.ts");
+    const hiddenFile = path.join(root, "hidden.ts");
+    const hiddenLocal = resolveExport(index, hiddenFile, "target");
+    expect(hiddenLocal?.kind).toBe("resolved");
+    if (hiddenLocal?.kind === "resolved") {
+      expect(fileIdentityKey(hiddenLocal.def.file)).toBe(fileIdentityKey(hiddenFile));
+    }
+    expect(resolveExport(index, hiddenFile, "target", { allowLocalFallback: false })).toBeNull();
+    const forwarded = resolveExport(index, path.join(root, "m0.ts"), "target");
+    expect(forwarded?.kind).toBe("resolved");
+    if (forwarded?.kind === "resolved") {
+      expect(fileIdentityKey(forwarded.def.file)).toBe(fileIdentityKey(def.file));
+    }
+    const directCall = await goToDefinition(index, {
+      file: path.join(root, "consumer.ts"),
+      line: 7,
+      column: 23,
+    });
+    expect(directCall.status).toBe("ok");
+    if (directCall.status === "ok") {
+      expect(fileIdentityKey(directCall.definition.file)).toBe(fileIdentityKey(def.file));
+    }
+    const cold = await findReferences(index, { def });
+    const repeated = await findReferences(index, { def });
+    expect(cold.status).toBe("ok");
+    expect(repeated).toEqual(cold);
+    if (cold.status !== "ok") return;
+    expect([...new Set(cold.references.map((ref) => relativeTo(root, ref.file)))].sort()).toEqual([
+      "consumer.ts",
+      "def.ts",
+      "m9.ts",
+    ]);
+    expect(
+      cold.references
+        .filter((ref) => relativeTo(root, ref.file) === "consumer.ts" && ref.range.start.line >= 7)
+        .map((ref) => ref.range.start.line),
+    ).toEqual([7, 8, 9, 10]);
+
+    const snapshot: AgentProjectSnapshot = {
+      root,
+      files: projectFiles,
+      index: coldClone(index),
+      fileGraph: index.graph,
+      symbolGraph: { nodes: new Map(), edges: [] },
+      analysis: {
+        mode: "semantic",
+        backend: "unknown",
+        parserDegradedFiles: 0,
+        nativeFilesUsed: 0,
+        nativeFilesFellBack: 0,
+        label: "semantic",
+      },
+    };
+    const preview = await previewRenameInSnapshot(snapshot, {
+      root,
+      handle: "def.ts::target",
+      newName: "renamedTarget",
+    });
+    expect(
+      preview.edits
+        .filter((edit) => edit.file === "consumer.ts")
+        .map((edit) => [edit.range.start.line, edit.oldText, edit.kind]),
+    ).toEqual([
+      [1, "target", "import"],
+      [2, "target", "import"],
+      [7, "target", "reference"],
+      [10, "target", "reference"],
+    ]);
+    expect(
+      preview.edits.filter((edit) => edit.file !== "consumer.ts").map((edit) => [edit.file, edit.oldText, edit.kind]),
+    ).toEqual([
+      ["def.ts", "target", "definition"],
+      ["m9.ts", "target", "export"],
+    ]);
+  }, 30_000);
 });

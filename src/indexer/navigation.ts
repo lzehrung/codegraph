@@ -71,6 +71,7 @@ import {
   directModuleValueEntry,
   csharpNamespaceImportDirectories,
   csharpShadowedImports,
+  EXPORT_ONLY_LOOKUP_OPTIONS,
   javaStaticNamedImportIncludes,
   resolveExport,
   resolveImported,
@@ -256,7 +257,7 @@ export async function goToDefinition(
         );
       }
       if (typeof resolvedTarget === "string") {
-        const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier);
+        const hit = resolveExport(index, resolvedTarget, exportFrom.entry.sourceSpecifier, EXPORT_ONLY_LOOKUP_OPTIONS);
         if (hit?.kind === "resolved") {
           return okGoToResult(index, hit.def, {
             via: { importedFrom: resolvedTarget, exportedName: exportFrom.entry.sourceSpecifier },
@@ -1216,7 +1217,7 @@ async function findReferencesInternal(
         if (hasReachedCollectionLimit()) break;
         if (entry.type !== "reexport") continue;
         if (!exportedNameSet.has(entry.sourceSpecifier)) continue;
-        const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
+        const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier, EXPORT_ONLY_LOOKUP_OPTIONS);
         if (resolved?.kind === "resolved" && !matchesReferenceDefinition(resolved.def)) continue;
         const remainingReferences = remainingCollectionSlots();
         const ranges = await collectVerifiedNamedNodeReferences(

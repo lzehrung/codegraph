@@ -788,6 +788,10 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
       "export class ExportedClass {}",
       "const assigned = InternalClass;",
       "export = assigned;",
+      "export type PublicAlias = string;",
+      "export interface PublicContract { value: PublicAlias }",
+      "type PrivateAlias = number;",
+      "interface PrivateContract { value: PrivateAlias }",
     ].join("\n"),
     "utf8",
   );
@@ -1992,7 +1996,20 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
-    await expectNativeSemantics(testCase);
+    const index = await expectNativeSemantics(testCase);
+    const moduleIndex = index.byFile.get(fileIdentityKey(testCase.files[0]!));
+    const exportedNames = moduleIndex?.exports.map((entry) => entry.exportedAs);
+    expect(exportedNames).toEqual(expect.arrayContaining(["PublicAlias", "PublicContract"]));
+    expect(exportedNames).not.toContain("PrivateAlias");
+    expect(exportedNames).not.toContain("PrivateContract");
+    for (const publicName of ["PublicAlias", "PublicContract"]) {
+      expect(resolveExport(index, testCase.files[0]!, publicName, { allowLocalFallback: false })?.kind).toBe(
+        "resolved",
+      );
+    }
+    for (const privateName of ["PrivateAlias", "PrivateContract"]) {
+      expect(resolveExport(index, testCase.files[0]!, privateName, { allowLocalFallback: false })).toBeNull();
+    }
   });
 
   it("keeps native TypeScript and JavaScript semantics aligned for an imported superclass member", async () => {

@@ -99,8 +99,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * import statement in source order and do not revive locals excluded from the target's exports.
  * Epoch 113 keeps Python signature annotations out of parameter declarations and function-body
  * bindings, so navigation, references, and cached detailed graphs retain their enclosing targets.
+ * Epoch 114 keeps JS/TS named and star re-exports from forwarding private locals of their targets.
+ * Query-time graph artifacts built under the old export resolution are rebuilt; direct lexical
+ * lookups retain their local fallback.
+ * Native TypeScript and TSX export records also capture public type aliases and interfaces.
  */
-export const CORE_ALGORITHM_EPOCH = 113;
+export const CORE_ALGORITHM_EPOCH = 114;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

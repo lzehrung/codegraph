@@ -94,6 +94,8 @@ const BASE_GRAPH = {
     (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (abstract_class_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (interface_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (type_alias_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (enum_declaration name: [ (identifier) (type_identifier) ] @name)) @stmt
     (export_statement declaration: (internal_module name: (identifier) @name)) @stmt
     (export_statement declaration: (module name: (identifier) @name)) @stmt
