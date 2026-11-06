@@ -14,7 +14,7 @@ import {
   SymbolKind,
 } from "../../src/indexer.js";
 import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
-import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
+import { buildSymbolGraphDetailed, collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { PY_SUPPORT } from "../../src/languages.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
@@ -1129,6 +1129,56 @@ describe("Python native import bindings", () => {
           expect.objectContaining({ kind: "named", from: ".local", imported: "value", local: "value" }),
         ]),
       );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a function-body call to a later module-level import and excludes the earlier local helper", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-runtime-import-rebinding-"));
+    const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+    const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+    const mainLines = [
+      "def helper():",
+      "    return 1",
+      "def run():",
+      "    return helper()",
+      "from other import helper",
+      "",
+    ];
+    await Promise.all([
+      fsp.writeFile(mainFile, mainLines.join("\n"), "utf8"),
+      fsp.writeFile(otherFile, "def helper():\n    return 2\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const callColumn = mainLines[3]!.indexOf("helper") + 1;
+      const goto = await goToDefinition(index, { file: mainFile, line: 4, column: callColumn });
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected goto to resolve");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(otherFile));
+      expect(goto.definition.range.start.line).toBe(1);
+
+      const importedRefs = await findReferences(index, { file: otherFile, line: 1, column: 5 });
+      expect(importedRefs.status).toBe("ok");
+      if (importedRefs.status !== "ok") throw new Error("Expected imported helper references");
+      expect(
+        importedRefs.references.some(
+          (reference) =>
+            fileIdentityKey(reference.file) === fileIdentityKey(mainFile) && reference.range.start.line === 4,
+        ),
+      ).toBe(true);
+
+      const localRefs = await findReferences(index, { file: mainFile, line: 1, column: 5 });
+      expect(localRefs.status).toBe("ok");
+      if (localRefs.status !== "ok") throw new Error("Expected local helper references");
+      expect(localRefs.references.map((reference) => reference.range.start.line)).toEqual([1]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const callTargets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+        .map((edge) => fileIdentityKey(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(callTargets).toEqual([fileIdentityKey(otherFile)]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

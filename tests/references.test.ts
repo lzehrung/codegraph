@@ -7707,3 +7707,60 @@ describe("Find References: Python formatted property accessors", () => {
     }
   });
 });
+
+describe("Find References: Python runtime import rebinding", () => {
+  // A module-level `def` is the same-name local decoy for the import that follows it: the
+  // module-level call before the import still names the local, while the deferred call inside
+  // `run` reads the module binding at call time and so names the imported function.
+  const lines = [
+    "def helper():",
+    "    return 1",
+    "print(helper())",
+    "def run():",
+    "    return helper()",
+    "from other import helper",
+    "",
+  ];
+  const mainSource = lines.join("\n");
+  const otherSource = "def helper():\n    return 2\n";
+
+  it("keeps the local declaration and its own call, and attributes the deferred call to the import", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-runtime-rebinding-refs-"));
+    const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+    const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(mainFile, mainSource, "utf8");
+      await fsp.writeFile(otherFile, otherSource, "utf8");
+      const index = await createTestIndexFromFiles(root, [mainFile, otherFile]);
+      const localColumn = tokenColumn(lines[0]!, "helper");
+
+      const local = await testFindReferences(index, mainFile, 1, localColumn, [
+        { file: mainFile, line: 1, column: localColumn },
+        { file: mainFile, line: 3, column: tokenColumn(lines[2]!, "helper") },
+      ]);
+      expect(local.status === "ok" ? local.referenceCoverage?.state : undefined).toBe("complete");
+      const bounded = await indexer.findReferences(
+        index,
+        { file: mainFile, line: 1, column: localColumn },
+        { maxReferences: 1 },
+      );
+      expect(bounded.status).toBe("ok");
+      if (bounded.status !== "ok") throw new Error("Expected bounded local references");
+      expect(bounded.references.map((reference) => reference.range.start.line)).toEqual([1]);
+      expect(bounded.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["truncated"],
+      });
+
+      const imported = await testFindReferences(index, otherFile, 1, tokenColumn("def helper():", "helper"), [
+        { file: otherFile, line: 1, column: tokenColumn("def helper():", "helper") },
+        { file: mainFile, line: 5, column: tokenColumn(lines[4]!, "helper") },
+        { file: mainFile, line: 6, column: tokenColumn(lines[5]!, "helper") },
+      ]);
+      expect(imported.status === "ok" ? imported.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -154,6 +154,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A package import resolves to `__init__.py`/`__init__.pyi`, else a PEP 420 namespace directory with importable members; an empty directory stays unresolved.
 - `if TYPE_CHECKING:` and `if typing.TYPE_CHECKING:` imports are type-only; `if not TYPE_CHECKING:`, its `else`, and other guards stay runtime.
 - Conditional and function-suite imports are not module re-exports; an unresolved relative import keeps its written specifier (`.missing`).
+- `findReferences` and `goToDefinition` distinguish module-level uses before an import from function-body uses of the final module binding; a later import does not leave false references on the earlier local declaration.
 - Qualified value patterns in `match` are not captures.
 - `self`/`cls` members resolve, including `__init__` attributes and `svc = Service()` locals; factory-assigned and unannotated receivers stay unproven.
 - A class member called in a default expression before a same-named keyword-only parameter can have a detailed call edge while go-to-definition remains `not_found`. Calls through that parameter in the body stay unproven and emit no edge.
