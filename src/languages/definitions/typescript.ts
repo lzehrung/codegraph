@@ -109,8 +109,8 @@ const BASE_GRAPH = {
     (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias)) (string) @from) @stmt
-    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
-    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
+    (export_statement !source (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
+    (export_statement !source (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
     (export_statement "*" @wild (string) @from) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)

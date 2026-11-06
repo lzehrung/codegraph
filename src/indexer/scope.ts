@@ -505,7 +505,7 @@ export function buildScopeIndexFromSource(
         genericOwner &&
         (scope.node.startIndex < genericOwner.startIndex || scope.node.endIndex > genericOwner.endIndex);
       if (outsideGenericOwner) return undefined;
-      if (node && !scopeAllowsUse(row, scope, node)) continue;
+      if (node && !scopeAllowsUse(row, scope, node, pythonPostponedAnnotations)) continue;
       let hit = scope.map.get(canonicalName);
       if (node && row.moduleBindingsAtFunctionRuntime) {
         while (
@@ -593,7 +593,7 @@ export function buildScopeIndexFromSource(
 
   const walkSignatureRead = (node: SyntaxNodeLike): void => {
     const current = stack[stack.length - 1];
-    if (!current || scopeAllowsUse(row, current, node)) {
+    if (!current || scopeAllowsUse(row, current, node, pythonPostponedAnnotations)) {
       walk(node);
       return;
     }
@@ -906,6 +906,7 @@ export function buildScopeIndexFromSource(
     useNode: SyntaxNodeLike,
   ): Scope | undefined => {
     const postponedAnnotation = pythonPostponedAnnotations && !!pythonFunctionAnnotationOwner(useNode);
+    if (postponedAnnotation) return rootScope;
     if (row.variableTargetScopeKinds) {
       for (let index = stack.length - 1; index >= 0; index -= 1) {
         const scope = stack[index]!;
@@ -916,10 +917,7 @@ export function buildScopeIndexFromSource(
         ) {
           return undefined;
         }
-        if (binding && scopeOwnsBinding(scope, canonical, binding)) {
-          if (scope.kind === "module" && postponedAnnotation) return scope;
-          return undefined;
-        }
+        if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
         if (row.variableTargetScopeKinds.has(scope.kind)) return scope;
       }
     }
@@ -984,7 +982,7 @@ export function buildScopeIndexFromSource(
         genericOwner &&
         (scope.node.startIndex < genericOwner.startIndex || scope.node.endIndex > genericOwner.endIndex);
       if (outsideGenericOwner) return undefined;
-      if (!scopeAllowsUse(row, scope, useNode)) {
+      if (!scopeAllowsUse(row, scope, useNode, pythonPostponedAnnotations)) {
         scope = scope.parent;
         continue;
       }

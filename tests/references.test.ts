@@ -421,7 +421,7 @@ describe("Find References", () => {
   });
 
   it.each(["ts", "js"] as const)(
-    "keeps private named re-export source tokens out of $extension consumer navigation",
+    "keeps private named re-export source tokens out of %s consumer navigation",
     async (extension) => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-private-reexport-token-"));
       try {
@@ -433,8 +433,16 @@ describe("Find References", () => {
         const consumerFile = file("consumer");
         await fsp.writeFile(hiddenFile, "function target() { return 1; }\ntarget();\n", "utf8");
         await fsp.writeFile(publicFile, "export function target() { return 2; }\n", "utf8");
-        await fsp.writeFile(hiddenBarrel, 'export { target } from "./hidden";\n', "utf8");
-        await fsp.writeFile(publicBarrel, 'export { target as publicTarget } from "./public";\n', "utf8");
+        await fsp.writeFile(
+          hiddenBarrel,
+          'export { target } from "./hidden";\nfunction target() { return 3; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          publicBarrel,
+          'export { target as publicTarget } from "./public";\nfunction target() { return 4; }\n',
+          "utf8",
+        );
         await fsp.writeFile(
           consumerFile,
           [
@@ -462,7 +470,7 @@ describe("Find References", () => {
         if (!hiddenDef || !publicDef) throw new Error("Expected both same-named definitions");
 
         expect(resolveExport(index, hiddenFile, "target")?.kind).toBe("resolved");
-        expect(resolveExport(index, hiddenBarrel, "target")).toBeNull();
+        expect(resolveExport(index, hiddenBarrel, "target", { allowLocalFallback: false })).toBeNull();
         expect(resolveExport(index, publicBarrel, "publicTarget")?.kind).toBe("resolved");
 
         const hiddenToken = await goToDefinition(index, { file: hiddenBarrel, line: 1, column: 11 });

@@ -48,6 +48,7 @@ interface CodegraphStep {
   type: string;
   command: string;
   query: string;
+  limit?: number;
 }
 
 interface AnchorSelector {

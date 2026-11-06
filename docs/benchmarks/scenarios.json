@@ -226,21 +226,24 @@
           {
             "type": "codegraph",
             "command": "explore",
-            "query": "How does the installer preserve an existing MCP server configuration?"
+            "query": "How does the installer preserve an existing MCP server configuration?",
+            "limit": 10
           }
         ],
         "warm-cli": [
           {
             "type": "codegraph",
             "command": "explore",
-            "query": "How does the installer preserve an existing MCP server configuration?"
+            "query": "How does the installer preserve an existing MCP server configuration?",
+            "limit": 10
           }
         ],
         "warm-mcp": [
           {
             "type": "codegraph",
             "command": "explore",
-            "query": "How does the installer preserve an existing MCP server configuration?"
+            "query": "How does the installer preserve an existing MCP server configuration?",
+            "limit": 10
           }
         ]
       }

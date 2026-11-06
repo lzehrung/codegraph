@@ -10,6 +10,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import {
   assertPythonAnnotationNavigation,
   assertPythonAnnotationReferences,
+  assertPythonPostponedCallEdges,
   PYTHON_ANNOTATION_SOURCES,
 } from "./helpers/python-annotation-fixture.js";
 
@@ -2472,6 +2473,14 @@ describe("Python signature annotation scope", () => {
         [fileIdentityKey(f("models.py")), "annotation_type", 2, signature.indexOf("annotation_type()") + 1],
         [fileIdentityKey(f("models.py")), "annotation_type", 2, signature.lastIndexOf("annotation_type()") + 1],
       ]);
+    });
+  });
+
+  it("records eager defaults but no execution calls from postponed annotations", async () => {
+    await withFixture("cg-py-postponed-annotation-calls-", { ...PYTHON_ANNOTATION_SOURCES }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const paths = Object.fromEntries(Object.keys(PYTHON_ANNOTATION_SOURCES).map((file) => [file, f(file)]));
+      await assertPythonPostponedCallEdges(index, paths);
     });
   });
 

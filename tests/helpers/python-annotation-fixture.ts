@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { findReferences, goToDefinition, type ProjectIndex } from "../../src/index.js";
+import { buildSymbolGraphDetailed, findReferences, goToDefinition, type ProjectIndex } from "../../src/index.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 
 export const PYTHON_ANNOTATION_SOURCES: Readonly<Record<string, string>> = {
@@ -68,6 +68,59 @@ export const PYTHON_ANNOTATION_SOURCES: Readonly<Record<string, string>> = {
     "    return f",
     "",
   ].join("\n"),
+  "postponed_scope.py": [
+    "from __future__ import annotations",
+    "from models import T",
+    "def outer(T):",
+    "    def inner(value: T = T) -> T:",
+    "        return T, value",
+    "    return inner",
+    "def outer_local():",
+    "    T = 1",
+    "    def inner(value: T = T) -> T:",
+    "        return T, value",
+    "    return inner",
+    "class Owner:",
+    "    T = int",
+    "    def method(self, value: T = T) -> T:",
+    "        return T, value",
+    "def global_control(value: T = T) -> T:",
+    "    return T, value",
+    "def assigned_later():",
+    "    def inner(value: T) -> T:",
+    "        return T, value",
+    "    T = 2",
+    "    return inner",
+    "",
+  ].join("\n"),
+  "postponed_unbound.py": [
+    "from __future__ import annotations",
+    "def outer(T):",
+    "    def inner(value: T) -> T:",
+    "        return T, value",
+    "    return inner",
+    "class Owner:",
+    "    T = int",
+    "    def method(self, value: T) -> T:",
+    "        return T, value",
+    "",
+  ].join("\n"),
+  "postponed_calls.py": [
+    "from __future__ import annotations",
+    "from models import annotation_type",
+    "def lazy(annotation_type, value: annotation_type()) -> annotation_type():",
+    "    return annotation_type, value",
+    "def eager(value=annotation_type()):",
+    "    return value",
+    "def combined(annotation_type, value: annotation_type()=annotation_type()) -> annotation_type():",
+    "    return annotation_type, value",
+    "import models",
+    "def lazy_namespace(value: models.annotation_type()) -> models.annotation_type():",
+    "    return value",
+    "def eager_namespace(value=models.annotation_type()):",
+    "    return value",
+    "",
+  ].join("\n"),
 };
 
 export type PythonAnnotationSite = { file: string; line: number; column: number };
@@ -113,6 +166,20 @@ export const PYTHON_ANNOTATION_BINDINGS: ReadonlyArray<{
       pythonAnnotationSite("future.py", 2, "T"),
       pythonAnnotationSite("future.py", 3, "T", 2),
       pythonAnnotationSite("future.py", 3, "T", 3),
+      pythonAnnotationSite("postponed_scope.py", 2, "T"),
+      pythonAnnotationSite("postponed_scope.py", 4, "T"),
+      pythonAnnotationSite("postponed_scope.py", 4, "T", 3),
+      pythonAnnotationSite("postponed_scope.py", 9, "T"),
+      pythonAnnotationSite("postponed_scope.py", 9, "T", 3),
+      pythonAnnotationSite("postponed_scope.py", 14, "T"),
+      pythonAnnotationSite("postponed_scope.py", 14, "T", 3),
+      pythonAnnotationSite("postponed_scope.py", 15, "T"),
+      pythonAnnotationSite("postponed_scope.py", 16, "T"),
+      pythonAnnotationSite("postponed_scope.py", 16, "T", 2),
+      pythonAnnotationSite("postponed_scope.py", 16, "T", 3),
+      pythonAnnotationSite("postponed_scope.py", 17, "T"),
+      pythonAnnotationSite("postponed_scope.py", 19, "T"),
+      pythonAnnotationSite("postponed_scope.py", 19, "T", 2),
     ],
   },
   ...[
@@ -155,6 +222,16 @@ export const PYTHON_ANNOTATION_BINDINGS: ReadonlyArray<{
       pythonAnnotationSite("self_named.py", 1, "annotation_type"),
       pythonAnnotationSite("self_named.py", 2, "annotation_type", 2),
       pythonAnnotationSite("self_named.py", 2, "annotation_type", 3),
+      pythonAnnotationSite("postponed_calls.py", 2, "annotation_type"),
+      pythonAnnotationSite("postponed_calls.py", 3, "annotation_type", 2),
+      pythonAnnotationSite("postponed_calls.py", 3, "annotation_type", 3),
+      pythonAnnotationSite("postponed_calls.py", 5, "annotation_type"),
+      pythonAnnotationSite("postponed_calls.py", 7, "annotation_type", 2),
+      pythonAnnotationSite("postponed_calls.py", 7, "annotation_type", 3),
+      pythonAnnotationSite("postponed_calls.py", 7, "annotation_type", 4),
+      pythonAnnotationSite("postponed_calls.py", 10, "annotation_type"),
+      pythonAnnotationSite("postponed_calls.py", 10, "annotation_type", 2),
+      pythonAnnotationSite("postponed_calls.py", 12, "annotation_type"),
     ],
   },
   {
@@ -198,6 +275,46 @@ export const PYTHON_ANNOTATION_BINDINGS: ReadonlyArray<{
       pythonAnnotationSite("postponed_self.py", 4, "f"),
     ],
   },
+  {
+    label: "outer parameter excluded from postponed annotations",
+    declaration: pythonAnnotationSite("postponed_scope.py", 3, "T"),
+    reads: [pythonAnnotationSite("postponed_scope.py", 4, "T", 2), pythonAnnotationSite("postponed_scope.py", 5, "T")],
+  },
+  {
+    label: "outer local excluded from postponed annotations",
+    declaration: pythonAnnotationSite("postponed_scope.py", 8, "T"),
+    reads: [pythonAnnotationSite("postponed_scope.py", 9, "T", 2), pythonAnnotationSite("postponed_scope.py", 10, "T")],
+  },
+  {
+    label: "class local excluded from postponed annotations",
+    declaration: pythonAnnotationSite("postponed_scope.py", 13, "T"),
+    reads: [pythonAnnotationSite("postponed_scope.py", 14, "T", 2)],
+  },
+  {
+    label: "later local cannot steal postponed annotation sites",
+    declaration: pythonAnnotationSite("postponed_scope.py", 21, "T"),
+    reads: [pythonAnnotationSite("postponed_scope.py", 20, "T")],
+  },
+  {
+    label: "outer parameter without a module annotation binding",
+    declaration: pythonAnnotationSite("postponed_unbound.py", 2, "T"),
+    reads: [pythonAnnotationSite("postponed_unbound.py", 4, "T")],
+  },
+  {
+    label: "class local without a module annotation binding",
+    declaration: pythonAnnotationSite("postponed_unbound.py", 7, "T"),
+    reads: [],
+  },
+  {
+    label: "lazy annotation callable parameter",
+    declaration: pythonAnnotationSite("postponed_calls.py", 3, "annotation_type"),
+    reads: [pythonAnnotationSite("postponed_calls.py", 4, "annotation_type")],
+  },
+  {
+    label: "combined annotation and default callable parameter",
+    declaration: pythonAnnotationSite("postponed_calls.py", 7, "annotation_type"),
+    reads: [pythonAnnotationSite("postponed_calls.py", 8, "annotation_type")],
+  },
 ];
 
 export async function assertPythonAnnotationNavigation(
@@ -219,6 +336,16 @@ export async function assertPythonAnnotationNavigation(
     const site = pythonAnnotationSite("future.py", 5, "T", occurrence);
     const quoted = await goToDefinition(index, { ...site, file: paths[site.file]! });
     expect(quoted.status, `quoted annotation ${occurrence}`).toBe("not_found");
+  }
+  for (const site of [
+    pythonAnnotationSite("postponed_unbound.py", 3, "T"),
+    pythonAnnotationSite("postponed_unbound.py", 3, "T", 2),
+    pythonAnnotationSite("postponed_unbound.py", 8, "T"),
+    pythonAnnotationSite("postponed_unbound.py", 8, "T", 2),
+    pythonAnnotationSite("postponed_unbound.py", 9, "T"),
+  ]) {
+    const unbound = await goToDefinition(index, { ...site, file: paths[site.file]! });
+    expect(unbound.status, `unbound postponed annotation ${site.line}:${site.column}`).toBe("not_found");
   }
   const keyword = await goToDefinition(index, { file: paths["future.py"]!, line: 5, column: 1 });
   expect(keyword.status).toBe("ok");
@@ -246,4 +373,32 @@ export async function assertPythonAnnotationReferences(
       .sort();
     expect(actual, binding.label).toEqual(expected);
   }
+}
+
+export async function assertPythonPostponedCallEdges(
+  index: ProjectIndex,
+  paths: Readonly<Record<string, string>>,
+): Promise<void> {
+  const graph = await buildSymbolGraphDetailed(index);
+  const actual = graph.edges
+    .filter(
+      (edge) =>
+        edge.label === "calls" &&
+        fileIdentityKey(graph.nodes.get(edge.from)?.file ?? "") === fileIdentityKey(paths["postponed_calls.py"]!),
+    )
+    .map((edge) => [
+      graph.nodes.get(edge.from)?.name,
+      fileIdentityKey(graph.nodes.get(edge.to)?.file ?? ""),
+      graph.nodes.get(edge.to)?.name,
+      edge.site?.range.start.line,
+      edge.site?.range.start.column,
+    ]);
+  const eager = pythonAnnotationSite("postponed_calls.py", 5, "annotation_type");
+  const combined = pythonAnnotationSite("postponed_calls.py", 7, "annotation_type", 3);
+  const namespace = pythonAnnotationSite("postponed_calls.py", 12, "models");
+  expect(actual.sort()).toEqual([
+    ["combined", fileIdentityKey(paths["models.py"]!), "annotation_type", combined.line, combined.column],
+    ["eager", fileIdentityKey(paths["models.py"]!), "annotation_type", eager.line, eager.column],
+    ["eager_namespace", fileIdentityKey(paths["models.py"]!), "annotation_type", namespace.line, namespace.column],
+  ]);
 }

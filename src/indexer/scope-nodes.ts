@@ -555,8 +555,15 @@ export function scopeUseBoundary(row: ScopeNodeRow, scope: Scope): SyntaxNodeLik
   return scope.node;
 }
 
-/** Python signatures use enclosing scopes; class bodies are not closures for nested runtime scopes. */
-export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeLike): boolean {
+/** Eager signatures use enclosing scopes; explicitly postponed annotations use module globals. */
+export function scopeAllowsUse(
+  row: ScopeNodeRow,
+  scope: Scope,
+  use: SyntaxNodeLike,
+  annotationsPostponed = false,
+): boolean {
+  const annotationUsesModuleScope = annotationsPostponed && !!pythonFunctionAnnotationOwner(use);
+  if (annotationUsesModuleScope && scope.kind !== "module") return false;
   if (row.functionSignatureInEnclosingScope && scope.kind === "function") {
     const boundary = scopeUseBoundary(row, scope);
     if (use.startIndex < boundary.startIndex || use.endIndex > boundary.endIndex) return false;

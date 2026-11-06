@@ -103,6 +103,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Query-time graph artifacts built under the old export resolution are rebuilt; direct lexical
  * lookups retain their local fallback.
  * Native TypeScript and TSX export records also capture public type aliases and interfaces.
+ * Local export-clause captures exclude export-from statements.
  */
 export const CORE_ALGORITHM_EPOCH = 114;
 /**

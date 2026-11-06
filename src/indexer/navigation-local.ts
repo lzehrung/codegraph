@@ -295,7 +295,7 @@ export function findClosestScopeBinding(
       genericOwner &&
       (currentScope.node.startIndex < genericOwner.startIndex || currentScope.node.endIndex > genericOwner.endIndex);
     if (outsideGenericOwner) return null;
-    if (!scopeAllowsUse(row, currentScope, currentNode)) {
+    if (!scopeAllowsUse(row, currentScope, currentNode, scopeIndex.pythonPostponedAnnotations)) {
       for (
         let declaration = currentScope.map.get(normalizedName);
         declaration;
@@ -368,7 +368,7 @@ export function laterLocalShadowsUse(
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   let scope = closestContainingScope(scopeIndex, currentNode);
   while (scope) {
-    if (!scopeAllowsUse(row, scope, currentNode)) {
+    if (!scopeAllowsUse(row, scope, currentNode, scopeIndex.pythonPostponedAnnotations)) {
       scope = scope.parent;
       continue;
     }

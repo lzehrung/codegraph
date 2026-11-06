@@ -308,4 +308,19 @@ export const pythonCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "calls.py", fromName: "called" },
   },
+  {
+    id: "python/bare-call-eager-default-beside-postponed-annotations",
+    language: "python",
+    callForm: "bare-call",
+    files: {
+      "models.py": PYTHON_ANNOTATION_SOURCES["models.py"]!,
+      "postponed_calls.py": PYTHON_ANNOTATION_SOURCES["postponed_calls.py"]!,
+      "decoy.py": PYTHON_ANNOTATION_SOURCES["decoy.py"]!,
+    },
+    use: { file: "postponed_calls.py", line: 5, token: "annotation_type" },
+    expected: { file: "models.py", line: 3, token: "annotation_type" },
+    decoy: { file: "decoy.py", line: 3, token: "annotation_type" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "postponed_calls.py", fromName: "eager" },
+  },
 ];

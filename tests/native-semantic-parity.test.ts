@@ -32,6 +32,7 @@ import { __setQuerySyntaxCacheLimitsForTests } from "../src/indexer/parsed-cache
 import {
   assertPythonAnnotationNavigation,
   assertPythonAnnotationReferences,
+  assertPythonPostponedCallEdges,
   PYTHON_ANNOTATION_SOURCES,
 } from "./helpers/python-annotation-fixture.js";
 
@@ -1998,7 +1999,9 @@ nativeDescribe("native semantic coverage", () => {
     const testCase = await createTypeScriptNormalizationCase();
     const index = await expectNativeSemantics(testCase);
     const moduleIndex = index.byFile.get(fileIdentityKey(testCase.files[0]!));
-    const exportedNames = moduleIndex?.exports.map((entry) => entry.exportedAs);
+    const exportedNames = moduleIndex?.exports
+      .filter((entry) => entry.type !== "exportStar")
+      .map((entry) => entry.exportedAs);
     expect(exportedNames).toEqual(expect.arrayContaining(["PublicAlias", "PublicContract"]));
     expect(exportedNames).not.toContain("PrivateAlias");
     expect(exportedNames).not.toContain("PrivateContract");
@@ -2909,9 +2912,11 @@ nativeDescribe("native semantic coverage", () => {
     for (const index of [cold, warm]) {
       await assertPythonAnnotationNavigation(index, paths);
       await assertPythonAnnotationReferences(index, paths);
+      await assertPythonPostponedCallEdges(index, paths);
     }
     __setQuerySyntaxCacheLimitsForTests(warm, { compactBytes: 0, liveBytes: 0 });
     await assertPythonAnnotationNavigation(warm, paths);
     await assertPythonAnnotationReferences(warm, paths);
+    await assertPythonPostponedCallEdges(warm, paths);
   });
 });

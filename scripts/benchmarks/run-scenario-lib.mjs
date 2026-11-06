@@ -155,7 +155,12 @@ function validateStep(step, variant, label) {
     return;
   }
 
-  assertExactKeys(step, ["type", "command", "query"], label);
+  const keys = ["type", "command", "query"];
+  if (Object.hasOwn(step, "limit")) keys.push("limit");
+  assertExactKeys(step, keys, label);
+  if (step.limit !== undefined && (!Number.isSafeInteger(step.limit) || step.limit < 1)) {
+    fail(`${label}.limit must be a positive safe integer.`);
+  }
   if (step.type !== "codegraph") fail(`${label}.type must be "codegraph".`);
   if (step.command !== "explore") fail(`${label}.command must be "explore".`);
   assertNonEmptyString(step.query, `${label}.query`);
@@ -196,7 +201,12 @@ function validateVariants(variants, label) {
       warmSteps.length === coldSteps.length &&
       warmSteps.every((step, index) => {
         const coldStep = coldSteps[index];
-        return coldStep !== undefined && step.command === coldStep.command && step.query === coldStep.query;
+        return (
+          coldStep !== undefined &&
+          step.command === coldStep.command &&
+          step.query === coldStep.query &&
+          step.limit === coldStep.limit
+        );
       });
     if (!matchesColdSteps) fail(`${label}.${variant} must exactly match ${label}.codegraph.`);
   }
@@ -535,6 +545,7 @@ export async function executeCodegraphExplore(options) {
     rootDir = repositoryRoot,
     repo,
     query,
+    limit,
     cache = "off",
     cacheDir,
     distCliPath = path.join(rootDir, "dist", "cli.js"),
@@ -551,6 +562,7 @@ export async function executeCodegraphExplore(options) {
   if (!fs.statSync(repoRealpath).isDirectory()) fail("Scenario repo must name an existing directory.");
   const argv = [distCliPath, "explore", query, "--root", repoRealpath, "--cache", cache];
   if (cacheDir) argv.push("--cache-dir", cacheDir);
+  if (limit !== undefined) argv.push("--limit", String(limit));
   argv.push("--json");
   let result;
   try {
@@ -598,7 +610,7 @@ export async function createWarmMcpExecutor(options) {
     buildOptions: { cache: "disk", ...(cacheDir ? { cacheDir } : {}) },
   });
   return {
-    execute: async ({ query }) => await handlers.explore({ query }),
+    execute: async ({ query, limit }) => await handlers.explore({ query, ...(limit !== undefined ? { limit } : {}) }),
     dispose: () => handlers.dispose(),
   };
 }
@@ -723,11 +735,12 @@ async function runVariant(scenario, variant, runNumber, options) {
       } else {
         const rawExecution =
           variant === "warm-mcp"
-            ? await warmMcp.execute({ query: step.query })
+            ? await warmMcp.execute({ query: step.query, ...(step.limit !== undefined ? { limit: step.limit } : {}) })
             : await executeCodegraph({
                 rootDir,
                 repo: scenario.repo,
                 query: step.query,
+                ...(step.limit !== undefined ? { limit: step.limit } : {}),
                 command: step.command,
                 cache: variant === "warm-cli" ? "disk" : "off",
                 ...(cacheDir ? { cacheDir } : {}),
@@ -771,6 +784,7 @@ async function warmScenarioVariant(scenario, variant, options) {
         rootDir,
         repo: scenario.repo,
         query: step.query,
+        ...(step.limit !== undefined ? { limit: step.limit } : {}),
         command: step.command,
         cache: "disk",
         ...(cacheDir ? { cacheDir } : {}),
@@ -781,7 +795,9 @@ async function warmScenarioVariant(scenario, variant, options) {
   if (variant === "warm-mcp") {
     const warmMcp = await createWarmMcp({ rootDir, repo: scenario.repo, ...(cacheDir ? { cacheDir } : {}) });
     try {
-      for (const step of steps) await warmMcp.execute({ query: step.query });
+      for (const step of steps) {
+        await warmMcp.execute({ query: step.query, ...(step.limit !== undefined ? { limit: step.limit } : {}) });
+      }
       return warmMcp;
     } catch (error) {
       warmMcp.dispose();

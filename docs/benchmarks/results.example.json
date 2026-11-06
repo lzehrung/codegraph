@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-06T16:00:11.270Z",
+  "generatedAt": "2026-11-06T20:05:42.739Z",
   "command": [
     "node",
     "scripts/benchmarks/run-scenario.mjs",
@@ -13,7 +13,7 @@
     "--require-complete"
   ],
   "environment": {
-    "nodeVersion": "v22.16.0",
+    "nodeVersion": "v22.23.4",
     "platform": "win32",
     "arch": "x64",
     "cpuModel": "Intel(R) Core(TM) i9-14900K",
@@ -21,7 +21,7 @@
     "totalMemoryBytes": 137141977088
   },
   "scenarioFile": "docs/benchmarks/scenarios.json",
-  "scenarioDigest": "sha256:0a1f07d7edf3d472c894986988243d41a7aeb0a78f88a2697d2c06157903f9a0",
+  "scenarioDigest": "sha256:b163cf9a3ab8275c5e45e59055ff650d8b85c6ec282cb74c406dffdcf2259070",
   "scenarioIds": [
     "repo-orientation-small-ts",
     "python-import-reference",
@@ -38,7 +38,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.528
+        "wallTimeMs": 2.52
       },
       "checks": {
         "anchorsExpected": 3,
@@ -54,7 +54,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.494
+        "wallTimeMs": 2.575
       },
       "checks": {
         "anchorsExpected": 3,
@@ -70,7 +70,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.748
+        "wallTimeMs": 2.256
       },
       "checks": {
         "anchorsExpected": 3,
@@ -86,7 +86,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 760.419
+        "wallTimeMs": 901.372
       },
       "checks": {
         "anchorsExpected": 3,
@@ -102,7 +102,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 746.057
+        "wallTimeMs": 937.848
       },
       "checks": {
         "anchorsExpected": 3,
@@ -118,7 +118,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 750.271
+        "wallTimeMs": 898.805
       },
       "checks": {
         "anchorsExpected": 3,
@@ -134,7 +134,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 827.104
+        "wallTimeMs": 893
       },
       "checks": {
         "anchorsExpected": 3,
@@ -150,7 +150,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 746.672
+        "wallTimeMs": 903.722
       },
       "checks": {
         "anchorsExpected": 3,
@@ -166,7 +166,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 761.233
+        "wallTimeMs": 904.625
       },
       "checks": {
         "anchorsExpected": 3,
@@ -182,7 +182,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 40.578
+        "wallTimeMs": 221.022
       },
       "checks": {
         "anchorsExpected": 3,
@@ -198,7 +198,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.899
+        "wallTimeMs": 0.737
       },
       "checks": {
         "anchorsExpected": 3,
@@ -214,7 +214,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.839
+        "wallTimeMs": 0.673
       },
       "checks": {
         "anchorsExpected": 3,
@@ -230,7 +230,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 1.905
+        "wallTimeMs": 2.003
       },
       "checks": {
         "anchorsExpected": 3,
@@ -246,7 +246,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.113
+        "wallTimeMs": 2.277
       },
       "checks": {
         "anchorsExpected": 3,
@@ -262,7 +262,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.142
+        "wallTimeMs": 1.852
       },
       "checks": {
         "anchorsExpected": 3,
@@ -278,7 +278,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 770.681
+        "wallTimeMs": 946.558
       },
       "checks": {
         "anchorsExpected": 3,
@@ -294,7 +294,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 749.219
+        "wallTimeMs": 932.541
       },
       "checks": {
         "anchorsExpected": 3,
@@ -310,7 +310,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 762.438
+        "wallTimeMs": 916.629
       },
       "checks": {
         "anchorsExpected": 3,
@@ -326,7 +326,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 768.556
+        "wallTimeMs": 931.015
       },
       "checks": {
         "anchorsExpected": 3,
@@ -342,7 +342,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 765.128
+        "wallTimeMs": 910.903
       },
       "checks": {
         "anchorsExpected": 3,
@@ -358,7 +358,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 768.914
+        "wallTimeMs": 920.149
       },
       "checks": {
         "anchorsExpected": 3,
@@ -374,7 +374,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 38.065
+        "wallTimeMs": 220.319
       },
       "checks": {
         "anchorsExpected": 3,
@@ -390,7 +390,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.618
+        "wallTimeMs": 0.477
       },
       "checks": {
         "anchorsExpected": 3,
@@ -406,7 +406,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.595
+        "wallTimeMs": 0.467
       },
       "checks": {
         "anchorsExpected": 3,
@@ -422,7 +422,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 3.839
+        "wallTimeMs": 2.234
       },
       "checks": {
         "anchorsExpected": 3,
@@ -438,7 +438,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.381
+        "wallTimeMs": 2.437
       },
       "checks": {
         "anchorsExpected": 3,
@@ -454,7 +454,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.194
+        "wallTimeMs": 1.966
       },
       "checks": {
         "anchorsExpected": 3,
@@ -470,7 +470,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 797.021
+        "wallTimeMs": 941.451
       },
       "checks": {
         "anchorsExpected": 3,
@@ -486,7 +486,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 809.596
+        "wallTimeMs": 969.626
       },
       "checks": {
         "anchorsExpected": 3,
@@ -502,7 +502,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 840.132
+        "wallTimeMs": 957.339
       },
       "checks": {
         "anchorsExpected": 3,
@@ -518,7 +518,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 753.567
+        "wallTimeMs": 872.015
       },
       "checks": {
         "anchorsExpected": 3,
@@ -534,7 +534,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 747.411
+        "wallTimeMs": 891.757
       },
       "checks": {
         "anchorsExpected": 3,
@@ -550,7 +550,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 749.54
+        "wallTimeMs": 883.286
       },
       "checks": {
         "anchorsExpected": 3,
@@ -566,7 +566,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 36.07
+        "wallTimeMs": 199.136
       },
       "checks": {
         "anchorsExpected": 3,
@@ -582,7 +582,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.478
+        "wallTimeMs": 0.295
       },
       "checks": {
         "anchorsExpected": 3,
@@ -598,7 +598,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.326
+        "wallTimeMs": 0.311
       },
       "checks": {
         "anchorsExpected": 3,
@@ -614,7 +614,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.421
+        "wallTimeMs": 2.25
       },
       "checks": {
         "anchorsExpected": 3,
@@ -630,7 +630,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 1.884
+        "wallTimeMs": 2.001
       },
       "checks": {
         "anchorsExpected": 3,
@@ -646,7 +646,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 1.881
+        "wallTimeMs": 2.024
       },
       "checks": {
         "anchorsExpected": 3,
@@ -662,7 +662,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 759.847
+        "wallTimeMs": 896.848
       },
       "checks": {
         "anchorsExpected": 3,
@@ -678,7 +678,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 732.86
+        "wallTimeMs": 901.982
       },
       "checks": {
         "anchorsExpected": 3,
@@ -694,7 +694,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 746.868
+        "wallTimeMs": 890.911
       },
       "checks": {
         "anchorsExpected": 3,
@@ -710,7 +710,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 744.929
+        "wallTimeMs": 877.263
       },
       "checks": {
         "anchorsExpected": 3,
@@ -726,7 +726,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 738.719
+        "wallTimeMs": 908.392
       },
       "checks": {
         "anchorsExpected": 3,
@@ -742,7 +742,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 764.131
+        "wallTimeMs": 887.01
       },
       "checks": {
         "anchorsExpected": 3,
@@ -758,7 +758,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 38.593
+        "wallTimeMs": 204.69
       },
       "checks": {
         "anchorsExpected": 3,
@@ -774,7 +774,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.438
+        "wallTimeMs": 0.292
       },
       "checks": {
         "anchorsExpected": 3,
@@ -790,7 +790,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.856
+        "wallTimeMs": 0.311
       },
       "checks": {
         "anchorsExpected": 3,
@@ -806,7 +806,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.563
+        "wallTimeMs": 3.218
       },
       "checks": {
         "anchorsExpected": 3,
@@ -822,7 +822,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.041
+        "wallTimeMs": 2.506
       },
       "checks": {
         "anchorsExpected": 3,
@@ -838,7 +838,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.066
+        "wallTimeMs": 2.617
       },
       "checks": {
         "anchorsExpected": 3,
@@ -854,7 +854,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 760.986
+        "wallTimeMs": 948.526
       },
       "checks": {
         "anchorsExpected": 3,
@@ -887,9 +887,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -915,7 +915,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 749.429
+        "wallTimeMs": 954.277
       },
       "checks": {
         "anchorsExpected": 3,
@@ -948,9 +948,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -976,7 +976,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 765.189
+        "wallTimeMs": 965.009
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1009,9 +1009,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1037,7 +1037,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 749.21
+        "wallTimeMs": 891.675
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1070,9 +1070,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1098,7 +1098,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 762.427
+        "wallTimeMs": 901.18
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1131,9 +1131,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1159,7 +1159,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 777.923
+        "wallTimeMs": 904.134
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1192,9 +1192,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1220,7 +1220,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 36.619
+        "wallTimeMs": 215.279
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1253,9 +1253,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1281,7 +1281,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.284
+        "wallTimeMs": 0.301
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1314,9 +1314,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {
@@ -1342,7 +1342,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 0,
-        "wallTimeMs": 0.264
+        "wallTimeMs": 0.663
       },
       "checks": {
         "anchorsExpected": 3,
@@ -1375,9 +1375,9 @@
                 "label": "preserveExistingBenchmarkDirectory"
               },
               "beforeRank": 2,
-              "afterRank": 5,
+              "afterRank": 6,
               "beforeReciprocalRank": 0.5,
-              "afterReciprocalRank": 0.2
+              "afterReciprocalRank": 0.16666666666666666
             }
           ],
           "recommendedFile": {

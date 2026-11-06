@@ -266,6 +266,7 @@ export async function goToDefinition(
           });
         }
       }
+      return { status: "not_found", reason: "No matching exported definition" };
     }
   }
 
