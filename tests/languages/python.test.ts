@@ -1183,6 +1183,68 @@ describe("Python native import bindings", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a module-level call to the import a later local declaration replaces", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-later-local-rebinding-"));
+    const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+    const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+    const mainLines = [
+      "from other import helper",
+      "print(helper())",
+      "def run():",
+      "    return helper()",
+      "def helper():",
+      "    return 3",
+      "",
+    ];
+    await Promise.all([
+      fsp.writeFile(mainFile, mainLines.join("\n"), "utf8"),
+      fsp.writeFile(otherFile, "def helper():\n    return 2\n", "utf8"),
+    ]);
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const immediate = await goToDefinition(index, {
+        file: mainFile,
+        line: 2,
+        column: mainLines[1]!.indexOf("helper") + 1,
+      });
+      expect(immediate.status).toBe("ok");
+      if (immediate.status !== "ok") throw new Error("Expected the module-level call to resolve");
+      expect(fileIdentityKey(immediate.definition.file)).toBe(fileIdentityKey(otherFile));
+      expect(immediate.definition.range.start.line).toBe(1);
+
+      const deferred = await goToDefinition(index, {
+        file: mainFile,
+        line: 4,
+        column: mainLines[3]!.indexOf("helper") + 1,
+      });
+      expect(deferred.status).toBe("ok");
+      if (deferred.status !== "ok") throw new Error("Expected the deferred call to resolve");
+      expect(fileIdentityKey(deferred.definition.file)).toBe(fileIdentityKey(mainFile));
+      expect(deferred.definition.range.start.line).toBe(5);
+
+      const importedRefs = await findReferences(index, { file: otherFile, line: 1, column: 5 });
+      expect(importedRefs.status).toBe("ok");
+      if (importedRefs.status !== "ok") throw new Error("Expected imported helper references");
+      expect(importedRefs.referenceCoverage.state).toBe("complete");
+      expect(importedRefs.references.map((reference) => reference.range.start.line)).toEqual([1, 2, 1]);
+
+      const localRefs = await findReferences(index, { file: mainFile, line: 5, column: 5 });
+      expect(localRefs.status).toBe("ok");
+      if (localRefs.status !== "ok") throw new Error("Expected local helper references");
+      expect(localRefs.referenceCoverage.state).toBe("complete");
+      expect(localRefs.references.map((reference) => reference.range.start.line)).toEqual([4, 5]);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const runEdges = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+        .map((edge) => fileIdentityKey(graph.nodes.get(edge.to)?.file ?? ""));
+      expect(runEdges).toEqual([fileIdentityKey(mainFile)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Python receiver member declarations", () => {

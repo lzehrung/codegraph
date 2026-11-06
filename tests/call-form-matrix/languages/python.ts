@@ -256,4 +256,40 @@ export const pythonCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.py", fromName: "defaults" },
   },
+  {
+    id: "python/bare-call-module-level-before-local-declaration",
+    language: "python",
+    callForm: "bare-call",
+    // Module statements run in order, so the call on line 2 reads the import that line 1 bound.
+    // The `def` on line 4 replaces the name only afterwards, which is the same-name decoy here.
+    files: {
+      "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "use.py": ["from calc import add", "print(add(1, 2))", "", "def add(a, b):", "    return -1", ""].join("\n"),
+    },
+    use: { file: "use.py", line: 2, token: "add" },
+    expected: { file: "calc.py", line: 1, token: "add" },
+    decoy: { file: "use.py", line: 4, token: "add" },
+    decoyKind: "callable",
+  },
+  {
+    id: "python/bare-call-eager-default-before-local-declaration",
+    language: "python",
+    callForm: "bare-call",
+    files: {
+      "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "use.py": [
+        "from calc import add",
+        "def run(value=add(1, 2)):",
+        "    return value",
+        "def add(a, b):",
+        "    return -1",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.py", line: 2, token: "add" },
+    expected: { file: "calc.py", line: 1, token: "add" },
+    decoy: { file: "use.py", line: 4, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "run" },
+  },
 ];

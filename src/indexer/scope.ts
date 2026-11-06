@@ -18,6 +18,7 @@ import {
   bindingCoversUse,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
+  pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
@@ -493,10 +494,27 @@ export function buildScopeIndexFromSource(
       const scope = stack[index]!;
       if (node && !scopeAllowsUse(row, scope, node)) continue;
       let hit = scope.map.get(canonicalName);
+      if (node && row.moduleBindingsAtFunctionRuntime) {
+        while (hit?.kind === "function" && pythonFunctionPendingInDefault(hit.def?.start.index, node)) {
+          hit = hit.earlierSameScope;
+        }
+      }
       while (methodCall && hit?.kind === "local") hit = hit.earlierSameScope;
       if (hit) return hit;
+      if (
+        node &&
+        row.moduleBindingsAtFunctionRuntime &&
+        laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, node)
+      ) {
+        return undefined;
+      }
     }
     let root = rootScope.map.get(canonicalName);
+    if (node && row.moduleBindingsAtFunctionRuntime) {
+      while (root?.kind === "function" && pythonFunctionPendingInDefault(root.def?.start.index, node)) {
+        root = root.earlierSameScope;
+      }
+    }
     while (methodCall && root?.kind === "local") root = root.earlierSameScope;
     return root;
   };
@@ -565,17 +583,23 @@ export function buildScopeIndexFromSource(
       addBindingToScope(pattern, kind);
       return;
     }
-    // Parameter nodes put names and types as siblings. Walking the whole subtree for bindings
-    // would register type-position identifiers (`int`, `T`, package qualifiers) as new locals;
-    // `walk` still visits the type field so a proven declaration (e.g. a struct name used as a
-    // parameter type) records this position as one of its occurrences.
+    // Parameter type and default-value fields are reads, not additional bound names.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
+      const readsEagerDefault = kind === "param" && !!row.moduleBindingsAtFunctionRuntime;
+      const valueNode = readsEagerDefault ? pattern.childForFieldName("value") : null;
       for (const child of pattern.namedChildren) {
         if (typeNode && child.id === typeNode.id) continue;
+        if (valueNode && child.id === valueNode.id) continue;
         addPatternDecls(child, kind, addBindingToScope);
       }
       if (typeNode) walk(typeNode);
+      if (valueNode) {
+        // Python defaults execute in the enclosing scope, before the function is bound.
+        const functionScope = stack.pop();
+        walk(valueNode);
+        if (functionScope) stack.push(functionScope);
+      }
       return;
     }
     if (row.destructuringPairPatternTypes?.has(pattern.type)) {
@@ -850,10 +874,21 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
-  const deferToScope = (canonical: string, binding: Binding | undefined): Scope | undefined => {
+  const deferToScope = (
+    canonical: string,
+    binding: Binding | undefined,
+    useNode: SyntaxNodeLike,
+  ): Scope | undefined => {
     if (row.variableTargetScopeKinds) {
       for (let index = stack.length - 1; index >= 0; index -= 1) {
         const scope = stack[index]!;
+        if (
+          !binding &&
+          row.moduleBindingsAtFunctionRuntime &&
+          laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)
+        ) {
+          return undefined;
+        }
         if (binding && scopeOwnsBinding(scope, canonical, binding)) return undefined;
         if (row.variableTargetScopeKinds.has(scope.kind)) return scope;
       }
@@ -898,7 +933,7 @@ export function buildScopeIndexFromSource(
     for (let current = useNode.parent; current; current = current.parent) {
       if (!support.createsFunctionScope(current)) continue;
       const body = current.childForFieldName("body");
-      return !!body && useNode.startIndex >= body.startIndex && useNode.endIndex <= body.endIndex;
+      if (body && useNode.startIndex >= body.startIndex && useNode.endIndex <= body.endIndex) return true;
     }
     return false;
   };
@@ -923,13 +958,13 @@ export function buildScopeIndexFromSource(
         while (
           binding &&
           ((methodCall && binding.kind === "local") ||
-            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart)))
+            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode)))
         ) {
           binding = binding.earlierSameScope;
         }
         if (binding) return binding;
       }
-      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart)) return undefined;
+      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, useNode)) return undefined;
       scope = scope.parent;
     }
     return undefined;
@@ -967,7 +1002,7 @@ export function buildScopeIndexFromSource(
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
       const binding = lookupCovering(scope, useNode, canonical, phpThis);
       if (!binding) {
-        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex)) continue;
+        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)) continue;
         if (receiver) queueUse(receiver, id);
         continue;
       }
@@ -1216,7 +1251,7 @@ export function buildScopeIndexFromSource(
           const name = sliceText(node, source);
           const binding = phpThis ? lookupOutsideFunctions(name) : lookup(name, node);
           const canonical = canonicalUseName(name, node);
-          const deferred = deferToScope(canonical, binding);
+          const deferred = deferToScope(canonical, binding, node);
           const useId = node.id;
           if (deferred && useId !== undefined) queueUse(deferred, useId);
           else if (binding) attachOccurrence(binding, node);

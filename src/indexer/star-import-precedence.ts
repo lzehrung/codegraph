@@ -97,7 +97,8 @@ export function isExpandedStarBinding(binding: ImportBinding, imports: readonly 
   });
 }
 
-function explicitBindingStartIndex(binding: ImportBinding): number | undefined {
+/** Source position of an explicit import's binding token for source-order arbitration. */
+export function explicitBindingStartIndex(binding: ImportBinding): number | undefined {
   if (binding.kind === "star") return undefined;
   if (binding.localRange?.start.index !== undefined) return binding.localRange.start.index;
   return binding.kind === "named" ? binding.importedRange?.start.index : undefined;
