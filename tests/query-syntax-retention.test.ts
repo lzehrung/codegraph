@@ -305,6 +305,7 @@ describe("bounded query syntax retention", () => {
         const local = await findReferences(index, { file: mainFile, line: 1, column: 5 });
         expect(local.status).toBe("ok");
         if (local.status !== "ok") throw new Error("Expected local helper references");
+        expect(local.references.some((reference) => reference.range.start.line === 4)).toBe(false);
         localSitesByRetention.push(
           local.references.map((reference) => `${reference.file}:${reference.range.start.line}`),
         );

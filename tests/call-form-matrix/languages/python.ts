@@ -20,12 +20,20 @@ export const pythonCells: MatrixCell[] = [
     callForm: "bare-call",
     files: {
       "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
-      "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
-      "use.py": ["from calc import add", "", "", "def sum_pair():", "    return add(1, 2)", ""].join("\n"),
+      "use.py": [
+        "def add(a, b):",
+        "    return -1",
+        "",
+        "def sum_pair():",
+        "    return add(1, 2)",
+        "",
+        "from calc import add",
+        "",
+      ].join("\n"),
     },
     use: { file: "use.py", line: 5, token: "add" },
     expected: { file: "calc.py", line: 1, token: "add" },
-    decoy: { file: "decoy.py", line: 1, token: "add" },
+    decoy: { file: "use.py", line: 1, token: "add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
     // Moved: calc.py relocates under lib/, and use.py's import path updates to match -- Python's
@@ -34,8 +42,16 @@ export const pythonCells: MatrixCell[] = [
     moved: {
       files: {
         "lib/calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
-        "decoy.py": ["def add(a, b):", "    return -1", ""].join("\n"),
-        "use.py": ["from lib.calc import add", "", "", "def sum_pair():", "    return add(1, 2)", ""].join("\n"),
+        "use.py": [
+          "def add(a, b):",
+          "    return -1",
+          "",
+          "def sum_pair():",
+          "    return add(1, 2)",
+          "",
+          "from lib.calc import add",
+          "",
+        ].join("\n"),
       },
       expected: { file: "lib/calc.py", line: 1, token: "add" },
     },

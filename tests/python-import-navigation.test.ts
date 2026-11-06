@@ -3,7 +3,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer.js";
-import { buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
+import { buildSymbolGraphDetailed, findReferences, goToDefinition, type Reference } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 /**
@@ -16,6 +16,9 @@ import { fileIdentityKey } from "../src/util/paths.js";
  * - `super().m()` resolves through a proven base class, same-file or imported, unless `super` is
  *   lexically shadowed; an unproven (missing) base stays `not_found`.
  * - Submodule bindings target regular-package initializers and never infer the wrong case.
+ * - a module-level name read from a function body is the module's binding at call time, so an
+ *   import that follows a local `def` owns the deferred call while an earlier module-level call
+ *   still names the local, and a later local declaration or a parameter keeps its own binding.
  */
 
 async function withFixture(
@@ -41,6 +44,14 @@ function columnOf(source: string, line: number, token: string, fromEnd = false):
   const index = fromEnd ? text.lastIndexOf(token) : text.indexOf(token);
   if (index < 0) throw new Error(`Expected token ${token} on line ${line} of ${JSON.stringify(text)}`);
   return index + 1;
+}
+
+/** Sorted `[line, column]` reference start sites of one file. */
+function sitesOf(references: readonly Reference[], file: string): Array<[number, number]> {
+  return references
+    .filter((reference) => fileIdentityKey(reference.file) === file)
+    .map((reference): [number, number] => [reference.range.start.line, reference.range.start.column])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
 }
 
 describe("class named like its own module through a package re-export", () => {
@@ -1376,6 +1387,172 @@ describe("Python package attributes before submodules", () => {
           expect(warm.byFile.get(fileIdentityKey(f("main.py")))?.imports).toEqual(
             cold.byFile.get(fileIdentityKey(f("main.py")))?.imports,
           );
+        }
+      },
+    );
+  });
+});
+
+describe("Python module names a later import rebinds", () => {
+  const otherSource = "def helper():\n    return 2\n";
+  // 1-2: local definition, the same-name local decoy for the imported helper.
+  // 3: module-level call before the import, still the local.
+  // 4-5: deferred call in a function body, which reads the module name at call time.
+  // 6: the import that rebinds the name.
+  const mainSource = [
+    "def helper():",
+    "    return 1",
+    "print(helper())",
+    "def run():",
+    "    return helper()",
+    "from other import helper",
+    "",
+  ].join("\n");
+
+  it("keeps the local's own call and excludes the deferred call the import owns", async () => {
+    await withFixture("cg-py-later-import-", { "main.py": mainSource, "other.py": otherSource }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const earlyCall = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 3,
+        column: columnOf(mainSource, 3, "helper"),
+      });
+      expect(earlyCall.status).toBe("ok");
+      if (earlyCall.status === "ok") {
+        expect(fileIdentityKey(earlyCall.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(earlyCall.definition.range.start.line).toBe(1);
+      }
+
+      const deferredCall = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 5,
+        column: columnOf(mainSource, 5, "helper"),
+      });
+      expect(deferredCall.status).toBe("ok");
+      if (deferredCall.status === "ok") {
+        expect(fileIdentityKey(deferredCall.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        expect(deferredCall.definition.range.start.line).toBe(1);
+      }
+
+      const localReferences = await findReferences(index, {
+        file: f("main.py"),
+        line: 1,
+        column: columnOf(mainSource, 1, "helper"),
+      });
+      expect(localReferences.status).toBe("ok");
+      if (localReferences.status !== "ok") return;
+      expect(localReferences.referenceCoverage.state).toBe("complete");
+      expect(sitesOf(localReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+        [1, columnOf(mainSource, 1, "helper")],
+        [3, columnOf(mainSource, 3, "helper")],
+      ]);
+
+      const importedReferences = await findReferences(index, {
+        file: f("other.py"),
+        line: 1,
+        column: columnOf(otherSource, 1, "helper"),
+      });
+      expect(importedReferences.status).toBe("ok");
+      if (importedReferences.status !== "ok") return;
+      expect(importedReferences.referenceCoverage.state).toBe("complete");
+      expect(sitesOf(importedReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+        [5, columnOf(mainSource, 5, "helper")],
+        [6, columnOf(mainSource, 6, "helper")],
+      ]);
+    });
+  });
+
+  it("gives the deferred call to a local declaration that follows the import", async () => {
+    const shadowedSource = [
+      "from other import helper",
+      "",
+      "def run():",
+      "    return helper()",
+      "def helper():",
+      "    return 3",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-local-after-import-",
+      { "main.py": shadowedSource, "other.py": otherSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+
+        const deferredCall = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(shadowedSource, 4, "helper"),
+        });
+        expect(deferredCall.status).toBe("ok");
+        if (deferredCall.status === "ok") {
+          expect(fileIdentityKey(deferredCall.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(deferredCall.definition.range.start.line).toBe(5);
+        }
+
+        const localReferences = await findReferences(index, {
+          file: f("main.py"),
+          line: 5,
+          column: columnOf(shadowedSource, 5, "helper"),
+        });
+        expect(localReferences.status).toBe("ok");
+        if (localReferences.status !== "ok") return;
+        expect(sitesOf(localReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+          [4, columnOf(shadowedSource, 4, "helper")],
+          [5, columnOf(shadowedSource, 5, "helper")],
+        ]);
+
+        const importedReferences = await findReferences(index, {
+          file: f("other.py"),
+          line: 1,
+          column: columnOf(otherSource, 1, "helper"),
+        });
+        expect(importedReferences.status).toBe("ok");
+        if (importedReferences.status !== "ok") return;
+        expect(sitesOf(importedReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(shadowedSource, 1, "helper")],
+        ]);
+      },
+    );
+  });
+
+  it("keeps a parameter that shadows the rebinding module name", async () => {
+    const parameterSource = `${mainSource}\ndef via_param(helper):\n    return helper()\n`;
+    await withFixture(
+      "cg-py-later-import-param-",
+      { "main.py": parameterSource, "other.py": otherSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const parameterUse = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 9,
+          column: columnOf(parameterSource, 9, "helper"),
+        });
+        expect(parameterUse.status).toBe("ok");
+        if (parameterUse.status !== "ok") return;
+        expect(fileIdentityKey(parameterUse.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(parameterUse.definition.range.start.line).toBe(8);
+
+        for (const [definition, expected] of [
+          [
+            { file: f("main.py"), line: 1, column: columnOf(parameterSource, 1, "helper") },
+            [
+              [1, columnOf(parameterSource, 1, "helper")],
+              [3, columnOf(parameterSource, 3, "helper")],
+            ],
+          ],
+          [
+            { file: f("other.py"), line: 1, column: columnOf(otherSource, 1, "helper") },
+            [
+              [5, columnOf(parameterSource, 5, "helper")],
+              [6, columnOf(parameterSource, 6, "helper")],
+            ],
+          ],
+        ] as const) {
+          const result = await findReferences(index, definition);
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") continue;
+          expect(sitesOf(result.references, fileIdentityKey(f("main.py")))).toEqual(expected);
         }
       },
     );

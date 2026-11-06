@@ -761,7 +761,8 @@ async function findReferencesInternal(
   const verifiedReferenceFilter = (
     fileId: string,
   ): ((reference: VerifiedNamedNodeReference) => boolean) | undefined => {
-    if (collectionMode === "all") return undefined;
+    // Already-collected sites must not consume the bounded scan's lookahead slot.
+    if (collectionMode === "all") return (reference) => !seenRefs.has(referenceSiteKey(fileId, reference.range));
     return (reference) => !reference.via?.reexport && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
   };
   const parsedContext = await ensureParsedContextForIndex(index, definitionFile);
@@ -933,13 +934,25 @@ async function findReferencesInternal(
     );
     requiresTypeScriptOverloadVerifiedScan = overloadBindings.length > 1;
   }
+  // Scope occurrences do not select between a module declaration and a later import.
+  // Reuse goto's shared source-order/runtime-binding decision for these collisions.
+  let requiresRuntimeBindingVerifiedScan = false;
+  if (scopeNodesFor(parsedContext.sup.id).moduleBindingsAtFunctionRuntime) {
+    for (let binding = localBinding; binding; binding = binding.earlierSameScope) {
+      if (binding.import) {
+        requiresRuntimeBindingVerifiedScan = true;
+        break;
+      }
+    }
+  }
 
   const requiresSameFileVerifiedScan =
     ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
       definition.kind === SymbolKind.Function &&
       !receiverMemberDefinition) ||
     scansNamespaceReferences ||
-    requiresTypeScriptOverloadVerifiedScan;
+    requiresTypeScriptOverloadVerifiedScan ||
+    requiresRuntimeBindingVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;

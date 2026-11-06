@@ -879,6 +879,35 @@ describe("Go to Definition", () => {
       await testGoToDefinition(index, matchFile, 6, 20, matchFile, 5);
       await testGoToDefinition(index, consumerFile, 4, 10, stubFile, 5);
     });
+
+    it("resolves a function-body call to a later module-level import instead of an earlier local helper", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-rebinding-import-goto-"));
+      const otherFile = path.join(root, "other.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(otherFile, "def helper():\n    return 2\n", "utf8");
+        const mainLines = [
+          "def helper():",
+          "    return 1",
+          "def run():",
+          "    return helper()",
+          "from other import helper",
+          "",
+        ];
+        await fsp.writeFile(mainFile, mainLines.join("\n"), "utf8");
+
+        const index = await createTestIndexFromFiles(root, [otherFile, mainFile]);
+        await testGoToDefinition(index, mainFile, 4, mainLines[3]!.indexOf("helper") + 1, otherFile, 1);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const callTargets = graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+        expect(callTargets).toEqual([otherFile]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("PHP", () => {

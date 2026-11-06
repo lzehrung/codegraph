@@ -2153,7 +2153,14 @@ nativeDescribe("native semantic coverage", () => {
       name: string;
       files: Record<string, string[]>;
       goto: { file: string; line: number; token: string; expectedFile: string; expectedLine: number };
-      references: { file: string; line: number; token: string; expectedSites: string[]; decoyFile: string };
+      references: {
+        file: string;
+        line: number;
+        token: string;
+        expectedSites: string[];
+        decoyFile?: string;
+        decoyDeclaration?: { file: string; line: number; token: string; absentSites: string[] };
+      };
       edge: {
         caller: string;
         callerFile: string;
@@ -2490,6 +2497,44 @@ nativeDescribe("native semantic coverage", () => {
         },
         edge: { caller: "caller", callerFile: "zig/use.zig", expectedTarget: "zig/api.zig::target" },
       },
+      {
+        name: "Python function-body call rebound by a later module-level import",
+        files: {
+          "pyrebind/other.py": ["def helper():", "    return 2"],
+          "pyrebind/main.py": [
+            "def helper():",
+            "    return 1",
+            "def run():",
+            "    return helper()",
+            "from other import helper",
+          ],
+        },
+        goto: {
+          file: "pyrebind/main.py",
+          line: 4,
+          token: "helper",
+          expectedFile: "pyrebind/other.py",
+          expectedLine: 1,
+        },
+        references: {
+          file: "pyrebind/other.py",
+          line: 1,
+          token: "helper",
+          expectedSites: ["pyrebind/other.py:1", "pyrebind/main.py:4", "pyrebind/main.py:5"],
+          decoyDeclaration: {
+            file: "pyrebind/main.py",
+            line: 1,
+            token: "helper",
+            absentSites: ["pyrebind/main.py:4", "pyrebind/main.py:5"],
+          },
+        },
+        edge: {
+          caller: "run",
+          callerFile: "pyrebind/main.py",
+          expectedTarget: "pyrebind/other.py::helper",
+          absentTargets: ["pyrebind/main.py::helper"],
+        },
+      },
     ];
 
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-cross-unit-reload-"));
@@ -2570,10 +2615,30 @@ nativeDescribe("native semantic coverage", () => {
       for (const site of peerCase.references.expectedSites) {
         expect(coldReferences.refs, `${peerCase.name}: missing reference ${site}`).toContain(site);
       }
-      expect(
-        coldReferences.refs.some((site) => site.startsWith(`${peerCase.references.decoyFile}:`)),
-        `${peerCase.name}: decoy must stay out of the reference set`,
-      ).toBe(false);
+      if (peerCase.references.decoyFile) {
+        expect(
+          coldReferences.refs.some((site) => site.startsWith(`${peerCase.references.decoyFile}:`)),
+          `${peerCase.name}: decoy must stay out of the reference set`,
+        ).toBe(false);
+      }
+      if (peerCase.references.decoyDeclaration) {
+        const decoyDecl = peerCase.references.decoyDeclaration;
+        const decoyLines = peerCase.files[decoyDecl.file]!;
+        const decoyRequest = {
+          file: normalizeFile(path.join(root, decoyDecl.file)),
+          line: decoyDecl.line,
+          column: columnAt(decoyLines, decoyDecl.line, decoyDecl.token),
+          expectedStatus: "ok" as const,
+        };
+        const coldDecoyReferences = stableReferencesSnapshot(root, await normalizeReferences(cold, decoyRequest));
+        expect(coldDecoyReferences.status, `${peerCase.name}: decoy references`).toBe("ok");
+        if (coldDecoyReferences.status !== "ok") throw new Error(`${peerCase.name}: decoy references did not resolve`);
+        for (const site of decoyDecl.absentSites) {
+          expect(coldDecoyReferences.refs, `${peerCase.name}: decoy must omit ${site}`).not.toContain(site);
+        }
+        const warmDecoyReferences = stableReferencesSnapshot(root, await normalizeReferences(warm, decoyRequest));
+        expect(warmDecoyReferences, `${peerCase.name}: warm reload decoy references`).toEqual(coldDecoyReferences);
+      }
 
       const warmReferences = stableReferencesSnapshot(root, await normalizeReferences(warm, referenceRequest));
       expect(warmReferences, `${peerCase.name}: warm reload references`).toEqual(coldReferences);
