@@ -831,6 +831,19 @@ describe("Python native import bindings", () => {
       fsp.writeFile(alphaFile, "one = 1\ntwo = 2\n", "utf8"),
       fsp.writeFile(path.join(packageDir, "beta.py"), "three = 3\nfour = 4\n", "utf8"),
       fsp.writeFile(path.join(packageDir, "local.py"), "value = 5\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "star_left.py"), "def target():\n    return 1\n", "utf8"),
+      fsp.writeFile(path.join(packageDir, "star_right.py"), "def target():\n    return 2\n", "utf8"),
+      fsp.writeFile(
+        path.join(packageDir, "star_inner.py"),
+        "from .star_left import *\nfrom .star_right import *\n",
+        "utf8",
+      ),
+      fsp.writeFile(
+        path.join(packageDir, "star_outer.py"),
+        "from .star_inner import *\nfrom .star_right import *\n",
+        "utf8",
+      ),
+      fsp.writeFile(path.join(packageDir, "star_consumer.py"), "from .star_outer import target\nresult = target()\n"),
       fsp.writeFile(
         consumerFile,
         [
@@ -898,6 +911,26 @@ describe("Python native import bindings", () => {
             (reference) => reference.file === consumerFile && reference.range.start.line === 12,
           ),
         ).toBe(true);
+      }
+      const starConsumer = path.join(packageDir, "star_consumer.py").replace(/\\/g, "/");
+      const starRight = path.join(packageDir, "star_right.py").replace(/\\/g, "/");
+      const starLeft = path.join(packageDir, "star_left.py").replace(/\\/g, "/");
+      const starGoto = await goToDefinition(index, { file: starConsumer, line: 2, column: 10 });
+      expect(starGoto.status).toBe("ok");
+      if (starGoto.status === "ok") expect(starGoto.definition.file).toBe(starRight);
+      for (const [file, expected] of [
+        [starRight, [1, 2]],
+        [starLeft, []],
+      ] as const) {
+        const result = await findReferences(index, { file, line: 1, column: 5 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected references for ${file}`);
+        expect(
+          result.references
+            .filter((reference) => reference.file === starConsumer)
+            .map((reference) => reference.range.start.line)
+            .sort(),
+        ).toEqual(expected);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

@@ -205,6 +205,46 @@ describe("star-import precedence", () => {
     expect(baseName(resolved.definition.file)).toBe("aaa.py");
     expect(resolved.provenance?.resolution).toBe("import-star");
     expect(resolved.provenance?.confidence).toBe("medium");
+    expect(fileIdentityKey(resolved.via?.importedFrom ?? "")).toBe(fileIdentityKey(fileIn(root, "aaa.py")));
+    expect(resolved.via?.exportedName).toBe("helper");
+
+    const warm = await goToDefinition(index, { file: fileIn(root, "main.py"), ...at(main, "helper()", "helper") });
+    expect(warm.status).toBe("ok");
+    if (warm.status !== "ok") throw new Error("Expected the warm star import target");
+    expect(baseName(warm.definition.file)).toBe("aaa.py");
+    expect(warm.provenance).toEqual(resolved.provenance);
+    expect(warm.via).toEqual(resolved.via);
+  });
+
+  it("distinguishes Python explicit-import provenance from a true local declaration", async () => {
+    const imported = "from aaa import helper\n\ndef run():\n    return helper()\n";
+    const local = "def helper():\n    return 3\n\ndef run():\n    return helper()\n";
+    const { root, index } = await project("cg-python-import-provenance-", {
+      "aaa.py":
+        "# Imported declarations have source offsets independent of the consumer.\ndef helper():\n    return 2\n",
+      "imported.py": imported,
+      "local.py": local,
+    });
+    for (const scenario of [
+      { file: "imported.py", source: imported, target: "aaa.py", line: 2, resolution: "import" },
+      { file: "local.py", source: local, target: "local.py", line: 1, resolution: "exact" },
+    ]) {
+      const resolved = await goToDefinition(index, {
+        file: fileIn(root, scenario.file),
+        ...at(scenario.source, "return helper()", "helper"),
+      });
+      expect(resolved.status).toBe("ok");
+      if (resolved.status !== "ok") throw new Error("Expected the imported or local helper");
+      expect(baseName(resolved.definition.file)).toBe(scenario.target);
+      expect(resolved.definition.range.start.line).toBe(scenario.line);
+      expect(resolved.provenance?.resolution).toBe(scenario.resolution);
+      expect(resolved.provenance?.confidence).toBe("high");
+      if (scenario.resolution === "import") {
+        expect(fileIdentityKey(resolved.via?.importedFrom ?? "")).toBe(fileIdentityKey(fileIn(root, "aaa.py")));
+      } else {
+        expect(resolved.via?.importedFrom).toBeUndefined();
+      }
+    }
   });
 
   it("lets an explicit Java import beat an earlier wildcard and rejects two wildcards", async () => {

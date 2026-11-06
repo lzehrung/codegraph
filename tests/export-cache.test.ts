@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition, SymbolKind } from "../src/index.js";
 import { resolveExport, setExportCacheLimitForTests } from "../src/indexer/navigation-resolve.js";
 import type { ProjectIndex, ResolvedExport } from "../src/indexer/types.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
@@ -164,6 +164,47 @@ describe("resolveExport cache", () => {
           .sort(),
       ).toEqual([1, 2]);
       expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    }
+  });
+
+  it("keeps root-only cycle answers separate from interior walks and lookup options", async () => {
+    const root = await roots.create("cg-export-cache-cycle-roots-");
+    await writeFiles(root, {
+      "a.ts": "export * from './b';\n",
+      "b.ts": "export * from './a';\nexport * from './left';\n",
+      "p.ts": "export * from './q';\nexport * from './left';\n",
+      "q.ts": "export * from './p';\nexport * from './right';\n",
+      "left.ts": "export function target() { return 1; }\n",
+      "right.ts": "export function target() { return 2; }\n",
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const at = (file: string): string => path.join(root, file).replace(/\\/g, "/");
+    for (const order of [
+      ["p.ts", "q.ts"],
+      ["q.ts", "p.ts"],
+    ]) {
+      index.exportCache.clear();
+      for (const file of order) {
+        expect(resolveExport(index, at(file), "target")).toBeNull();
+        expect(resolveExport(index, at(file), "target")).toBeNull();
+      }
+    }
+    for (const allowLocalFallback of [false, true]) {
+      for (const file of ["a.ts", "b.ts"]) {
+        const functionHit = resolveExport(index, at(file), "target", {
+          allowLocalFallback,
+          preferredKind: SymbolKind.Function,
+        });
+        expect(show(functionHit)).toBe("left.ts:target");
+        const classHit = resolveExport(index, at(file), "target", {
+          allowLocalFallback,
+          preferredKind: SymbolKind.Class,
+        });
+        expect(classHit).toBeNull();
+        const callableHit = resolveExport(index, at(file), "target", { allowLocalFallback, argumentCount: 0 });
+        expect(show(callableHit)).toBe("left.ts:target");
+        expect(resolveExport(index, at(file), "missing", { allowLocalFallback })).toBeNull();
+      }
     }
   });
 

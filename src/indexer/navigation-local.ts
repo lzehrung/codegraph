@@ -540,12 +540,15 @@ export function resolveNamedDefinition(
       });
     }
   }
+  let localDefinition: SymbolDef | undefined;
+  if (hit?.kind === "resolved" && fileIdentityKey(file) === fileIdentityKey(hit.def.file)) {
+    localDefinition = hit.def;
+  }
   const row = scopeNodesFor(support.id);
   const moduleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime &&
-    hit?.kind === "resolved" &&
+    !!localDefinition &&
     referenceIndex !== undefined &&
-    fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
     !!(scopeIndex ?? cachedScopeIndexForIndex(index, file))?.allScopes.some((scope) => {
       if (scope.kind !== "function") return false;
       const body = scope.node.childForFieldName("body");
@@ -555,13 +558,13 @@ export function resolveNamedDefinition(
     mod.imports,
     support.id,
     matchesExplicitBinding,
-    hit?.kind === "resolved" ? hit.def.range.start.index : undefined,
+    localDefinition?.range.start.index,
     referenceIndex,
     moduleLookupAtRuntime,
   );
   const effectiveExplicitImport = effectiveBinding?.kind === "explicit" ? effectiveBinding.binding : undefined;
   if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
-    const sameFileFallback = referenceIndex !== undefined && fileIdentityKey(file) === fileIdentityKey(hit.def.file);
+    const sameFileFallback = referenceIndex !== undefined && !!localDefinition;
     if (
       sameFileFallback &&
       !fileScopeDefinitionCoversUse(support.id, hit.def.range, referenceIndex, hit.def.kind, moduleLookupAtRuntime)

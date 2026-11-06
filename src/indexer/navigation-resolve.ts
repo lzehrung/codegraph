@@ -1,5 +1,6 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
@@ -436,7 +437,13 @@ export function resolveExport(
     (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
-  function resolveFromFile(fileInner: FileId, name: string, namespace = opts?.cNamespace): ExportResolution {
+  function resolveFromFile(
+    fileInner: FileId,
+    name: string,
+    namespace = opts?.cNamespace,
+    allowCurrentLocalFallback = allowLocalFallback,
+    isRoot = false,
+  ): ExportResolution {
     const innerKey = fileIdentityKey(fileInner);
     const moduleEntry = index.byFile.get(innerKey);
     if (!moduleEntry) return null;
@@ -473,15 +480,23 @@ export function resolveExport(
       !names.localExports.has(canonicalName) &&
       !names.namespaceReexports.has(canonicalName) &&
       !names.reexports.has(canonicalName) &&
-      !(allowLocalFallback && names.locals.has(canonicalName))
+      !(allowCurrentLocalFallback && names.locals.has(canonicalName))
     ) {
       return null;
     }
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
-    // The module path is the lookup id, and the free-form name comes last so no field can run into it.
-    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
+    // The current file's export-only mode and the enclosing lookup's fallback mode are separate:
+    // a Python star excludes private locals, but an explicit re-export can still name one.
+    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
     const cached = index.exportCache.get(key);
     if (cached !== undefined) return cached;
+    // A root answer is safe for the same top-level query even when its walk cut a cycle.
+    // Interior walks must never consult it, because their excluded paths can differ.
+    const rootCacheKey = isRoot ? `root|${key}` : undefined;
+    if (rootCacheKey) {
+      const rootCached = index.exportCache.get(rootCacheKey);
+      if (rootCached !== undefined) return rootCached;
+    }
 
     if (visited.has(key)) {
       cycleCuts += 1;
@@ -492,7 +507,12 @@ export function resolveExport(
     visited.add(key);
     const cutsAtEntry = cycleCuts;
     const remember = (result: ExportResolution): ExportResolution => {
-      if (cycleCuts === cutsAtEntry && result !== "ambiguous") index.exportCache.set(key, result);
+      const isUncut = cycleCuts === cutsAtEntry;
+      if (isUncut && result !== "ambiguous") {
+        index.exportCache.set(key, result);
+      } else if (rootCacheKey) {
+        index.exportCache.set(rootCacheKey, result === "ambiguous" ? null : result);
+      }
       return result;
     };
 
@@ -543,7 +563,12 @@ export function resolveExport(
         if (imp.kind !== "star" && !(imp.kind === "named" && imp.local === name)) continue;
         if (imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== namespace) continue;
         const downstream = resolveFromFile(imp.resolved, imp.kind === "named" ? imp.imported : name, namespace);
-        if (downstream === "ambiguous") return remember("ambiguous");
+        if (downstream === "ambiguous") {
+          // C include lookup retains its existing declaration recovery: an unresolved
+          // intermediate header must not hide another included definition.
+          if (languageId === "c") continue;
+          return remember("ambiguous");
+        }
         if (downstream && !included.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
           included.push(downstream);
         }
@@ -584,11 +609,14 @@ export function resolveExport(
     if (namespaceCandidates.size) return remember("ambiguous");
 
     const reexportCandidates: ResolvedExport[] = [];
-    for (const entry of names.reexports.get(canonicalName) ?? []) {
-      const downstream =
-        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace) ??
-        // A qualified using target cannot fall back to an unrelated bare export.
-        (entry.sourceSpecifier.includes("::") ? null : resolveFromFile(entry.fromModule, canonicalName, namespace));
+    const explicitReexports = names.reexports.get(canonicalName) ?? [];
+    const explicitExportsTakePrecedence = !!languageId && isJsTsLanguage(languageId);
+    for (const entry of explicitReexports) {
+      let downstream = resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace);
+      // A qualified using target cannot fall back to an unrelated bare export. An ES named
+      // re-export likewise names its source spelling, not another export with its alias.
+      const mayTryBareName = !explicitExportsTakePrecedence && !entry.sourceSpecifier.includes("::");
+      if (!downstream && mayTryBareName) downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
       if (downstream === "ambiguous") return remember("ambiguous");
       if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         reexportCandidates.push(downstream);
@@ -599,24 +627,37 @@ export function resolveExport(
       return remember(result);
     }
     if (reexportCandidates.length) return remember("ambiguous");
+    if (explicitExportsTakePrecedence && explicitReexports.length) return remember(null);
 
-    const starCandidates: ResolvedExport[] = [];
-    for (const entry of moduleEntry.exports) {
-      if (entry.type !== "exportStar") continue;
-      const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
-      if (downstream === "ambiguous") return remember("ambiguous");
-      if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
-        starCandidates.push(downstream);
+    const usesPythonStarExports = languageId === "python";
+    if (usesPythonStarExports) {
+      for (let entryIndex = moduleEntry.exports.length - 1; entryIndex >= 0; entryIndex -= 1) {
+        const entry = moduleEntry.exports[entryIndex]!;
+        if (entry.type !== "exportStar") continue;
+        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace, false);
+        if (downstream) return remember(downstream);
       }
+    } else {
+      const starCandidates: ResolvedExport[] = [];
+      for (const entry of moduleEntry.exports) {
+        if (entry.type !== "exportStar") continue;
+        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
+        if (downstream === "ambiguous") return remember("ambiguous");
+        if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
+          starCandidates.push(downstream);
+        }
+      }
+      const [onlyStarCandidate] = starCandidates;
+      if (starCandidates.length === 1 && onlyStarCandidate) return remember(onlyStarCandidate);
+      if (starCandidates.length) return remember("ambiguous");
     }
-    const [onlyStarCandidate] = starCandidates;
-    if (starCandidates.length === 1 && onlyStarCandidate) return remember(onlyStarCandidate);
-    if (starCandidates.length) return remember("ambiguous");
 
     const localFallbackCandidates: SymbolDef[] = [];
     // C# lexical bindings have already been checked. Only namespace-level types
     // can remain visible from another region without a shared lexical scope.
-    if (allowLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry))) {
+    const canUseLocalFallback =
+      allowCurrentLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry));
+    if (canUseLocalFallback) {
       for (const local of names.locals.get(canonicalName) ?? []) {
         if (
           filtersUseNamespace &&
@@ -661,7 +702,7 @@ export function resolveExport(
 
   activeExportLookups += 1;
   try {
-    const result = resolveFromFile(file, exportedName);
+    const result = resolveFromFile(file, exportedName, opts?.cNamespace, allowLocalFallback, true);
     return result === "ambiguous" ? null : result;
   } finally {
     activeExportLookups -= 1;

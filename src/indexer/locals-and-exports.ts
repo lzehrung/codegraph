@@ -1667,14 +1667,13 @@ export function collectLocalsAndExportsFromSource(
           moduleSpecifier: binding.from,
         });
       } else if (binding.kind === "star") {
-        if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === fromModule)) {
-          exports.push({
-            type: "exportStar",
-            fromModule,
-            moduleSpecifier: binding.from,
-            sourceSpecifier: binding.from,
-          });
-        }
+        // Every statement matters: importing the same module again restores its later binding.
+        exports.push({
+          type: "exportStar",
+          fromModule,
+          moduleSpecifier: binding.from,
+          sourceSpecifier: binding.from,
+        });
       }
     }
   }

@@ -1235,9 +1235,7 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
     return found;
   }
 
-  // A scan of every module tests the modules no exporting file's importer set offers first, in module order, and then
-  // the offered files in sorted order. `resolveExport` caches what it answers on the way, so the order of these tests
-  // decides what a cold index answers for a name that a star-export cycle cuts short; keep that order.
+  // Preserve the full scan's module order for indirect importers, then sort offered importers.
   const offered = new Set<string>();
   const offeredNeedingFullTest: Array<{ key: string; importer: string; moduleIndex: ModuleIndex }> = [];
   for (const exportingFile of exportingFileIds) {

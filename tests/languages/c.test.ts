@@ -904,6 +904,18 @@ describe("C function redeclarations", () => {
         "",
       ].join("\n");
       await writeFile(file, source, "utf8");
+      const nestedFile = normalizePath(path.join(root, "nested.c"));
+      const definitionFile = normalizePath(path.join(root, "definition.h"));
+      const decoyFile = normalizePath(path.join(root, "decoy.c"));
+      await Promise.all([
+        writeFile(path.join(root, "one.h"), "int nested(void);\n"),
+        writeFile(path.join(root, "two.h"), "int nested(void);\n"),
+        writeFile(path.join(root, "forwards.h"), '#include "one.h"\n#include "two.h"\n'),
+        writeFile(definitionFile, "int nested(void) { return 1; }\n"),
+        writeFile(path.join(root, "outer.h"), '#include "forwards.h"\n#include "definition.h"\n'),
+        writeFile(decoyFile, "int nested(void) { return 2; }\n"),
+        writeFile(nestedFile, '#include "outer.h"\nint use(void) { return nested(); }\n'),
+      ]);
       const index = await buildProjectIndex(root, { cache: "off" });
 
       const prototypeReferences = await findReferences(index, { file, line: 1, column: 5 });
@@ -920,6 +932,26 @@ describe("C function redeclarations", () => {
           1, 4, 7,
         ]);
         expect(definitionReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+      const nestedGoto = await goToDefinition(index, {
+        file: nestedFile,
+        line: 2,
+        column: "int use(void) { return nested(); }".indexOf("nested") + 1,
+      });
+      expect(nestedGoto.status).toBe("ok");
+      if (nestedGoto.status === "ok") expect(nestedGoto.definition.file).toBe(definitionFile);
+      for (const [target, expectedLines] of [
+        [definitionFile, [2]],
+        [decoyFile, []],
+      ] as const) {
+        const result = await findReferences(index, { file: target, line: 1, column: 5 });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected references for ${target}`);
+        expect(
+          result.references
+            .filter((reference) => reference.file === nestedFile)
+            .map((reference) => reference.range.start.line),
+        ).toEqual(expectedLines);
       }
     } finally {
       await rm(root, { recursive: true, force: true });

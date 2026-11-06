@@ -7977,7 +7977,7 @@ describe("Find References: star-export cycles", () => {
     }
   });
 
-  it("checks each edge only once in a dense cycle without losing the consumer", async () => {
+  it("bounds each resolver walk in a fully indexed dense cycle and reuses its root answer", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cycle-dense-"));
     try {
       const moduleCount = 7;
@@ -7995,6 +7995,15 @@ describe("Find References: star-export cycles", () => {
       }
       const files = await writeFixtureFiles(root, sources);
       const index = await buildProjectIndexFromFiles(root, Object.values(files), { cache: "off" });
+      expect(index.byFile.size).toBe(moduleCount + 2);
+      for (const [name, file] of Object.entries(files)) {
+        const module = index.byFile.get(fileIdentityKey(file));
+        expect(module?.nativeOutcome, name).toBe("used");
+        if (!name.startsWith("m")) continue;
+        const starExports = module?.exports.filter((entry) => entry.type === "exportStar") ?? [];
+        const expectedStars = name === `m${moduleCount - 1}.ts` ? moduleCount : moduleCount - 1;
+        expect(starExports, name).toHaveLength(expectedStars);
+      }
       index.exportCache.clear();
       const visits = vi.spyOn(index.byFile, "get");
       try {
@@ -8002,7 +8011,14 @@ describe("Find References: star-export cycles", () => {
         expect(target?.kind).toBe("resolved");
         if (target?.kind === "resolved") expect(target.def.file).toBe(files["def.ts"]);
         // One initial visit, each directed cycle edge, and the edge to the definition.
-        expect(visits.mock.calls.length).toBeLessThanOrEqual(2 + moduleCount * (moduleCount - 1));
+        const coldVisits = visits.mock.calls.length;
+        expect(coldVisits).toBe(2 + moduleCount * (moduleCount - 1));
+        for (let repeat = 0; repeat < 3; repeat += 1) {
+          const repeated = resolveExport(index, files["m0.ts"]!, "target");
+          expect(repeated?.kind).toBe("resolved");
+          if (repeated?.kind === "resolved") expect(repeated.def.file).toBe(files["def.ts"]);
+        }
+        expect(visits.mock.calls.length - coldVisits).toBe(3);
       } finally {
         visits.mockRestore();
       }

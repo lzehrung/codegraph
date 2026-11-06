@@ -147,7 +147,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `module.exports = { ...source }` expands static imports and local literals; unresolved spreads stay namespace-reexport markers; `obj.prop = localVar` is not an export.
 - The AngularJS heuristic needs `angular.module(...)` registration; generic `controller` or `templateUrl` objects do not count.
 - `refs` marks named re-exports `via.reexport: true` (non-executable); star and namespace re-exports have no source-symbol token.
-- `goto`, `refs`, and `rename-preview` follow unambiguous names through `export *` cycles independently of module and lookup order. Missing names stay unresolved, and competing definitions remain ambiguous through additional barrels or sibling export routes.
+- `goto`, `refs`, and `rename-preview` follow unambiguous names through `export *` cycles independently of module and lookup order. Named re-exports take precedence even within a cycle; missing names stay unresolved, and competing definitions remain ambiguous through additional barrels or sibling export routes.
 - A call through a nested namespace chain (`A.B.f()`) resolves in neither go-to-definition nor the graph.
 
 ## Python
@@ -155,6 +155,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A package import resolves to `__init__.py`/`__init__.pyi`, else a PEP 420 namespace directory with importable members; an empty directory stays unresolved.
 - `if TYPE_CHECKING:` and `if typing.TYPE_CHECKING:` imports are type-only; `if not TYPE_CHECKING:`, its `else`, and other guards stay runtime.
 - Conditional and function-suite imports are not module re-exports; an unresolved relative import keeps its written specifier (`.missing`).
+- Star re-exports retain Python's later binding through nested modules, including repeated imports from the same source. A later star that lacks the name or excludes a local via `__all__` does not replace the earlier binding; an explicit named import can still access that local.
 - `findReferences` and `goToDefinition` distinguish module-level uses before an import from function-body uses of the final module binding; a later import does not leave false references on the earlier local declaration.
 - Qualified value patterns in `match` are not captures.
 - `self`/`cls` members resolve, including `__init__` attributes and `svc = Service()` locals; factory-assigned and unannotated receivers stay unproven.
@@ -184,6 +185,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - C has no methods on types, so a struct function-pointer call emits no receiver edge. It is the one source language outside `receiverAwareLanguages`.
 - Struct, union, and enum tags are a separate namespace from typedefs and ordinary names; a block-scope forward tag can hide an outer tag.
+- An unresolved intermediate include does not hide a separately resolved declaration from another included header.
 - A `.h` header parses as C unless it holds a C++ signal (see C++).
 
 ## C++

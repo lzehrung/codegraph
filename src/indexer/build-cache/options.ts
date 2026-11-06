@@ -91,7 +91,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 110 applies the native source byte limit to every C# namespace candidate, including ignored and unindexed
  * files, so serial and worker builds leave the same alias and static-using lookups partial beside oversized files.
  * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
- * or discard an ambiguous branch in favor of a sibling export.
+ * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
+ * import statement in source order and do not revive locals excluded from the target's exports.
  */
 export const CORE_ALGORITHM_EPOCH = 112;
 /**
