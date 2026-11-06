@@ -1,5 +1,6 @@
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
@@ -421,17 +422,28 @@ export function resolveExport(
   exportedName: string,
   opts?: ResolveExportOptions,
 ): ResolvedExport | null {
-  // Trim only between top-level lookups. One lookup walks re-export chains that can reach a module
-  // again, and the second visit has to find the entry the first visit stored.
+  // Trim only between top-level lookups, so a walk can reuse every context-independent
+  // answer it has already proved, even when it crosses the cache limit.
   if (!activeExportLookups && index.exportCache.size >= exportCacheMaxEntries) index.exportCache.clear();
-  const visited = new Set<string>();
   const fileKey = fileIdentityKey(file);
+  const visited = new Set<string>();
+  // A repeated visit cuts a route. Every lookup enclosing that cut is context-dependent:
+  // its result must not become a cache hit inside a later walk from another module.
+  let cycleCuts = 0;
+  // Ambiguity is not absence: a sibling export must never turn a conflict into a unique target.
+  type ExportResolution = ResolvedExport | "ambiguous" | null;
   const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
     (!opts?.preferredKind || def.kind === opts.preferredKind) &&
     (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
-  function resolveFromFile(fileInner: FileId, name: string, namespace = opts?.cNamespace): ResolvedExport | null {
+  function resolveFromFile(
+    fileInner: FileId,
+    name: string,
+    namespace = opts?.cNamespace,
+    allowCurrentLocalFallback = allowLocalFallback,
+    isRoot = false,
+  ): ExportResolution {
     const innerKey = fileIdentityKey(fileInner);
     const moduleEntry = index.byFile.get(innerKey);
     if (!moduleEntry) return null;
@@ -468,19 +480,41 @@ export function resolveExport(
       !names.localExports.has(canonicalName) &&
       !names.namespaceReexports.has(canonicalName) &&
       !names.reexports.has(canonicalName) &&
-      !(allowLocalFallback && names.locals.has(canonicalName))
+      !(allowCurrentLocalFallback && names.locals.has(canonicalName))
     ) {
       return null;
     }
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
-    // The module path is the lookup id, and the free-form name comes last so no field can run into it.
-    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
+    // The current file's export-only mode and the enclosing lookup's fallback mode are separate:
+    // a Python star excludes private locals, but an explicit re-export can still name one.
+    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
     const cached = index.exportCache.get(key);
     if (cached !== undefined) return cached;
+    // A root answer is safe for the same top-level query even when its walk cut a cycle.
+    // Interior walks must never consult it, because their excluded paths can differ.
+    const rootCacheKey = isRoot ? `root|${key}` : undefined;
+    if (rootCacheKey) {
+      const rootCached = index.exportCache.get(rootCacheKey);
+      if (rootCached !== undefined) return rootCached;
+    }
 
-    const cycleKey = `${names.id}|${canonicalName}|${namespace ?? ""}`;
-    if (visited.has(cycleKey)) return null;
-    visited.add(cycleKey);
+    if (visited.has(key)) {
+      cycleCuts += 1;
+      return null;
+    }
+    // Keep visits for the entire lookup, not just the current path. Each module/name is
+    // expanded at most once, including densely connected cycles with many alternate routes.
+    visited.add(key);
+    const cutsAtEntry = cycleCuts;
+    const remember = (result: ExportResolution): ExportResolution => {
+      const isUncut = cycleCuts === cutsAtEntry;
+      if (isUncut && result !== "ambiguous") {
+        index.exportCache.set(key, result);
+      } else if (rootCacheKey) {
+        index.exportCache.set(rootCacheKey, result === "ambiguous" ? null : result);
+      }
+      return result;
+    };
 
     const implicitUnitExport = resolveImplicitUnitExport(
       index,
@@ -493,8 +527,7 @@ export function resolveExport(
     );
     if (implicitUnitExport) {
       const result: ResolvedExport = { kind: "resolved", def: implicitUnitExport };
-      index.exportCache.set(key, result);
-      return result;
+      return remember(result);
     }
 
     const localCandidates: SymbolDef[] = [];
@@ -530,21 +563,25 @@ export function resolveExport(
         if (imp.kind !== "star" && !(imp.kind === "named" && imp.local === name)) continue;
         if (imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== namespace) continue;
         const downstream = resolveFromFile(imp.resolved, imp.kind === "named" ? imp.imported : name, namespace);
+        if (downstream === "ambiguous") {
+          // C include lookup retains its existing declaration recovery: an unresolved
+          // intermediate header must not hide another included definition.
+          if (languageId === "c") continue;
+          return remember("ambiguous");
+        }
         if (downstream && !included.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
           included.push(downstream);
         }
       }
       if (included.length) {
-        const result = included.length === 1 ? included[0]! : null;
-        index.exportCache.set(key, result);
-        return result;
+        const result = included.length === 1 ? included[0]! : "ambiguous";
+        return remember(result);
       }
     }
     if (localCandidates.length === 1) {
       const target = localCandidates[0]!;
       const result: ResolvedExport = { kind: "resolved", def: target };
-      index.exportCache.set(key, result);
-      return result;
+      return remember(result);
     }
     if (localCandidates.length) {
       // Several same-named functions are an overload set, not a failed lookup. Java static
@@ -555,11 +592,9 @@ export function resolveExport(
           : null;
       if (selected) {
         const result: ResolvedExport = { kind: "resolved", def: selected };
-        index.exportCache.set(key, result);
-        return result;
+        return remember(result);
       }
-      index.exportCache.set(key, null);
-      return null;
+      return remember("ambiguous");
     }
 
     const namespaceCandidates = new Map<string, ResolvedExport>();
@@ -569,56 +604,60 @@ export function resolveExport(
     }
     if (namespaceCandidates.size === 1) {
       const result = namespaceCandidates.values().next().value!;
-      index.exportCache.set(key, result);
-      return result;
+      return remember(result);
     }
-    if (namespaceCandidates.size) {
-      index.exportCache.set(key, null);
-      return null;
-    }
+    if (namespaceCandidates.size) return remember("ambiguous");
 
     const reexportCandidates: ResolvedExport[] = [];
-    for (const entry of names.reexports.get(canonicalName) ?? []) {
-      const downstream =
-        resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace) ??
-        // A qualified using target cannot fall back to an unrelated bare export.
-        (entry.sourceSpecifier.includes("::") ? null : resolveFromFile(entry.fromModule, canonicalName, namespace));
+    const explicitReexports = names.reexports.get(canonicalName) ?? [];
+    const explicitExportsTakePrecedence = !!languageId && isJsTsLanguage(languageId);
+    for (const entry of explicitReexports) {
+      let downstream = resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace);
+      // A qualified using target cannot fall back to an unrelated bare export. An ES named
+      // re-export likewise names its source spelling, not another export with its alias.
+      const mayTryBareName = !explicitExportsTakePrecedence && !entry.sourceSpecifier.includes("::");
+      if (!downstream && mayTryBareName) downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
+      if (downstream === "ambiguous") return remember("ambiguous");
       if (downstream && !reexportCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
         reexportCandidates.push(downstream);
       }
     }
     if (reexportCandidates.length === 1) {
       const result = reexportCandidates[0]!;
-      index.exportCache.set(key, result);
-      return result;
+      return remember(result);
     }
-    if (reexportCandidates.length) {
-      index.exportCache.set(key, null);
-      return null;
-    }
+    if (reexportCandidates.length) return remember("ambiguous");
+    if (explicitExportsTakePrecedence && explicitReexports.length) return remember(null);
 
-    const starCandidates: ResolvedExport[] = [];
-    for (const entry of moduleEntry.exports) {
-      if (entry.type !== "exportStar") continue;
-      const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
-      if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
-        starCandidates.push(downstream);
+    const usesPythonStarExports = languageId === "python";
+    if (usesPythonStarExports) {
+      for (let entryIndex = moduleEntry.exports.length - 1; entryIndex >= 0; entryIndex -= 1) {
+        const entry = moduleEntry.exports[entryIndex]!;
+        if (entry.type !== "exportStar") continue;
+        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace, false);
+        if (downstream) return remember(downstream);
       }
-    }
-    const [onlyStarCandidate] = starCandidates;
-    if (starCandidates.length === 1 && onlyStarCandidate) {
-      index.exportCache.set(key, onlyStarCandidate);
-      return onlyStarCandidate;
-    }
-    if (starCandidates.length) {
-      index.exportCache.set(key, null);
-      return null;
+    } else {
+      const starCandidates: ResolvedExport[] = [];
+      for (const entry of moduleEntry.exports) {
+        if (entry.type !== "exportStar") continue;
+        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
+        if (downstream === "ambiguous") return remember("ambiguous");
+        if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
+          starCandidates.push(downstream);
+        }
+      }
+      const [onlyStarCandidate] = starCandidates;
+      if (starCandidates.length === 1 && onlyStarCandidate) return remember(onlyStarCandidate);
+      if (starCandidates.length) return remember("ambiguous");
     }
 
     const localFallbackCandidates: SymbolDef[] = [];
     // C# lexical bindings have already been checked. Only namespace-level types
     // can remain visible from another region without a shared lexical scope.
-    if (allowLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry))) {
+    const canUseLocalFallback =
+      allowCurrentLocalFallback && (filtersUseNamespace || !shouldSkipVisibilityLocalFallback(index, moduleEntry));
+    if (canUseLocalFallback) {
       for (const local of names.locals.get(canonicalName) ?? []) {
         if (
           filtersUseNamespace &&
@@ -654,21 +693,17 @@ export function resolveExport(
     if (uniqueLocalFallback.length === 1) {
       const local = uniqueLocalFallback[0]!;
       const result: ResolvedExport = { kind: "resolved", def: local };
-      index.exportCache.set(key, result);
-      return result;
+      return remember(result);
     }
-    if (uniqueLocalFallback.length) {
-      index.exportCache.set(key, null);
-      return null;
-    }
+    if (uniqueLocalFallback.length) return remember("ambiguous");
 
-    index.exportCache.set(key, null);
-    return null;
+    return remember(null);
   }
 
   activeExportLookups += 1;
   try {
-    return resolveFromFile(file, exportedName);
+    const result = resolveFromFile(file, exportedName, opts?.cNamespace, allowLocalFallback, true);
+    return result === "ambiguous" ? null : result;
   } finally {
     activeExportLookups -= 1;
   }

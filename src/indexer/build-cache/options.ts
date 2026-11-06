@@ -94,8 +94,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * earlier module-level use of an explicit import before a same-named local declaration. Python
  * default-argument reads are excluded from parameter bindings and resolve in their enclosing scope,
  * before the function being defined replaces any earlier same-named binding.
+ * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
+ * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
+ * import statement in source order and do not revive locals excluded from the target's exports.
  */
-export const CORE_ALGORITHM_EPOCH = 111;
+export const CORE_ALGORITHM_EPOCH = 112;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

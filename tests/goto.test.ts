@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildSymbolGraphDetailed, goToDefinition, type ProjectIndex } from "../src/index.js";
+import {
+  buildProjectIndexFromFiles,
+  buildSymbolGraphDetailed,
+  goToDefinition,
+  type ProjectIndex,
+} from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
 import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -419,6 +424,81 @@ describe("Go to Definition", () => {
         const index = await createTestIndexFromFiles(root, [sourceFile, barrelFile]);
 
         await testGoToDefinition(index, barrelFile, 1, barrelSource.indexOf("X") + 1, sourceFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves cycle imports in either module order without rebinding a shadowed parameter", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-cycle-goto-"));
+      try {
+        const consumerLines = [
+          "import { target as imported } from './a';",
+          "export function use() { return imported(); }",
+          "export function shadow(imported: () => number) { return imported(); }",
+        ];
+        const files = await writeFixtureFiles(root, {
+          "a.ts": "export * from './b';\n",
+          "b.ts": "export * from './a';\nexport * from './def';\n",
+          "def.ts": "export function target() { return 1; }\n",
+          "consumer.ts": `${consumerLines.join("\n")}\n`,
+        });
+        for (const names of [
+          ["a.ts", "b.ts", "consumer.ts", "def.ts"],
+          ["consumer.ts", "def.ts", "b.ts", "a.ts"],
+        ]) {
+          const index = await buildProjectIndexFromFiles(
+            root,
+            names.map((name) => files[name]!),
+            { cache: "off" },
+          );
+          await testGoToDefinition(
+            index,
+            files["consumer.ts"]!,
+            1,
+            columnInLines(consumerLines, 1, "target"),
+            files["def.ts"]!,
+            1,
+          );
+          await testGoToDefinition(
+            index,
+            files["consumer.ts"]!,
+            2,
+            columnInLines(consumerLines, 2, "imported"),
+            files["def.ts"]!,
+            1,
+          );
+          await testGoToDefinition(
+            index,
+            files["consumer.ts"]!,
+            3,
+            consumerLines[2]!.lastIndexOf("imported") + 1,
+            files["consumer.ts"]!,
+            3,
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve a nested ambiguous star export through a sibling route to one contender", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-nested-star-ambiguity-"));
+      try {
+        const files = await writeFixtureFiles(root, {
+          "outer.ts": "export * from './bridge';\nexport * from './sibling';\n",
+          "bridge.ts": "export * from './conflict';\n",
+          "conflict.ts": "export * from './left';\nexport * from './right';\n",
+          "sibling.ts": "export * from './right';\n",
+          "left.ts": "export function target() { return 1; }\n",
+          "right.ts": "export function target() { return 2; }\n",
+          "consumer.ts": "import { target } from './outer';\nexport function rejected() { return target(); }\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        for (let repeat = 0; repeat < 2; repeat += 1) {
+          await testGoToDefinition(index, files["consumer.ts"]!, 1, 10, undefined, undefined, "not_found");
+          await testGoToDefinition(index, files["consumer.ts"]!, 2, 37, undefined, undefined, "not_found");
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

@@ -1433,6 +1433,120 @@ nativeDescribe("native semantic coverage", () => {
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
 
+  it.each(["ts", "js", "tsx"])("keeps %s cycle calls separate from a shadowed parameter", async (extension) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-star-cycle-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, {
+      [`a.${extension}`]: "export * from './b';\n",
+      [`b.${extension}`]: "export * from './a';\nexport * from './def';\n",
+      [`def.${extension}`]: "export function target() { return 1; }\n",
+      [`consumer.${extension}`]:
+        "import { target } from './a';\nexport function accepted() { return target(); }\nexport function rejected(target) { return target(); }\n",
+    });
+    const index = await buildProjectIndexFromFiles(
+      root,
+      ["consumer", "def", "b", "a"].map((name) => files[`${name}.${extension}`]!),
+      { cache: "off" },
+    );
+    for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+    const graph = await buildSymbolGraphDetailed(index);
+    const consumer = files[`consumer.${extension}`]!;
+    for (const name of ["accepted", "rejected"]) {
+      expect([...graph.nodes.values()].some((node) => node.file === consumer && node.name === name)).toBe(true);
+    }
+    expect(
+      graph.edges
+        .filter(
+          (edge) =>
+            edge.label === "calls" &&
+            graph.nodes.get(edge.from)?.file === consumer &&
+            graph.nodes.get(edge.to)?.file === files[`def.${extension}`],
+        )
+        .map((edge) => [
+          graph.nodes.get(edge.from)?.name,
+          graph.nodes.get(edge.to)?.file,
+          graph.nodes.get(edge.to)?.name,
+        ]),
+    ).toEqual([["accepted", files[`def.${extension}`], "target"]]);
+  });
+
+  it("keeps native Python re-exports and C includes aligned with navigation and references", async () => {
+    const cases: Array<{
+      files: Record<string, string>;
+      consumer: string;
+      target: string;
+      decoy: string;
+      line: number;
+      text: string;
+      referenceLines: number[];
+    }> = [
+      {
+        files: {
+          "pkg/__init__.py": "# package\n",
+          "pkg/left.py": "def target():\n    return 1\n",
+          "pkg/right.py": "def target():\n    return 2\n",
+          "pkg/inner.py": "from .left import *\nfrom .right import *\n",
+          "pkg/outer.py": "from .inner import *\nfrom .right import *\n",
+          "pkg/use.py": "from .outer import target\ndef run():\n    return target()\n",
+        },
+        consumer: "pkg/use.py",
+        target: "pkg/right.py",
+        decoy: "pkg/left.py",
+        line: 3,
+        text: "    return target()",
+        referenceLines: [1, 3],
+      },
+      {
+        files: {
+          "one.h": "int target(void);\n",
+          "two.h": "int target(void);\n",
+          "mixed.h": '#include "one.h"\n#include "two.h"\n',
+          "def.h": "int target(void) { return 1; }\n",
+          "outer.h": '#include "mixed.h"\n#include "def.h"\n',
+          "decoy.c": "int target(void) { return 2; }\n",
+          "main.c": '#include "outer.h"\nint run(void) { return target(); }\n',
+        },
+        consumer: "main.c",
+        target: "def.h",
+        decoy: "decoy.c",
+        line: 2,
+        text: "int run(void) { return target(); }",
+        referenceLines: [2],
+      },
+    ];
+    for (const fixture of cases) {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-nested-exports-"));
+      tempDirs.push(root);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndexFromFiles(root, Object.values(files), { cache: "off" });
+      expect(index.byFile.size).toBe(Object.keys(files).length);
+      for (const file of Object.values(files)) {
+        expect(index.byFile.get(fileIdentityKey(file))?.nativeOutcome, file).toBe("used");
+      }
+      const goto = await goToDefinition(index, {
+        file: files[fixture.consumer]!,
+        line: fixture.line,
+        column: fixture.text.indexOf("target") + 1,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.file).toBe(files[fixture.target]);
+      for (const [name, expected] of [
+        [fixture.target, fixture.referenceLines],
+        [fixture.decoy, []],
+      ] as const) {
+        const references = await findReferences(index, { file: files[name]!, line: 1, column: 5 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error(`Expected references for ${name}`);
+        expect(
+          references.references
+            .filter((reference) => reference.file === files[fixture.consumer])
+            .map((reference) => reference.range.start.line)
+            .sort(),
+        ).toEqual(expected);
+      }
+    }
+  });
+
   it("keeps qualified C++ ancestry and empty pack expansions in native graphs", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-"));
     tempDirs.push(root);

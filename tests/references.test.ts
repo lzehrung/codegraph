@@ -13,6 +13,8 @@ import {
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
 import { goToDefinition, type ProjectIndex } from "../src/index.js";
+import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
 import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
@@ -7759,6 +7761,277 @@ describe("Find References: Python runtime import rebinding", () => {
         { file: mainFile, line: 6, column: tokenColumn(lines[5]!, "helper") },
       ]);
       expect(imported.status === "ok" ? imported.referenceCoverage?.state : undefined).toBe("complete");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: star-export cycles", () => {
+  const CYCLE_SOURCES = {
+    a: "export * from './b';\n",
+    b: "export * from './a';\nexport * from './def';\n",
+    def: "export function target(): number { return 1; }\n",
+    consumer:
+      "import { target } from './a';\nexport function use() { return target(); }\nexport function shadow(target: () => number) { return target(); }\n",
+  } as const;
+
+  type CycleName = keyof typeof CYCLE_SOURCES;
+
+  /** Writes one naming variant of the cycle fixture and indexes exactly `order`, which fixes module order. */
+  async function indexCycle(
+    prefix: string,
+    order: readonly CycleName[],
+    names: Record<CycleName, string> = { a: "a", b: "b", def: "def", consumer: "consumer" },
+  ): Promise<{ root: string; index: ProjectIndex; fileOf: (name: CycleName) => string }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+    const fileOf = (name: CycleName): string => path.join(root, `${names[name]}.ts`).replace(/\\/g, "/");
+    for (const name of ["a", "b", "def", "consumer"] as CycleName[]) {
+      const source = CYCLE_SOURCES[name]
+        .replace("'./b'", `'./${names.b}'`)
+        .replace("'./a'", `'./${names.a}'`)
+        .replace("'./def'", `'./${names.def}'`);
+      await fsp.writeFile(fileOf(name), source, "utf8");
+    }
+    const index = await buildProjectIndexFromFiles(root, order.map(fileOf), { cache: "off" });
+    return { root, index, fileOf };
+  }
+
+  function targetColumn(file: CycleName): number {
+    return tokenColumn(CYCLE_SOURCES[file].split("\n").find((line) => line.includes("function target"))!, "target");
+  }
+  /** The consumer sites a definition reference set must always contain, whatever the module order. */
+  function consumerSites(result: Awaited<ReturnType<typeof indexer.findReferences>>, consumerFile: string) {
+    if (result.status !== "ok") return [];
+    return result.references
+      .filter((reference) => reference.file === consumerFile)
+      .map((reference) => reference.range.start.line)
+      .sort((left, right) => left - right);
+  }
+
+  it("finds the consumer of a target reached around a star-export cycle in either module order", async () => {
+    const forwards = await indexCycle("cg-cycle-order-forwards-", ["a", "b", "consumer", "def"]);
+    const backwards = await indexCycle("cg-cycle-order-backwards-", ["consumer", "def", "b", "a"]);
+    // The same graph under other file names must answer identically: module order, not spelling, is the variable.
+    const renamed = await indexCycle("cg-cycle-renamed-", ["consumer", "def", "b", "a"], {
+      a: "m1",
+      b: "m2",
+      def: "def",
+      consumer: "consumer",
+    });
+    try {
+      const expectedLines = [1, 2];
+      for (const [label, project] of [
+        ["forwards", forwards],
+        ["backwards", backwards],
+        ["renamed", renamed],
+      ] as const) {
+        const result = await indexer.findReferences(project.index, {
+          file: project.fileOf("def"),
+          line: 1,
+          column: targetColumn("def"),
+        });
+        expect(result.status, label).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(consumerSites(result, project.fileOf("consumer")), label).toEqual(expectedLines);
+        expect(result.referenceCoverage, label).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(forwards.root, { recursive: true, force: true });
+      await fsp.rm(backwards.root, { recursive: true, force: true });
+      await fsp.rm(renamed.root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers the same on a cold and a warm index and after the cycle module is looked up first", async () => {
+    const project = await indexCycle("cg-cycle-warm-", ["consumer", "def", "b", "a"]);
+    try {
+      const lookup = async () =>
+        await indexer.findReferences(project.index, {
+          file: project.fileOf("def"),
+          line: 1,
+          column: targetColumn("def"),
+        });
+
+      // Warm the cycle's own module first: a lookup that only walks the ring must not decide the consumer answer.
+      expect(resolveExport(project.index, project.fileOf("b"), "target")).not.toBeNull();
+      const warm = await lookup();
+      const repeated = await lookup();
+      expect(warm.status === "ok" ? consumerSites(warm, project.fileOf("consumer")) : []).toEqual([1, 2]);
+      expect(repeated.status === "ok" ? consumerSites(repeated, project.fileOf("consumer")) : []).toEqual([1, 2]);
+
+      const cold = await indexer.findReferences(
+        await buildProjectIndexFromFiles(
+          project.root,
+          [project.fileOf("consumer"), project.fileOf("def"), project.fileOf("b"), project.fileOf("a")],
+          { cache: "off" },
+        ),
+        { file: project.fileOf("def"), line: 1, column: targetColumn("def") },
+      );
+      expect(cold.status === "ok" ? consumerSites(cold, project.fileOf("consumer")) : []).toEqual([1, 2]);
+    } finally {
+      await fsp.rm(project.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not bind a missing cycle export to a same-named declaration elsewhere", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cycle-missing-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "a.ts": "export * from './b';\n",
+        "b.ts": "export * from './a';\n",
+        "decoy.ts": "export function absent() { return 1; }\n",
+        "consumer.ts": "import { absent } from './a';\nexport function use() { return absent(); }\n",
+      });
+      const index = await buildProjectIndexFromFiles(root, Object.values(files), { cache: "off" });
+      expect(resolveExport(index, files["a.ts"]!, "absent")).toBeNull();
+      expect(resolveExport(index, files["b.ts"]!, "absent")).toBeNull();
+      const goto = await goToDefinition(index, { file: files["consumer.ts"]!, line: 2, column: 32 });
+      expect(goto.status).toBe("not_found");
+      const references = await indexer.findReferences(index, {
+        file: files["decoy.ts"]!,
+        line: 1,
+        column: 17,
+      });
+      expect(references.status).toBe("ok");
+      expect(consumerSites(references, files["consumer.ts"]!)).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps conflicting cycle exports ambiguous for consumers after either module is warmed", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cycle-competing-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "p.ts": "export * from './q';\nexport * from './defA';\n",
+        "q.ts": "export * from './p';\nexport * from './defB';\n",
+        "defA.ts": "export function target(): number { return 1; }\n",
+        "defB.ts": "export function target(): number { return 2; }\n",
+        "consumer.ts":
+          "import { target as fromP } from './p';\nimport { target as fromQ } from './q';\nexport function rejected() { return fromP() + fromQ(); }\n",
+        "direct.ts": "import { target } from './defA';\nexport function accepted() { return target(); }\n",
+      });
+      for (const order of [
+        [files["p.ts"]!, files["q.ts"]!],
+        [files["q.ts"]!, files["p.ts"]!],
+      ]) {
+        const index = await buildProjectIndexFromFiles(
+          root,
+          [...order, files["defA.ts"]!, files["defB.ts"]!, files["consumer.ts"]!, files["direct.ts"]!],
+          { cache: "off" },
+        );
+        for (const file of order) expect(resolveExport(index, file, "target")).toBeNull();
+        for (const token of ["fromP", "fromQ"]) {
+          const goto = await goToDefinition(index, {
+            file: files["consumer.ts"]!,
+            line: 3,
+            column: tokenColumn("export function rejected() { return fromP() + fromQ(); }", token),
+          });
+          expect(goto.status).toBe("not_found");
+        }
+        for (const name of ["defA.ts", "defB.ts"]) {
+          const references = await indexer.findReferences(index, { file: files[name]!, line: 1, column: 17 });
+          expect(references.status).toBe("ok");
+          expect(consumerSites(references, files["consumer.ts"]!)).toEqual([]);
+          expect(consumerSites(references, files["direct.ts"]!)).toEqual(name === "defA.ts" ? [1, 2] : []);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers the same for every module order of the same cycle", async () => {
+    // The whole project is small enough to try every permutation, which is what a caller cannot do
+    // when discovery happens to return one order. Every order must give the identical answer.
+    const project = await indexCycle("cg-cycle-permutations-", ["a", "b", "consumer", "def"]);
+    try {
+      const names: CycleName[] = ["a", "b", "consumer", "def"];
+      const answers = new Map<string, string[]>();
+      const walk = async (prefix: CycleName[], rest: CycleName[]): Promise<void> => {
+        if (!rest.length) {
+          const index = await buildProjectIndexFromFiles(project.root, prefix.map(project.fileOf), {
+            cache: "off",
+          });
+          const result = await indexer.findReferences(index, {
+            file: project.fileOf("def"),
+            line: 1,
+            column: targetColumn("def"),
+          });
+          const signature = `${consumerSites(result, project.fileOf("consumer")).join(",")}|${result.status === "ok" ? result.referenceCoverage.state : result.status}`;
+          const orders = answers.get(signature) ?? [];
+          orders.push(prefix.join(","));
+          answers.set(signature, orders);
+          return;
+        }
+        for (const [position, name] of rest.entries()) {
+          await walk([...prefix, name], [...rest.slice(0, position), ...rest.slice(position + 1)]);
+        }
+      };
+      await walk([], names);
+      expect([...answers.keys()]).toEqual(["1,2|complete"]);
+      expect(answers.get("1,2|complete")).toHaveLength(24);
+    } finally {
+      await fsp.rm(project.root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds each resolver walk in a fully indexed dense cycle and reuses its root answer", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cycle-dense-"));
+    try {
+      const moduleCount = 7;
+      const sources: Record<string, string> = {
+        "def.ts": CYCLE_SOURCES.def,
+        "consumer.ts": "import { target } from './m0';\nexport function use() { return target(); }\n",
+      };
+      for (let from = 0; from < moduleCount; from += 1) {
+        const exports: string[] = [];
+        for (let to = 0; to < moduleCount; to += 1) {
+          if (from !== to) exports.push(`export * from './m${to}';`);
+        }
+        if (from === moduleCount - 1) exports.push("export * from './def';");
+        sources[`m${from}.ts`] = `${exports.join("\n")}\n`;
+      }
+      const files = await writeFixtureFiles(root, sources);
+      const index = await buildProjectIndexFromFiles(root, Object.values(files), { cache: "off" });
+      expect(index.byFile.size).toBe(moduleCount + 2);
+      for (const [name, file] of Object.entries(files)) {
+        const module = index.byFile.get(fileIdentityKey(file));
+        expect(module?.nativeOutcome, name).toBe("used");
+        if (!name.startsWith("m")) continue;
+        const starExports = module?.exports.filter((entry) => entry.type === "exportStar") ?? [];
+        const expectedStars = name === `m${moduleCount - 1}.ts` ? moduleCount : moduleCount - 1;
+        expect(starExports, name).toHaveLength(expectedStars);
+      }
+      index.exportCache.clear();
+      const visits = vi.spyOn(index.byFile, "get");
+      try {
+        const target = resolveExport(index, files["m0.ts"]!, "target");
+        expect(target?.kind).toBe("resolved");
+        if (target?.kind === "resolved") expect(target.def.file).toBe(files["def.ts"]);
+        // One initial visit, each directed cycle edge, and the edge to the definition.
+        const coldVisits = visits.mock.calls.length;
+        expect(coldVisits).toBe(2 + moduleCount * (moduleCount - 1));
+        for (let repeat = 0; repeat < 3; repeat += 1) {
+          const repeated = resolveExport(index, files["m0.ts"]!, "target");
+          expect(repeated?.kind).toBe("resolved");
+          if (repeated?.kind === "resolved") expect(repeated.def.file).toBe(files["def.ts"]);
+        }
+        expect(visits.mock.calls.length - coldVisits).toBe(3);
+      } finally {
+        visits.mockRestore();
+      }
+      const references = await indexer.findReferences(index, {
+        file: files["def.ts"]!,
+        line: 1,
+        column: targetColumn("def"),
+      });
+      expect(references.status).toBe("ok");
+      expect(consumerSites(references, files["consumer.ts"]!)).toEqual([1, 2]);
+      if (references.status === "ok") {
+        expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

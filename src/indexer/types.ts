@@ -195,8 +195,9 @@ export type ProjectIndex = {
   projectRoot?: string;
   languageExtensions?: LanguageExtensionMap;
   /**
-   * Memoized `resolveExport` results. Keys are internal, and the cache is emptied between lookups once it holds
-   * a fixed number of entries, so its size does not follow the number of modules or queries.
+   * `resolveExport` results: uncut, non-ambiguous answers can be reused by any walk; cycle-dependent
+   * and ambiguous root answers are reused only for the same top-level lookup. Keys are internal,
+   * and the cache is emptied between lookups once it holds a fixed number of entries.
    */
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;

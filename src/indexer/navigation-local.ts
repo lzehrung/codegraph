@@ -541,12 +541,15 @@ export function resolveNamedDefinition(
       });
     }
   }
+  let localDefinition: SymbolDef | undefined;
+  if (hit?.kind === "resolved" && fileIdentityKey(file) === fileIdentityKey(hit.def.file)) {
+    localDefinition = hit.def;
+  }
   const row = scopeNodesFor(support.id);
   const moduleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime &&
-    hit?.kind === "resolved" &&
+    !!localDefinition &&
     referenceIndex !== undefined &&
-    fileIdentityKey(file) === fileIdentityKey(hit.def.file) &&
     !!(scopeIndex ?? cachedScopeIndexForIndex(index, file))?.allScopes.some((scope) => {
       if (scope.kind !== "function") return false;
       const body = scope.node.childForFieldName("body");
@@ -563,7 +566,7 @@ export function resolveNamedDefinition(
     mod.imports,
     support.id,
     matchesExplicitBinding,
-    hit?.kind === "resolved" && !pendingOwnFunction ? hit.def.range.start.index : undefined,
+    pendingOwnFunction ? undefined : localDefinition?.range.start.index,
     referenceIndex,
     moduleLookupAtRuntime,
   );
