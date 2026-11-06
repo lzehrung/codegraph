@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildProjectIndex } from "../src/index.js";
+import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
 import { resolveExport, setExportCacheLimitForTests } from "../src/indexer/navigation-resolve.js";
 import type { ProjectIndex, ResolvedExport } from "../src/indexer/types.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
@@ -126,19 +126,45 @@ describe("resolveExport cache", () => {
     expect(unlimitedSize).toBeGreaterThan(limit + mostAddedByOneLookup);
   });
 
-  it("empties the cache between lookups and never inside one", async () => {
-    const root = await createProject();
-    setExportCacheLimitForTests(2);
-    const index = await buildProjectIndex(root);
+  it("reuses uncut positive and negative answers inside a cycle without changing consumer results", async () => {
+    const root = await roots.create("cg-export-cache-cycle-interior-");
+    await writeFiles(root, {
+      "source.ts": "export function target() { return 1; }\n",
+      "empty.ts": "export const other = 1;\n",
+      "hit.ts": "export * from './source';\n",
+      "miss.ts": "export * from './empty';\n",
+      "a.ts": "export * from './b';\nexport * from './miss';\n",
+      "b.ts": "export * from './a';\nexport * from './hit';\n",
+      "consumer.ts": "import { target } from './a';\nexport function use() { return target(); }\n",
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
     const at = (file: string): string => path.join(root, file).replace(/\\/g, "/");
-
-    // One walk over the barrel's star exports stores more entries than the limit, and none are dropped half way.
-    expect(resolveExport(index, at("barrel.ts"), "shared")).toBeNull();
-    expect(index.exportCache.size).toBeGreaterThan(2);
-
-    // The next lookup starts by dropping them, and a name nobody exports adds nothing.
-    expect(resolveExport(index, at("m1.ts"), "absent")).toBeNull();
-    expect(index.exportCache.size).toBe(0);
+    for (const warmOrder of [
+      ["hit.ts", "miss.ts"],
+      ["miss.ts", "hit.ts"],
+    ]) {
+      index.exportCache.clear();
+      for (const file of warmOrder) {
+        expect(show(resolveExport(index, at(file), "target"))).toBe(file === "hit.ts" ? "source.ts:target" : "null");
+      }
+      expect([...index.exportCache.values()]).toContain(null);
+      for (const file of ["a.ts", "b.ts"]) {
+        expect(show(resolveExport(index, at(file), "target"))).toBe("source.ts:target");
+      }
+      const goto = await goToDefinition(index, { file: at("consumer.ts"), line: 2, column: 32 });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") expect(goto.definition.file).toBe(at("source.ts"));
+      const references = await findReferences(index, { file: at("source.ts"), line: 1, column: 17 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected cycle target references");
+      expect(
+        references.references
+          .filter((reference) => reference.file === at("consumer.ts"))
+          .map((reference) => reference.range.start.line)
+          .sort(),
+      ).toEqual([1, 2]);
+      expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    }
   });
 
   it("never serves one module the entry of another when an index copy shares the cache", async () => {

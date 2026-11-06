@@ -62,7 +62,7 @@ describe("Circular re-exports resolution", () => {
     }
   });
 
-  it("declines ambiguous names from competing star exports and caches the absence", async () => {
+  it("declines competing star exports before and after warming the cache", async () => {
     const root = await mkTmpDir("dg-reexp-star-ambiguity-");
     const left = path.join(root, "left.ts");
     const right = path.join(root, "right.ts");

@@ -1938,4 +1938,47 @@ describe("rename preview", () => {
     expect(result101.omittedCounts.candidateTests).toBe(1);
     expect(result101.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
   });
+
+  it("includes the consumer edit reached around a star-export cycle in any module order", async () => {
+    const root = await mkTmpDir("cg-rename-export-cycle-");
+    const aFile = path.join(root, "a.ts");
+    const bFile = path.join(root, "b.ts");
+    const defFile = path.join(root, "def.ts");
+    const consumerFile = path.join(root, "consumer.ts");
+    try {
+      await fsp.writeFile(aFile, "export * from './b';\n");
+      await fsp.writeFile(bFile, "export * from './a';\nexport * from './def';\n");
+      await fsp.writeFile(defFile, "export function target(): number { return 1; }\n");
+      await fsp.writeFile(
+        consumerFile,
+        "import { target } from './a';\nexport function use() { return target(); }\nexport function shadow(target: () => number) { return target(); }\n",
+      );
+
+      // Both module orders must preserve the consumer edits and exclude the shadowed parameter.
+      for (const order of [
+        [aFile, bFile, consumerFile, defFile],
+        [consumerFile, defFile, bFile, aFile],
+      ]) {
+        const snapshot = await renameSnapshotForFiles(root, order);
+        const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "target" });
+        const target = symbols.symbols.find((symbol) => symbol.name === "target");
+        expect(target).toBeDefined();
+        const result = await previewRenameInSnapshot(snapshot, {
+          root,
+          handle: target!.handle,
+          newName: "renamedTarget",
+        });
+
+        expect(result.safe).toBe(true);
+        expect(result.unsafeSites).toEqual([]);
+        expect(result.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
+          ["consumer.ts", "target", "import"],
+          ["consumer.ts", "target", "reference"],
+          ["def.ts", "target", "definition"],
+        ]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

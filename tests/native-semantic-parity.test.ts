@@ -1433,6 +1433,43 @@ nativeDescribe("native semantic coverage", () => {
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
 
+  it.each(["ts", "js", "tsx"])("keeps %s cycle calls separate from a shadowed parameter", async (extension) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-star-cycle-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, {
+      [`a.${extension}`]: "export * from './b';\n",
+      [`b.${extension}`]: "export * from './a';\nexport * from './def';\n",
+      [`def.${extension}`]: "export function target() { return 1; }\n",
+      [`consumer.${extension}`]:
+        "import { target } from './a';\nexport function accepted() { return target(); }\nexport function rejected(target) { return target(); }\n",
+    });
+    const index = await buildProjectIndexFromFiles(
+      root,
+      ["consumer", "def", "b", "a"].map((name) => files[`${name}.${extension}`]!),
+      { cache: "off" },
+    );
+    for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+    const graph = await buildSymbolGraphDetailed(index);
+    const consumer = files[`consumer.${extension}`]!;
+    for (const name of ["accepted", "rejected"]) {
+      expect([...graph.nodes.values()].some((node) => node.file === consumer && node.name === name)).toBe(true);
+    }
+    expect(
+      graph.edges
+        .filter(
+          (edge) =>
+            edge.label === "calls" &&
+            graph.nodes.get(edge.from)?.file === consumer &&
+            graph.nodes.get(edge.to)?.file === files[`def.${extension}`],
+        )
+        .map((edge) => [
+          graph.nodes.get(edge.from)?.name,
+          graph.nodes.get(edge.to)?.file,
+          graph.nodes.get(edge.to)?.name,
+        ]),
+    ).toEqual([["accepted", files[`def.${extension}`], "target"]]);
+  });
+
   it("keeps qualified C++ ancestry and empty pack expansions in native graphs", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-"));
     tempDirs.push(root);

@@ -147,6 +147,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `module.exports = { ...source }` expands static imports and local literals; unresolved spreads stay namespace-reexport markers; `obj.prop = localVar` is not an export.
 - The AngularJS heuristic needs `angular.module(...)` registration; generic `controller` or `templateUrl` objects do not count.
 - `refs` marks named re-exports `via.reexport: true` (non-executable); star and namespace re-exports have no source-symbol token.
+- `goto`, `refs`, and `rename-preview` follow unambiguous names through `export *` cycles independently of module and lookup order. Missing names stay unresolved, and competing definitions remain ambiguous through additional barrels or sibling export routes.
 - A call through a nested namespace chain (`A.B.f()`) resolves in neither go-to-definition nor the graph.
 
 ## Python

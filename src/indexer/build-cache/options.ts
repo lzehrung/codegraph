@@ -90,8 +90,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
  * Epoch 110 applies the native source byte limit to every C# namespace candidate, including ignored and unindexed
  * files, so serial and worker builds leave the same alias and static-using lookups partial beside oversized files.
+ * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
+ * or discard an ambiguous branch in favor of a sibling export.
  */
-export const CORE_ALGORITHM_EPOCH = 110;
+export const CORE_ALGORITHM_EPOCH = 112;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

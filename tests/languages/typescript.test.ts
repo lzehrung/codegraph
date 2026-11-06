@@ -580,3 +580,48 @@ describe("TypeScript named function expression self-binding", () => {
     }
   });
 });
+
+describe("TypeScript cyclic barrel consumers", () => {
+  it("keeps a named alias above a star cycle ahead of a same-named star decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-cyclic-barrel-alias-"));
+    const at = (name: string): string => path.join(root, name).replace(/\\/g, "/");
+    try {
+      const sources = {
+        "a.ts": "export * from './b';\n",
+        "b.ts": "export * from './a';\nexport * from './def';\n",
+        "def.ts": "export function target() { return 1; }\n",
+        "facade.ts": "export { target as forwarded } from './a';\nexport * from './decoy';\n",
+        "decoy.ts": "export function forwarded() { return 2; }\n",
+        "consumer.ts": "import { forwarded } from './facade';\nexport function use() { return forwarded(); }\n",
+      };
+      for (const [file, source] of Object.entries(sources)) await writeFile(at(file), source, "utf8");
+      const index = await createTestIndexFromFiles(
+        root,
+        ["consumer.ts", "def.ts", "b.ts", "a.ts", "facade.ts", "decoy.ts"].map(at),
+      );
+      const goto = await goToDefinition(index, {
+        file: at("consumer.ts"),
+        line: 2,
+        column: sources["consumer.ts"].split("\n")[1]!.indexOf("forwarded") + 1,
+      });
+      expect(goto.status).toBe("ok");
+      if (goto.status === "ok") {
+        expect(goto.definition.file).toBe(at("def.ts"));
+        expect(goto.definition.localName).toBe("target");
+      }
+      for (const file of ["def.ts", "decoy.ts"]) {
+        const references = await findReferences(index, { file: at(file), line: 1, column: 17 });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error(`Expected references for ${file}`);
+        expect(
+          references.references
+            .filter((reference) => reference.file === at("consumer.ts"))
+            .map((reference) => reference.range.start.line)
+            .sort(),
+        ).toEqual(file === "def.ts" ? [1, 2] : []);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
