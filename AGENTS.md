@@ -5,6 +5,7 @@
 - Never use `any` or `as unknown as`
 - Never use nested ternary expressions. Use `if`/`else`, a helper function, or named intermediate values instead.
 - Never use `=== true`, `=== false`, etc. in boolean conditions; keep them as terse and simple as possible like `!condition`. Extract conditions to variables when the variable name adds clarity/insight into the reason for the condition.
+- Split dense compound conditions into named predicates or guard clauses. Name the domain decision, not the expression. Preserve short-circuit evaluation and avoid extra scans or allocations.
 - In boolean condition contexts, use the shortest syntactically equivalent expression. Prefer `items.length` over `items.length > 0`, `!items.length` over `items.length === 0`, and `items?.length` over `items && items.length > 0`.
 - Always consider the impact of a change on tests or when more test cases are needed. Never make tests pass for the sake of passing; always exercise real behavior.
 - Treat the actual implementation as the only evidence of behavior. Check node names, fields, and

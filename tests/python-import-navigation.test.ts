@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildProjectIndexIncremental } from "../src/indexer.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { buildSymbolGraphDetailed, findReferences, goToDefinition, type Reference } from "../src/index.js";
+import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 /**
@@ -1941,6 +1942,435 @@ describe("Python module-level use before a later same-named local declaration", 
         expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual(
           referenceLines.map((line) => [line, columnOf(mainSource, line, "exists")]),
         );
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "a resolved wrapper definition overwritten by an external import",
+      imports: ["from other import exists", "from wrapper import *"],
+      wrapperSource: "def exists(path):\n    return False\nfrom os.path import exists\n",
+      expectedTargetFile: undefined,
+      expectedCoverage: "partial",
+      wrapperDefinesExists: true,
+    },
+    {
+      label: "an unchecked star overwritten by a later proven star",
+      imports: ["from other import exists", "from os.path import *", "from replacement import *"],
+      wrapperSource: "def unrelated():\n    return 0\n",
+      expectedTargetFile: "replacement.py",
+      expectedCoverage: "complete",
+      wrapperDefinesExists: false,
+    },
+    {
+      label: "a star target with only unrelated imports",
+      imports: ["from other import exists", "from wrapper import *"],
+      wrapperSource: "import math\nfrom math import sqrt\n\ndef unrelated():\n    return 0\n",
+      expectedTargetFile: "other.py",
+      expectedCoverage: "complete",
+      wrapperDefinesExists: false,
+    },
+  ])(
+    "keeps star fallback source-order proof for $label",
+    async ({ imports, wrapperSource, expectedTargetFile, expectedCoverage, wrapperDefinesExists }) => {
+      const mainSource = [
+        ...imports,
+        'print(exists("."))',
+        'def run(value=exists(".")):',
+        '    return exists(".")',
+        "def exists(path):",
+        "    return False",
+        "",
+      ].join("\n");
+      const immediateLine = imports.length + 1;
+      const defaultLine = immediateLine + 1;
+      const deferredLine = immediateLine + 2;
+      const localDefinitionLine = immediateLine + 3;
+      await withFixture(
+        "cg-py-star-fallback-proof-",
+        {
+          "main.py": mainSource,
+          "other.py": "def exists(path):\n    return True\n",
+          "replacement.py": "def exists(path):\n    return 99\n",
+          "wrapper.py": wrapperSource,
+        },
+        async (root, f) => {
+          const index = await buildProjectIndex(root, { cache: "off" });
+          for (const line of [immediateLine, defaultLine]) {
+            const result = await goToDefinition(index, {
+              file: f("main.py"),
+              line,
+              column: columnOf(mainSource, line, "exists"),
+            });
+            if (expectedTargetFile) {
+              expect(result.status).toBe("ok");
+              if (result.status !== "ok") throw new Error("Expected the source-order import target");
+              expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f(expectedTargetFile)));
+              expect(result.definition.range.start.line).toBe(1);
+            } else {
+              expect(result.status).toBe("not_found");
+              if (result.status === "not_found") expect(result.reason).toBe("Ambiguous star import");
+            }
+          }
+
+          const deferred = await goToDefinition(index, {
+            file: f("main.py"),
+            line: deferredLine,
+            column: columnOf(mainSource, deferredLine, "exists"),
+          });
+          expect(deferred.status).toBe("ok");
+          if (deferred.status !== "ok") throw new Error("Expected the final local declaration");
+          expect(fileIdentityKey(deferred.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(deferred.definition.range.start.line).toBe(localDefinitionLine);
+
+          for (const file of ["other.py", "replacement.py"]) {
+            const references = await findReferences(index, { file: f(file), line: 1, column: 5 });
+            expect(references.status).toBe("ok");
+            if (references.status !== "ok") throw new Error("Expected source-order import references");
+            if (file === "other.py") expect(references.referenceCoverage.state).toBe(expectedCoverage);
+            const expectedLines: number[] = file === "other.py" ? [1] : [];
+            if (file === expectedTargetFile) expectedLines.push(immediateLine, defaultLine);
+            expect(sitesOf(references.references, fileIdentityKey(f("main.py")))).toEqual(
+              expectedLines.map((line) => [line, columnOf(mainSource, line, "exists")]),
+            );
+          }
+
+          const local = await findReferences(index, {
+            file: f("main.py"),
+            line: localDefinitionLine,
+            column: columnOf(mainSource, localDefinitionLine, "exists"),
+          });
+          expect(local.status).toBe("ok");
+          if (local.status !== "ok") throw new Error("Expected local exists references");
+          expect(sitesOf(local.references, fileIdentityKey(f("main.py")))).toEqual(
+            [deferredLine, localDefinitionLine].map((line) => [line, columnOf(mainSource, line, "exists")]),
+          );
+
+          if (wrapperDefinesExists) {
+            const wrapper = await findReferences(index, { file: f("wrapper.py"), line: 1, column: 5 });
+            expect(wrapper.status).toBe("ok");
+            if (wrapper.status !== "ok") throw new Error("Expected the overwritten wrapper declaration");
+            expect(wrapper.referenceCoverage.state).toBe("partial");
+            expect(sitesOf(wrapper.references, fileIdentityKey(f("main.py")))).toEqual([]);
+          }
+
+          const graph = await buildSymbolGraphDetailed(index);
+          const run = [...graph.nodes.values()].find(
+            (node) => node.name === "run" && fileIdentityKey(node.file) === fileIdentityKey(f("main.py")),
+          );
+          expect(run).toBeDefined();
+          if (!run) throw new Error("Expected the run function to be indexed");
+          const calls = graph.edges
+            .filter((edge) => edge.label === "calls" && edge.from === run.id)
+            .map((edge) => `${fileIdentityKey(graph.nodes.get(edge.to)?.file ?? "")}:${edge.site?.range.start.line}`);
+          const expectedCalls = [`${fileIdentityKey(f("main.py"))}:${deferredLine}`];
+          if (expectedTargetFile) expectedCalls.push(`${fileIdentityKey(f(expectedTargetFile))}:${defaultLine}`);
+          expect(calls.sort()).toEqual(expectedCalls.sort());
+        },
+      );
+    },
+  );
+
+  it.each([
+    { label: "a positional parameter", declaration: "def run(helper=helper()):", bodyLine: 3 },
+    { label: "a typed parameter", declaration: "def run(helper: object=helper()):", bodyLine: 3 },
+    { label: "a keyword-only parameter", declaration: "def run(*, helper=helper()):", bodyLine: 3 },
+    { label: "a lambda parameter", declaration: "run = lambda helper=helper(): helper()", bodyLine: 2 },
+  ])("evaluates the default outside $label's binding", async ({ declaration, bodyLine }) => {
+    const lines = ["from other import helper", declaration];
+    if (bodyLine === 3) lines.push("    return helper()");
+    const localDefinitionLine = lines.length + 1;
+    lines.push("def helper():", "    return 3", "");
+    const mainSource = lines.join("\n");
+    const parameterColumn = declaration.indexOf("helper") + 1;
+    const defaultColumn = declaration.indexOf("helper()") + 1;
+    const bodyColumn = columnOf(mainSource, bodyLine, "helper", true);
+    await withFixture(
+      "cg-py-default-parameter-binding-",
+      { "main.py": mainSource, "other.py": "def helper():\n    return lambda: 2\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const defaultUse = await goToDefinition(index, { file: f("main.py"), line: 2, column: defaultColumn });
+        expect(defaultUse.status).toBe("ok");
+        if (defaultUse.status !== "ok") throw new Error("Expected the eager default-expression target");
+        expect(fileIdentityKey(defaultUse.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        expect(defaultUse.definition.range.start.line).toBe(1);
+
+        for (const [line, column] of [
+          [2, parameterColumn],
+          [bodyLine, bodyColumn],
+        ] as const) {
+          const parameterUse = await goToDefinition(index, { file: f("main.py"), line, column });
+          expect(parameterUse.status).toBe("ok");
+          if (parameterUse.status !== "ok") throw new Error("Expected the actual parameter binding");
+          expect(fileIdentityKey(parameterUse.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(parameterUse.definition.range.start.line).toBe(2);
+          expect(parameterUse.definition.range.start.column).toBe(parameterColumn);
+        }
+
+        const imported = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(imported.status).toBe("ok");
+        if (imported.status !== "ok") throw new Error("Expected default-expression references");
+        expect(imported.referenceCoverage.state).toBe("complete");
+        expect(sitesOf(imported.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(mainSource, 1, "helper")],
+          [2, defaultColumn],
+        ]);
+
+        const parameter = await findReferences(index, { file: f("main.py"), line: 2, column: parameterColumn });
+        expect(parameter.status).toBe("ok");
+        if (parameter.status !== "ok") throw new Error("Expected actual parameter references");
+        expect(sitesOf(parameter.references, fileIdentityKey(f("main.py")))).toEqual([
+          [2, parameterColumn],
+          [bodyLine, bodyColumn],
+        ]);
+
+        const local = await findReferences(index, {
+          file: f("main.py"),
+          line: localDefinitionLine,
+          column: columnOf(mainSource, localDefinitionLine, "helper"),
+        });
+        expect(local.status).toBe("ok");
+        if (local.status !== "ok") throw new Error("Expected the later local declaration");
+        expect(sitesOf(local.references, fileIdentityKey(f("main.py")))).toEqual([
+          [localDefinitionLine, columnOf(mainSource, localDefinitionLine, "helper")],
+        ]);
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "an imported callable",
+      before: ["from other import run"],
+      targetFile: "other.py",
+      targetLine: 1,
+      earlierMainLine: 1,
+    },
+    {
+      label: "an earlier local callable",
+      before: ["def run():", "    return 1"],
+      targetFile: "main.py",
+      targetLine: 1,
+      earlierMainLine: 1,
+    },
+  ])("uses $label when a same-named function evaluates its default", async (scenario) => {
+    const mainSource = [...scenario.before, "def run(value=run()):", "    return run(value)", ""].join("\n");
+    const defaultLine = scenario.before.length + 1;
+    const bodyLine = defaultLine + 1;
+    await withFixture(
+      "cg-py-self-named-default-",
+      { "main.py": mainSource, "other.py": "def run():\n    return 2\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const defaultUse = await goToDefinition(index, {
+          file: f("main.py"),
+          line: defaultLine,
+          column: columnOf(mainSource, defaultLine, "run", true),
+        });
+        expect(defaultUse.status).toBe("ok");
+        if (defaultUse.status !== "ok") throw new Error("Expected the earlier callable in the default");
+        expect(fileIdentityKey(defaultUse.definition.file)).toBe(fileIdentityKey(f(scenario.targetFile)));
+        expect(defaultUse.definition.range.start.line).toBe(scenario.targetLine);
+
+        const bodyUse = await goToDefinition(index, {
+          file: f("main.py"),
+          line: bodyLine,
+          column: columnOf(mainSource, bodyLine, "run"),
+        });
+        expect(bodyUse.status).toBe("ok");
+        if (bodyUse.status !== "ok") throw new Error("Expected the new function in its body");
+        expect(fileIdentityKey(bodyUse.definition.file)).toBe(fileIdentityKey(f("main.py")));
+        expect(bodyUse.definition.range.start.line).toBe(defaultLine);
+
+        const earlier = await findReferences(index, {
+          file: f(scenario.targetFile),
+          line: scenario.targetLine,
+          column: 5,
+        });
+        expect(earlier.status).toBe("ok");
+        if (earlier.status !== "ok") throw new Error("Expected earlier callable references");
+        expect(sitesOf(earlier.references, fileIdentityKey(f("main.py")))).toEqual([
+          [scenario.earlierMainLine, columnOf(mainSource, scenario.earlierMainLine, "run")],
+          [defaultLine, columnOf(mainSource, defaultLine, "run", true)],
+        ]);
+
+        const current = await findReferences(index, {
+          file: f("main.py"),
+          line: defaultLine,
+          column: columnOf(mainSource, defaultLine, "run"),
+        });
+        expect(current.status).toBe("ok");
+        if (current.status !== "ok") throw new Error("Expected the new function's references");
+        expect(sitesOf(current.references, fileIdentityKey(f("main.py")))).toEqual([
+          [defaultLine, columnOf(mainSource, defaultLine, "run")],
+          [bodyLine, columnOf(mainSource, bodyLine, "run")],
+        ]);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const priorId = defNodeId(defaultUse.definition);
+        const currentId = defNodeId(bodyUse.definition);
+        expect(graph.nodes.has(priorId)).toBe(true);
+        expect(graph.nodes.has(currentId)).toBe(true);
+        expect(
+          graph.edges
+            .filter((edge) => edge.from === currentId && edge.label === "calls")
+            .map((edge) => [edge.site?.range.start.line, edge.to])
+            .sort((left, right) => Number(left[0]) - Number(right[0])),
+        ).toEqual([
+          [defaultLine, priorId],
+          [bodyLine, currentId],
+        ]);
+      },
+    );
+  });
+
+  it("keeps an unbound eager self-name unresolved while a deferred lambda sees the function", async () => {
+    const mainSource = [
+      "def missing(value=missing()):",
+      "    return value",
+      "def future(value=lambda: future()):",
+      "    return value",
+      "",
+    ].join("\n");
+    await withFixture("cg-py-self-default-unbound-", { "main.py": mainSource }, async (root, f) => {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const missing = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 1,
+        column: columnOf(mainSource, 1, "missing", true),
+      });
+      expect(missing.status).toBe("not_found");
+      const missingReferences = await findReferences(index, { file: f("main.py"), line: 1, column: 5 });
+      expect(missingReferences.status).toBe("ok");
+      if (missingReferences.status !== "ok") throw new Error("Expected missing's declaration references");
+      expect(sitesOf(missingReferences.references, fileIdentityKey(f("main.py")))).toEqual([[1, 5]]);
+
+      const deferred = await goToDefinition(index, {
+        file: f("main.py"),
+        line: 3,
+        column: columnOf(mainSource, 3, "future", true),
+      });
+      expect(deferred.status).toBe("ok");
+      if (deferred.status !== "ok") throw new Error("Expected the deferred function binding");
+      expect(deferred.definition.range.start.line).toBe(3);
+      expect(deferred.definition.range.start.column).toBe(5);
+      const futureReferences = await findReferences(index, { file: f("main.py"), line: 3, column: 5 });
+      expect(futureReferences.status).toBe("ok");
+      if (futureReferences.status !== "ok") throw new Error("Expected deferred function references");
+      expect(sitesOf(futureReferences.references, fileIdentityKey(f("main.py")))).toEqual([
+        [3, 5],
+        [3, columnOf(mainSource, 3, "future", true)],
+      ]);
+    });
+  });
+
+  it.each([
+    { label: "no prior local", before: [], expectedLine: undefined },
+    { label: "a prior local", before: ["    def run():", "        return 1"], expectedLine: 3 },
+  ])("keeps a nested self-named default within its enclosing scope with $label", async (scenario) => {
+    const lines = [
+      "from other import run",
+      "def outer():",
+      ...scenario.before,
+      "    def run(value=run()):",
+      "        return value",
+      "    return run",
+      "",
+    ];
+    const mainSource = lines.join("\n");
+    const defaultLine = scenario.before.length + 3;
+    await withFixture(
+      "cg-py-nested-self-default-",
+      { "main.py": mainSource, "other.py": "def run():\n    return 2\n" },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: defaultLine,
+          column: columnOf(mainSource, defaultLine, "run", true),
+        });
+        if (scenario.expectedLine === undefined) {
+          expect(result.status).toBe("not_found");
+        } else {
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected the earlier enclosing local");
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("main.py")));
+          expect(result.definition.range.start.line).toBe(scenario.expectedLine);
+          const prior = await findReferences(index, {
+            file: f("main.py"),
+            line: scenario.expectedLine,
+            column: columnOf(mainSource, scenario.expectedLine, "run"),
+          });
+          expect(prior.status).toBe("ok");
+          if (prior.status !== "ok") throw new Error("Expected the earlier local references");
+          expect(sitesOf(prior.references, fileIdentityKey(f("main.py")))).toEqual([
+            [scenario.expectedLine, columnOf(mainSource, scenario.expectedLine, "run")],
+            [defaultLine, columnOf(mainSource, defaultLine, "run", true)],
+          ]);
+        }
+        const imported = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(imported.status).toBe("ok");
+        if (imported.status !== "ok") throw new Error("Expected the external import references");
+        expect(sitesOf(imported.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(mainSource, 1, "run")],
+        ]);
+        const current = await findReferences(index, {
+          file: f("main.py"),
+          line: defaultLine,
+          column: columnOf(mainSource, defaultLine, "run"),
+        });
+        expect(current.status).toBe("ok");
+        if (current.status !== "ok") throw new Error("Expected the nested function references");
+        expect(sitesOf(current.references, fileIdentityKey(f("main.py")))).toEqual([
+          [defaultLine, columnOf(mainSource, defaultLine, "run")],
+          [defaultLine + 2, columnOf(mainSource, defaultLine + 2, "run")],
+        ]);
+      },
+    );
+  });
+
+  it("evaluates a nested function's default with its enclosing function's runtime module binding", async () => {
+    const mainSource = [
+      "def helper():",
+      "    return 1",
+      "def outer():",
+      "    def inner(value=helper()):",
+      "        return value",
+      "    return inner",
+      "from other import helper",
+      "",
+    ].join("\n");
+    await withFixture(
+      "cg-py-nested-default-runtime-",
+      { "main.py": mainSource, "other.py": otherSource },
+      async (root, f) => {
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, {
+          file: f("main.py"),
+          line: 4,
+          column: columnOf(mainSource, 4, "helper"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected the runtime module import");
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(f("other.py")));
+        expect(result.definition.range.start.line).toBe(1);
+
+        const imported = await findReferences(index, { file: f("other.py"), line: 1, column: 5 });
+        expect(imported.status).toBe("ok");
+        if (imported.status !== "ok") throw new Error("Expected nested-default import references");
+        expect(imported.referenceCoverage.state).toBe("complete");
+        expect(sitesOf(imported.references, fileIdentityKey(f("main.py")))).toEqual(
+          [4, 7].map((line) => [line, columnOf(mainSource, line, "helper")]),
+        );
+
+        const local = await findReferences(index, { file: f("main.py"), line: 1, column: 5 });
+        expect(local.status).toBe("ok");
+        if (local.status !== "ok") throw new Error("Expected the original helper declaration");
+        expect(sitesOf(local.references, fileIdentityKey(f("main.py")))).toEqual([
+          [1, columnOf(mainSource, 1, "helper")],
+        ]);
       },
     );
   });

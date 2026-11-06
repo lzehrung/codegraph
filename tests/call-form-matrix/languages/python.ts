@@ -271,4 +271,25 @@ export const pythonCells: MatrixCell[] = [
     decoy: { file: "use.py", line: 4, token: "add" },
     decoyKind: "callable",
   },
+  {
+    id: "python/bare-call-eager-default-before-local-declaration",
+    language: "python",
+    callForm: "bare-call",
+    files: {
+      "calc.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "use.py": [
+        "from calc import add",
+        "def run(value=add(1, 2)):",
+        "    return value",
+        "def add(a, b):",
+        "    return -1",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.py", line: 2, token: "add" },
+    expected: { file: "calc.py", line: 1, token: "add" },
+    decoy: { file: "use.py", line: 4, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "run" },
+  },
 ];
