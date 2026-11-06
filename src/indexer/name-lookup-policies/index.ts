@@ -5,6 +5,7 @@
  */
 import { getCallArgumentCount } from "../../languages/callable-arity.js";
 import { rustTokenTreeNameFollowsSeparator } from "../../util/member-access.js";
+import { pythonTypeParameterShadowsAnnotation } from "../../languages/definitions/python.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveImported } from "../navigation-resolve.js";
@@ -61,8 +62,13 @@ const typescriptLookupPolicy: NameLookupPolicy = {
   },
 };
 
-/** Python: a module object is not callable. */
+/** Python: generic annotation names cannot select value bindings, and a module object is not callable. */
 const pythonLookupPolicy: NameLookupPolicy = {
+  shadowsModuleAlias: ({ node }) => pythonTypeParameterShadowsAnnotation(node),
+  beforeCrossModule({ use }) {
+    if (!pythonTypeParameterShadowsAnnotation(use.node)) return undefined;
+    return { status: "not_found", reason: "Python generic annotation binding is not modeled" };
+  },
   afterCrossModule({ use }, resolved) {
     if (use.node.parent?.type !== "call" || resolved?.status !== "ok") return undefined;
     if (resolved.provenance?.resolution !== "namespace") return undefined;

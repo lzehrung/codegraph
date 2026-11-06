@@ -32,6 +32,7 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_TYPES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { assertPythonAnnotationNavigation, PYTHON_ANNOTATION_SOURCES } from "./helpers/python-annotation-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -1016,6 +1017,17 @@ describe("Go to Definition", () => {
           .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
           .map((edge) => `${graph.nodes.get(edge.to)?.file}:${edge.site?.range.start.line}`);
         expect(runCallSites).toEqual([`${mainFile}:4`]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves Python signature annotations outside parameter and body-local bindings", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-annotation-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        await assertPythonAnnotationNavigation(index, paths);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -6477,6 +6489,34 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await testGoToDefinition(index, file, 7, columnOf(lines[6]!, "inset"), file, 2);
       await testGoToDefinition(index, file, 10, columnOf(lines[9]!, "to-ne"), file, 9);
       await testGoToDefinition(index, file, 11, columnOf(lines[10]!, "to_ne"), file, 9);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Declaration-prefix navigation", () => {
+  it.each([
+    { extension: "js", source: 'function target(value = "literal") { return value; }\n' },
+    { extension: "ts", source: 'function target(value: "literal" = "literal"): "literal" { return value; }\n' },
+  ])("keeps $extension parameter literals outside the declaring function's prefix", async ({ extension, source }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-declaration-prefix-goto-"));
+    try {
+      const file = path.join(root, `main.${extension}`).replace(/\\/g, "/");
+      await fsp.writeFile(file, source, "utf8");
+      const index = await createTestIndexFromFiles(root, [file]);
+      for (let at = source.indexOf("literal"); at >= 0; at = source.indexOf("literal", at + 1)) {
+        const literal = await goToDefinition(index, { file, line: 1, column: at + 1 });
+        expect(literal.status).toBe("not_found");
+      }
+      for (const column of [1, source.indexOf("target") + 1]) {
+        const declaration = await goToDefinition(index, { file, line: 1, column });
+        expect(declaration.status).toBe("ok");
+        if (declaration.status !== "ok") throw new Error("Expected the declaration keyword or name");
+        expect(fileIdentityKey(declaration.definition.file)).toBe(fileIdentityKey(file));
+        expect(declaration.definition.range.start.line).toBe(1);
+        expect(declaration.definition.range.start.column).toBe(source.indexOf("target") + 1);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

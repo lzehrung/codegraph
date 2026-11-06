@@ -65,4 +65,6 @@ export type ScopeIndex = {
   all: Binding[];
   allScopes: Scope[];
   cppQualifiedFunctionBindings: Map<string, Binding[]>;
+  /** Per-file syntax fact; recomputed with the live scope view, never persisted separately. */
+  pythonPostponedAnnotations?: boolean;
 };

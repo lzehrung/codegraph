@@ -65,6 +65,38 @@ const fixtures = [
 ] as const;
 
 describe("module import alias shadowing", () => {
+  it("Python generic annotation bindings exclude imported aliases from graph uses", async () => {
+    const root = await mkTmpDir("cg-generic-annotation-alias-");
+    try {
+      const sources = {
+        "models.py": "class T:\n    pass\n__bound__ = 1\n",
+        "named.py": [
+          "from models import T",
+          "def plain_named(value:T): pass",
+          "def generic_named[T](value:T): pass",
+          "def outer[T]():",
+          "    def inner(value:T)->T: pass",
+          "",
+        ].join("\n"),
+        "member.py": [
+          "import models as T",
+          "def plain_member(value:T.__bound__): pass",
+          "def generic_member[T: int](value:T.__bound__): pass",
+          "",
+        ].join("\n"),
+      };
+      for (const [file, source] of Object.entries(sources)) await fs.writeFile(path.join(root, file), source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const importedUses = graph.edges
+        .filter((edge) => edge.label === "uses" && path.basename(graph.nodes.get(edge.to)!.file) === "models.py")
+        .map((edge) => `${graph.nodes.get(edge.from)!.name}:${graph.nodes.get(edge.to)!.name}`)
+        .sort();
+      expect(importedUses).toEqual(["plain_member:__bound__", "plain_named:T"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
   for (const fixture of fixtures) {
     it(`${fixture.language} keeps the imported call but excludes a parameter receiver`, async () => {
       const root = await mkTmpDir("cg-module-shadow-");

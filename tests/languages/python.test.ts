@@ -20,6 +20,12 @@ import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs/specifiers.js";
 import { exportedNameOf } from "../helpers/narrow.js";
+import {
+  assertPythonAnnotationNavigation,
+  assertPythonAnnotationReferences,
+  PYTHON_ANNOTATION_SOURCES,
+} from "../helpers/python-annotation-fixture.js";
+import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -1274,6 +1280,20 @@ describe("Python native import bindings", () => {
         .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
         .map((edge) => fileIdentityKey(graph.nodes.get(edge.to)?.file ?? ""));
       expect(runEdges).toEqual([fileIdentityKey(mainFile)]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Python signature annotation bindings", () => {
+  it("shares enclosing annotation targets across navigation and references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-annotation-bindings-"));
+    try {
+      const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await assertPythonAnnotationNavigation(index, paths);
+      await assertPythonAnnotationReferences(index, paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

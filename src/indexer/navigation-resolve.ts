@@ -86,6 +86,9 @@ export type ResolveExportOptions = {
   isCallableUse?: boolean;
 };
 
+/** An export-facing lookup cannot use a target file's private lexical declarations as a fallback. */
+export const EXPORT_ONLY_LOOKUP_OPTIONS = { allowLocalFallback: false } as const;
+
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
 }
@@ -611,8 +614,15 @@ export function resolveExport(
     const reexportCandidates: ResolvedExport[] = [];
     const explicitReexports = names.reexports.get(canonicalName) ?? [];
     const explicitExportsTakePrecedence = !!languageId && isJsTsLanguage(languageId);
+    // An ES re-export forwards the target module's public exports, never its private locals.
+    const forwardingAllowsLocalFallback = !explicitExportsTakePrecedence && allowLocalFallback;
     for (const entry of explicitReexports) {
-      let downstream = resolveFromFile(entry.fromModule, entry.sourceSpecifier || canonicalName, namespace);
+      let downstream = resolveFromFile(
+        entry.fromModule,
+        entry.sourceSpecifier || canonicalName,
+        namespace,
+        forwardingAllowsLocalFallback,
+      );
       // A qualified using target cannot fall back to an unrelated bare export. An ES named
       // re-export likewise names its source spelling, not another export with its alias.
       const mayTryBareName = !explicitExportsTakePrecedence && !entry.sourceSpecifier.includes("::");
@@ -641,7 +651,7 @@ export function resolveExport(
       const starCandidates: ResolvedExport[] = [];
       for (const entry of moduleEntry.exports) {
         if (entry.type !== "exportStar") continue;
-        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace);
+        const downstream = resolveFromFile(entry.fromModule, canonicalName, namespace, forwardingAllowsLocalFallback);
         if (downstream === "ambiguous") return remember("ambiguous");
         if (downstream && !starCandidates.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
           starCandidates.push(downstream);

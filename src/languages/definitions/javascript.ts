@@ -57,8 +57,8 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src !alias)) (string) @from)
-      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
-      (export_statement (export_clause (export_specifier name: (identifier) @src !alias)))
+      (export_statement !source (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
+      (export_statement !source (export_clause (export_specifier name: (identifier) @src !alias)))
       (export_statement "*" @wild (string) @from)
       (export_statement (string) @from)
       ;; CJS whole-module export: module.exports = function () {} / = () => {}

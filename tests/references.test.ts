@@ -43,6 +43,7 @@ import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { assertPythonAnnotationReferences, PYTHON_ANNOTATION_SOURCES } from "./helpers/python-annotation-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -418,6 +419,105 @@ describe("Find References", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["ts", "js"] as const)(
+    "keeps private named re-export source tokens out of %s consumer navigation",
+    async (extension) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-private-reexport-token-"));
+      try {
+        const file = (name: string): string => path.join(root, `${name}.${extension}`).replace(/\\/g, "/");
+        const hiddenFile = file("hidden");
+        const publicFile = file("public");
+        const hiddenBarrel = file("hidden-barrel");
+        const publicBarrel = file("public-barrel");
+        const consumerFile = file("consumer");
+        await fsp.writeFile(hiddenFile, "function target() { return 1; }\ntarget();\n", "utf8");
+        await fsp.writeFile(publicFile, "export function target() { return 2; }\n", "utf8");
+        await fsp.writeFile(
+          hiddenBarrel,
+          'export { target } from "./hidden";\nfunction target() { return 3; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          publicBarrel,
+          'export { target as publicTarget } from "./public";\nfunction target() { return 4; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { publicTarget } from "./public-barrel";',
+            'import { target as privateTarget } from "./hidden-barrel";',
+            "publicTarget();",
+            "privateTarget();",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [
+          hiddenFile,
+          publicFile,
+          hiddenBarrel,
+          publicBarrel,
+          consumerFile,
+        ]);
+        const hiddenDef = index.byFile
+          .get(fileIdentityKey(hiddenFile))
+          ?.locals.find((def) => def.localName === "target");
+        const publicDef = index.byFile
+          .get(fileIdentityKey(publicFile))
+          ?.locals.find((def) => def.localName === "target");
+        if (!hiddenDef || !publicDef) throw new Error("Expected both same-named definitions");
+
+        expect(resolveExport(index, hiddenFile, "target")?.kind).toBe("resolved");
+        expect(resolveExport(index, hiddenBarrel, "target", { allowLocalFallback: false })).toBeNull();
+        expect(resolveExport(index, publicBarrel, "publicTarget")?.kind).toBe("resolved");
+
+        const hiddenToken = await goToDefinition(index, { file: hiddenBarrel, line: 1, column: 11 });
+        const publicToken = await goToDefinition(index, { file: publicBarrel, line: 1, column: 11 });
+        expect(hiddenToken.status).toBe("not_found");
+        expect(publicToken.status).toBe("ok");
+        if (publicToken.status === "ok") expect(publicToken.definition.file).toBe(publicFile);
+
+        const resolveDefinition = (position: { file: string; line: number; column: number }) =>
+          goToDefinition(index, position);
+        const hiddenSites = await navigationReferences.collectVerifiedNamedNodeReferences(
+          index,
+          hiddenBarrel,
+          "target",
+          hiddenDef,
+          resolveDefinition,
+        );
+        const publicSites = await navigationReferences.collectVerifiedNamedNodeReferences(
+          index,
+          publicBarrel,
+          "target",
+          publicDef,
+          resolveDefinition,
+        );
+        expect(hiddenSites).toEqual([]);
+        expect(publicSites.map((site) => [site.range.start.line, site.via?.reexport])).toEqual([[1, true]]);
+
+        const hiddenRefs = await indexer.findReferences(index, { def: hiddenDef });
+        const publicRefs = await indexer.findReferences(index, { def: publicDef });
+        expect(hiddenRefs.status).toBe("ok");
+        expect(publicRefs.status).toBe("ok");
+        if (hiddenRefs.status !== "ok" || publicRefs.status !== "ok") return;
+        expect(
+          hiddenRefs.references.filter((ref) => ref.file === hiddenFile).map((ref) => ref.range.start.line),
+        ).toEqual([1, 2]);
+        expect(hiddenRefs.references.some((ref) => ref.file === hiddenBarrel || ref.file === consumerFile)).toBe(false);
+        expect(publicRefs.references.some((ref) => ref.file === publicBarrel && ref.via?.reexport)).toBe(true);
+        const publicUse = await goToDefinition(index, { file: consumerFile, line: 3, column: 2 });
+        const hiddenUse = await goToDefinition(index, { file: consumerFile, line: 4, column: 2 });
+        expect(publicUse.status).toBe("ok");
+        if (publicUse.status === "ok") expect(publicUse.definition.file).toBe(publicFile);
+        expect(hiddenUse.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("applies usage bounds after excluding re-export declarations", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reexport-usage-bound-"));
@@ -4658,6 +4758,61 @@ describe("Find References", () => {
       }
     });
 
+    it("retains public TypeScript type and interface re-exports without exposing private same-named types", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-public-type-reexport-"));
+      try {
+        const publicFile = path.join(root, "public.ts").replace(/\\/g, "/");
+        const privateFile = path.join(root, "private.ts").replace(/\\/g, "/");
+        const publicBarrel = path.join(root, "public-barrel.ts").replace(/\\/g, "/");
+        const privateBarrel = path.join(root, "private-barrel.ts").replace(/\\/g, "/");
+        const publicClause = 'export type { Foo, Contract } from "./public";';
+        const privateClause = 'export type { Foo, Contract } from "./private";';
+        await fsp.writeFile(
+          publicFile,
+          "export type Foo = string;\nexport interface Contract { id: string }\n",
+          "utf8",
+        );
+        await fsp.writeFile(privateFile, "type Foo = number;\ninterface Contract { id: number }\n", "utf8");
+        await fsp.writeFile(publicBarrel, `${publicClause}\n`, "utf8");
+        await fsp.writeFile(privateBarrel, `${privateClause}\n`, "utf8");
+        const index = await createTestIndexFromFiles(root, [publicFile, privateFile, publicBarrel, privateBarrel]);
+        for (const [name, line] of [
+          ["Foo", 1],
+          ["Contract", 2],
+        ] as const) {
+          const exported = index.byFile.get(fileIdentityKey(publicFile))?.locals.find((def) => def.localName === name);
+          const hidden = index.byFile.get(fileIdentityKey(privateFile))?.locals.find((def) => def.localName === name);
+          if (!exported || !hidden) throw new Error(`Expected both ${name} declarations`);
+          const publicGoto = await goToDefinition(index, {
+            file: publicBarrel,
+            line: 1,
+            column: publicClause.indexOf(name) + 1,
+          });
+          const privateGoto = await goToDefinition(index, {
+            file: privateBarrel,
+            line: 1,
+            column: privateClause.indexOf(name) + 1,
+          });
+          expect(publicGoto.status, name).toBe("ok");
+          if (publicGoto.status === "ok") expect(publicGoto.definition.file).toBe(publicFile);
+          expect(privateGoto.status, name).toBe("not_found");
+          const publicRefs = await indexer.findReferences(index, { def: exported });
+          const privateRefs = await indexer.findReferences(index, { def: hidden });
+          expect(publicRefs.status, name).toBe("ok");
+          expect(privateRefs.status, name).toBe("ok");
+          if (publicRefs.status !== "ok" || privateRefs.status !== "ok") continue;
+          expect(publicRefs.references.map((ref) => [ref.file, ref.range.start.line])).toEqual([
+            [publicBarrel, 1],
+            [publicFile, line],
+          ]);
+          expect(privateRefs.references.map((ref) => [ref.file, ref.range.start.line])).toEqual([[privateFile, line]]);
+          expect(publicRefs.references[0]?.via).toMatchObject({ reexport: true });
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds member uses through export * as, including a star import and not an unrelated namespace", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ns-reexport-refs-"));
       try {
@@ -8010,15 +8165,16 @@ describe("Find References: star-export cycles", () => {
         const target = resolveExport(index, files["m0.ts"]!, "target");
         expect(target?.kind).toBe("resolved");
         if (target?.kind === "resolved") expect(target.def.file).toBe(files["def.ts"]);
-        // One initial visit, each directed cycle edge, and the edge to the definition.
+        // Lexical-root and export-only lookups are distinct states, each bounded by graph size.
         const coldVisits = visits.mock.calls.length;
-        expect(coldVisits).toBe(2 + moduleCount * (moduleCount - 1));
+        const graphSize = 2 + moduleCount * (moduleCount - 1);
+        expect(coldVisits).toBeLessThanOrEqual(2 * graphSize);
         for (let repeat = 0; repeat < 3; repeat += 1) {
           const repeated = resolveExport(index, files["m0.ts"]!, "target");
           expect(repeated?.kind).toBe("resolved");
           if (repeated?.kind === "resolved") expect(repeated.def.file).toBe(files["def.ts"]);
         }
-        expect(visits.mock.calls.length - coldVisits).toBe(3);
+        expect(visits.mock.calls.length - coldVisits).toBeLessThanOrEqual(3);
       } finally {
         visits.mockRestore();
       }
@@ -8081,6 +8237,19 @@ describe("Find References: Python module-level use before a later local declarat
       expect(local.status === "ok" ? local.referenceCoverage?.state : undefined).toBe("complete");
       const localSites = local.status === "ok" ? local.references.map((ref) => ref.range.start.line) : [];
       expect(localSites).not.toContain(2);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: Python signature annotations", () => {
+  it("excludes parameter and body-local decoys from enclosing annotation references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-annotation-refs-"));
+    try {
+      const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await assertPythonAnnotationReferences(index, paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

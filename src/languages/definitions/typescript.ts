@@ -94,6 +94,8 @@ const BASE_GRAPH = {
     (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (abstract_class_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (interface_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (type_alias_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (enum_declaration name: [ (identifier) (type_identifier) ] @name)) @stmt
     (export_statement declaration: (internal_module name: (identifier) @name)) @stmt
     (export_statement declaration: (module name: (identifier) @name)) @stmt
@@ -107,8 +109,8 @@ const BASE_GRAPH = {
     (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias)) (string) @from) @stmt
-    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
-    (export_statement (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
+    (export_statement !source (export_clause (export_specifier "type"? @type_kw name: (identifier) @src alias: (identifier) @alias))) @stmt
+    (export_statement !source (export_clause (export_specifier "type"? @type_kw name: (identifier) @src !alias))) @stmt
     (export_statement "*" @wild (string) @from) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)

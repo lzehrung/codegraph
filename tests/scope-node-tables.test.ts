@@ -131,6 +131,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "requireCall",
   "classScopeComprehension",
   "moduleBindingsAtFunctionRuntime",
+  "functionSignatureInEnclosingScope",
   "laterLocalBlocksOuterKinds",
   "namelessVariableDeclaration",
   "scopedEnum",

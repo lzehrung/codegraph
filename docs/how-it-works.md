@@ -84,6 +84,8 @@ References verify each candidate through go-to-definition. The graph applies two
 
 References choose the files they verify from the importers of each file, which every index build records, and from two tables that the first lookup of an index builds and every later lookup reuses: the modules that re-export each file, and the modules sorted once. A lookup tests the files that can reach the definition (its re-exporters, their importers, and its compilation-unit peers), not every indexed module, so a definition with no importers costs the same on a project of 17,000 files as on one of 1,800. The indexes belong to one index object and are never stored in a module entry or on disk, so an incremental update returns a new index that starts without them.
 
+When choosing potential export names, a query-local iterative walk visits each module and `export *` edge at most once per starting module, collecting re-export aliases in depth-first entry order. These are probe names, not proven exports: `resolveExport` still decides precedence, ambiguity, and visibility, and a lookup may repeat the walk for another starting module. JavaScript and TypeScript named and star re-exports forward only public exports, not the target module's private locals. Go-to-definition and references on a named re-export's source token use the same export-only lookup.
+
 Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.

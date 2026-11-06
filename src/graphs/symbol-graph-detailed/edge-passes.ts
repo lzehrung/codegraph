@@ -40,6 +40,7 @@ import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import { getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import { pythonFunctionAnnotationOwner } from "../../languages/definitions/python.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import {
   getMemberAccessParts,
@@ -1514,7 +1515,9 @@ export async function emitFunctionBodyEdges(
       if (node !== fn.node && nestedFunctions.has(node)) return;
       recordAliasUse(node);
       recordMemberUse(node);
-      const allowChildCallProcessing = allowCallProcessing ? recordCallOrInstantiation(node) : false;
+      const executesCalls =
+        allowCallProcessing && (!context.scopeIndex.pythonPostponedAnnotations || !pythonFunctionAnnotationOwner(node));
+      const allowChildCallProcessing = executesCalls ? recordCallOrInstantiation(node) : false;
       for (const child of node.namedChildren ?? []) walkFunctionBody(child, allowChildCallProcessing);
     };
 

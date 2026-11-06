@@ -28,6 +28,13 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import { __setQuerySyntaxCacheLimitsForTests } from "../src/indexer/parsed-cache.js";
+import {
+  assertPythonAnnotationNavigation,
+  assertPythonAnnotationReferences,
+  assertPythonPostponedCallEdges,
+  PYTHON_ANNOTATION_SOURCES,
+} from "./helpers/python-annotation-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -782,6 +789,10 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
       "export class ExportedClass {}",
       "const assigned = InternalClass;",
       "export = assigned;",
+      "export type PublicAlias = string;",
+      "export interface PublicContract { value: PublicAlias }",
+      "type PrivateAlias = number;",
+      "interface PrivateContract { value: PrivateAlias }",
     ].join("\n"),
     "utf8",
   );
@@ -1986,7 +1997,22 @@ nativeDescribe("native semantic coverage", () => {
 
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
-    await expectNativeSemantics(testCase);
+    const index = await expectNativeSemantics(testCase);
+    const moduleIndex = index.byFile.get(fileIdentityKey(testCase.files[0]!));
+    const exportedNames = moduleIndex?.exports
+      .filter((entry) => entry.type !== "exportStar")
+      .map((entry) => entry.exportedAs);
+    expect(exportedNames).toEqual(expect.arrayContaining(["PublicAlias", "PublicContract"]));
+    expect(exportedNames).not.toContain("PrivateAlias");
+    expect(exportedNames).not.toContain("PrivateContract");
+    for (const publicName of ["PublicAlias", "PublicContract"]) {
+      expect(resolveExport(index, testCase.files[0]!, publicName, { allowLocalFallback: false })?.kind).toBe(
+        "resolved",
+      );
+    }
+    for (const privateName of ["PrivateAlias", "PrivateContract"]) {
+      expect(resolveExport(index, testCase.files[0]!, privateName, { allowLocalFallback: false })).toBeNull();
+    }
   });
 
   it("keeps native TypeScript and JavaScript semantics aligned for an imported superclass member", async () => {
@@ -2873,5 +2899,24 @@ nativeDescribe("native semantic coverage", () => {
         ).toEqual([...row.lines]);
       }
     }
+  });
+
+  it("preserves Python signature annotation targets across cold, warm, and evicted native views", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-annotations-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-annotations-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, PYTHON_ANNOTATION_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1, keepParsed: false } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    for (const index of [cold, warm]) {
+      await assertPythonAnnotationNavigation(index, paths);
+      await assertPythonAnnotationReferences(index, paths);
+      await assertPythonPostponedCallEdges(index, paths);
+    }
+    __setQuerySyntaxCacheLimitsForTests(warm, { compactBytes: 0, liveBytes: 0 });
+    await assertPythonAnnotationNavigation(warm, paths);
+    await assertPythonAnnotationReferences(warm, paths);
+    await assertPythonPostponedCallEdges(warm, paths);
   });
 });

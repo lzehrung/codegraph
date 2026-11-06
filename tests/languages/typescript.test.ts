@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import { findReferences, goToDefinition, listSymbols, resolveExport } from "../../src/index.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
@@ -192,6 +192,49 @@ describe("TypeScript declaration-only symbols", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("TypeScript public type exports", () => {
+  it.each(["ts", "tsx"] as const)(
+    "indexes public aliases and interfaces, not private %s declarations",
+    async (extension) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-public-type-exports-"));
+      const apiFile = path.join(root, `api.${extension}`).replace(/\\/g, "/");
+      try {
+        await writeFile(
+          apiFile,
+          [
+            "export type PublicAlias = string;",
+            "export interface PublicContract { value: string }",
+            "type PrivateAlias = number;",
+            "interface PrivateContract { value: number }",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [apiFile]);
+        const api = index.byFile.get(fileIdentityKey(apiFile));
+        expect(api?.nativeOutcome).toBe("used");
+        const visible =
+          api?.exports
+            .filter((entry) => entry.type === "local")
+            .map((entry) => entry.exportedAs)
+            .sort() ?? [];
+        expect(visible).toEqual(["PublicAlias", "PublicContract"]);
+        for (const name of ["PublicAlias", "PublicContract"]) {
+          const exported = resolveExport(index, apiFile, name, { allowLocalFallback: false });
+          expect(exported?.kind, name).toBe("resolved");
+          if (exported?.kind === "resolved") expect(exported.def.localName).toBe(name);
+        }
+        for (const name of ["PrivateAlias", "PrivateContract"]) {
+          expect(resolveExport(index, apiFile, name)?.kind, name).toBe("resolved");
+          expect(resolveExport(index, apiFile, name, { allowLocalFallback: false }), name).toBeNull();
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("TypeScript inherited instance methods", () => {

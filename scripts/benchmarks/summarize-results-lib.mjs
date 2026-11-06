@@ -194,7 +194,12 @@ function validateBaselineStep(step, location) {
 }
 
 function validateCodegraphStep(step, location) {
-  requireExactKeys(step, ["type", "command", "query"], location);
+  const keys = ["type", "command", "query"];
+  if (Object.hasOwn(step, "limit")) keys.push("limit");
+  requireExactKeys(step, keys, location);
+  if (step.limit !== undefined && (!Number.isSafeInteger(step.limit) || step.limit < 1)) {
+    fail(`${location}.limit`, "expected a positive safe integer");
+  }
   if (step.type !== "codegraph") {
     fail(`${location}.type`, 'expected "codegraph"');
   }
@@ -261,7 +266,12 @@ export function validateScenarioFile(value) {
         warmSteps.length === coldSteps.length &&
         warmSteps.every((step, stepIndex) => {
           const coldStep = coldSteps[stepIndex];
-          return coldStep !== undefined && step.command === coldStep.command && step.query === coldStep.query;
+          return (
+            coldStep !== undefined &&
+            step.command === coldStep.command &&
+            step.query === coldStep.query &&
+            step.limit === coldStep.limit
+          );
         });
       if (!matchesColdSteps) {
         fail(`${location}.variants.${variant}`, `must exactly match ${location}.variants.codegraph`);

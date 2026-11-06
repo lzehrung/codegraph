@@ -13,13 +13,19 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
+import {
+  pythonFunctionAnnotationOwner,
+  pythonPostponesAnnotations,
+  pythonTypeParameterAnnotationOwner,
+} from "../languages/definitions/python.js";
 import type { LanguageSupport } from "../languages.js";
 import {
   bindingCoversUse,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
-  pythonFunctionPendingInDefault,
+  pythonFunctionPendingInSignature,
   scopeAllowsUse,
+  scopeUseBoundary,
   scopeIdentifierKey,
   scopeNodesFor,
   type ScopeNodeRow,
@@ -196,6 +202,7 @@ export function buildScopeIndexFromSource(
   }
 
   const row = scopeNodesFor(support.id);
+  const pythonPostponedAnnotations = support.id === "python" && pythonPostponesAnnotations(tree.rootNode);
   /** Covering-declaration names collected before a scope's body is walked, keyed by syntax node id. */
   const pendingNamesByNodeId = new Map<number, Set<string>>();
   /**
@@ -278,8 +285,9 @@ export function buildScopeIndexFromSource(
       }
       parent = parent.parent;
     }
-    const start = target.node.startIndex;
-    const end = target.node.endIndex;
+    const boundary = scopeUseBoundary(row, target);
+    const start = boundary.startIndex;
+    const end = boundary.endIndex;
     const seen = new Set<Range[]>();
     for (const source of sources) {
       if (seen.has(source.occurrences)) continue;
@@ -490,12 +498,20 @@ export function buildScopeIndexFromSource(
     const canonicalName =
       support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     const methodCall = !!node && isExplicitMethodCall(row, node);
+    const genericOwner = node && support.id === "python" ? pythonTypeParameterAnnotationOwner(node) : null;
     for (let index = stack.length - 1; index >= 0; index--) {
       const scope = stack[index]!;
-      if (node && !scopeAllowsUse(row, scope, node)) continue;
+      const outsideGenericOwner =
+        genericOwner &&
+        (scope.node.startIndex < genericOwner.startIndex || scope.node.endIndex > genericOwner.endIndex);
+      if (outsideGenericOwner) return undefined;
+      if (node && !scopeAllowsUse(row, scope, node, pythonPostponedAnnotations)) continue;
       let hit = scope.map.get(canonicalName);
       if (node && row.moduleBindingsAtFunctionRuntime) {
-        while (hit?.kind === "function" && pythonFunctionPendingInDefault(hit.def?.start.index, node)) {
+        while (
+          hit?.kind === "function" &&
+          pythonFunctionPendingInSignature(hit.def?.start.index, node, pythonPostponedAnnotations)
+        ) {
           hit = hit.earlierSameScope;
         }
       }
@@ -504,14 +520,18 @@ export function buildScopeIndexFromSource(
       if (
         node &&
         row.moduleBindingsAtFunctionRuntime &&
-        laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, node)
+        laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, node, pythonPostponedAnnotations)
       ) {
         return undefined;
       }
     }
+    if (genericOwner) return undefined;
     let root = rootScope.map.get(canonicalName);
     if (node && row.moduleBindingsAtFunctionRuntime) {
-      while (root?.kind === "function" && pythonFunctionPendingInDefault(root.def?.start.index, node)) {
+      while (
+        root?.kind === "function" &&
+        pythonFunctionPendingInSignature(root.def?.start.index, node, pythonPostponedAnnotations)
+      ) {
         root = root.earlierSameScope;
       }
     }
@@ -571,6 +591,17 @@ export function buildScopeIndexFromSource(
     return variables;
   };
 
+  const walkSignatureRead = (node: SyntaxNodeLike): void => {
+    const current = stack[stack.length - 1];
+    if (!current || scopeAllowsUse(row, current, node, pythonPostponedAnnotations)) {
+      walk(node);
+      return;
+    }
+    stack.pop();
+    walk(node);
+    stack.push(current);
+  };
+
   const addPatternDecls = (
     pattern: SyntaxNodeLike,
     kind: BindingKind,
@@ -586,20 +617,15 @@ export function buildScopeIndexFromSource(
     // Parameter type and default-value fields are reads, not additional bound names.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
-      const readsEagerDefault = kind === "param" && !!row.moduleBindingsAtFunctionRuntime;
-      const valueNode = readsEagerDefault ? pattern.childForFieldName("value") : null;
+      const readsEnclosingValue = kind === "param" && row.functionSignatureInEnclosingScope;
+      const valueNode = readsEnclosingValue ? pattern.childForFieldName("value") : null;
       for (const child of pattern.namedChildren) {
         if (typeNode && child.id === typeNode.id) continue;
         if (valueNode && child.id === valueNode.id) continue;
         addPatternDecls(child, kind, addBindingToScope);
       }
-      if (typeNode) walk(typeNode);
-      if (valueNode) {
-        // Python defaults execute in the enclosing scope, before the function is bound.
-        const functionScope = stack.pop();
-        walk(valueNode);
-        if (functionScope) stack.push(functionScope);
-      }
+      if (typeNode) walkSignatureRead(typeNode);
+      if (valueNode) walkSignatureRead(valueNode);
       return;
     }
     if (row.destructuringPairPatternTypes?.has(pattern.type)) {
@@ -879,13 +905,15 @@ export function buildScopeIndexFromSource(
     binding: Binding | undefined,
     useNode: SyntaxNodeLike,
   ): Scope | undefined => {
+    const postponedAnnotation = pythonPostponedAnnotations && !!pythonFunctionAnnotationOwner(useNode);
+    if (postponedAnnotation) return rootScope;
     if (row.variableTargetScopeKinds) {
       for (let index = stack.length - 1; index >= 0; index -= 1) {
         const scope = stack[index]!;
         if (
           !binding &&
           row.moduleBindingsAtFunctionRuntime &&
-          laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)
+          laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode, pythonPostponedAnnotations)
         ) {
           return undefined;
         }
@@ -930,6 +958,7 @@ export function buildScopeIndexFromSource(
 
   const moduleBindingAtFunctionRuntime = (useNode: SyntaxNodeLike): boolean => {
     if (!row.moduleBindingsAtFunctionRuntime) return false;
+    if (pythonPostponedAnnotations && pythonFunctionAnnotationOwner(useNode)) return true;
     for (let current = useNode.parent; current; current = current.parent) {
       if (!support.createsFunctionScope(current)) continue;
       const body = current.childForFieldName("body");
@@ -946,9 +975,14 @@ export function buildScopeIndexFromSource(
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
     const methodCall = isExplicitMethodCall(row, useNode);
+    const genericOwner = support.id === "python" ? pythonTypeParameterAnnotationOwner(useNode) : null;
     let scope = start;
     while (scope) {
-      if (!scopeAllowsUse(row, scope, useNode)) {
+      const outsideGenericOwner =
+        genericOwner &&
+        (scope.node.startIndex < genericOwner.startIndex || scope.node.endIndex > genericOwner.endIndex);
+      if (outsideGenericOwner) return undefined;
+      if (!scopeAllowsUse(row, scope, useNode, pythonPostponedAnnotations)) {
         scope = scope.parent;
         continue;
       }
@@ -958,13 +992,15 @@ export function buildScopeIndexFromSource(
         while (
           binding &&
           ((methodCall && binding.kind === "local") ||
-            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode)))
+            (!atModuleRuntime &&
+              !bindingCoversUse(row, scope.kind, binding, useStart, useNode, pythonPostponedAnnotations)))
         ) {
           binding = binding.earlierSameScope;
         }
         if (binding) return binding;
       }
-      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, useNode)) return undefined;
+      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, useNode, pythonPostponedAnnotations))
+        return undefined;
       scope = scope.parent;
     }
     return undefined;
@@ -1002,7 +1038,8 @@ export function buildScopeIndexFromSource(
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
       const binding = lookupCovering(scope, useNode, canonical, phpThis);
       if (!binding) {
-        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)) continue;
+        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode, pythonPostponedAnnotations))
+          continue;
         if (receiver) queueUse(receiver, id);
         continue;
       }
@@ -1228,7 +1265,8 @@ export function buildScopeIndexFromSource(
     }
 
     const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(node.type);
-    if (idSet.has(node.type) && !declarationName && !nestedIdentifier) {
+    const identifierUse = idSet.has(node.type) && !declarationName && !nestedIdentifier;
+    if (identifierUse) {
       const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");
@@ -1281,7 +1319,8 @@ export function buildScopeIndexFromSource(
           continue;
         }
       }
-      walk(child);
+      if (pushed && support.createsFunctionScope(node)) walkSignatureRead(child);
+      else walk(child);
     }
     for (let index = 0; index < pushedScopeCount; index += 1) {
       const closed = stack[stack.length - 1];
@@ -1384,5 +1423,11 @@ export function buildScopeIndexFromSource(
   };
   for (const scope of allScopes) flush(scope);
   for (const binding of extraBindings) pushBinding(binding);
-  return { bindings, all, allScopes, cppQualifiedFunctionBindings: cppQualifiedCallableBindings };
+  return {
+    bindings,
+    all,
+    allScopes,
+    cppQualifiedFunctionBindings: cppQualifiedCallableBindings,
+    pythonPostponedAnnotations,
+  };
 }
