@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { buildSymbolGraph, defNodeId } from "../../src/graphs/symbol-graph.js";
 import {
+  type BuildReport,
   buildProjectIndex,
   buildProjectIndexIncremental,
   collectLocalsAndExportsFromSource,
@@ -1413,6 +1414,35 @@ describe("PHP path-proof native extraction reuse", () => {
       }
     } finally {
       __resetNativeTreeSitterBindingForTests();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts each indexed PHP file once through native workers with the serial import results", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-worker-extraction-"));
+    try {
+      const fixture = phpPathFallbackFixture("psr4");
+      const files = await writeFixtureFiles(root, fixture.files);
+      const serial = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false, threads: 1 });
+      const report: BuildReport = { timings: {} };
+      const workers = await buildProjectIndex(root, {
+        cache: "off",
+        useNativeWorkers: true,
+        nativeThreads: 1,
+        threads: 1,
+        report,
+      });
+      const phpFileCount = Object.keys(fixture.files).filter((name) => name.endsWith(".php")).length;
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+      expect(report.workerPool?.tasksSubmitted).toBe(phpFileCount);
+      expect(declarationImportTargets(workers, files["Use.php"]!)).toEqual([
+        `file:${fileIdentityKey(files[fixture.owner]!)}`,
+      ]);
+      for (const file of Object.values(files)) {
+        expect(declarationImportTargets(workers, file)).toEqual(declarationImportTargets(serial, file));
+      }
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
