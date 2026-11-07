@@ -78,6 +78,7 @@ import {
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
+import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
@@ -437,6 +438,14 @@ const CSHARP_SHADOWED_TARGET_REASON = "C# alias target is shadowed by a member o
 const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
 const CSHARP_SHADOWED_USING_REASON =
   "C# using directive is shadowed by an enclosing namespace that may declare the name";
+
+export function isCsharpAliasQualifier(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
+  return (
+    sup.id === "csharp" &&
+    node.parent?.type === "alias_qualified_name" &&
+    getMemberAccessParts(sup, node.parent).object?.id === node.id
+  );
+}
 
 /** The leading name `X` of a C# dotted or alias-qualified name (`X.Y.Z`, `X::Y`) and the names it qualifies. */
 export function csharpChainQualifier(
@@ -836,12 +845,25 @@ export async function resolveMemberAccessDefinition(params: {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport;
+  scopeIndex?: ScopeIndex;
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
   loadParsedFile?: PythonParsedFileLoader;
   pythonReceiverResolutionCache?: PythonReceiverResolutionCache;
 }): Promise<GoToResult | null> {
-  const { index, mod, node, source, tree, sup, resolveLexicalBinding, loadParsedFile, pythonReceiverResolutionCache } =
-    params;
+  const {
+    index,
+    mod,
+    node,
+    source,
+    tree,
+    sup,
+    scopeIndex: ownedScopeIndex,
+    resolveLexicalBinding,
+    loadParsedFile,
+    pythonReceiverResolutionCache,
+  } = params;
+  const ensureScopeIndex = (): ScopeIndex =>
+    ownedScopeIndex ?? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
   if (sup.id === "ruby") {
     const qualified = resolveRubyQualifiedConstantDefinition(index, mod, node, source);
     if (qualified) return qualified;
@@ -863,7 +885,7 @@ export async function resolveMemberAccessDefinition(params: {
     if (lead && reason) {
       // A parameter, local, or member named like the alias is a value that C# binds before any alias,
       // except after `::`, which reaches aliases only.
-      const scopeIndex = getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
+      const scopeIndex = ensureScopeIndex();
       const closest = findClosestScopeBinding(scopeIndex, sliceText(lead.qualifier, source), lead.qualifier, sup);
       const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
       if (aliasQualified || !closest || closest.import) return { status: "not_found", reason };
@@ -878,18 +900,22 @@ export async function resolveMemberAccessDefinition(params: {
       ? (getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined)
       : undefined;
 
+  const csharpNameUnshadowed = (expr: SyntaxNodeLike, exprName: string): boolean => {
+    const scopeIndex = ensureScopeIndex();
+    const closest = findClosestScopeBinding(scopeIndex, exprName, expr, sup);
+    return fileBindingIsUnshadowed(scopeIndex, closest);
+  };
+
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
-      const aliasQualifier =
-        sup.id === "csharp" &&
-        expr.parent?.type === "alias_qualified_name" &&
-        getMemberAccessParts(sup, expr.parent).object?.id === expr.id;
+      const aliasQualifier = isCsharpAliasQualifier(expr, sup);
+      const exprName = sliceText(expr, source);
       if (!aliasQualifier) {
         const lexicalBinding = resolveLexicalBinding?.(expr);
         if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+        if (sup.id === "csharp" && !csharpNameUnshadowed(expr, exprName)) return null;
       }
-      const exprName = sliceText(expr, source);
       let imp: ImportBinding | undefined;
       if (sup.id === "php") {
         imp = findPhpImportAlias(mod.imports, exprName, "class") ?? undefined;
@@ -1028,13 +1054,21 @@ export async function resolveMemberAccessDefinition(params: {
         // declares the namespace. An alias in scope binds the name, resolved or not, and so may a
         // `using N;` that an enclosing namespace shadows, so neither falls back to a namespace of that name.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
-        if (
-          dottedRoot &&
-          !resolveLexicalBinding?.(dottedRoot) &&
-          !csharpAliasAt(mod, sliceText(dottedRoot, source), dottedRoot) &&
-          !csharpShadowedUsingReason(index, mod, dottedRoot, source)
-        ) {
-          return resolveCsharpQualifiedName(index, mod, sliceText(expr, source).replace(/\s+/gu, ""), expr.startIndex);
+        if (dottedRoot) {
+          const rootName = sliceText(dottedRoot, source);
+          const unshadowedNamespaceRoot =
+            !resolveLexicalBinding?.(dottedRoot) &&
+            csharpNameUnshadowed(dottedRoot, rootName) &&
+            !csharpAliasAt(mod, rootName, dottedRoot) &&
+            !csharpShadowedUsingReason(index, mod, dottedRoot, source);
+          if (unshadowedNamespaceRoot) {
+            return resolveCsharpQualifiedName(
+              index,
+              mod,
+              sliceText(expr, source).replace(/\s+/gu, ""),
+              expr.startIndex,
+            );
+          }
         }
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;

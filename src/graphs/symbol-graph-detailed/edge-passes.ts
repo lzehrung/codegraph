@@ -1153,6 +1153,7 @@ export async function emitFunctionBodyEdges(
 
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;
+      if (context.sup.id === "csharp" && context.sup.isDeclarationName(node)) return;
       const name = sliceText(node, context.source);
       if (context.sup.id === "php") {
         // Resolve the occurrence's namespace; a plain-name map cannot distinguish PHP roles.

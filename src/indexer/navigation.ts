@@ -15,6 +15,7 @@ import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiv
 import {
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
+  isCsharpAliasQualifier,
   resolveMemberAccessDefinition,
   resolvePhpObjectCreationTarget,
   resolveRubySuperDefinition,
@@ -87,7 +88,7 @@ import {
 } from "./reference-query-index.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
-import type { ScopeIndex } from "./scope.js";
+import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -137,7 +138,6 @@ import {
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
   createLoadingParsedFileProvider,
-  fileBindingIsUnshadowed,
   phpImportTypeAtPosition,
   resolveBareName,
   settleNameResolution,
@@ -301,6 +301,7 @@ export async function goToDefinition(
         sup,
         ...(scopeIndex
           ? {
+              scopeIndex,
               resolveLexicalBinding: (receiver) => {
                 if (!isReceiverNameNode(sup, receiver.type)) return null;
                 const receiverName = sliceText(receiver, source);
@@ -2415,7 +2416,9 @@ export async function collectNamespaceMemberRefs(
             scopeIndex && isMemberObjectIdentifier(receiver.type)
               ? findClosestScopeBinding(scopeIndex, sliceText(receiver, source), receiver, sup)
               : null;
-          const inFileScope = !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
+          const aliasQualified = isCsharpAliasQualifier(receiver, sup);
+          const inFileScope =
+            aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
           const inPythonBindingScope =
             sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
           const inAliasScope =

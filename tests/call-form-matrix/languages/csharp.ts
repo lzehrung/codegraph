@@ -303,6 +303,29 @@ export const csharpCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "Use.cs", fromName: "SumPair" },
   },
   {
+    id: "csharp/imported-alias-local-shadow",
+    language: "csharp",
+    callForm: "imported-alias",
+    files: {
+      "second.cs": "namespace N; public class Second { public class Nested { public static void Run() {} } }\n",
+      "use.cs": [
+        "using B = N.Second;",
+        "class Use {",
+        "  void Visible() { B.Nested.Run(); }",
+        "  void Shadowed(dynamic B) { B.Nested.Run(); }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.cs", line: 4, token: "Run" },
+    expected: "not_found",
+    decoy: { file: "second.cs", line: 1, token: "Run" },
+    decoyKind: "callable",
+    // A dynamic receiver stays unresolved and retains partial reference coverage.
+    decoyAmbiguous: true,
+    edge: { label: "calls", fromFile: "use.cs", fromName: "Shadowed" },
+  },
+  {
     id: "csharp/namespace-alias",
     language: "csharp",
     callForm: "imported-alias",

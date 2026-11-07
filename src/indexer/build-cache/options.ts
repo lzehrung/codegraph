@@ -100,8 +100,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 115 rebuilds detailed graphs with normalized C# verbatim alias keys and receiver value proofs.
  * Epoch 116 matches Kotlin quoted and plain names across package imports, navigation, and graph edges
  * without rewriting source-spelled JVM facts or binding ranges.
+ * Epoch 117 rebuilds detailed graphs so C# parameter and local bindings cannot emit calls or uses
+ * through a shadowed using alias.
  */
-export const CORE_ALGORITHM_EPOCH = 116;
+export const CORE_ALGORITHM_EPOCH = 117;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -4,6 +4,13 @@ import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import {
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_SHADOW_LINES,
+  CSHARP_ALIAS_SHADOW_SITES,
+} from "./helpers/csharp-alias-shadow-fixture.js";
+import { CSHARP_ALIAS_ONLY_FILES, CSHARP_ALIAS_ONLY_LINES } from "./helpers/csharp-alias-only-shadow-fixture.js";
+import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const fixtures = [
   {
@@ -349,6 +356,132 @@ describe("module import alias shadowing", () => {
         })
         .sort();
       expect.soft(edges).toEqual(["assigned calls make", "assigned uses make", "eager calls make", "eager uses make"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("C# keeps alias graph calls and uses off shadowed parameters and block locals", async () => {
+    const root = await mkTmpDir("cg-csharp-alias-shadow-");
+    try {
+      const paths = await writeFixtureFiles(root, CSHARP_ALIAS_SHADOW_FILES);
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const use = paths["Use.cs"]!;
+      const second = paths["Second.cs"]!;
+      const plain = paths["Plain.cs"]!;
+      const edgesTo = (caller: string, file: string, name: string, label: "calls" | "uses") => {
+        const from = nodes.find((node) => node.file === use && node.name === caller);
+        const targets = nodes.filter((node) => node.file === file && node.name === name);
+        expect(from, `missing caller ${caller}`).toBeDefined();
+        expect(targets, `missing target ${file}::${name}`).not.toHaveLength(0);
+        return graph.edges.filter(
+          (edge) => edge.from === from?.id && targets.some((target) => edge.to === target.id) && edge.label === label,
+        );
+      };
+      for (const caller of ["Visible", "Local"]) {
+        expect(edgesTo(caller, second, "Run", "calls")).toHaveLength(1);
+      }
+      for (const caller of ["Outer", "Outside"]) {
+        expect(edgesTo(caller, plain, "Run", "calls")).toHaveLength(1);
+        expect(edgesTo(caller, second, "Run", "calls")).toHaveLength(0);
+      }
+      for (const caller of ["Parameter", "Unused"]) {
+        expect(edgesTo(caller, second, "Second", "uses")).toHaveLength(0);
+      }
+      for (const caller of ["Parameter", "Unused"]) {
+        for (const label of ["calls", "uses"] as const) {
+          expect(edgesTo(caller, second, "Run", label)).toHaveLength(0);
+          expect(edgesTo(caller, second, "Nested", label)).toHaveLength(0);
+        }
+      }
+      expect(edgesTo("Typed", second, "Act", "calls")).toHaveLength(1);
+
+      const call = await goToDefinition(index, {
+        file: use,
+        line: CSHARP_ALIAS_SHADOW_SITES.visible,
+        column: columnOf(CSHARP_ALIAS_SHADOW_LINES, CSHARP_ALIAS_SHADOW_SITES.visible, "Run"),
+      });
+      expect(call.status).toBe("ok");
+      if (call.status === "ok") expect(call.definition.file).toBe(second);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("C# does not turn unused same-name parameters into alias uses with only one alias", async () => {
+    const root = await mkTmpDir("cg-csharp-only-alias-shadow-");
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_ALIAS_ONLY_FILES);
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const nodes = [...graph.nodes.values()];
+      const targetFile = files["Second.cs"]!;
+      const fromFile = files["Use.cs"]!;
+      const edges = graph.edges.flatMap((edge) => {
+        const from = nodes.find((node) => node.id === edge.from);
+        const to = nodes.find((node) => node.id === edge.to);
+        if (from?.file !== fromFile || to?.file !== targetFile) return [];
+        if (edge.label !== "calls" && edge.label !== "uses") return [];
+        return [`${from.name} ${edge.label} ${to.name}`];
+      });
+      expect(edges).toContain("Visible calls Run");
+      expect(edges).toContain("Visible uses Second");
+      expect(edges).toContain("Typed calls Act");
+      expect(edges).toContain("Typed uses Second");
+      for (const caller of ["Parameter", "Unused", "Local"]) {
+        expect(edges.filter((edge) => edge.startsWith(`${caller} `))).toEqual([]);
+      }
+      const annotatedType = await goToDefinition(index, {
+        file: fromFile,
+        line: 7,
+        column: columnOf(CSHARP_ALIAS_ONLY_LINES, 7, "B"),
+      });
+      expect(annotatedType.status).toBe("ok");
+      if (annotatedType.status === "ok") {
+        expect(annotatedType.definition.file).toBe(targetFile);
+        expect(annotatedType.definition.localName).toBe("Second");
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("C# namespace alias qualification remains explicit through a same-name parameter", async () => {
+    const root = await mkTmpDir("cg-csharp-qualified-namespace-shadow-");
+    try {
+      const files = await writeFixtureFiles(root, {
+        "Second.cs": CSHARP_ALIAS_ONLY_FILES["Second.cs"],
+        "Use.cs": [
+          "using B = N;",
+          "class Use { void Visible() { B::Second.Nested.Run(); }",
+          "  void Parameter(dynamic B) { B::Second.Nested.Run(); } }",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const run = [...graph.nodes.values()].find((node) => node.name === "Run" && node.file === files["Second.cs"]);
+      expect(run).toBeDefined();
+      for (const caller of ["Visible", "Parameter"]) {
+        const from = [...graph.nodes.values()].find((node) => node.name === caller && node.file === files["Use.cs"]);
+        expect(from).toBeDefined();
+        expect(
+          graph.edges.some((edge) => edge.from === from?.id && edge.to === run?.id && edge.label === "calls"),
+        ).toBe(true);
+      }
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: CSHARP_ALIAS_ONLY_FILES["Second.cs"].indexOf("Run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references
+            .filter((site) => site.file === files["Use.cs"])
+            .map((site) => site.range.start.line)
+            .sort(),
+        ).toEqual([2, 3]);
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
