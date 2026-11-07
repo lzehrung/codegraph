@@ -106,8 +106,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 119 indexes unnamed JVM packages for Kotlin named imports and rejects Java unnamed-package imports.
  * Epoch 120 resolves qualified JVM types and constructors by owner, and excludes false C# type-use edges.
  * Epoch 121 rebuilds Swift quoted-name resolutions, shared-owner identities, and detailed call edges.
+ * Epoch 122 resolves qualified C# declared and constructed receiver types through namespace-aware lookup.
  */
-export const CORE_ALGORITHM_EPOCH = 121;
+export const CORE_ALGORITHM_EPOCH = 122;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

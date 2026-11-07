@@ -80,6 +80,7 @@ import type { ParsedFileContext } from "./parse-context.js";
 import { ensureParsedContextForIndex, ignoreQueryParseFailure, rethrowStaleQuerySource } from "./parsed-cache.js";
 import {
   csharpLookupName,
+  csharpQualifiedThroughGenericOwner,
   csharpQualifiedNameNode,
   findClosestScopeBinding,
   getOrBuildScopeIndex,
@@ -658,6 +659,46 @@ export function csharpAliasQualifiedLookupName(
   if (alias === "global") return raw;
   const imported = innermostNamespaceImport(imports, alias, lead.qualifier, CSHARP_SUPPORT.normalizeIdentifier);
   return imported ? `${imported.from}.${lead.names.toReversed().join(".")}` : raw;
+}
+
+/** The proven namespace path of a C# receiver type, retaining alias and namespace shadowing. */
+export function csharpQualifiedReceiverName(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  typeNode: SyntaxNodeLike,
+  source: string,
+): string | null {
+  const qualified = csharpQualifiedNameNode(typeNode);
+  if (!qualified || csharpQualifiedThroughGenericOwner(qualified)) return null;
+  const lead = csharpChainQualifier(qualified, source);
+  if (!lead) return null;
+  const unproven =
+    csharpAliasUnprovenReason(index, mod, lead.qualifier, source) ??
+    csharpShadowedUsingReason(index, mod, lead.qualifier, source);
+  if (unproven) return null;
+  const rootName = sliceText(lead.qualifier, source);
+  const alias = csharpAliasAt(mod, rootName, lead.qualifier);
+  if (alias && alias.kind !== "namespace") return null;
+  const name = csharpAliasQualifiedLookupName(typeNode, source, sliceText(qualified, source), mod.imports);
+  if (!alias && lead.qualifier.parent?.type !== "alias_qualified_name") {
+    const root = resolveExport(index, mod.file, rootName, { referenceIndex: typeNode.startIndex });
+    const rootIsType = root?.kind === "resolved" && declaresMembers(root.def);
+    const regions = mod.csharpNamespaceFacts?.regions;
+    let namespace = regions ? csharpNamespaceAtIndex(regions, typeNode.startIndex) : "";
+    while (namespace && !rootIsType) {
+      const separator = namespace.lastIndexOf(".");
+      const parent = separator < 0 ? "" : namespace.slice(0, separator);
+      if (csharpNamespaceChainDeclares(index, mod, namespace, rootName, parent)) {
+        if (csharpProjectDeclarationsUnknown(index, mod)) return null;
+        const relative = `global::${namespace}.${name}`;
+        const resolved = resolveCsharpQualifiedName(index, mod, relative, typeNode.startIndex);
+        // A nearer binding that has no such type must not fall back to a global namesake.
+        return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? relative : null;
+      }
+      namespace = parent;
+    }
+  }
+  return name;
 }
 
 /**
@@ -2771,6 +2812,17 @@ async function resolveReceiverDefinition(
   }
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
   if (constructor) {
+    if (sup.id === "csharp") {
+      const qualified = csharpQualifiedNameNode(constructor);
+      if (qualified) {
+        const name = csharpQualifiedReceiverName(index, mod, constructor, source);
+        if (!name) return null;
+        const resolved =
+          resolveCsharpQualifiedName(index, mod, name, constructor.startIndex) ?? (await resolveExpression(qualified));
+        const def = resolved?.kind === "resolved" ? asMemberContainer(index, resolved.def) : undefined;
+        return def ? { def, memberScope: "instance" } : null;
+      }
+    }
     if (sup.id === "cpp") {
       const qualifiedType = cppQualifiedNameSegments(constructor, source);
       if (qualifiedType.length > 1) {

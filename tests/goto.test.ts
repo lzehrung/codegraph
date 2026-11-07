@@ -51,6 +51,10 @@ import {
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
 import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "./helpers/csharp-qualified-receiver-fixture.js";
+import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
@@ -6915,4 +6919,26 @@ describe("Go to Definition: JVM package and nested type identities", () => {
       }
     },
   );
+});
+describe("Go to Definition: C# qualified receiver types", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("resolves %s receiver types without decoys", async (type) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-receiver-goto-"));
+    try {
+      const fixture = csharpQualifiedReceiverFixture(type);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      for (const line of [...fixture.calls, fixture.decoyCall]) {
+        await testGoToDefinition(
+          index,
+          files["Use.cs"]!,
+          line,
+          columnInLines(fixture.lines, line, "Run"),
+          files[line === fixture.decoyCall ? "Other.cs" : "Value.cs"]!,
+          1,
+        );
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

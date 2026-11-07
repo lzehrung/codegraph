@@ -11,6 +11,7 @@ import {
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
   cppQualifiedOwnerHasImplicitThis,
+  csharpQualifiedReceiverName,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -21,12 +22,13 @@ import {
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
-import { findClosestScopeBinding } from "../../indexer/navigation-local.js";
+import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
   resolveImportTypeMember,
+  resolveCsharpQualifiedName,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
 import { selectMember } from "../../indexer/member-selection.js";
@@ -674,6 +676,12 @@ function resolveNamedType(
   node: SyntaxNodeLike,
   rubyConstructed = false,
 ): SymbolDef | null {
+  if (context.sup.id === "csharp" && csharpQualifiedNameNode(node)) {
+    const qualifiedName = csharpQualifiedReceiverName(context.index, context.moduleEntry, node, context.source);
+    if (!qualifiedName) return null;
+    const qualified = resolveCsharpQualifiedName(context.index, context.moduleEntry, qualifiedName, node.startIndex);
+    if (qualified?.kind === "resolved" && declaresMembers(qualified.def)) return qualified.def;
+  }
   // A Go composite literal or Zig struct initializer can name a qualified cross-file type
   // (`pkg.Type{}` / `ns.Type{}`); the receiver's typeName is then dotted text, not one
   // identifier, so resolve the chain directly instead of treating it as a plain name.
