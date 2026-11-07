@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-07T20:20:33.606Z",
+  "generatedAt": "2026-11-07T20:21:45.796Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1188,
+  "numTotalTests": 1198,
   "numFailedTests": 0,
   "languages": [
     {
@@ -176,8 +176,8 @@
       "files": [
         "tests/languages/php.test.ts"
       ],
-      "tests": 126,
-      "passed": 126,
+      "tests": 127,
+      "passed": 127,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -264,8 +264,8 @@
       "files": [
         "tests/languages/swift.test.ts"
       ],
-      "tests": 22,
-      "passed": 22,
+      "tests": 31,
+      "passed": 31,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

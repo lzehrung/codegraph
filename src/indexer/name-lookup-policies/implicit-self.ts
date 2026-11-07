@@ -4,6 +4,7 @@
  * member lookup, which applies static scope and overload selection, and it takes precedence over
  * a same-named module-level name or import.
  */
+import { UNRESOLVED_QUALIFIED_TYPE_REASON } from "../ambiguous-resolution.js";
 import {
   declaresMembers,
   nearestMemberContainer,
@@ -31,6 +32,7 @@ import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
+import { isSwiftExtensionTypeName, isSwiftQualifiedExtensionSuffix } from "../../util/swift-tree.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
 import { csharpTypeOnlyName } from "../scope-nodes.js";
 
@@ -80,15 +82,30 @@ function namesEnclosingSwiftType(state: NameLookupState, def: SymbolDef): boolea
   return sliceText(owner?.childForFieldName("name"), state.use.parsed.source) === state.lookupName;
 }
 
+/** An extension header names a type: a function or variable of that spelling is in another namespace. */
+function extensionOwnerTypeOnly(resolved: GoToResult | null): GoToResult | null {
+  if (resolved?.status !== "ok" || declaresMembers(resolved.definition)) return resolved;
+  return { status: "not_found", reason: "A Swift extension names a type, not a function or variable" };
+}
+
 export const swiftLookupPolicy: NameLookupPolicy = {
+  beforeLexical(use) {
+    // A later segment of a dotted owner (`Inner` in `extension Outer.Inner`) is a member of the segment before it.
+    // No Swift nested-type lookup proves it, and a bare lookup of its own spelling would match any other `Inner`.
+    if (!isSwiftQualifiedExtensionSuffix(use.node)) return undefined;
+    return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+  },
   fromClosestBinding: ownOverloadDeclaration,
   // Swift checks every bare name through `self`; method-local bindings still win.
   onLocal(state, local) {
+    // An extension header sits outside the extension's members, so its name never reaches one through `self`.
+    if (isSwiftExtensionTypeName(state.use.node)) return undefined;
     if (namesEnclosingSwiftType(state, local) || (!bindsAtFileScope(state) && !bindsTypeMethod(state)))
       return undefined;
     return implicitSelf(state, lexical(state, local));
   },
   afterCrossModule(state, resolved: GoToResult | null) {
+    if (isSwiftExtensionTypeName(state.use.node)) return extensionOwnerTypeOnly(resolved);
     if (resolved?.status === "ok" && namesEnclosingSwiftType(state, resolved.definition)) return resolved;
     // A member reached only by name, not through `self`, is not a module-level target.
     const memberOnly = resolved?.status === "ok" && !!resolved.definition.isMember;

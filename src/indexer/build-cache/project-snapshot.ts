@@ -1282,6 +1282,7 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     isOptionalBoolean(symbol.javaProtectedMember) &&
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     isOptionalBoolean(symbol.jvmStaticMember) &&
+    isOptionalBoolean(symbol.swiftExtensionOwner) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")

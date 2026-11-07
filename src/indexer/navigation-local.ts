@@ -18,6 +18,7 @@ import {
   scopeNodesFor,
   closestContainingScope,
   typeOnlyName,
+  isValueNamespaceBinding,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cachedParsedContextForIndexSync, cachedScopeIndexForIndex, retainScopeIndexForIndex } from "./parsed-cache.js";
@@ -297,8 +298,7 @@ export function findClosestScopeBinding(
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
       while (binding) {
         const wrongNamespace =
-          (methodCall && binding.kind === "local") ||
-          (typeOnly && (binding.kind === "local" || binding.kind === "param" || binding.kind === "function"));
+          (methodCall && binding.kind === "local") || (typeOnly && isValueNamespaceBinding(binding));
         if (!wrongNamespace) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
           if (

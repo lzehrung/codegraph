@@ -372,4 +372,217 @@ nativeDescribe("type hierarchy language parity", () => {
       }
     }
   });
+
+  it("classifies imported Swift extension protocol conformance without inheriting a decoy", async () => {
+    const root = await mkTmpDir("cg-hierarchy-swift-extension-");
+    roots.push(root);
+    await fs.writeFile(
+      path.join(root, "Models.swift"),
+      "protocol Proto {}\nstruct Widget {}\nstruct Box<Element> {}\n",
+    );
+    await fs.writeFile(path.join(root, "Extension.swift"), "import Models\nextension Widget: Proto {}\n");
+    await fs.writeFile(path.join(root, "Decoy.swift"), "private struct Widget {}\n");
+    await fs.writeFile(
+      path.join(root, "Conditional.swift"),
+      "import Models\nextension Box: Proto where Element: Equatable {}\n",
+    );
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const owner = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Extension.swift",
+    );
+    const nominal = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Models.swift",
+    );
+    const protocol = [...graph.nodes.values()].find(
+      (node) => node.name === "Proto" && path.basename(node.file) === "Models.swift",
+    );
+    const decoy = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Decoy.swift",
+    );
+    const box = [...graph.nodes.values()].find(
+      (node) => node.name === "Box" && path.basename(node.file) === "Models.swift",
+    );
+    expect(owner).toBeDefined();
+    expect(nominal).toBeDefined();
+    expect(protocol).toBeDefined();
+    expect(decoy).toBeDefined();
+    expect(box).toBeDefined();
+    expect(
+      graph.edges.some((edge) => edge.from === owner!.id && edge.to === nominal!.id && edge.label === "uses"),
+    ).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === nominal!.id && edge.to === protocol!.id && edge.label === "implements"),
+    ).toBe(true);
+    expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id)).toBe(false);
+    expect(
+      graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id && edge.label === "extends"),
+    ).toBe(false);
+    expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === decoy!.id)).toBe(false);
+    const hierarchy = findTypeHierarchy(graph, owner!.id, "super");
+    expect(hierarchy.status).toBe("ok");
+    if (hierarchy.status !== "ok") throw new Error("Expected Swift extension conformance");
+    expect(hierarchy.relations).toEqual([]);
+    const nominalHierarchy = findTypeHierarchy(graph, nominal!.id, "super");
+    expect(nominalHierarchy.status).toBe("ok");
+    if (nominalHierarchy.status !== "ok") throw new Error("Expected the nominal type hierarchy");
+    expect(nominalHierarchy.relations.map((relation) => relation.targetId)).toEqual([protocol!.id]);
+    const boxHierarchy = findTypeHierarchy(graph, box!.id, "super");
+    expect(boxHierarchy.status).toBe("ok");
+    if (boxHierarchy.status !== "ok") throw new Error("Expected the nominal Box type hierarchy");
+    expect(boxHierarchy.relations).toEqual([]);
+    const implementations = findImplementations(index, graph, protocol!.id);
+    expect(implementations.status).toBe("ok");
+    if (implementations.status !== "ok") throw new Error("Expected unique Swift implementing type");
+    expect(implementations.implementations.map((match) => match.symbolId)).toEqual([nominal!.id]);
+  });
+
+  it("follows typealiases to the class or protocol they name in hierarchy and conformance", async () => {
+    const root = await mkTmpDir("cg-hierarchy-swift-alias-");
+    roots.push(root);
+    await fs.writeFile(
+      path.join(root, "Types.swift"),
+      [
+        "protocol P {}",
+        "struct Widget {}",
+        "class Base: P {}",
+        "struct Other {}",
+        "typealias Alias = Widget",
+        "typealias BaseAlias = Base",
+        "typealias ProtocolAlias = P",
+        "class Sub: BaseAlias {}",
+        "extension Alias: P {}",
+        "extension Other: ProtocolAlias {}",
+        "",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(root, "Generic.swift"),
+      [
+        "struct Box<Element> {}",
+        "typealias IntBox = Box<Int>",
+        "extension IntBox: P {}",
+        "class GenericBase<Element> {}",
+        "typealias IntBase = GenericBase<Int>",
+        "class FromGeneric: IntBase {}",
+        "",
+      ].join("\n"),
+    );
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const named = (name: string, file: string, kind: string) =>
+      [...graph.nodes.values()].find(
+        (node) => node.name === name && path.basename(node.file) === file && node.kind === kind,
+      );
+    const protocol = named("P", "Types.swift", "type");
+    const nominal = named("Widget", "Types.swift", "class");
+    const base = named("Base", "Types.swift", "class");
+    const other = named("Other", "Types.swift", "class");
+    const alias = named("Alias", "Types.swift", "type");
+    const baseAlias = named("BaseAlias", "Types.swift", "type");
+    const protocolAlias = named("ProtocolAlias", "Types.swift", "type");
+    const sub = named("Sub", "Types.swift", "class");
+    const box = named("Box", "Generic.swift", "class");
+    const fromGeneric = named("FromGeneric", "Generic.swift", "class");
+    for (const target of [protocol, nominal, base, other, alias, baseAlias, protocolAlias, sub, box, fromGeneric]) {
+      expect(target).toBeDefined();
+    }
+    const related = (id: string, direction: "super" | "sub"): Array<[string, string]> => {
+      const hierarchy = findTypeHierarchy(graph, id, direction);
+      if (hierarchy.status !== "ok") throw new Error("Expected a Swift hierarchy");
+      return hierarchy.relations.map((relation) => [graph.nodes.get(relation.targetId)?.name ?? "", relation.relation]);
+    };
+    // An alias names the declaration it provably reaches, so the alias itself is never a hierarchy node.
+    expect(related(nominal!.id, "super")).toEqual([["P", "implements"]]);
+    expect(related(other!.id, "super")).toEqual([["P", "implements"]]);
+    expect(related(sub!.id, "super")).toEqual([["Base", "extends"]]);
+    expect(related(base!.id, "sub")).toEqual([["Sub", "extends"]]);
+    for (const aliasNode of [alias!, baseAlias!, protocolAlias!]) {
+      expect(related(aliasNode.id, "super"), aliasNode.name).toEqual([]);
+      expect(related(aliasNode.id, "sub"), aliasNode.name).toEqual([]);
+    }
+    // A generic specialization is not a proven nominal identity, so it adds no edge in either direction.
+    expect(related(box!.id, "super")).toEqual([]);
+    expect(related(fromGeneric!.id, "super")).toEqual([]);
+    expect(related(protocol!.id, "sub")).toEqual([
+      ["Base", "implements"],
+      ["Other", "implements"],
+      ["Widget", "implements"],
+    ]);
+    const implementations = findImplementations(index, graph, protocol!.id);
+    expect(implementations.status).toBe("ok");
+    if (implementations.status !== "ok") throw new Error("Expected the aliased implementations");
+    expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name).sort()).toEqual([
+      "Base",
+      "Other",
+      "Sub",
+      "Widget",
+    ]);
+  });
+
+  it("keeps Swift protocol inheritance as extends and finds conformers through inherited protocols", async () => {
+    const root = await mkTmpDir("cg-hierarchy-swift-refinement-");
+    roots.push(root);
+    const files: Record<string, string> = {
+      "Parent.swift": "protocol Parent {}\n",
+      "Child.swift": "protocol Child: Parent {}\nprotocol Grand: Child {}\nprotocol Lonely: Parent {}\n",
+      "Conformer.swift":
+        "struct Widget: Child {}\nstruct Leaf: Grand {}\nclass Direct: Parent {}\nclass Sub: Direct {}\n",
+      "Late.swift": "struct Late {}\nextension Late: Grand {}\n",
+      "Same.swift": "protocol SameParent {}\nprotocol SameChild: SameParent {}\nstruct SameWidget: SameChild {}\n",
+      "Other.swift": "protocol Unrelated {}\nstruct Decoy: Unrelated {}\n",
+    };
+    for (const [file, source] of Object.entries(files)) await fs.writeFile(path.join(root, file), source);
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const edgesByLabel = new Map<string, string[]>();
+    for (const edge of graph.edges) {
+      const keys = edgesByLabel.get(edge.label ?? "") ?? [];
+      keys.push(`${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`);
+      edgesByLabel.set(edge.label ?? "", keys);
+    }
+    // Protocol inheritance never reads as conformance, in one file or across files; only nominal types conform.
+    expect(edgesByLabel.get("extends")?.sort()).toEqual([
+      "Child->Parent",
+      "Grand->Child",
+      "Lonely->Parent",
+      "SameChild->SameParent",
+      "Sub->Direct",
+    ]);
+    expect(edgesByLabel.get("implements")?.sort()).toEqual([
+      "Decoy->Unrelated",
+      "Direct->Parent",
+      "Late->Grand",
+      "Leaf->Grand",
+      "SameWidget->SameChild",
+      "Widget->Child",
+    ]);
+    const named = (name: string) => {
+      const node = [...graph.nodes.values()].find((candidate) => candidate.name === name && candidate.kind !== "class");
+      if (!node) throw new Error(`Expected the ${name} protocol`);
+      return node;
+    };
+    const related = (id: string, direction: "super" | "sub"): string[] => {
+      const hierarchy = findTypeHierarchy(graph, id, direction);
+      if (hierarchy.status !== "ok") throw new Error("Expected a Swift hierarchy");
+      return hierarchy.relations
+        .map((relation) => `${graph.nodes.get(relation.targetId)?.name}:${relation.relation}`)
+        .sort();
+    };
+    expect(related(named("Child").id, "super")).toEqual(["Parent:extends"]);
+    expect(related(named("Child").id, "sub")).toEqual(["Grand:extends", "Widget:implements"]);
+    expect(related(named("Parent").id, "sub")).toEqual(["Child:extends", "Direct:implements", "Lonely:extends"]);
+    expect(related(named("SameChild").id, "super")).toEqual(["SameParent:extends"]);
+    const implementationsOf = (name: string): string[] => {
+      const result = findImplementations(index, graph, named(name).id);
+      if (result.status !== "ok") throw new Error(`Expected implementations of ${name}`);
+      return result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name ?? "").sort();
+    };
+    // Conformers of a refining protocol implement what it inherits; the protocols themselves never do.
+    expect(implementationsOf("Parent")).toEqual(["Direct", "Late", "Leaf", "Sub", "Widget"]);
+    expect(implementationsOf("Child")).toEqual(["Late", "Leaf", "Widget"]);
+    expect(implementationsOf("Grand")).toEqual(["Late", "Leaf"]);
+    expect(implementationsOf("SameParent")).toEqual(["SameWidget"]);
+    expect(implementationsOf("Unrelated")).toEqual(["Decoy"]);
+  });
 });

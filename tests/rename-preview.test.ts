@@ -10,6 +10,11 @@ import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 import { jvmIncompleteWildcardSources } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import {
+  SWIFT_EXTENSION_OWNER_FILES,
+  SWIFT_EXTENSION_OWNER_HANDLE,
+  SWIFT_NOMINAL_HANDLE,
+} from "./helpers/swift-extension-owner-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 async function renameFixture() {
@@ -2010,6 +2015,41 @@ describe("rename preview", () => {
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renames a Swift type with its extension headers and never previews the header alone", async () => {
+    const root = await mkTmpDir("cg-rename-swift-extension-");
+    await writeFixtureFiles(root, SWIFT_EXTENSION_OWNER_FILES);
+    const session = createAgentSession({ root, buildOptions: { cache: "off" } });
+    try {
+      // The name resolves to the declared type, whose rename edits the declaration and every extension header.
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "Widget" });
+      expect(symbols.symbols.map((symbol) => symbol.handle)).toEqual([SWIFT_NOMINAL_HANDLE]);
+      const preview = await previewRenameWithSession(session, {
+        root,
+        handle: SWIFT_NOMINAL_HANDLE,
+        newName: "Gadget",
+      });
+      expect(preview.safe).toBe(true);
+      expect(preview.unsafeSites).toEqual([]);
+      expect(preview.edits.map((edit) => [edit.file, edit.oldText, edit.kind])).toEqual([
+        ["Extensions.swift", "Widget", "reference"],
+        ["Models.swift", "Widget", "definition"],
+      ]);
+
+      // The header declares nothing, so no handle or path to it may start a rename that would edit it alone.
+      await expect(
+        previewRenameWithSession(session, { root, handle: SWIFT_EXTENSION_OWNER_HANDLE, newName: "Gadget" }),
+      ).rejects.toThrow("Symbol handle is stale or missing");
+      for (const target of ["Extensions.swift::Widget", "Extensions.swift:1:11"]) {
+        await expect(
+          previewRenameWithSession(session, { root, handle: target, newName: "Gadget" }),
+          target,
+        ).rejects.toThrow("was not found");
+      }
+    } finally {
+      session.invalidate();
     }
   });
 });

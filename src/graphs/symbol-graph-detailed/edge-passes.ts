@@ -20,6 +20,8 @@ import {
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
+  resolveSwiftAliasContainer,
+  resolveSwiftAliasHeritage,
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -1789,6 +1791,70 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
   for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
 }
 
+/** The syntax type of the declaration a Swift definition names (`protocol_declaration`, `typealias_declaration`, ...). */
+async function swiftDeclarationType(context: EdgePassContext, def: SymbolDef): Promise<string | undefined> {
+  const tree =
+    fileIdentityKey(def.file) === fileIdentityKey(context.moduleEntry.file)
+      ? context.tree
+      : (await context.loadParsedFile(def.file))?.tree;
+  const start = def.range.start.index;
+  if (!tree || start === undefined) return undefined;
+  return tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent?.type;
+}
+
+/**
+ * `swiftDeclarationType` for a type-kind definition: a protocol, enum, or typealias. A class, struct, or actor is
+ * never type-kind, so resolving one loads no syntax tree.
+ */
+async function swiftTypeKindDeclarationType(context: EdgePassContext, def: SymbolDef): Promise<string | undefined> {
+  if (def.kind !== SymbolKind.TypeAlias) return undefined;
+  return await swiftDeclarationType(context, def);
+}
+
+/** What a Swift base clause names once typealiases are followed, and whether that declaration is a protocol. */
+type SwiftBase = { target: SymbolDef; isProtocol: boolean };
+
+/**
+ * A Swift base clause names a class, a protocol, or a typealias for one. An alias is followed to the single class or
+ * protocol it provably reaches, so the edge targets that declaration, never the alias; an unproven alias names none
+ * and adds no edge.
+ */
+async function resolveSwiftBase(context: EdgePassContext, named: SymbolDef): Promise<SwiftBase | null> {
+  let target = named;
+  let declaration = await swiftTypeKindDeclarationType(context, target);
+  if (declaration === "typealias_declaration") {
+    const reached = await resolveSwiftAliasHeritage(context.index, target);
+    if (!reached) return null;
+    target = reached;
+    declaration = await swiftTypeKindDeclarationType(context, target);
+  }
+  return { target, isProtocol: declaration === "protocol_declaration" };
+}
+
+/**
+ * A protocol's own base clause refines other protocols (`extends`), so a protocol is never an implementation of a
+ * protocol it inherits. A class, struct, enum, actor, or extension conforms to a protocol (`implements`); a class
+ * base keeps the clause's superclass-first relation.
+ */
+function swiftBaseRelation(
+  clause: SyntaxNodeLike,
+  base: SwiftBase,
+  clauseRelation: ReceiverAncestryRelation,
+): ReceiverAncestryRelation {
+  if (clause.parent?.type === "protocol_declaration") return "extends";
+  return base.isProtocol ? "implements" : clauseRelation;
+}
+
+/**
+ * The nominal type an unconditional extension header names: the type itself, or the single nominal type a
+ * typealias provably reaches. An unproven alias names none, so it can neither gain nor donate a conformance.
+ */
+async function swiftExtendedNominal(context: EdgePassContext, target: SymbolDef): Promise<SymbolDef | null> {
+  if ((await swiftTypeKindDeclarationType(context, target)) !== "typealias_declaration") return target;
+  const nominal = await resolveSwiftAliasContainer(context.index, target);
+  return nominal && !nominal.swiftExtensionOwner ? nominal : null;
+}
+
 async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
@@ -1798,6 +1864,7 @@ async function recordIdentifierRelations(
     index: number,
     identifier: SyntaxNodeLike,
   ) => "extends" | "implements" | "trait" | "mixin",
+  extensionNominal?: SymbolDef | null,
 ): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
@@ -1828,10 +1895,26 @@ async function recordIdentifierRelations(
       }
     }
     if (!target) continue;
+    let swiftBase: SwiftBase | null = null;
+    if (context.sup.id === "swift") {
+      swiftBase = await resolveSwiftBase(context, target);
+      if (!swiftBase) continue;
+      target = swiftBase.target;
+    }
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    recordDefEdge(context, fromId, target, relationForTarget(target, index, identifier), identifier);
+    const clauseRelation = relationForTarget(target, index, identifier);
+    const relation = swiftBase ? swiftBaseRelation(container, swiftBase, clauseRelation) : clauseRelation;
+    if (extensionNominal !== undefined) {
+      // An extension is not a second implementing type. Conditional or
+      // unproven extensions cannot establish unconditional conformance.
+      if (relation === "implements" && extensionNominal) {
+        recordDefEdge(context, ensureNode(context, extensionNominal), target, relation, identifier);
+      }
+    } else {
+      recordDefEdge(context, fromId, target, relation, identifier);
+    }
   }
 }
 
@@ -1914,6 +1997,20 @@ export async function emitClassInheritanceEdges(
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
+    let extensionNominal: SymbolDef | null | undefined;
+    if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
+      extensionNominal = null;
+      const name = cls.node.childForFieldName("name");
+      const singleType = name?.namedChildren.length === 1 ? name.namedChildren[0] : undefined;
+      if (singleType?.type === "type_identifier") {
+        const target = context.resolveIdentifier(sliceText(singleType, context.source), singleType);
+        if (target && declaresMembers(target)) {
+          recordDefEdge(context, fromId, target, "uses", singleType);
+          const conditional = isSwiftConstrainedExtension(cls.node, context.source);
+          if (!conditional) extensionNominal = await swiftExtendedNominal(context, target);
+        }
+      }
+    }
 
     if ((context.sup.id === "ts" || context.sup.id === "tsx") && cls.node.type === "class_declaration") {
       const heritage = cls.node.namedChildren.find((child) => child.type === "class_heritage");
@@ -1931,8 +2028,13 @@ export async function emitClassInheritanceEdges(
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
-        await recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
-          baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
+        await recordIdentifierRelations(
+          context,
+          fromId,
+          specifiers,
+          (target, index, identifier) =>
+            baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
+          extensionNominal,
         );
       }
     }

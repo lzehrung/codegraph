@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { explainCodegraphTarget, explainCodegraphTargetWithSession } from "../src/agent/explain.js";
+import {
+  explainCodegraphTarget,
+  explainCodegraphTargetWithSession,
+  explainTargetReferencesWithSession,
+} from "../src/agent/explain.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import * as navigationModule from "../src/indexer/navigation.js";
 import { SymbolKind, type SymbolDef } from "../src/indexer/types.js";
@@ -9,6 +13,12 @@ import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runGit } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
+import {
+  SWIFT_EXTENSION_OWNER_FILES,
+  SWIFT_EXTENSION_OWNER_HANDLE,
+  SWIFT_NOMINAL_HANDLE,
+} from "./helpers/swift-extension-owner-fixture.js";
+import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const tempRoots = createTempRootRegistry();
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -522,5 +532,47 @@ describe("agent explain", () => {
       tool: "duplicates",
       arguments: { json: true, files: expect.arrayContaining(["src/g.ts"]) },
     });
+  });
+
+  it("explains the Swift type an extension header extends, never the header itself", async () => {
+    const root = await mkTmpDir("cg-agent-explain-swift-extension-");
+    await writeFixtureFiles(root, SWIFT_EXTENSION_OWNER_FILES);
+    const buildOptions = { cache: "off" } as const;
+
+    // `Extensions.swift` sorts first, so only the declared-symbol rule keeps the header from winning the name.
+    const byName = await explainCodegraphTarget({ root, target: "Widget", buildOptions, maxDuplicates: 0 });
+    expect(byName.target).toMatchObject({
+      kind: "symbol",
+      label: "Widget",
+      file: "Models.swift",
+      handle: SWIFT_NOMINAL_HANDLE,
+    });
+    expect(byName.symbols.map((symbol) => symbol.name)).toEqual(["Widget"]);
+    expect(byName.references.map((reference) => reference.file).sort()).toEqual(["Extensions.swift", "Models.swift"]);
+    expect(byName.referenceCoverage).toMatchObject({ scope: "indexed_candidates", state: "complete" });
+    const byHandle = await explainCodegraphTarget({ root, target: SWIFT_NOMINAL_HANDLE, buildOptions });
+    expect(byHandle.target).toMatchObject({ kind: "symbol", file: "Models.swift", handle: SWIFT_NOMINAL_HANDLE });
+    expect(byHandle.references).toEqual(byName.references);
+
+    // The header is no symbol of its file; the member the extension adds is.
+    const extensionFile = await explainCodegraphTarget({ root, target: "Extensions.swift", buildOptions });
+    expect(extensionFile.target.kind).toBe("file");
+    expect(extensionFile.symbols.map((symbol) => symbol.name)).toEqual(["added"]);
+
+    // A handle to the header names no symbol, whether the whole explanation or only its references are asked for.
+    const stale = await explainCodegraphTarget({ root, target: SWIFT_EXTENSION_OWNER_HANDLE, buildOptions });
+    expect(stale.target).toEqual({ kind: "not_found", label: SWIFT_EXTENSION_OWNER_HANDLE });
+    expect(stale.references).toEqual([]);
+    const session = createAgentSession({ root, buildOptions });
+    const staleReferences = await explainTargetReferencesWithSession(session, {
+      root,
+      target: SWIFT_EXTENSION_OWNER_HANDLE,
+    });
+    expect(staleReferences.references).toEqual([]);
+    const nominalReferences = await explainTargetReferencesWithSession(session, { root, target: SWIFT_NOMINAL_HANDLE });
+    expect(nominalReferences.references.map((reference) => reference.file).sort()).toEqual([
+      "Extensions.swift",
+      "Models.swift",
+    ]);
   });
 });

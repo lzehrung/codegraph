@@ -4,6 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import type { SymbolGraph } from "../../src/graphs/symbol-graph.js";
+import { findImplementations, findTypeHierarchy } from "../../src/indexer/type-hierarchy.js";
+import type { FindReferencesResult, ProjectIndex } from "../../src/indexer/types.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
@@ -68,10 +71,7 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "Extensions.swift",
-          symbols: [
-            { name: "WorkerImpl", kind: "class" },
-            { name: "makeDefault", kind: "function" },
-          ],
+          symbols: [{ name: "makeDefault", kind: "function" }],
         },
         {
           file: "Actors.swift",
@@ -177,6 +177,8 @@ describe("Swift quoted and plain identifier identity", () => {
         [site("Imports.swift", 1, "`Widget`"), "Api.swift", 3],
         [site("Imports.swift", 2, "`top`"), "Api.swift", 1],
         [site("Imports.swift", 3, "helper"), "Api.swift", 4],
+        [site("Extension.swift", 1, "Widget"), "Api.swift", 3],
+        [site("Extension.swift", 4, "`Plain`"), "Api.swift", 7],
         [site("Extension.swift", 2, "`helper`"), "Api.swift", 4],
         [site("Extension.swift", 5, "helper"), "Api.swift", 8],
         [site("Api.swift", 13, "`class`"), "Api.swift", 12],
@@ -1052,8 +1054,8 @@ describe("Swift construction inside extensions", () => {
       if (direct.status !== "ok" || extension.status !== "ok") throw new Error("Expected nominal type construction");
       expect(normalizePath(extension.definition.file)).toBe(normalizePath(direct.definition.file));
       expect(extension.definition.range.start).toEqual(direct.definition.range.start);
-      expect(normalizePath(extension.definition.file)).toBe(paths["Use.swift"]);
-      expect(extension.definition.range.start.line).toBe(19);
+      expect(normalizePath(extension.definition.file)).toBe(paths["Types.swift"]);
+      expect(extension.definition.range.start.line).toBe(6);
       expect(normalizePath(extension.definition.file)).not.toBe(paths["other/Worker.swift"]);
 
       const graph = await buildSymbolGraphDetailed(index);
@@ -1064,10 +1066,606 @@ describe("Swift construction inside extensions", () => {
       const constructions = graph.edges
         .filter((edge) => edge.from === factory?.id && edge.label === "instantiates")
         .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
-      expect(constructions).toEqual([paths["Use.swift"]]);
+      expect(constructions).toEqual([paths["Types.swift"]]);
       expect(constructions).not.toContain(paths["other/Worker.swift"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Swift extension header type references", () => {
+  it("navigates to the nominal type and keeps extension members and conformance connected", async () => {
+    const models = [
+      "protocol Proto {}",
+      "struct Widget { func original() {} }",
+      "extension Widget { func sameFile() {} }",
+      "struct Outer { struct Inner {} }",
+    ];
+    const extensions = [
+      "import Models",
+      "extension Widget: Proto {",
+      "  func added() { self.original() }",
+      "}",
+      "extension String { func builtIn() {} }",
+      "extension Outer.Inner { func nested() {} }",
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-header-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Models.swift": `${models.join("\n")}\n`,
+        "Extensions.swift": `${extensions.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const model = paths["Models.swift"]!;
+      const extension = paths["Extensions.swift"]!;
+      for (const [file, lines, line] of [
+        [model, models, 3],
+        [extension, extensions, 2],
+      ] as const) {
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, "Widget") });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected the nominal Widget declaration");
+        expect(normalizePath(result.definition.file)).toBe(model);
+        expect(result.definition.range.start.line).toBe(2);
+      }
+      const member = await goToDefinition(index, {
+        file: extension,
+        line: 3,
+        column: columnOf(extensions, 3, "original"),
+      });
+      expect(member.status).toBe("ok");
+      if (member.status !== "ok") throw new Error("Expected an extension member call to resolve");
+      expect(normalizePath(member.definition.file)).toBe(model);
+      expect(member.definition.range.start.line).toBe(2);
+      const builtIn = await goToDefinition(index, {
+        file: extension,
+        line: 5,
+        column: columnOf(extensions, 5, "String"),
+      });
+      expect(builtIn.status).toBe("not_found");
+      // The leading segment of a dotted owner is an ordinary type use; its nested suffix has no proof.
+      const outer = await goToDefinition(index, {
+        file: extension,
+        line: 6,
+        column: columnOf(extensions, 6, "Outer"),
+      });
+      expect(outer.status).toBe("ok");
+      if (outer.status !== "ok") throw new Error("Expected the leading owner segment to resolve");
+      expect(normalizePath(outer.definition.file)).toBe(model);
+      expect(outer.definition.range.start.line).toBe(4);
+      const inner = await goToDefinition(index, {
+        file: extension,
+        line: 6,
+        column: columnOf(extensions, 6, "Inner"),
+      });
+      expect(inner).toEqual({ status: "not_found", reason: "Unresolved qualified type" });
+      const missingRefs = await findReferences(index, {
+        file: extension,
+        line: 5,
+        column: columnOf(extensions, 5, "String"),
+      });
+      expect(missingRefs.status).toBe("not_found");
+
+      const references = await findReferences(index, {
+        file: model,
+        line: 2,
+        column: columnOf(models, 2, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected extension header references");
+      expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        references.references
+          .map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`)
+          .sort(),
+      ).toEqual([`${model}:2`, `${model}:3`, `${extension}:2`].sort());
+      const headerRefs = await findReferences(index, {
+        file: extension,
+        line: 2,
+        column: columnOf(extensions, 2, "Widget"),
+      });
+      expect(headerRefs).toEqual(references);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const nominal = [...graph.nodes.values()].find(
+        (node) => node.name === "Widget" && normalizePath(node.file) === model,
+      );
+      const protocol = [...graph.nodes.values()].find(
+        (node) => node.name === "Proto" && normalizePath(node.file) === model,
+      );
+      const owner = [...graph.nodes.values()].find(
+        (node) => node.name === "Widget" && normalizePath(node.file) === extension,
+      );
+      expect(nominal).toBeDefined();
+      expect(protocol).toBeDefined();
+      expect(owner).toBeDefined();
+      expect(
+        graph.edges.some((edge) => edge.from === owner!.id && edge.to === nominal!.id && edge.label === "uses"),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) => edge.from === nominal!.id && edge.to === protocol!.id && edge.label === "implements",
+        ),
+      ).toBe(true);
+      expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id)).toBe(false);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "uses" &&
+            graph.nodes.get(edge.from)?.name === "String" &&
+            normalizePath(graph.nodes.get(edge.from)?.file ?? "") === extension,
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes the same-named type in another directory without claiming a complete module boundary", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-decoy-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Models.swift": "protocol Proto {}\nstruct Widget {}\n",
+        "Extensions.swift": "import Models\nextension Widget: Proto { func added() {} }\n",
+        "Other/Widget.swift": "struct Widget {}\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const header = await goToDefinition(index, { file: paths["Extensions.swift"]!, line: 2, column: 11 });
+      expect(header.status).toBe("ok");
+      if (header.status !== "ok") throw new Error("Expected the imported nominal type");
+      expect(normalizePath(header.definition.file)).toBe(paths["Models.swift"]);
+      expect(normalizePath(header.definition.file)).not.toBe(paths["Other/Widget.swift"]);
+      const refs = await findReferences(index, { file: paths["Models.swift"]!, line: 2, column: 8 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected module-scoped references");
+      expect(refs.references.map((reference) => normalizePath(reference.file)).sort()).toEqual(
+        [paths["Models.swift"], paths["Extensions.swift"]].sort(),
+      );
+      expect(refs.references.some((reference) => normalizePath(reference.file) === paths["Other/Widget.swift"])).toBe(
+        false,
+      );
+      expect(refs.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves class, struct, enum, and protocol extension headers as type uses", async () => {
+    const names = ["ClassWidget", "StructWidget", "EnumWidget", "ProtocolWidget"] as const;
+    const lines = [
+      "class ClassWidget {}",
+      "struct StructWidget {}",
+      "enum EnumWidget { case value }",
+      "protocol ProtocolWidget {}",
+      ...names.map((name) => `extension ${name} {}`),
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-kinds-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Types.swift": `${lines.join("\n")}\n` });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const file = paths["Types.swift"]!;
+      for (const [position, name] of names.entries()) {
+        const line = names.length + position + 1;
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+        expect(result.status, name).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected a type declaration for ${name}`);
+        expect(normalizePath(result.definition.file)).toBe(file);
+        expect(result.definition.range.start.line).toBe(position + 1);
+        const refs = await findReferences(index, {
+          file,
+          line: position + 1,
+          column: columnOf(lines, position + 1, name),
+        });
+        expect(refs.status, name).toBe("ok");
+        if (refs.status !== "ok") throw new Error(`Expected extension references for ${name}`);
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([position + 1, line]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift protocol extension default-method graph ownership", () => {
+  it("preserves calls from struct and class conformers without reaching a same-named decoy protocol", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-protocol-extension-calls-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Types.swift": [
+          "protocol Relay { func send() }",
+          "extension Relay { func announce() { send() } }",
+          "struct Labelled: Relay { func send() {} }",
+          "class Tagged: Relay { func send() {} }",
+        ].join("\n"),
+        "Calls.swift": [
+          "import Types",
+          "func useStruct(_ value: Labelled) { value.announce() }",
+          "func useClass(_ value: Tagged) { value.announce() }",
+        ].join("\n"),
+        "other/Decoy.swift": [
+          "protocol Relay { func send() }",
+          "extension Relay { func announce() { send() } }",
+          "struct Labelled: Relay { func send() {} }",
+          "func useDecoy(_ value: Labelled) { value.announce() }",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const symbol = (file: string, name: string) =>
+        [...graph.nodes.values()].find((node) => normalizePath(node.file) === paths[file] && node.name === name);
+      const protocol = [...graph.nodes.values()].find(
+        (node) => normalizePath(node.file) === paths["Types.swift"] && node.name === "Relay" && node.kind === "type",
+      );
+      const extension = [...graph.nodes.values()].find(
+        (node) => normalizePath(node.file) === paths["Types.swift"] && node.name === "Relay" && node.kind === "class",
+      );
+      const announcement = symbol("Types.swift", "announce");
+      const decoyProtocol = [...graph.nodes.values()].find(
+        (node) =>
+          normalizePath(node.file) === paths["other/Decoy.swift"] && node.name === "Relay" && node.kind === "type",
+      );
+      const decoyAnnouncement = symbol("other/Decoy.swift", "announce");
+      const labelled = symbol("Types.swift", "Labelled");
+      const tagged = symbol("Types.swift", "Tagged");
+      const decoyLabelled = symbol("other/Decoy.swift", "Labelled");
+      const useStruct = symbol("Calls.swift", "useStruct");
+      const useClass = symbol("Calls.swift", "useClass");
+      const useDecoy = symbol("other/Decoy.swift", "useDecoy");
+      for (const target of [
+        protocol,
+        extension,
+        announcement,
+        decoyProtocol,
+        decoyAnnouncement,
+        labelled,
+        tagged,
+        decoyLabelled,
+        useStruct,
+        useClass,
+        useDecoy,
+      ]) {
+        expect(target).toBeDefined();
+      }
+      expect(
+        graph.edges.some((edge) => edge.from === extension!.id && edge.to === protocol!.id && edge.label === "uses"),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) => edge.from === announcement!.id && edge.to === protocol!.id && edge.label === "member_of",
+        ),
+      ).toBe(true);
+      for (const [caller, target] of [
+        [useStruct!, announcement!],
+        [useClass!, announcement!],
+        [useDecoy!, decoyAnnouncement!],
+      ] as const) {
+        expect(
+          graph.edges.filter((edge) => edge.from === caller.id && edge.label === "calls").map((edge) => edge.to),
+        ).toEqual([target.id]);
+      }
+      for (const conformer of [labelled!, tagged!]) {
+        const supers = findTypeHierarchy(graph, conformer.id, "super");
+        expect(supers.status).toBe("ok");
+        if (supers.status !== "ok") throw new Error("Expected Swift protocol conformance");
+        expect(supers.relations.map((relation) => [relation.targetId, relation.relation])).toContainEqual([
+          protocol!.id,
+          "implements",
+        ]);
+        expect(supers.relations.some((relation) => relation.targetId === decoyProtocol!.id)).toBe(false);
+        expect(
+          graph.edges.some(
+            (edge) => edge.from === conformer.id && edge.to === protocol!.id && edge.label === "extends",
+          ),
+        ).toBe(false);
+      }
+      const subtypes = findTypeHierarchy(graph, protocol!.id, "sub");
+      expect(subtypes.status).toBe("ok");
+      if (subtypes.status !== "ok") throw new Error("Expected Swift conforming types");
+      expect(subtypes.relations.map((relation) => relation.targetId).sort()).toEqual([labelled!.id, tagged!.id].sort());
+      expect(subtypes.relations.map((relation) => relation.relation)).toEqual(["implements", "implements"]);
+      const decoySubtypes = findTypeHierarchy(graph, decoyProtocol!.id, "sub");
+      expect(decoySubtypes.status).toBe("ok");
+      if (decoySubtypes.status !== "ok") throw new Error("Expected separate decoy conformer");
+      expect(decoySubtypes.relations.map((relation) => relation.targetId)).toEqual([decoyLabelled!.id]);
+      expect(decoySubtypes.relations.map((relation) => relation.relation)).toEqual(["implements"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift extension headers: type namespace, aliases, and dotted owners", () => {
+  const lines = (...rows: string[]): string => `${rows.join("\n")}\n`;
+  const complete = { scope: "indexed_candidates", state: "complete" } as const;
+
+  async function withProject(
+    files: Readonly<Record<string, string>>,
+    run: (project: { index: ProjectIndex; paths: Record<string, string> }) => Promise<void>,
+  ): Promise<void> {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-header-"));
+    try {
+      const paths = await writeFixtureFiles(root, files);
+      await run({ index: await buildProjectIndex(root, { cache: "off" }), paths });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  function okRefs(result: FindReferencesResult) {
+    if (result.status !== "ok") throw new Error(`Expected references: ${result.reason}`);
+    return result;
+  }
+
+  function sites(result: FindReferencesResult): string[] {
+    return okRefs(result)
+      .references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+      .sort();
+  }
+
+  function find(graph: SymbolGraph, file: string, name: string, kind: string) {
+    return [...graph.nodes.values()].find(
+      (node) => normalizePath(node.file) === file && node.name === name && node.kind === kind,
+    );
+  }
+
+  function edgeKeys(graph: SymbolGraph, label: string): string[] {
+    return graph.edges
+      .filter((edge) => edge.label === label)
+      .map((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        return `${path.basename(from?.file ?? "")}:${from?.name}->${path.basename(to?.file ?? "")}:${to?.name}`;
+      })
+      .sort();
+  }
+
+  function supers(graph: SymbolGraph, id: string): Array<[string, string]> {
+    const hierarchy = findTypeHierarchy(graph, id, "super");
+    if (hierarchy.status !== "ok") throw new Error("Expected a Swift hierarchy");
+    return hierarchy.relations.map((relation) => [relation.targetId, relation.relation]);
+  }
+
+  it("never binds an extension header to a same-named function in another file", async () => {
+    await withProject(
+      {
+        "Factory.swift": lines("import Foundation", "func URL(_ number: Int) -> Int { return number }"),
+        "Extension.swift": lines("import Foundation", "extension URL { func custom() {} }"),
+      },
+      async ({ index, paths }) => {
+        const header = await goToDefinition(index, { file: paths["Extension.swift"]!, line: 2, column: 11 });
+        expect(header.status).toBe("not_found");
+        const refs = await findReferences(index, { file: paths["Factory.swift"]!, line: 2, column: 6 });
+        expect(sites(refs)).toEqual(["Factory.swift:2"]);
+        expect(okRefs(refs).referenceCoverage).toEqual(complete);
+        expect(edgeKeys(await buildSymbolGraphDetailed(index), "uses")).toEqual([]);
+      },
+    );
+  });
+
+  it("keeps same-file function references clean and resolves the type beside a function decoy elsewhere", async () => {
+    await withProject(
+      {
+        "One.swift": lines(
+          "import Foundation",
+          "func URL(_ number: Int) -> Int { return number }",
+          "extension URL { func custom() {} }",
+        ),
+      },
+      async ({ index, paths }) => {
+        const header = await goToDefinition(index, { file: paths["One.swift"]!, line: 3, column: 11 });
+        expect(header.status).toBe("not_found");
+        const refs = await findReferences(index, { file: paths["One.swift"]!, line: 2, column: 6 });
+        expect(sites(refs)).toEqual(["One.swift:2"]);
+        expect(okRefs(refs).referenceCoverage).toEqual(complete);
+      },
+    );
+    await withProject(
+      {
+        "Types.swift": lines("struct Widget {}"),
+        "Extension.swift": lines("extension Widget { func added() {} }"),
+        "Other/Factory.swift": lines("func Widget(_ number: Int) -> Int { number }"),
+      },
+      async ({ index, paths }) => {
+        const header = await goToDefinition(index, { file: paths["Extension.swift"]!, line: 1, column: 11 });
+        expect(header.status).toBe("ok");
+        if (header.status !== "ok") throw new Error("Expected the type");
+        expect(normalizePath(header.definition.file)).toBe(paths["Types.swift"]);
+        const typeRefs = await findReferences(index, { file: paths["Types.swift"]!, line: 1, column: 8 });
+        expect(sites(typeRefs)).toEqual(["Extension.swift:1", "Types.swift:1"]);
+        const functionRefs = await findReferences(index, { file: paths["Other/Factory.swift"]!, line: 1, column: 6 });
+        expect(sites(functionRefs)).toEqual(["Factory.swift:1"]);
+        expect(edgeKeys(await buildSymbolGraphDetailed(index), "uses")).toEqual([
+          "Extension.swift:Widget->Types.swift:Widget",
+        ]);
+      },
+    );
+  });
+
+  it("gives typealias extension conformance to the nominal type, or to nothing when unproven", async () => {
+    await withProject(
+      {
+        "Types.swift": lines(
+          "protocol P {}",
+          "struct Widget {}",
+          "struct Box<Element> {}",
+          "struct Outer { struct Widget {} }",
+        ),
+        "Aliases.swift": lines(
+          "typealias Inner = Widget",
+          "typealias Alias = Inner",
+          "typealias IntBox = Box<Int>",
+          "typealias Nested = Outer.Widget",
+          "typealias Missing = Elsewhere",
+        ),
+        "Extension.swift": lines("extension Alias: P {}"),
+        "Unproven.swift": lines("extension IntBox: P {}", "extension Nested: P {}", "extension Missing: P {}"),
+        "Other/Widget.swift": lines("struct Widget {}"),
+      },
+      async ({ index, paths }) => {
+        const header = await goToDefinition(index, { file: paths["Extension.swift"]!, line: 1, column: 11 });
+        expect(header.status).toBe("ok");
+        if (header.status !== "ok") throw new Error("Expected the alias");
+        expect(normalizePath(header.definition.file)).toBe(paths["Aliases.swift"]);
+        expect(header.definition.range.start.line).toBe(2);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(edgeKeys(graph, "implements")).toEqual(["Types.swift:Widget->Types.swift:P"]);
+        expect(edgeKeys(graph, "extends")).toEqual([]);
+        expect(edgeKeys(graph, "uses")).toEqual(
+          [
+            "Extension.swift:Alias->Aliases.swift:Alias",
+            "Unproven.swift:IntBox->Aliases.swift:IntBox",
+            "Unproven.swift:Missing->Aliases.swift:Missing",
+            "Unproven.swift:Nested->Aliases.swift:Nested",
+          ].sort(),
+        );
+        const protocol = find(graph, paths["Types.swift"]!, "P", "type");
+        const nominal = find(graph, paths["Types.swift"]!, "Widget", "class");
+        const alias = find(graph, paths["Aliases.swift"]!, "Alias", "type");
+        const decoy = find(graph, paths["Other/Widget.swift"]!, "Widget", "class");
+        for (const target of [protocol, nominal, alias, decoy]) expect(target).toBeDefined();
+        expect(supers(graph, nominal!.id)).toEqual([[protocol!.id, "implements"]]);
+        expect(supers(graph, alias!.id)).toEqual([]);
+        expect(supers(graph, decoy!.id)).toEqual([]);
+        const implementations = findImplementations(index, graph, protocol!.id);
+        expect(implementations.status).toBe("ok");
+        if (implementations.status !== "ok") throw new Error("Expected the aliased implementation");
+        expect(implementations.implementations.map((match) => match.symbolId)).toEqual([nominal!.id]);
+      },
+    );
+  });
+
+  it("follows typealiases to the class or protocol they provably name in base clauses", async () => {
+    await withProject(
+      {
+        "Types.swift": lines(
+          "class Base {}",
+          "typealias Alias = Base",
+          "class Sub: Alias {}",
+          "class Direct: Base {}",
+          "protocol Proto {}",
+          "typealias ProtoAlias = Proto",
+        ),
+        "Conform.swift": lines(
+          "struct Conforming: Proto {}",
+          "class Mixed: Base, Proto {}",
+          "struct ViaAlias: ProtoAlias {}",
+          "class MixedAlias: Alias, ProtoAlias {}",
+        ),
+        "Unproven.swift": lines(
+          "class Generic<Element> {}",
+          "struct Outer { class Inner {} }",
+          "typealias IntGeneric = Generic<Int>",
+          "typealias Nested = Outer.Inner",
+          "typealias Missing = Elsewhere",
+          "class FromGeneric: IntGeneric {}",
+          "class FromNested: Nested {}",
+          "class FromMissing: Missing {}",
+        ),
+        "Other/Base.swift": lines("class Base {}"),
+      },
+      async ({ index, paths }) => {
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(edgeKeys(graph, "extends")).toEqual(
+          [
+            "Conform.swift:Mixed->Types.swift:Base",
+            "Conform.swift:MixedAlias->Types.swift:Base",
+            "Types.swift:Direct->Types.swift:Base",
+            "Types.swift:Sub->Types.swift:Base",
+          ].sort(),
+        );
+        expect(edgeKeys(graph, "implements")).toEqual(
+          [
+            "Conform.swift:Conforming->Types.swift:Proto",
+            "Conform.swift:Mixed->Types.swift:Proto",
+            "Conform.swift:MixedAlias->Types.swift:Proto",
+            "Conform.swift:ViaAlias->Types.swift:Proto",
+          ].sort(),
+        );
+        const base = find(graph, paths["Types.swift"]!, "Base", "class");
+        const protocol = find(graph, paths["Types.swift"]!, "Proto", "type");
+        const sub = find(graph, paths["Types.swift"]!, "Sub", "class");
+        const mixedAlias = find(graph, paths["Conform.swift"]!, "MixedAlias", "class");
+        const decoy = find(graph, paths["Other/Base.swift"]!, "Base", "class");
+        for (const target of [base, protocol, sub, mixedAlias, decoy]) expect(target).toBeDefined();
+        // An alias is never a hierarchy node: the class or protocol it names is the supertype.
+        expect(supers(graph, sub!.id)).toEqual([[base!.id, "extends"]]);
+        expect(supers(graph, mixedAlias!.id)).toEqual([
+          [base!.id, "extends"],
+          [protocol!.id, "implements"],
+        ]);
+        expect(supers(graph, decoy!.id)).toEqual([]);
+        // A generic specialization, a nested type, and an unindexed type prove no base, so they add no edge.
+        for (const name of ["FromGeneric", "FromNested", "FromMissing"]) {
+          const unproven = find(graph, paths["Unproven.swift"]!, name, "class");
+          expect(unproven, name).toBeDefined();
+          expect(supers(graph, unproven!.id), name).toEqual([]);
+        }
+        const subtypes = findTypeHierarchy(graph, base!.id, "sub");
+        if (subtypes.status !== "ok") throw new Error("Expected the base class subtypes");
+        expect(subtypes.relations.map((relation) => graph.nodes.get(relation.targetId)?.name).sort()).toEqual([
+          "Direct",
+          "Mixed",
+          "MixedAlias",
+          "Sub",
+        ]);
+      },
+    );
+  });
+
+  it("resolves the leading segment of a dotted extension owner and leaves its nested suffix unproven", async () => {
+    await withProject(
+      {
+        "Models.swift": lines("struct Outer { struct Inner {} }"),
+        "Extension.swift": lines("extension Outer.Inner { func nested() {} }"),
+      },
+      async ({ index, paths }) => {
+        const outer = await goToDefinition(index, { file: paths["Extension.swift"]!, line: 1, column: 11 });
+        expect(outer.status).toBe("ok");
+        if (outer.status !== "ok") throw new Error("Expected the leading owner segment");
+        expect(normalizePath(outer.definition.file)).toBe(paths["Models.swift"]);
+        const suffix = await goToDefinition(index, { file: paths["Extension.swift"]!, line: 1, column: 17 });
+        expect(suffix).toEqual({ status: "not_found", reason: "Unresolved qualified type" });
+
+        const outerRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 8 });
+        expect(sites(outerRefs)).toEqual(["Extension.swift:1", "Models.swift:1"]);
+        expect(okRefs(outerRefs).referenceCoverage).toEqual(complete);
+        const innerRefs = okRefs(await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 23 }));
+        expect(innerRefs.references.map((reference) => path.basename(reference.file))).toEqual(["Models.swift"]);
+        expect(innerRefs.referenceCoverage.state).toBe("partial");
+        expect(innerRefs.referenceCoverage.reasons).toEqual(["strategy_unavailable"]);
+        expect(innerRefs.referenceCoverage.affectedFiles?.map(normalizePath)).toEqual([paths["Extension.swift"]]);
+        expect(edgeKeys(await buildSymbolGraphDetailed(index), "uses")).toEqual([]);
+      },
+    );
+    const source = [
+      "struct Inner {}",
+      "struct Outer { struct Inner { func run() { nested() } } }",
+      "extension Outer.Inner { func nested() {} }",
+      "protocol P {}",
+      "extension Outer.Inner: P {}",
+    ];
+    await withProject({ "A.swift": lines(...source) }, async ({ index, paths }) => {
+      const file = paths["A.swift"]!;
+      // The suffix is never a bare use: the top-level `Inner` keeps only its own declaration.
+      expect(sites(await findReferences(index, { file, line: 1, column: 8 }))).toEqual(["A.swift:1"]);
+      const outerRefs = await findReferences(index, { file, line: 2, column: 8 });
+      expect(sites(outerRefs)).toEqual(["A.swift:2", "A.swift:3", "A.swift:5"]);
+      expect(okRefs(outerRefs).referenceCoverage).toEqual(complete);
+      // Members of the dotted extension stay reachable from the nested type through shared owner identity.
+      const member = await goToDefinition(index, { file, line: 2, column: columnOf(source, 2, "nested") });
+      expect(member.status).toBe("ok");
+      if (member.status !== "ok") throw new Error("Expected the extension member");
+      expect(member.definition.range.start.line).toBe(3);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(edgeKeys(graph, "uses")).toEqual([]);
+      expect(edgeKeys(graph, "implements")).toEqual([]);
+    });
   });
 });

@@ -13,6 +13,7 @@ import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 import { parseSourceLocationInput } from "../util/source-location.js";
 import { importNodeId } from "./import-types.js";
+import { isDeclaredSymbol } from "./declarations.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links/language-ids.js";
 import { DOCSTRING_CAPTURE_LANGUAGES } from "./locals-and-exports.js";
@@ -38,8 +39,9 @@ export function parseQualifiedSymbolPath(value: string): QualifiedSymbolPath | n
 export function findLocalSymbolDefinitions(index: ProjectIndex, file: string, name: string): SymbolDef[] {
   const normalizedFile = normalizePath(file);
   return (
-    index.byFile.get(fileIdentityKey(normalizedFile))?.locals.filter((definition) => definition.localName === name) ??
-    []
+    index.byFile
+      .get(fileIdentityKey(normalizedFile))
+      ?.locals.filter((definition) => definition.localName === name && isDeclaredSymbol(definition)) ?? []
   );
 }
 
@@ -82,6 +84,7 @@ export function resolveSymbolTarget(index: ProjectIndex, input: string): SymbolT
   const file = resolveIndexedFile(index, location.file);
   if (file) {
     const definitions = (index.byFile.get(fileIdentityKey(file))?.locals ?? []).filter((definition) => {
+      if (!isDeclaredSymbol(definition)) return false;
       if (location.line !== undefined && definition.range.start.line !== location.line) return false;
       if (location.column !== undefined && definition.range.start.column !== location.column) return false;
       return true;
@@ -92,7 +95,7 @@ export function resolveSymbolTarget(index: ProjectIndex, input: string): SymbolT
   const definitions: SymbolDef[] = [];
   for (const module of index.byFile.values()) {
     for (const definition of module.locals) {
-      if (definition.localName === input) definitions.push(definition);
+      if (definition.localName === input && isDeclaredSymbol(definition)) definitions.push(definition);
     }
   }
   return resolutionForDefinitions(input, definitions);
@@ -238,6 +241,7 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
     if (!mod) continue;
     const displayFile = mod.file;
     for (const def of mod.locals) {
+      if (!isDeclaredSymbol(def)) continue;
       out.push({
         id: symbolId(def),
         file: displayFile,

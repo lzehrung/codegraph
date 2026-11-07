@@ -111,8 +111,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 124 rebuilds receiver proofs, alias uses, and qualified owners after the alias and identity review fixes.
  * Epoch 125 rejects PHP import path candidates whose parsed declarations do not contain the imported qualified name.
  * It persists qualified PHP declaration identities by role, so restoring one namespace or kind is not hidden by a decoy.
+ * Epoch 126 rebuilds Swift extension owner symbols, marked as owners instead of type declarations, and excludes
+ * extension headers as type declarations. It also rebuilds Swift base-clause edges that follow typealiases and keep
+ * protocol inheritance as `extends`.
  */
-export const CORE_ALGORITHM_EPOCH = 125;
+export const CORE_ALGORITHM_EPOCH = 126;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

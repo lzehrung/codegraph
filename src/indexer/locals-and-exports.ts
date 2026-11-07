@@ -15,6 +15,7 @@ import {
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { replaceContents } from "../util/collections.js";
+import { swiftExtensionOwnerType } from "../util/swift-tree.js";
 import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
@@ -876,6 +877,7 @@ export function collectLocalsAndExportsFromSource(
       const tagRole = cTagRole(node);
       if (tagRole) base.cTag = tagRole;
     }
+    if (support.id === "swift" && node && swiftExtensionOwnerType(node)) base.swiftExtensionOwner = true;
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;

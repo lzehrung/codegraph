@@ -212,7 +212,7 @@ function collectSharedOwnerContainers(root: SyntaxNodeLike, languageId: string, 
   if (languageId === "csharp") {
     if (CSHARP_PARTIAL_CONTAINER_TYPES.has(root.type)) out.push(root);
   } else if (languageId === "swift") {
-    if (root.type === "class_declaration") out.push(root);
+    if (root.type === "class_declaration" || root.type === "protocol_declaration") out.push(root);
   }
   for (const child of root.namedChildren ?? []) collectSharedOwnerContainers(child, languageId, out);
 }
@@ -1898,8 +1898,12 @@ async function resolveDeclaredBase(
   base: DeclaredBaseType,
 ): Promise<SymbolDef | undefined> {
   const normalize = sup.normalizeIdentifier;
-  if (base.kind === "simple") return resolveNamedMemberContainer(index, mod, base.name, normalize);
-  return resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+  const named =
+    base.kind === "simple"
+      ? resolveNamedMemberContainer(index, mod, base.name, normalize)
+      : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+  if (!named || sup.id !== "swift") return named;
+  return await swiftBaseDeclaration(index, named);
 }
 
 /**
@@ -2086,6 +2090,7 @@ async function baseRefsFromContainer(
     if (!def && sup.id === "php" && base.kind === "simple") {
       def = resolvePhpNamespaceSymbol(index, source, tree, container, base.name, mod.imports, "class") ?? undefined;
     }
+    if (def && sup.id === "swift") def = await swiftBaseDeclaration(index, def);
     if (!def) continue;
     const ref = await keywordClassRefFromDef(index, def);
     if (!ref) continue;
@@ -2738,8 +2743,45 @@ export async function resolveRubySuperDefinition(
   return resolveKeywordReceiverMember(index, mod, node, member, "any", true);
 }
 
-/** Follow a Swift typealias only when its right-hand side is a single indexed nominal type. */
-async function resolveSwiftAliasContainer(index: ProjectIndex, alias: SymbolDef): Promise<SymbolDef | undefined> {
+/**
+ * Follow a Swift typealias only when its right-hand side is a single indexed nominal type. Shared by receiver
+ * navigation and the detailed graph, so an alias names the same type everywhere.
+ */
+export async function resolveSwiftAliasContainer(
+  index: ProjectIndex,
+  alias: SymbolDef,
+): Promise<SymbolDef | undefined> {
+  return await followSwiftAlias(index, alias, false);
+}
+
+/**
+ * `resolveSwiftAliasContainer` for an inheritance clause, which may also name a protocol: the single class,
+ * struct, enum, actor, or protocol declaration a typealias chain provably reaches. An extension header declares no
+ * type, so an alias that lands on one reaches no proven declaration. Shared by member lookup through a base and
+ * by the detailed graph's base-clause edges, so a base alias names the same type everywhere.
+ */
+export async function resolveSwiftAliasHeritage(index: ProjectIndex, alias: SymbolDef): Promise<SymbolDef | undefined> {
+  const reached = await followSwiftAlias(index, alias, true);
+  return reached?.swiftExtensionOwner ? undefined : reached;
+}
+
+/** A Swift base clause may name a typealias: the declaration it provably reaches is the base, and an unproven alias names none. */
+async function swiftBaseDeclaration(index: ProjectIndex, named: SymbolDef): Promise<SymbolDef | undefined> {
+  if (named.kind !== SymbolKind.TypeAlias) return named;
+  return await resolveSwiftAliasHeritage(index, named);
+}
+
+/** Whether a declaration ends a Swift alias chain: a nominal type, or a protocol where the caller accepts one. */
+function endsSwiftAliasChain(declarationType: string | undefined, acceptsProtocol: boolean): boolean {
+  if (declarationType === "class_declaration") return true;
+  return acceptsProtocol && declarationType === "protocol_declaration";
+}
+
+async function followSwiftAlias(
+  index: ProjectIndex,
+  alias: SymbolDef,
+  acceptsProtocol: boolean,
+): Promise<SymbolDef | undefined> {
   let current = alias;
   const seen = new Set<string>();
   while (current.kind === SymbolKind.TypeAlias) {
@@ -2752,7 +2794,7 @@ async function resolveSwiftAliasContainer(index: ProjectIndex, alias: SymbolDef)
     if (context.sup.id !== "swift") return undefined;
     const declaration = nameNodeForDef(context, current)?.parent;
     if (declaration?.type !== "typealias_declaration") {
-      return declaration?.type === "class_declaration" && declaresMembers(current) ? current : undefined;
+      return endsSwiftAliasChain(declaration?.type, acceptsProtocol) && declaresMembers(current) ? current : undefined;
     }
     const target = declaration.namedChildren.find((child) => child.type === "user_type");
     const named = target ? unwrapNamedType(target, context.sup) : null;

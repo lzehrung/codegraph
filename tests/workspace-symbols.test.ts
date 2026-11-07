@@ -7,7 +7,17 @@ import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
 import { resolveSemanticSymbol } from "../src/agent/semantic-symbols.js";
 import { tool_workspaceSymbols } from "../src/agent-tools.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
-import { buildProjectIndex, findReferences } from "../src/indexer.js";
+import {
+  buildProjectIndex,
+  findReferences,
+  findReferencesById,
+  getApiSurface,
+  goToDefinitionById,
+  listSymbols,
+  resolveSymbolTarget,
+} from "../src/indexer.js";
+import { searchCodegraph } from "../src/agent/search.js";
+import { findUnusedExports } from "../src/indexer/unused-exports.js";
 import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
 import {
   __resetNativeTreeSitterBindingForTests,
@@ -519,5 +529,87 @@ describe("workspace symbol lookup", () => {
     const pastLimit = await workspaceSymbols(index, { query: "Service", limit: total - 1 });
     expect(pastLimit.symbols).toHaveLength(total - 1);
     expect(pastLimit.omitted).toBe(1);
+  });
+});
+
+describe("Swift extension headers in public symbol surfaces", () => {
+  it("lists the nominal type once and keeps handles, search, and API counts consistent", async () => {
+    const swiftRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-swift-extension-symbols-"));
+    try {
+      await fs.writeFile(
+        path.join(swiftRoot, "Types.swift"),
+        "struct Widget {}\nextension Widget { func inFile() {} }\n",
+      );
+      await fs.writeFile(
+        path.join(swiftRoot, "Extension.swift"),
+        "extension Widget { func added() {} }\nextension URL { func custom() {} }\n",
+      );
+      const swiftIndex = await buildProjectIndex(swiftRoot, { cache: "off" });
+      const types = path.join(swiftRoot, "Types.swift");
+      const extension = path.join(swiftRoot, "Extension.swift");
+      const shown = (symbols: readonly { file: string; name: string; kind: string }[]): string[] =>
+        symbols.map((symbol) => `${path.basename(symbol.file)}:${symbol.name}:${symbol.kind}`).sort();
+
+      const widgets = await workspaceSymbols(swiftIndex, { query: "Widget" });
+      expect(shown(widgets.symbols)).toEqual(["Types.swift:Widget:class"]);
+      expect(shown((await workspaceSymbols(swiftIndex, { query: "URL" })).symbols)).toEqual([]);
+      expect(
+        shown((await workspaceSymbols(swiftIndex, { query: "", fileGlob: "**/Extension.swift" })).symbols),
+      ).toEqual(["Extension.swift:added:function", "Extension.swift:custom:function"]);
+
+      // The published handle names the nominal type and its references, like the header position does.
+      const id = widgets.symbols[0]!.id;
+      const byId = goToDefinitionById(swiftIndex, id);
+      if (byId.status !== "ok") throw new Error("Expected the nominal type handle to resolve");
+      expect(path.basename(byId.definition.file)).toBe("Types.swift");
+      const refsById = await findReferencesById(swiftIndex, id);
+      const refsAtHeader = await findReferences(swiftIndex, { file: extension, line: 1, column: 11 });
+      if (refsById.status !== "ok" || refsAtHeader.status !== "ok") throw new Error("Expected type references");
+      expect(refsById.references).toEqual(refsAtHeader.references);
+      expect(refsById.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refsById.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`).sort(),
+      ).toEqual(["Extension.swift:1", "Types.swift:1", "Types.swift:2"]);
+
+      expect(
+        listSymbols(swiftIndex, { file: extension })
+          .map((symbol) => symbol.name)
+          .sort(),
+      ).toEqual(["added", "custom"]);
+      expect(
+        listSymbols(swiftIndex, { file: types })
+          .map((symbol) => `${symbol.name}:${symbol.kind}`)
+          .sort(),
+      ).toEqual(["Widget:class", "inFile:function"]);
+      expect(resolveSymbolTarget(swiftIndex, "Types.swift::Widget").status).toBe("exact");
+      expect(resolveSymbolTarget(swiftIndex, "Widget").status).toBe("exact");
+      expect(resolveSymbolTarget(swiftIndex, "Extension.swift::URL").status).toBe("not_found");
+
+      const surface = getApiSurface(swiftIndex)
+        .flatMap((entry) => entry.exports.map((exported) => `${path.basename(entry.file)}:${exported.name}`))
+        .sort();
+      expect(surface).toEqual([
+        "Extension.swift:added",
+        "Extension.swift:custom",
+        "Types.swift:Widget",
+        "Types.swift:inFile",
+      ]);
+      const unused = (await findUnusedExports(swiftIndex)).map((entry) => `${path.basename(entry.file)}:${entry.name}`);
+      expect(unused.sort()).toEqual(["Extension.swift:added", "Extension.swift:custom", "Types.swift:inFile"]);
+
+      const search = await searchCodegraph({
+        root: swiftRoot,
+        query: "Widget",
+        mode: "symbol",
+        buildOptions: { cache: "off" },
+      });
+      expect(
+        search.results
+          .filter((result) => result.kind === "symbol" && result.label === "Widget")
+          .map((result) => result.file),
+      ).toEqual(["Types.swift"]);
+    } finally {
+      await fs.rm(swiftRoot, { recursive: true, force: true });
+    }
   });
 });

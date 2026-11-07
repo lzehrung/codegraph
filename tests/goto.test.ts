@@ -2643,6 +2643,8 @@ describe("Go to Definition", () => {
           [site("Use.swift", 16, "`helper`"), "Api.swift", 8],
           [site("Imports.swift", 1, "`Widget`"), "Api.swift", 3],
           [site("Imports.swift", 2, "`top`"), "Api.swift", 1],
+          [site("Extension.swift", 1, "Widget"), "Api.swift", 3],
+          [site("Extension.swift", 4, "`Plain`"), "Api.swift", 7],
           [site("Extension.swift", 2, "`helper`"), "Api.swift", 4],
           [site("Extension.swift", 5, "helper"), "Api.swift", 8],
           [site("Api.swift", 13, "`class`"), "Api.swift", 12],
@@ -6293,6 +6295,140 @@ describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imp
         column: columnOf(a, 3, "Missing();"),
       });
       expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("opens the nominal Swift type from extension headers, not the extension or a private decoy", async () => {
+    const models = ["protocol Proto {}", "struct Widget {}", "extension Widget { func own() {} }"].join("\n");
+    const extensions = [
+      "import Models",
+      "extension Widget: Proto { func added() {} }",
+      "extension String { func builtIn() {} }",
+      "extension Outer.Inner { func nested() {} }",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-extension-header-goto-", {
+      "Models.swift": models,
+      "Extensions.swift": extensions,
+      "Decoy.swift": "private struct Widget {}",
+    });
+    try {
+      await testGoToDefinition(
+        index,
+        paths["Models.swift"]!,
+        3,
+        columnOf(models, 3, "Widget"),
+        paths["Models.swift"]!,
+        2,
+      );
+      await testGoToDefinition(
+        index,
+        paths["Extensions.swift"]!,
+        2,
+        columnOf(extensions, 2, "Widget"),
+        paths["Models.swift"]!,
+        2,
+      );
+      await testGoToDefinition(
+        index,
+        paths["Extensions.swift"]!,
+        2,
+        columnOf(extensions, 2, "Proto"),
+        paths["Models.swift"]!,
+        1,
+      );
+      for (const [line, token] of [
+        [3, "String"],
+        [4, "Outer"],
+        [4, "Inner"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: paths["Extensions.swift"]!,
+          line,
+          column: columnOf(extensions, line, token),
+        });
+        expect(result.status, token).toBe("not_found");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift extension headers in the type namespace and keeps dotted owner suffixes unproven", async () => {
+    const factory = ["import Foundation", "func URL(_ number: Int) -> Int { return number }"].join("\n");
+    const extensions = [
+      "import Foundation",
+      "extension URL { func custom() {} }",
+      "extension Outer.Inner { func nested() {} }",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-extension-namespace-goto-", {
+      "Factory.swift": factory,
+      "Extensions.swift": extensions,
+      "Models.swift": "struct Outer { struct Inner {} }",
+    });
+    try {
+      const unindexed = await goToDefinition(index, {
+        file: paths["Extensions.swift"]!,
+        line: 2,
+        column: columnOf(extensions, 2, "URL"),
+      });
+      expect(unindexed.status).toBe("not_found");
+      await testGoToDefinition(
+        index,
+        paths["Extensions.swift"]!,
+        3,
+        columnOf(extensions, 3, "Outer"),
+        paths["Models.swift"]!,
+        1,
+      );
+      const suffix = await goToDefinition(index, {
+        file: paths["Extensions.swift"]!,
+        line: 3,
+        column: columnOf(extensions, 3, "Inner"),
+      });
+      expect(suffix).toEqual({ status: "not_found", reason: "Unresolved qualified type" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Swift members through a typealias base across files and leaves an unproven alias unresolved", async () => {
+    const derived = [
+      "class Derived: Alias {",
+      "  func run() {",
+      "    super.helper()",
+      "    helper()",
+      "  }",
+      "}",
+      "class FromGeneric: IntGeneric {",
+      "  func run() { helper() }",
+      "}",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-alias-base-goto-", {
+      "Models.swift": "class Base { func helper() {} }\nclass Decoy { func helper() {} }",
+      "Generic.swift": "class Generic<Element> { func helper() {} }",
+      "Aliases.swift": "typealias Alias = Base\ntypealias IntGeneric = Generic<Int>",
+      "Derived.swift": derived,
+    });
+    try {
+      for (const line of [3, 4]) {
+        await testGoToDefinition(
+          index,
+          paths["Derived.swift"]!,
+          line,
+          columnOf(derived, line, "helper"),
+          paths["Models.swift"]!,
+          1,
+        );
+      }
+      // A generic specialization proves no base, so its member stays unresolved instead of being guessed.
+      const unproven = await goToDefinition(index, {
+        file: paths["Derived.swift"]!,
+        line: 8,
+        column: columnOf(derived, 8, "helper"),
+      });
+      expect(unproven.status).toBe("not_found");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

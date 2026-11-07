@@ -390,7 +390,7 @@ export async function goToDefinition(
   const localAtPosition = mod.locals.find(
     (local) => local.range.start.index === node.startIndex && local.range.end.index === node.endIndex,
   );
-  if (localAtPosition) {
+  if (localAtPosition && !localAtPosition.swiftExtensionOwner) {
     return okGoToResult(index, localAtPosition, {
       resolution: "exact",
       confidence: "high",
@@ -682,7 +682,7 @@ async function findReferencesInternal(
     if (sqlMention && sqlTarget?.status === "ok") {
       def = sqlTarget.definition;
       provenance = sqlTarget.provenance;
-    } else if (localAtPosition) {
+    } else if (localAtPosition && !localAtPosition.swiftExtensionOwner) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
       const canonical = await canonicalizePythonReceiverAttributeDefinition(index, def, {

@@ -2,6 +2,7 @@ import { sliceText, toRange } from "../util/ast.js";
 import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
+import { isSwiftQualifiedExtensionSuffix } from "../util/swift-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import { callableIdentityForDeclaration } from "./callable-identity.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
@@ -14,8 +15,10 @@ import {
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
+import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
+  isValueNamespaceBinding,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
   pythonFunctionPendingInDefault,
@@ -511,9 +514,7 @@ export function buildScopeIndexFromSource(
         }
       }
       while (hit) {
-        const wrongNamespace =
-          (methodCall && hit.kind === "local") ||
-          (typeOnly && (hit.kind === "local" || hit.kind === "param" || hit.kind === "function"));
+        const wrongNamespace = (methodCall && hit.kind === "local") || (typeOnly && isValueNamespaceBinding(hit));
         if (!wrongNamespace) break;
         hit = hit.earlierSameScope;
       }
@@ -534,9 +535,7 @@ export function buildScopeIndexFromSource(
       }
     }
     while (root) {
-      const wrongNamespace =
-        (methodCall && root.kind === "local") ||
-        (typeOnly && (root.kind === "local" || root.kind === "param" || root.kind === "function"));
+      const wrongNamespace = (methodCall && root.kind === "local") || (typeOnly && isValueNamespaceBinding(root));
       if (!wrongNamespace) break;
       root = root.earlierSameScope;
     }
@@ -981,6 +980,7 @@ export function buildScopeIndexFromSource(
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
     const methodCall = isExplicitMethodCall(row, useNode);
+    const typeOnly = typeOnlyName(support.id, useNode);
     let scope = start;
     while (scope) {
       if (!scopeAllowsUse(row, scope, useNode)) {
@@ -993,6 +993,7 @@ export function buildScopeIndexFromSource(
         while (
           binding &&
           ((methodCall && binding.kind === "local") ||
+            (typeOnly && isValueNamespaceBinding(binding)) ||
             (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode)))
         ) {
           binding = binding.earlierSameScope;
@@ -1082,8 +1083,11 @@ export function buildScopeIndexFromSource(
       }
     }
     if (row.classNameTypes?.has(node.type)) {
-      const name = node.childForFieldName("name");
-      if (name) addDecl(name, "class");
+      const isExtension = support.id === "swift" && isSwiftExtensionContainer(node, source);
+      if (!isExtension) {
+        const name = node.childForFieldName("name");
+        if (name) addDecl(name, "class");
+      }
     }
     if (row.typeNameTypes?.has(node.type)) {
       const name = node.childForFieldName("name");
@@ -1280,7 +1284,9 @@ export function buildScopeIndexFromSource(
             : null;
         const isMemberProperty =
           !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
-        if (!isMemberProperty) {
+        // The suffix of a dotted extension owner is a member of its prefix; its spelling proves no binding.
+        const isQualifiedSuffix = support.id === "swift" && isSwiftQualifiedExtensionSuffix(node);
+        if (!isMemberProperty && !isQualifiedSuffix) {
           const phpThis = support.id === "php" && isPhpThisPropertyName(node);
           const name = sliceText(node, source);
           const binding = phpThis ? lookupOutsideFunctions(name) : lookup(name, node);

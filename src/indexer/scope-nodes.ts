@@ -17,6 +17,7 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
+import { isSwiftExtensionTypeName } from "../util/swift-tree.js";
 import { SymbolKind } from "./types.js";
 import type { Binding, Scope, ScopeIndex } from "./scope-types.js";
 
@@ -196,10 +197,19 @@ export function csharpTypeOnlyName(node: SyntaxNodeLike): boolean {
   return false;
 }
 
-/** Kotlin user_type names occupy the type namespace, including qualified and nested type arguments. */
+/**
+ * Kotlin user_type names occupy the type namespace, including qualified and nested type arguments. A Swift
+ * extension header names the type it extends, so a same-named function or variable cannot bind it.
+ */
 export function typeOnlyName(languageId: string, node: SyntaxNodeLike): boolean {
   if (languageId === "csharp") return csharpTypeOnlyName(node);
+  if (languageId === "swift") return isSwiftExtensionTypeName(node);
   return languageId === "kotlin" && node.parent?.type === "user_type";
+}
+
+/** A type-position name never binds a variable, parameter, or function of the same spelling. */
+export function isValueNamespaceBinding(binding: { kind: Binding["kind"] }): boolean {
+  return binding.kind === "local" || binding.kind === "param" || binding.kind === "function";
 }
 
 /**

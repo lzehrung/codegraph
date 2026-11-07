@@ -59,6 +59,11 @@ export function buildTrackedSymbolPositions(locals: readonly SymbolDef[]): Set<s
   return positions;
 }
 
+/** Symbol listings and name lookups name declarations; a Swift extension header names an existing type instead. */
+export function isDeclaredSymbol(def: SymbolDef): boolean {
+  return !def.swiftExtensionOwner;
+}
+
 export function findTrackedDeclarationNameInAncestors(
   node: SyntaxNodeLike,
   support: LanguageSupport,

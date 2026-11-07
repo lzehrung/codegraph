@@ -12,7 +12,7 @@ import {
   REFERENCE_COVERAGE_REASON_ORDER,
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import { findReferences, goToDefinition, type ProjectIndex } from "../src/index.js";
+import { findReferences, goToDefinition, type FindReferencesResult, type ProjectIndex } from "../src/index.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
@@ -3978,6 +3978,104 @@ describe("Find References", () => {
       }
     });
 
+    it("counts Swift extension headers as type uses but excludes a private same-named decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-header-refs-"));
+      try {
+        const models = ["struct Widget {}", "extension Widget { func own() {} }"];
+        const extensions = ["import Models", "extension Widget { func added() {} }"];
+        const paths = await writeFixtureFiles(root, {
+          "Models.swift": `${models.join("\n")}\n`,
+          "Extensions.swift": `${extensions.join("\n")}\n`,
+          "Decoy.swift": "private struct Widget {}\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const declaration = { file: paths["Models.swift"]!, line: 1, column: columnInLines(models, 1, "Widget") };
+        const extension = { file: paths["Extensions.swift"]!, line: 2, column: columnInLines(extensions, 2, "Widget") };
+        const expected = [
+          `${declaration.file}:${declaration.line}:${declaration.column}`,
+          `${paths["Models.swift"]}:2:${columnInLines(models, 2, "Widget")}`,
+          `${extension.file}:${extension.line}:${extension.column}`,
+        ].sort();
+        for (const position of [declaration, extension]) {
+          const refs = await findReferences(index, position);
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error("Expected Swift type references");
+          expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          expect(
+            refs.references
+              .map((reference) => `${reference.file}:${reference.range.start.line}:${reference.range.start.column}`)
+              .sort(),
+          ).toEqual(expected);
+          expect(refs.references.some((reference) => reference.file === paths["Decoy.swift"])).toBe(false);
+        }
+        const decoy = await findReferences(index, { file: paths["Decoy.swift"]!, line: 1, column: 16 });
+        expect(decoy.status).toBe("ok");
+        if (decoy.status !== "ok") throw new Error("Expected the private decoy declaration");
+        expect(decoy.references.map((reference) => reference.file)).toEqual([paths["Decoy.swift"]]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps function references free of extension headers and marks a dotted owner suffix partial", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-namespace-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, {
+          "Factory.swift": "import Foundation\nfunc URL(_ number: Int) -> Int { return number }\n",
+          "Extensions.swift":
+            "import Foundation\nextension URL { func custom() {} }\nextension Outer.Inner { func nested() {} }\n",
+          "Models.swift": "struct Outer { struct Inner {} }\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const sites = (refs: FindReferencesResult): string[] => {
+          if (refs.status !== "ok") throw new Error("Expected references");
+          return refs.references
+            .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+            .sort();
+        };
+        const functionRefs = await findReferences(index, { file: paths["Factory.swift"]!, line: 2, column: 6 });
+        expect(sites(functionRefs)).toEqual(["Factory.swift:2"]);
+        if (functionRefs.status !== "ok") throw new Error("Expected function references");
+        expect(functionRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        const outerRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 8 });
+        expect(sites(outerRefs)).toEqual(["Extensions.swift:3", "Models.swift:1"]);
+        const innerRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 23 });
+        expect(sites(innerRefs)).toEqual(["Models.swift:1"]);
+        if (innerRefs.status !== "ok") throw new Error("Expected nested type references");
+        expect(innerRefs.referenceCoverage.state).toBe("partial");
+        expect(innerRefs.referenceCoverage.reasons).toEqual(["strategy_unavailable"]);
+        expect(innerRefs.referenceCoverage.affectedFiles).toEqual([paths["Extensions.swift"]]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("includes member uses reached through a typealias base and excludes a same-named decoy member", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-alias-base-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, {
+          "Models.swift": "class Base { func helper() {} }\nclass Decoy { func helper() {} }\n",
+          "Aliases.swift": "typealias Alias = Base\n",
+          "Derived.swift": "class Derived: Alias {\n  func run() {\n    super.helper()\n    helper()\n  }\n}\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const site = (refs: FindReferencesResult): string[] => {
+          if (refs.status !== "ok") throw new Error("Expected references");
+          return refs.references
+            .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+            .sort();
+        };
+        const baseRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 19 });
+        expect(site(baseRefs)).toEqual(["Derived.swift:3", "Derived.swift:4", "Models.swift:1"]);
+        if (baseRefs.status !== "ok") throw new Error("Expected base member references");
+        expect(baseRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        const decoyRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 2, column: 20 });
+        expect(site(decoyRefs)).toEqual(["Models.swift:2"]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("reports complete Swift references for both spellings without including same-named decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-references-"));
       try {
@@ -4046,6 +4144,7 @@ describe("Find References", () => {
           site("Use.swift", 13, "`Widget`", 1),
           site("Imports.swift", 1, "`Widget`"),
           site("Imports.swift", 3, "`Widget`"),
+          site("Extension.swift", 1, "Widget"),
         ]);
         await assertExact(site("Api.swift", 12, "`class`"), [
           site("Api.swift", 12, "`class`"),

@@ -175,6 +175,7 @@ function swiftKeywordText(container: SyntaxNodeLike, source: string): string {
 export function isSwiftExtensionContainer(container: SyntaxNodeLike, source: string): boolean {
   return container.type === "class_declaration" && swiftKeywordText(container, source) === "extension";
 }
+
 function appendSwiftConstraintTokens(node: SyntaxNodeLike, source: string, tokens: string[]): void {
   if (node.type === "comment" || node.type === "line_comment" || node.type === "multiline_comment") return;
   const first = node.child(0);
@@ -209,6 +210,7 @@ export function isSwiftConstrainedExtension(container: SyntaxNodeLike, source: s
 }
 
 function isSwiftTypeContainer(container: SyntaxNodeLike, source: string): boolean {
+  if (container.type === "protocol_declaration") return true;
   if (container.type !== "class_declaration") return false;
   const text = swiftKeywordText(container, source);
   return text === "class" || text === "struct" || text === "enum" || text === "actor";
