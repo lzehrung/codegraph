@@ -4,6 +4,7 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import { fileIdentityKey, isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
 import type { ModuleIndex } from "./types.js";
+import { PHP_INCOMPLETE_DECLARATION_IDENTITY } from "./php-namespace-symbols.js";
 import {
   foldPhpIdentifierCase,
   normalizeCsharpQualifiedName,
@@ -171,6 +172,25 @@ function declarationImportNames(mod: ModuleIndex, support: LanguageSupport): Set
   return names;
 }
 
+function newlyDeclaredPhpImportNames(previous: ModuleIndex | undefined, currentNames: readonly string[]): Set<string> {
+  const previousNames = new Set(previous?.phpDeclarationNames);
+  const addedNames = new Set<string>();
+  let previouslyIncomplete = previousNames.has(PHP_INCOMPLETE_DECLARATION_IDENTITY);
+  if (!previouslyIncomplete) {
+    previouslyIncomplete = !!(previous?.parserDegraded || previous?.parseErrorRanges?.length);
+  }
+  for (const identity of currentNames) {
+    if (identity === PHP_INCOMPLETE_DECLARATION_IDENTITY) {
+      if (!previouslyIncomplete) addedNames.add(identity);
+      continue;
+    }
+    if (previousNames.has(identity)) continue;
+    const qualifiedName = identity.slice(identity.indexOf(":") + 1);
+    addedNames.add(foldPhpIdentifierCase(qualifiedName));
+  }
+  return addedNames;
+}
+
 /**
  * New declaration-import names only. A body edit compares the same API surface used by the
  * extraction waves plus stored package/namespace facts, without inspecting any importers.
@@ -181,6 +201,9 @@ export function newlyDeclaredImportNames(
   support: LanguageSupport,
   projectRoot: string,
 ): ReadonlySet<string> {
+  if (support.id === "php" && current.phpDeclarationNames) {
+    return newlyDeclaredPhpImportNames(previous, current.phpDeclarationNames);
+  }
   if (
     previous &&
     sameDeclarationFacts(previous, current) &&

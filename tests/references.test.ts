@@ -84,6 +84,11 @@ import {
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
+  PHP_PATH_IMPORT_FORMS,
+  PHP_PATH_MAPPINGS,
+  phpPathFallbackFixture,
+} from "./helpers/php-path-fallback-fixture.js";
+import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
   KOTLIN_TYPE_PARAMETER_FILES,
@@ -9052,4 +9057,47 @@ describe("Find References: C# lowercase and keyword-verbatim aliases", () => {
       }
     },
   );
+});
+describe("PHP path-fallback import references", () => {
+  for (const mapping of PHP_PATH_MAPPINGS) {
+    it.each(PHP_PATH_IMPORT_FORMS.filter((form) => form.name === form.role))(
+      `excludes namespace decoys after a ${mapping} $name declaration is renamed`,
+      async (form) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-path-refs-"));
+        try {
+          const fixture = phpPathFallbackFixture(mapping, form);
+          const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: fixture.missingSource });
+          const owner = files[fixture.owner]!;
+          const consumer = files["Use.php"]!;
+          const column = fixture.form.declaration.indexOf("Gadget") + 1;
+          const missing = await createTestIndexFromFiles(root, Object.values(files));
+          expect(missing.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved).toEqual({
+            external: "App\\Gadget",
+          });
+          const decoyReferences = await findReferences(missing, { file: files["Decoy.php"]!, line: 3, column });
+          expect(decoyReferences.status).toBe("ok");
+          if (decoyReferences.status !== "ok") throw new Error("Expected references for PHP namespace decoy");
+          expect(
+            decoyReferences.references.some((site) => fileIdentityKey(site.file) === fileIdentityKey(consumer)),
+          ).toBe(false);
+          await fsp.writeFile(owner, fixture.ownerSource, "utf8");
+          const restored = await createTestIndexFromFiles(root, Object.values(files));
+          const result = await findReferences(restored, { file: owner, line: 3, column });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected restored PHP import references");
+          expect(result.referenceCoverage.state).toBe("complete");
+          expect(
+            result.references
+              .filter((site) => fileIdentityKey(site.file) === fileIdentityKey(consumer))
+              .map((site) => site.range.start.line),
+          ).toEqual([3, 4]);
+          expect(
+            result.references.some((site) => fileIdentityKey(site.file) === fileIdentityKey(files["Decoy.php"]!)),
+          ).toBe(false);
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 });

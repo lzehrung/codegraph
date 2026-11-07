@@ -17,6 +17,7 @@ import {
   type SqlFactKind,
 } from "../src/index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
+import { defNodeId } from "../src/graphs/symbol-graph.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
 import {
@@ -65,6 +66,11 @@ import {
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
+import {
+  PHP_PATH_IMPORT_FORMS,
+  PHP_PATH_MAPPINGS,
+  phpPathFallbackFixture,
+} from "./helpers/php-path-fallback-fixture.js";
 import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
@@ -4034,4 +4040,56 @@ nativeDescribe("native C# lowercase alias call cache parity", () => {
       }
     },
   );
+});
+nativeDescribe("PHP path-fallback native graph parity", () => {
+  for (const mapping of PHP_PATH_MAPPINGS) {
+    it.each(PHP_PATH_IMPORT_FORMS.filter((form) => form.name === form.role))(
+      `agrees on ${mapping} $name targets after disk reload and rename`,
+      async (form) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-path-native-"));
+        tempDirs.push(root);
+        const fixture = phpPathFallbackFixture(mapping, form);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const owner = files[fixture.owner]!;
+        const consumer = files["Use.php"]!;
+        const definition = {
+          file: owner,
+          localName: "Gadget",
+          range: { start: { index: fixture.ownerSource.indexOf("Gadget") } },
+        };
+        for (const [source, present] of [
+          [fixture.ownerSource, true],
+          [fixture.missingSource, false],
+          [fixture.ownerSource, true],
+        ] as const) {
+          await fsp.writeFile(owner, source, "utf8");
+          const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+          const persisted = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+          clearMemoryCache();
+          const reopened = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+          const expectedDetailed = await buildSymbolGraphDetailed(cold);
+          for (const index of [persisted, reopened]) {
+            expect(index.graph.edges).toEqual(cold.graph.edges);
+            expect(index.byFile.get(fileIdentityKey(owner))?.nativeOutcome).toBe("used");
+            const detailed = await buildSymbolGraphDetailed(index);
+            expect(detailed.edges).toEqual(expectedDetailed.edges);
+            const importEdges = detailed.edges.filter((edge) => {
+              const from = detailed.nodes.get(edge.from);
+              return from?.kind === "import" && fileIdentityKey(from.file) === fileIdentityKey(consumer);
+            });
+            expect(importEdges.map((edge) => edge.to)).toEqual(present ? [defNodeId(definition)] : []);
+            for (const graph of [await buildSymbolGraph(index), detailed]) {
+              expect(
+                graph.edges.some((edge) => {
+                  const from = graph.nodes.get(edge.from);
+                  const to = graph.nodes.get(edge.to);
+                  return from?.file === consumer && to?.file === files["Decoy.php"];
+                }),
+              ).toBe(false);
+            }
+          }
+        }
+      },
+    );
+  }
 });

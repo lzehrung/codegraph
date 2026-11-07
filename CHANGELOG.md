@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- PHP `use` imports no longer bind a plain, PSR-0, or PSR-4 path whose fully parsed file lacks the qualified declaration of the requested kind. Renaming a declaration away and back updates cold, disk, and memory indexes consistently; namespace-prefix aliases and fallback paths for unreadable, unparsed, or syntactically incomplete files remain supported across cache reloads. Declaration proof reuses each indexed file's native extraction or cached own-file facts and collects namespace regions in one tree pass instead of rescanning the root per declaration.
 - Incremental indexing restores Java, Kotlin, C#, PHP, and C++ import bindings when an existing file declares their target again. Rechecks use newly declared names only, so body edits do not revisit unrelated external imports; navigation, references, and detailed graphs match cold builds.
 - Kotlin and Java resolve qualified types and Kotlin qualified constructors to their proven declarations instead of same-named imports; value bindings no longer hide package-qualified types or Java constructor types. Kotlin detailed graphs retain imported extension-function alias uses on value receivers. C# qualified type uses no longer create a bare-import edge.
 - Kotlin named imports resolve declarations in the default package and stay conservative beside unread files; Java cannot import from that package.

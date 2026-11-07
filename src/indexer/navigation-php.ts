@@ -47,7 +47,7 @@ export function phpConstructorPromotedVariable(node: SyntaxNodeLike, source?: st
   return variable;
 }
 
-function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
+export function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =
     namespaceNode.childForFieldName?.("name") ??
     namespaceNode.namedChildren.find((child) => child.type === "namespace_name");

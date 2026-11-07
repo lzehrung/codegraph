@@ -28,6 +28,7 @@ import { collectJvmFileFacts } from "../util/jvm-tree.js";
 import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
 import { primeCsharpNamespaceFacts, setCsharpNamespaceFactsReader } from "../util/resolution/csharp.js";
 import { primeJvmFileFacts, resolveJvmPackageImportPaths, setJvmFileFactsReader } from "../util/resolution/jvm.js";
+import { primePhpModuleImportNames, setPhpModuleImportNamesReader } from "../util/resolution/php.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
@@ -53,6 +54,13 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import type { ImportDegradedHook } from "./imports/context.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
+import {
+  collectPhpModuleImportNames,
+  phpDeclarationImportNames,
+  phpModuleImportNamesFromDeclarations,
+  PHP_INCOMPLETE_DECLARATION_IDENTITY,
+  type PhpModuleImportNames,
+} from "./php-namespace-symbols.js";
 import {
   buildModuleRecord,
   collectJsonDependencies,
@@ -215,6 +223,85 @@ type IndexedFileBuildArgs = {
 };
 
 type ProjectFileExtraction = { prepared: PreparedFileContextWithWorkerBloomFilter } | { error: unknown };
+
+function primePreparedPhpModule(
+  prepared: PreparedFileContextWithWorkerBloomFilter,
+  opts: BuildOptions | undefined,
+): PhpModuleImportNames | null {
+  const attempt = attemptParsePreparedFileContext(prepared);
+  prepared.projectFactsParse = attempt;
+  const parsed = attempt.parsed;
+  if (!parsed || !prepared.nativeQueries) {
+    primePhpModuleImportNames(prepared.file, null);
+    return null;
+  }
+  const module = collectLocalsAndExportsFromSource(prepared.file, prepared.source, prepared.sup, [], {
+    tree: parsed.tree,
+    nativeQueries: prepared.nativeQueries,
+    ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+  });
+  if (parsed.tree instanceof ProjectedSyntaxTree) module.parseErrorRanges = collectParseErrorRanges(parsed.tree);
+  const names = collectPhpModuleImportNames(module, parsed);
+  module.phpDeclarationNames = phpDeclarationImportNames(names);
+  prepared.phpModule = module;
+  primePhpModuleImportNames(prepared.file, names);
+  return names;
+}
+
+/** PHP proof and module construction share one extraction without a project-wide preparation barrier. */
+function installPhpProjectFileReader(args: {
+  files: Iterable<string>;
+  opts: BuildOptions | undefined;
+  workerSetup: () => WorkerPoolSetupResult;
+  report: BuildReport | undefined;
+  projectRoot: string;
+  confinedRoot?: string;
+  trustedSources?: ReadonlyMap<string, string> | undefined;
+}): (file: string) => Promise<PreparedFileContextWithWorkerBloomFilter> {
+  const phpFiles = new Map<string, string>();
+  for (const file of args.files) {
+    if (supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "php") {
+      phpFiles.set(fileIdentityKey(file), file);
+    }
+  }
+  const pending = new Map<
+    string,
+    Promise<{ prepared: PreparedFileContextWithWorkerBloomFilter; names: PhpModuleImportNames | null }>
+  >();
+  const prepare = (file: string) => {
+    const key = fileIdentityKey(file);
+    const indexedFile = phpFiles.get(key);
+    if (!indexedFile) return undefined;
+    let extraction = pending.get(key);
+    if (!extraction) {
+      extraction = (async () => {
+        const prepared = await prepareFileContextForBuild(
+          indexedFile,
+          supportForFileWithoutHeaderSample(indexedFile, args.opts?.languageExtensions)!,
+          args.opts,
+          args.workerSetup(),
+          args.report,
+          args.confinedRoot,
+          args.projectRoot,
+          args.trustedSources?.get(indexedFile),
+          args.opts?.useBloomFilters ?? true,
+        );
+        const names = primePreparedPhpModule(prepared, args.opts);
+        return { prepared, names };
+      })();
+      pending.set(key, extraction);
+    }
+    return extraction;
+  };
+  setPhpModuleImportNamesReader(async (file) => (await prepare(file))?.names);
+  return async (file) => {
+    const extraction = prepare(file);
+    if (!extraction) throw new Error(`PHP file is outside the active extraction scope: ${file}`);
+    const result = await extraction;
+    pending.delete(fileIdentityKey(file));
+    return result.prepared;
+  };
+}
 
 /**
  * C#/JVM extraction finishes before any import lookup can scan the project. No capped task waits for an unstarted
@@ -464,6 +551,9 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
 function primeReusedFileFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
   if (mod.csharpNamespaceFacts) primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
   if (mod.jvmFacts) primeJvmFileFacts(file, mod.jvmFacts);
+  if (mod.phpDeclarationNames) {
+    primePhpModuleImportNames(file, phpModuleImportNamesFromDeclarations(mod.phpDeclarationNames, mod));
+  }
 }
 
 /**
@@ -738,6 +828,8 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   let mod: ModuleIndex;
   if (sup.id === "sql") {
     mod = buildSqlModuleIndex(args.file, source);
+  } else if (prepared.phpModule) {
+    mod = prepared.phpModule;
   } else if (lacksParserContext) {
     mod = { ...createEmptyModuleIndex(args.file), imports };
   } else {
@@ -748,8 +840,9 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     });
   }
   mod.imports = imports;
-  if (tree instanceof ProjectedSyntaxTree) mod.parseErrorRanges = collectParseErrorRanges(tree);
-  else if (graphOnlyLanguage) mod.parseErrorRanges = [];
+  if (tree instanceof ProjectedSyntaxTree) {
+    mod.parseErrorRanges = prepared.phpModule?.parseErrorRanges ?? collectParseErrorRanges(tree);
+  } else if (graphOnlyLanguage) mod.parseErrorRanges = [];
   else delete mod.parseErrorRanges;
   const nativeOutcome = preparedNativeOutcome(prepared);
   if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
@@ -761,6 +854,14 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   }
   if (csharpFacts) mod.csharpNamespaceFacts = csharpFacts;
   if (jvmFacts) mod.jvmFacts = jvmFacts;
+  if (sup.id === "php" && tree && nativeQueries && !mod.phpDeclarationNames) {
+    mod.phpDeclarationNames = phpDeclarationImportNames(collectPhpModuleImportNames(mod, { source, tree, sup }));
+  }
+  if (sup.id === "php" && mod.phpDeclarationNames && mod.parserDegraded) {
+    const names = phpModuleImportNamesFromDeclarations(mod.phpDeclarationNames, mod);
+    mod.phpDeclarationNames = phpDeclarationImportNames(names);
+    primePhpModuleImportNames(args.file, names);
+  }
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1844,6 +1945,14 @@ async function buildIndexFromFileListInProbeCache(
       });
       projectExtractionMs = performance.now() - projectExtractionStartedAt;
     }
+    const preparePhpFile = installPhpProjectFileReader({
+      files: normalizedFiles,
+      opts,
+      workerSetup: () => workerSetup,
+      report,
+      projectRoot,
+      ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
+    });
     let retiredDeletionFiles: string[] = [];
     // Set when a stale importer row could not be deleted. The build then keeps its previous disk
     // state (manifest, snapshot, deletion evidence), so the next build finds the same staleness.
@@ -2005,6 +2114,8 @@ async function buildIndexFromFileListInProbeCache(
           const extraction = projectFileExtractions.get(file);
           projectFileExtractions.delete(file);
           if (extraction && "error" in extraction) throw extraction.error;
+          let preparedFile = extraction && "prepared" in extraction ? extraction.prepared : undefined;
+          if (support.id === "php") preparedFile = await preparePhpFile(file);
           const built = await buildIndexedModuleForFile({
             file,
             support,
@@ -2024,7 +2135,7 @@ async function buildIndexFromFileListInProbeCache(
             cacheEnabled,
             ...(confinedRoot ? { confinedRoot, trustedSource: trustedSources?.get(file) } : {}),
             moduleRecords,
-            ...(extraction && "prepared" in extraction ? { preparedFile: extraction.prepared } : {}),
+            ...(preparedFile ? { preparedFile } : {}),
           });
           mod = built.module;
           graphContext = built.graphContext;
@@ -2247,6 +2358,7 @@ async function buildIndexFromFileListInProbeCache(
   } finally {
     setJvmFileFactsReader(undefined);
     setCsharpNamespaceFactsReader(undefined);
+    setPhpModuleImportNamesReader(undefined);
     await teardownWorkerPool(workerSetup, report);
   }
 }
@@ -3180,6 +3292,13 @@ async function buildProjectIndexIncrementalInProbeCache(
         });
         projectExtractionMs = performance.now() - updateStartedAt;
       }
+      const preparePhpFile = installPhpProjectFileReader({
+        files: allFiles,
+        opts,
+        workerSetup: () => workerSetup,
+        report,
+        projectRoot,
+      });
       const reparseCachedFile = (candidate: string): void => {
         const key = fileIdentityKey(candidate);
         if (modules.has(key)) {
@@ -3246,6 +3365,7 @@ async function buildProjectIndexIncrementalInProbeCache(
           if (!names) return false;
           const mod = modules.get(fileIdentityKey(candidate));
           if (!mod || !cachedModuleHasExternalImport(mod)) return false;
+          const phpDeclarationsBecameUncertain = support.id === "php" && names.has(PHP_INCOMPLETE_DECLARATION_IDENTITY);
           for (const binding of mod.imports) {
             if (typeof binding.resolved === "string") continue;
             const specifier = normalizeDeclarationImportName(binding.from, support);
@@ -3254,7 +3374,7 @@ async function buildProjectIndexIncrementalInProbeCache(
               // cannot make its missing path appear, so never re-resolve includes here.
               if ("includeForm" in binding && binding.includeForm) continue;
               if (!isCppNamedModuleSpecifier(specifier) || !names.has(specifier)) continue;
-            } else if (!names.has(specifier)) {
+            } else if (!phpDeclarationsBecameUncertain && !names.has(specifier)) {
               const separator = support.id === "php" ? "\\" : ".";
               const lastSeparator = specifier.lastIndexOf(separator);
               const importedName = specifier.slice(lastSeparator + 1);
@@ -3343,6 +3463,8 @@ async function buildProjectIndexIncrementalInProbeCache(
             const extraction = projectFileExtractions.get(file);
             projectFileExtractions.delete(file);
             if (extraction && "error" in extraction) throw extraction.error;
+            let preparedFile = extraction && "prepared" in extraction ? extraction.prepared : undefined;
+            if (support.id === "php") preparedFile = await preparePhpFile(file);
             const built = await buildIndexedModuleForFile({
               file,
               support,
@@ -3360,7 +3482,7 @@ async function buildProjectIndexIncrementalInProbeCache(
               fileSignatures,
               cacheEnabled,
               ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
-              ...(extraction && "prepared" in extraction ? { preparedFile: extraction.prepared } : {}),
+              ...(preparedFile ? { preparedFile } : {}),
             });
             return [file, built.module, built.cacheWrite] as const;
           } catch (error) {
@@ -3596,6 +3718,7 @@ async function buildProjectIndexIncrementalInProbeCache(
     } finally {
       setJvmFileFactsReader(undefined);
       setCsharpNamespaceFactsReader(undefined);
+      setPhpModuleImportNamesReader(undefined);
       await teardownWorkerPool(workerSetup, report);
     }
   } finally {

@@ -37,6 +37,7 @@ import type {
 import type { PackageExportConditionMode } from "./package-exports.js";
 import { lruMapGet, lruMapSet } from "./lru-map.js";
 import { currentProbeCache, probeKind } from "./fs-probe-cache.js";
+import type { ParsedFileContext } from "../indexer/parse-context.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
@@ -249,6 +250,7 @@ export async function resolveImportSpecifier(
     pathAttribute?: string;
     statementStartIndex?: number;
     includeForm?: CFamilyIncludeForm;
+    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
   },
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
@@ -266,10 +268,11 @@ export async function resolveImportSpecifier(
   if (languageId === "php") {
     const phpHit = await confineLanguageHit(
       projectRoot,
-      await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType),
+      await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType, opts?.parsedFiles),
       spec,
     );
     if (phpHit) return phpHit;
+    if (opts?.phpImportType) return { external: spec };
   }
   if (languageId === "c" || languageId === "cpp") {
     // Include form is per occurrence: `#include "HEADER"` and `#include HEADER` both extract

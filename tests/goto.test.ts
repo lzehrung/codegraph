@@ -76,6 +76,11 @@ import {
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
+  PHP_PATH_IMPORT_FORMS,
+  PHP_PATH_MAPPINGS,
+  phpPathFallbackFixture,
+} from "./helpers/php-path-fallback-fixture.js";
+import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
   KOTLIN_TYPE_VALUE_FILES,
@@ -7205,4 +7210,35 @@ describe("Go to Definition: C# lowercase and keyword-verbatim aliases", () => {
       }
     },
   );
+});
+describe("PHP path-fallback import navigation", () => {
+  for (const mapping of PHP_PATH_MAPPINGS) {
+    it.each(PHP_PATH_IMPORT_FORMS.filter((form) => form.name === form.role))(
+      `does not navigate a renamed $name through a ${mapping} filename`,
+      async (form) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-path-goto-"));
+        try {
+          const fixture = phpPathFallbackFixture(mapping, form);
+          const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: fixture.missingSource });
+          const consumer = files["Use.php"]!;
+          const query = { file: consumer, line: 4, column: columnInLines(fixture.lines, 4, "Gadget") };
+          const missing = await createTestIndexFromFiles(root, Object.values(files));
+          expect((await goToDefinition(missing, query)).status).toBe("not_found");
+          expect(missing.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved).toEqual({
+            external: "App\\Gadget",
+          });
+          await fsp.writeFile(files[fixture.owner]!, fixture.ownerSource, "utf8");
+          const restored = await createTestIndexFromFiles(root, Object.values(files));
+          const result = await goToDefinition(restored, query);
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected restored qualified PHP import");
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(files[fixture.owner]!));
+          expect(result.definition.range.start.line).toBe(3);
+          expect(fileIdentityKey(result.definition.file)).not.toBe(fileIdentityKey(files["Decoy.php"]!));
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 });

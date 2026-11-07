@@ -120,6 +120,8 @@ export type ModuleIndex = {
    * when the file's tree was unavailable.
    */
   jvmFacts?: JvmFileFacts;
+  /** PHP only: own-file qualified declarations and namespace prefixes, plus an identity marking incomplete facts. */
+  phpDeclarationNames?: string[];
   /** Outermost Tree-sitter ERROR/MISSING ranges. */
   parseErrorRanges?: ParseErrorRange[];
   /**

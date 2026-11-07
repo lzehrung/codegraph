@@ -24,7 +24,7 @@ import {
 } from "../src/indexer/build-cache/module-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
-import { columnOf } from "./languages/callable-consumer-fixtures.js";
+import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
@@ -32,6 +32,14 @@ import {
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
 
+import {
+  PHP_PATH_IMPORT_FORMS,
+  PHP_PATH_MAPPINGS,
+  phpPathFallbackFixture,
+  PHP_INCOMPLETE_DECLARATION_SOURCES,
+} from "./helpers/php-path-fallback-fixture.js";
+import { clearMemoryCache } from "../src/indexer/build-cache.js";
+import { PHP_INCOMPLETE_DECLARATION_IDENTITY } from "../src/indexer/php-namespace-symbols.js";
 const DISK_BUILD = { cache: "disk" as const };
 
 /** Consumer edges as comparable strings, independent of the temporary root. */
@@ -1625,6 +1633,142 @@ describe("graph deltas restore declaration import bindings", () => {
         },
         true,
       );
+    },
+  );
+});
+
+describe("PHP path-fallback cache parity", () => {
+  for (const cache of ["disk", "memory"] as const) {
+    for (const mapping of PHP_PATH_MAPPINGS) {
+      it.each(PHP_PATH_IMPORT_FORMS.filter((form) => form.name === form.role))(
+        `drops and restores the $name declaration behind a ${mapping} path (${cache})`,
+        async (form) => {
+          const root = await mkTmpDir("cg-php-path-cache-");
+          try {
+            const fixture = phpPathFallbackFixture(mapping, form, true);
+            const files = await writeFixtureFiles(root, fixture.files);
+            const owner = files[fixture.owner]!;
+            const consumer = files["Use.php"]!;
+            const options = { cache, threads: 1 };
+            const initial = await buildProjectIndex(root, options);
+            const expectedFile = [`file:${normalizePath(owner)}`];
+            expect(edgeTargets(initial, consumer)).toEqual(expectedFile);
+
+            for (const [source, expected] of [
+              [fixture.missingSource, ["external:App\\Gadget"]],
+              [fixture.ownerSource, expectedFile],
+              [fixture.wrongKindSource, ["external:App\\Gadget"]],
+              [fixture.ownerSource, expectedFile],
+            ] as const) {
+              await fsp.writeFile(owner, source, "utf8");
+              if (cache === "disk") clearMemoryCache();
+              const report: BuildReport = { timings: {} };
+              const warm = await buildProjectIndexIncremental(root, { ...options, report });
+              const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+              expect(edgeTargets(warm, consumer)).toEqual(expected);
+              expect(edgeTargets(warm, consumer)).toEqual(edgeTargets(cold, consumer));
+              expect(importBindings(warm, consumer)).toEqual(importBindings(cold, consumer));
+              expect(edgeTargets(warm, consumer)).not.toContain(`file:${normalizePath(files["Decoy.php"]!)}`);
+              const query = { file: consumer, line: 4, column: columnOf(fixture.lines, 4, "Gadget") };
+              expect(await goToDefinition(warm, query)).toEqual(await goToDefinition(cold, query));
+              expect((await goToDefinition(warm, query)).status).toBe(
+                source === fixture.ownerSource ? "ok" : "not_found",
+              );
+
+              const unchangedReport: BuildReport = { timings: {} };
+              const unchanged = await buildProjectIndexIncremental(root, { ...options, report: unchangedReport });
+              expect(edgeTargets(unchanged, consumer)).toEqual(expected);
+              if (cache === "disk") expectNoReprocessedFiles(unchangedReport);
+            }
+          } finally {
+            await fsp.rm(root, { recursive: true, force: true });
+          }
+        },
+      );
+    }
+  }
+});
+
+describe("PHP incomplete declaration cache parity", () => {
+  for (const cache of ["disk", "memory"] as const) {
+    for (const mapping of PHP_PATH_MAPPINGS) {
+      for (const form of PHP_PATH_IMPORT_FORMS.filter((entry) => entry.name === entry.role)) {
+        it(`matches cold ${form.role} resolution through incomplete candidates (${mapping}, ${cache})`, async () => {
+          const root = await mkTmpDir("cg-php-incomplete-cache-");
+          try {
+            const fixture = phpPathFallbackFixture(mapping, form);
+            const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: fixture.missingSource });
+            const owner = files[fixture.owner]!;
+            const consumer = files["Use.php"]!;
+            const hasPathFallback = mapping === "plain" || form.role === "class";
+            const uncertainTargets = hasPathFallback ? [`file:${normalizePath(owner)}`] : ["external:App\\Gadget"];
+            const options = { cache, threads: 1 };
+            const initial = await buildProjectIndex(root, options);
+            expect(edgeTargets(initial, consumer)).toEqual(["external:App\\Gadget"]);
+            for (const { source } of PHP_INCOMPLETE_DECLARATION_SOURCES) {
+              await fsp.writeFile(owner, source, "utf8");
+              if (cache === "disk") clearMemoryCache();
+              const uncertain = await buildProjectIndexIncremental(root, options);
+              const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+              expect(edgeTargets(uncertain, consumer)).toEqual(uncertainTargets);
+              expect(edgeTargets(uncertain, consumer)).toEqual(edgeTargets(cold, consumer));
+              expect(importBindings(uncertain, consumer)).toEqual(importBindings(cold, consumer));
+              expect(edgeTargets(uncertain, consumer)).not.toContain(`file:${normalizePath(files["Decoy.php"]!)}`);
+              if (cache === "disk") clearMemoryCache();
+              const unchanged = await buildProjectIndexIncremental(root, options);
+              expect(edgeTargets(unchanged, consumer)).toEqual(uncertainTargets);
+
+              await fsp.writeFile(owner, fixture.missingSource, "utf8");
+              const repaired = await buildProjectIndexIncremental(root, options);
+              expect(edgeTargets(repaired, consumer)).toEqual(["external:App\\Gadget"]);
+            }
+            await fsp.writeFile(owner, fixture.ownerSource, "utf8");
+            const restored = await buildProjectIndexIncremental(root, options);
+            expect(edgeTargets(restored, consumer)).toEqual([`file:${normalizePath(owner)}`]);
+          } finally {
+            await fsp.rm(root, { recursive: true, force: true });
+          }
+        });
+      }
+    }
+  }
+
+  it.each(["parse errors", "parser degradation"] as const)(
+    "keeps uncertainty from legacy cached %s without a marker",
+    async (diagnostic) => {
+      const root = await mkTmpDir("cg-php-legacy-incomplete-");
+      const options = { cache: "disk" as const, threads: 1 };
+      try {
+        const fixture = phpPathFallbackFixture("psr4");
+        const source =
+          diagnostic === "parse errors" ? PHP_INCOMPLETE_DECLARATION_SOURCES[0].source : fixture.missingSource;
+        const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: source });
+        await buildProjectIndex(root, options);
+        const owner = files[fixture.owner]!;
+        const cached = peekCachedModule(root, owner, options);
+        if (!cached?.mod.phpDeclarationNames) throw new Error("Expected cached PHP declaration facts");
+        const legacy = {
+          ...cached.mod,
+          phpDeclarationNames: cached.mod.phpDeclarationNames.filter(
+            (identity) => identity !== PHP_INCOMPLETE_DECLARATION_IDENTITY,
+          ),
+          parserDegraded: diagnostic === "parser degradation",
+        };
+        writeToCache(root, owner, cached.sig, legacy, options);
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        const added = await writeFixtureFile(
+          root,
+          "Later.php",
+          "<?php\nnamespace Later;\nuse App\\Gadget;\nfunction another(Gadget $value) {}\n",
+        );
+        const index = await buildProjectIndexIncremental(root, options);
+        expect(edgeTargets(index, added)).toEqual([`file:${normalizePath(owner)}`]);
+        expect(edgeTargets(index, added)).not.toContain(`file:${normalizePath(files["Decoy.php"]!)}`);
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     },
   );
 });

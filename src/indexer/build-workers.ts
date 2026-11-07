@@ -140,6 +140,8 @@ export type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
   projectFacts?: ProjectFileFacts;
   /** A whole-tree fallback needed before facts can be primed; the module builder reuses its outcome. */
   projectFactsParse?: PreparedFileParseAttempt;
+  /** PHP locals/exports extracted before imports resolve; the module builder finishes this same module. */
+  phpModule?: ModuleIndex;
   moduleRecord?: undefined;
   /** Why a worker that was asked for the file's module record returned the extraction instead. */
   moduleRecordFallback?: ModuleRecordFallback;
