@@ -31,6 +31,7 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import { lookupJvmImport } from "../../src/util/resolution/jvm.js";
 
 const definition: LanguageTestDefinition = {
   id: "java",
@@ -2125,4 +2126,28 @@ describe("Java restored declaration imports", () => {
       });
     },
   );
+});
+
+describe("Java default-package imports", () => {
+  it("does not resolve an invalid single-segment import to a default-package class", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-default-import-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "DefaultThing.java": "public class DefaultThing {}\n",
+        "app/Use.java": "package app;\nimport DefaultThing;\nclass Use { DefaultThing value; }\n",
+        "other/DefaultThing.java": "package other;\npublic class DefaultThing {}\n",
+      });
+      const result = await lookupJvmImport(root, "DefaultThing", {
+        languageId: "java",
+        fromFile: files["app/Use.java"]!,
+      });
+      expect(result).toEqual({ file: null, incomplete: false, packageKnown: true });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(index.graph.edges.some((edge) => edge.from === files["app/Use.java"] && edge.to.type === "file")).toBe(
+        false,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

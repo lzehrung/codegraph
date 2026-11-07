@@ -35,6 +35,7 @@ import {
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -6759,4 +6760,31 @@ describe("restored declaration import navigation", () => {
       });
     },
   );
+});
+
+describe("Go to Definition: Kotlin default-package imports", () => {
+  it("follows class and aliased function imports, never the same-named package decoy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-goto-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_DEFAULT_PACKAGE_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const lines = KOTLIN_DEFAULT_PACKAGE_SOURCES["app/Use.kt"].split("\n");
+      for (const [line, token, declaration] of [
+        [5, "DefaultThing", 1],
+        [6, "chosen", 2],
+        [7, "DefaultThing", 1],
+      ] as const) {
+        await testGoToDefinition(
+          index,
+          files["app/Use.kt"]!,
+          line,
+          columnInLines(lines, line, token),
+          files["Default.kt"]!,
+          declaration,
+        );
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
