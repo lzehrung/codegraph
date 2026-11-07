@@ -3,9 +3,9 @@
  * alias, so a member named like an alias binds `a.Run()` first. dotnet compiled every case below; `outcome` is what
  * go-to-definition, references, and the detailed graph must answer for the one `.Run()` call in `Use.cs`:
  *  - alias: `N.Target.Run`, the alias target; no member of that name is proven;
- *  - member: `Decoy.Target.Run`, the type of the member, proven by its declaration in the same file;
- *  - unresolved: a member hides the alias or may, but its type cannot be proven: `not_found`, partial coverage, and
- *    no edge to either target.
+ *  - member: `Decoy.Target.Run`, the type the member declares, read in the file that declares it;
+ *  - unresolved: a member hides the alias or may, but its type is not a project type or the base is unproven:
+ *    `not_found`, partial coverage, and no edge to either target.
  */
 export type CsharpInheritedAliasOutcome = "alias" | "member" | "unresolved";
 
@@ -36,7 +36,7 @@ const ALIAS = "using a = N.Target;";
 const BASE_FIELD = "class Base { protected Decoy.Target a = new Decoy.Target(); }";
 
 const SOURCES: readonly CsharpInheritedAliasSource[] = [
-  // The member is declared in the same file, so its declared type proves the receiver.
+  // The member's declared type proves the receiver, wherever the member is declared.
   {
     name: "inherited field",
     outcome: "member",
@@ -148,31 +148,30 @@ const SOURCES: readonly CsharpInheritedAliasSource[] = [
     header: ["namespace C {", `  ${ALIAS}`],
     body: [`  ${BASE_FIELD}`, "  class Use : Base { void F() { a.Run(); } }", "}"],
   },
-  // Another file declares the member, so go-to-definition cannot read its type.
   {
     name: "inherited field declared in another file",
-    outcome: "unresolved",
+    outcome: "member",
     body: ["class Use : Base { void F() { a.Run(); } }"],
     others: { "Base.cs": `${BASE_FIELD}\n` },
     memberFile: "Base.cs",
   },
   {
     name: "inherited property declared in another file",
-    outcome: "unresolved",
+    outcome: "member",
     body: ["class Use : Base { void F() { a.Run(); } }"],
     others: { "Base.cs": "class Base { protected Decoy.Target a { get; } = new Decoy.Target(); }\n" },
     memberFile: "Base.cs",
   },
   {
     name: "field in another part of a partial type",
-    outcome: "unresolved",
+    outcome: "member",
     body: ["partial class Use { void F() { a.Run(); } }"],
     others: { "Part.cs": "partial class Use { Decoy.Target a = new Decoy.Target(); }\n" },
     memberFile: "Part.cs",
   },
   {
     name: "base list in another part of a partial type",
-    outcome: "unresolved",
+    outcome: "member",
     body: ["partial class Use { void F() { a.Run(); } }"],
     others: { "Base.cs": `${BASE_FIELD}\n`, "Part.cs": "partial class Use : Base { }\n" },
     memberFile: "Base.cs",
@@ -183,6 +182,14 @@ const SOURCES: readonly CsharpInheritedAliasSource[] = [
     outcome: "unresolved",
     body: ["class Use : Base { void F() { a.Run(); } }"],
     others: { "Base.cs": "class Base { protected void a() { } }\n" },
+    memberFile: "Base.cs",
+  },
+  // dotnet: CS1061, StringBuilder has no Run; the field still binds the name before the alias.
+  {
+    name: "inherited field of a type no project file declares",
+    outcome: "unresolved",
+    body: ["class Use : Base { void F() { a.Run(); } }"],
+    others: { "Base.cs": "class Base { protected System.Text.StringBuilder a = null; }\n" },
     memberFile: "Base.cs",
   },
   // A base the project cannot read may declare a member of that name.

@@ -1049,6 +1049,15 @@ export async function resolveMemberAccessDefinition(params: {
       if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
     }
   }
+  /** The declared type of the member that binds an alias-named receiver first, when that type is proven. */
+  const hiddenReceiverType = async (expr: SyntaxNodeLike): Promise<SymbolDef | null> => {
+    if (sup.id !== "csharp" || !isReceiverNameNode(sup, expr.type)) return null;
+    const exprName = sliceText(expr, source);
+    if (!aliasBindsExpressionName(expr, exprName)) return null;
+    const lookup = await aliasMemberLookup(expr, exprName);
+    if (lookup.status !== "member" || !lookup.member || declaresMembers(lookup.member)) return null;
+    return await csharpMemberDeclaredType(index, lookup.member);
+  };
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     if (sup.id === "kotlin" && expr.type === "user_type") {
@@ -1496,6 +1505,7 @@ export async function resolveMemberAccessDefinition(params: {
       ensureScopeIndex,
       receiverProof,
       resolvedReceiver,
+      hiddenReceiverType,
     );
 
     if (receiver) {
@@ -2728,6 +2738,26 @@ export async function csharpAliasMemberLookup(
   return { status: "none" };
 }
 
+/**
+ * The type a C# field, property, or parameter declares, read in the file that declares it: a nominal type the project
+ * declares. `null` for a method, a type parameter, or a name no project file declares.
+ */
+async function csharpMemberDeclaredType(index: ProjectIndex, member: SymbolDef): Promise<SymbolDef | null> {
+  if (member.kind !== SymbolKind.Variable) return null;
+  const context = await ensureParsedContextForIndex(index, member.file).catch(ignoreQueryParseFailure);
+  const module = index.byFile.get(fileIdentityKey(member.file));
+  if (!context || !module) return null;
+  const nameNode = nameNodeForDef(context, member);
+  let declaration = nameNode?.parent ?? null;
+  if (declaration?.type === "variable_declarator") declaration = declaration.parent;
+  const typeNode = declaration ? declaredTypeNameNode(declaration, context.sup) : null;
+  if (!declaration || !typeNode) return null;
+  const typeText = qualifiedDeclaredTypeText(typeNode, context.source);
+  if (typeParameterNamesInScope(declaration, context.source).has(typeText.split(/[.:]/)[0]!)) return null;
+  const scopeIndex = getOrBuildScopeIndex(index, member.file, context.source, context.sup, module, context.tree);
+  return resolveCsharpQualifiedReceiverType(index, module, typeNode, context.source, scopeIndex);
+}
+
 /** Whether `node` can be the simple name of an expression: not a declaration, type position, `::` alias, or member. */
 function isCsharpExpressionName(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
   if (sup.isDeclarationName(node) || csharpTypeOnlyName(node) || isCsharpAliasQualifier(node, sup)) return false;
@@ -3082,7 +3112,11 @@ async function resolveReceiverDefinition(
   getScopeIndex: () => ScopeIndex,
   proof?: ReceiverBinding | null,
   resolvedDirect?: ResolvedExport | null,
+  hiddenReceiverType?: (expr: SyntaxNodeLike) => Promise<SymbolDef | null>,
 ): Promise<ResolvedReceiverDefinition | null> {
+  // A C# member that binds the receiver's name before an alias types it by its own declaration.
+  const hiddenType = await hiddenReceiverType?.(obj);
+  if (hiddenType) return { def: hiddenType, memberScope: "instance" };
   const direct = resolvedDirect === undefined ? await resolveExpression(obj) : resolvedDirect;
   const receiver =
     proof ??
@@ -3097,7 +3131,18 @@ async function resolveReceiverDefinition(
     if (!directType) {
       const { object, property } = getMemberAccessParts(sup, obj);
       if (!object || !property) return null;
-      const owner = await resolveReceiverDefinition(index, object, source, sup, resolveExpression, mod, getScopeIndex);
+      const owner = await resolveReceiverDefinition(
+        index,
+        object,
+        source,
+        sup,
+        resolveExpression,
+        mod,
+        getScopeIndex,
+        undefined,
+        undefined,
+        hiddenReceiverType,
+      );
       if (!owner || owner.runtimeTypeOnly) return null;
       const field = await resolveKeywordReceiverMember(
         index,

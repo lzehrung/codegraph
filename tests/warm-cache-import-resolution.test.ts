@@ -1007,12 +1007,14 @@ describe("warm module-cache builds never reuse import bindings resolved against 
         // Use.cs does not change; its base class now declares a field named like the alias.
         await fsp.writeFile(path.join(root, "Base.cs"), baseWithMember, "utf8");
         const hidden = await buildProjectIndex(root, { cache });
-        expect(await answer(hidden)).toBe("not_found");
-        expect(await answer(await buildProjectIndex(root, { cache: "off" }))).toBe("not_found");
+        expect(await answer(hidden)).toBe("Decoy.cs");
+        expect(await answer(await buildProjectIndex(root, { cache: "off" }))).toBe("Decoy.cs");
         const graph = await buildSymbolGraphDetailed(hidden);
-        expect(
-          graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run"),
-        ).toEqual([]);
+        const runCallFiles = graph.edges.flatMap((edge) => {
+          const to = graph.nodes.get(edge.to);
+          return edge.label === "calls" && to?.name === "Run" ? [path.basename(to.file)] : [];
+        });
+        expect(runCallFiles).toEqual(["Decoy.cs"]);
         // Removing the field restores the alias, as a cold build agrees.
         await fsp.writeFile(path.join(root, "Base.cs"), "class Base { }\n", "utf8");
         expect(await answer(await buildProjectIndex(root, { cache }))).toBe("N.cs");

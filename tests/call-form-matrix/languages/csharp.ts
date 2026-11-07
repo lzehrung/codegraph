@@ -51,11 +51,7 @@ const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "me
 export const csharpCells: MatrixCell[] = [
   // A member of an enclosing type binds an alias's name first (dotnet); an unproven member or base is not the alias.
   inheritedAliasCell("inherited field", "yields-to-inherited-field", "member"),
-  inheritedAliasCell(
-    "inherited field declared in another file",
-    "yields-to-inherited-field-in-another-file",
-    "unresolved",
-  ),
+  inheritedAliasCell("inherited field declared in another file", "yields-to-inherited-field-in-another-file", "member"),
   inheritedAliasCell("external base class", "unproven-external-base", "unresolved"),
   inheritedAliasCell("private field of a base", "kept-beside-private-base-field", "alias"),
   ...CSHARP_GENERIC_ALIAS_CASES.map(({ alias, parameter, scope }): MatrixCell => {
