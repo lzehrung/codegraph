@@ -9,6 +9,7 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import * as filePrep from "../src/languages/file-prep.js";
+import * as specifierTargets from "../src/util/resolution/specifier-targets.js";
 import { collectDirectDependents } from "../src/indexer/incremental-plan.js";
 import {
   computeApiSurface,
@@ -464,5 +465,63 @@ describe("surface dependents", () => {
     const changed = new Set([keyOf("c.ts")]);
     propagateReexportSurfaceChanges(index.byFile, changed);
     expect(changed).toEqual(new Set([keyOf("c.ts"), keyOf("b.ts"), keyOf("a.ts")]));
+  });
+});
+
+describe("declaration import rechecks are bounded by newly declared names", () => {
+  const externalImportFiles = (): Record<string, string> => {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      files[`units/C${index}.cs`] = [
+        "using System;",
+        "using System.Linq;",
+        "namespace Bench;",
+        `public class C${index} { public int Value() => 1; }`,
+        "",
+      ].join("\n");
+    }
+    return files;
+  };
+
+  it("does no unrelated import-resolution work after a body-only C# edit beside many external imports", async () => {
+    const files = externalImportFiles();
+    const root = await indexedProject(files);
+    const edited = path.join(root, "units/C0.cs");
+    const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    await fsp.writeFile(edited, files["units/C0.cs"]!.replace("=> 1;", "=> 2;"), "utf8");
+    const { index, extracted, report } = await update(root);
+    expect(extracted).toEqual(["units/C0.cs"]);
+    expect(report.files).toMatchObject({ total: 40, parsed: 1, changed: 1, cached: 39 });
+    const unrelatedLookups = resolve.mock.calls.filter(([file]) => normalize(file) !== normalize(edited));
+    expect(unrelatedLookups).toEqual([]);
+    resolve.mockRestore();
+    await expectSameAsColdBuild(root, index);
+  });
+
+  it("rechecks only the newly named alias target after a C# rename beside many external imports", async () => {
+    const root = await indexedProject({
+      ...externalImportFiles(),
+      "lib/Library.cs": "namespace Lib;\npublic class Different {}\n",
+      "app/Use.cs": "using Gadget = Lib.Gadget;\nclass Use { Gadget value; }\n",
+    });
+    const edited = path.join(root, "lib/Library.cs");
+    const consumer = path.join(root, "app/Use.cs");
+    const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    await fsp.writeFile(edited, "namespace Lib;\npublic class Gadget {}\n", "utf8");
+    const { index, extracted, report } = await update(root);
+    expect(extracted).toEqual(["app/Use.cs", "lib/Library.cs"]);
+    expect(report.files).toMatchObject({ total: 42, parsed: 2, changed: 2, cached: 40 });
+    const unrelatedLookups = resolve.mock.calls.filter(([file]) => {
+      const normalized = normalize(file);
+      return normalized !== normalize(edited) && normalized !== normalize(consumer);
+    });
+    expect(unrelatedLookups).toEqual([]);
+    expect(
+      resolve.mock.calls.some(
+        ([file, specifier]) => normalize(file) === normalize(consumer) && specifier === "Lib.Gadget",
+      ),
+    ).toBe(true);
+    resolve.mockRestore();
+    await expectSameAsColdBuild(root, index);
   });
 });

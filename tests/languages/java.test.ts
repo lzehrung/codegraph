@@ -26,6 +26,11 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "../helpers/restored-declaration-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "java",
@@ -2107,4 +2112,17 @@ describe("Java inherited member lookup", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Java restored declaration imports", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "java"))(
+    "restores an import after an existing file declares its type again",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async ({ restored, cold, owner, consumer, decoy }) => {
+        expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+        expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+        expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+      });
+    },
+  );
 });

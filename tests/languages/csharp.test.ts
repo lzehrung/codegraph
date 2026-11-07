@@ -30,6 +30,11 @@ import {
   CSHARP_ALIAS_SHADOW_SITES,
 } from "../helpers/csharp-alias-shadow-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "../helpers/restored-declaration-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -5227,4 +5232,17 @@ describe("C# verbatim alias review boundaries", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("C# restored declaration imports", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "csharp"))(
+    "restores an alias when its type returns in an existing declaration file",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async ({ restored, cold, owner, consumer, decoy }) => {
+        expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+        expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+        expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+      });
+    },
+  );
 });
