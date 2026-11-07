@@ -47,6 +47,7 @@ import {
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
@@ -8468,4 +8469,41 @@ describe("restored declaration import references", () => {
       });
     },
   );
+});
+
+describe("Find References: Kotlin default-package imports", () => {
+  it("includes class and aliased function uses and excludes named-package decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_DEFAULT_PACKAGE_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      for (const [name, declaration, useLines] of [
+        ["DefaultThing", 1, [2, 5, 7]],
+        ["defaultFn", 2, [3, 3, 6]],
+      ] as const) {
+        for (const [file, line, expected] of [
+          ["Default.kt", declaration, useLines],
+          ["Named.kt", declaration + 1, []],
+        ] as const) {
+          const lines = KOTLIN_DEFAULT_PACKAGE_SOURCES[file].split("\n");
+          const result = await findReferences(index, {
+            file: files[file]!,
+            line,
+            column: columnInLines(lines, line, name),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected default-package reference result");
+          expect(result.referenceCoverage.state).toBe("complete");
+          expect(
+            result.references
+              .filter((ref) => ref.file === files["app/Use.kt"])
+              .map((ref) => ref.range.start.line)
+              .sort(),
+          ).toEqual([...expected]);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

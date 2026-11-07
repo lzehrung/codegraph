@@ -23,6 +23,7 @@ import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
+import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -1825,4 +1826,58 @@ describe("Kotlin restored declaration imports", () => {
       });
     },
   );
+});
+
+describe("Kotlin default-package imports", () => {
+  it("binds declarations, aliases and calls, not named-package decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-import-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_DEFAULT_PACKAGE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const module = index.byFile.get(fileIdentityKey(files["app/Use.kt"]!));
+      expect(module?.imports.map((entry) => entry.resolved)).toEqual([files["Default.kt"], files["Default.kt"]]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => graph.nodes.get(edge.from)?.name === "make")
+        .map((edge) => `${edge.label}:${graph.nodes.get(edge.to)?.name}:${graph.nodes.get(edge.to)?.file}`);
+      expect(targets).toContain(`calls:defaultFn:${files["Default.kt"]}`);
+      expect(targets).toContain(`calls:DefaultThing:${files["Default.kt"]}`);
+      expect(targets.some((target) => target.includes(files["Named.kt"]!))).toBe(false);
+      expect(targets.some((target) => target.includes(files["PackageDecoy.kt"]!))).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["syntax error", "class Before\n)\nfun defaultFn(): Int = 0\n"],
+    ["oversized", `//${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}\nclass DefaultThing\n`],
+  ])("does not prove an import past an unread %s file", async (_kind, unread) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-unread-"));
+    try {
+      const files = await writeFixtureFiles(root, { ...KOTLIN_DEFAULT_PACKAGE_SOURCES, "Unread.kt": unread });
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const module = index.byFile.get(fileIdentityKey(files["app/Use.kt"]!));
+      expect(module).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      expect(module?.imports.map((entry) => entry.resolved)).toEqual([
+        { external: "DefaultThing" },
+        { external: "defaultFn" },
+      ]);
+      const result = await goToDefinition(index, {
+        file: files["app/Use.kt"]!,
+        line: 6,
+        column: columnInLines(KOTLIN_DEFAULT_PACKAGE_SOURCES["app/Use.kt"].split("\n"), 6, "chosen"),
+      });
+      expect(result.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            graph.nodes.get(edge.from)?.name === "make" && graph.nodes.get(edge.to)?.file === files["Default.kt"],
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
