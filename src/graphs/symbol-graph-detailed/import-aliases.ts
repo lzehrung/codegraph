@@ -24,6 +24,8 @@ import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 export type ImportAliasMaps = {
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
+  /** The key both tables are written and read by; a use-site spelling must go through it first. */
+  aliasKey: (name: string) => string;
 };
 
 type ResolveExportNamespace = (file: string, exportedName: string) => ResolvedExport | null;
@@ -75,7 +77,11 @@ export function buildImportAliasMaps(
 ): ImportAliasMaps {
   const aliasToTargetDef = new Map<string, SymbolDef>();
   const aliasToTargetModule = new Map<string, string>();
-  const languageId = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id ?? "";
+  const languageSupport = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
+  const languageId = languageSupport?.id ?? "";
+  // Preserve other languages' key conventions; only C# verbatim aliases change identity here.
+  const aliasKey =
+    languageSupport?.id === "csharp" ? languageSupport.normalizeIdentifier : (name: string): string => name;
   const pythonLocalStartIndexes = new Map<string, number>();
   if (languageId === "python") {
     for (const binding of scopeIndex.allScopes[0]?.map.values() ?? []) {
@@ -97,6 +103,8 @@ export function buildImportAliasMaps(
     // star-only names are resolved separately below instead.
     if (!isCIncludeBinding(imp) && isExpandedStarBinding(imp, moduleEntry.imports)) return;
     const bindingName = explicitBindingLocalName(imp);
+    // C# `@B` and `B` are one binding name, so both reach the same entry; see `aliasKey`.
+    const key = bindingName === undefined ? undefined : aliasKey(bindingName);
     if (languageId === "python" && bindingName) {
       const effectiveBinding = effectiveExplicitOrLocalBinding(
         moduleEntry.imports,
@@ -106,11 +114,12 @@ export function buildImportAliasMaps(
       );
       if (effectiveBinding?.kind !== "explicit" || effectiveBinding.binding !== imp) return;
     }
+    if (key === undefined) return;
     if (imp.kind === "named") {
       const phpRole = phpNamedImportRole(imp);
       if (phpRole) {
         const resolved = resolvePhpExplicitImport(index, imp, phpRole);
-        if (resolved) aliasToTargetDef.set(imp.local, resolved);
+        if (resolved) aliasToTargetDef.set(key, resolved);
         return;
       }
     }
@@ -123,7 +132,7 @@ export function buildImportAliasMaps(
         if (imp.cNamespace === "tag") return;
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) {
-          aliasToTargetDef.set(imp.local, resolved);
+          aliasToTargetDef.set(key, resolved);
         }
         return;
       }
@@ -134,7 +143,7 @@ export function buildImportAliasMaps(
         if (languageId === "rust") {
           const moduleFile = resolveRustModuleNamespace(index, imp);
           if (moduleFile) {
-            aliasToTargetModule.set(imp.local, normalizePath(moduleFile));
+            aliasToTargetModule.set(key, normalizePath(moduleFile));
             return;
           }
         }
@@ -142,9 +151,9 @@ export function buildImportAliasMaps(
         // locals also contain private Rust/JVM names and names in other C# namespaces.
         const resolved = resolveImported(index, imp, imp.imported, { allowLocalFallback: false });
         if (resolved && !("namespace" in resolved)) {
-          aliasToTargetDef.set(imp.local, resolved);
+          aliasToTargetDef.set(key, resolved);
         } else if (resolved && "namespace" in resolved) {
-          aliasToTargetModule.set(imp.local, normalizePath(resolved.namespace));
+          aliasToTargetModule.set(key, normalizePath(resolved.namespace));
         }
         return;
       }
@@ -157,9 +166,9 @@ export function buildImportAliasMaps(
         : null;
       const resolved = resolveExportNamespace(targetFile, imp.imported) ?? fallbackResolved;
       if (resolved?.kind === "resolved") {
-        aliasToTargetDef.set(imp.local, resolved.def);
+        aliasToTargetDef.set(key, resolved.def);
       } else if (resolved?.kind === "namespace") {
-        aliasToTargetModule.set(imp.local, normalizePath(resolved.file));
+        aliasToTargetModule.set(key, normalizePath(resolved.file));
       }
     } else if (imp.kind === "default") {
       const defaultExport = resolveExportFrom(targetFile, "default");
@@ -169,15 +178,15 @@ export function buildImportAliasMaps(
       const raw = defaultExport ?? fallbackExport;
       const container = raw ? memberContainerForDefinition(index, raw) : undefined;
       const def = container ?? raw;
-      if (def) aliasToTargetDef.set(imp.local, def);
+      if (def) aliasToTargetDef.set(key, def);
       // An ES default binding names one value, never the enclosing module namespace.
-      if (!isJsTsLanguage(languageId)) aliasToTargetModule.set(imp.local, targetFile);
+      if (!isJsTsLanguage(languageId)) aliasToTargetModule.set(key, targetFile);
     } else if (imp.kind === "namespace") {
       const classValue = imp.mechanism === "cjs" ? cjsRequireValueBinding(index, targetFile) : undefined;
       if (classValue) {
-        aliasToTargetDef.set(imp.localNS, classValue);
+        aliasToTargetDef.set(key, classValue);
       } else {
-        aliasToTargetModule.set(imp.localNS, targetFile);
+        aliasToTargetModule.set(key, targetFile);
       }
     }
   });
@@ -188,10 +197,16 @@ export function buildImportAliasMaps(
   for (const name of starReachableNames(moduleEntry)) {
     const decision = resolveStarImportedName(index, moduleEntry, languageId, name);
     if (decision.status !== "resolved") continue;
+    // An alias of the same identifier blocks the star even when the directive spells it `@B`
+    // and the star publishes `B`, so the comparison goes through the language's alias key.
+    const nameKey = aliasKey(name);
     const effectiveBinding = effectiveExplicitOrLocalBinding(
       moduleEntry.imports,
       languageId,
-      (candidate) => explicitBindingLocalName(candidate) === name,
+      (candidate) => {
+        const local = explicitBindingLocalName(candidate);
+        return local !== undefined && aliasKey(local) === nameKey;
+      },
       pythonLocalStartIndexes.get(name),
     );
     if (effectiveBinding?.kind === "local") continue;
@@ -201,9 +216,9 @@ export function buildImportAliasMaps(
       const explicitAt = moduleEntry.imports.indexOf(effectiveBinding.binding);
       if (explicitAt > starAt) continue;
     }
-    aliasToTargetModule.delete(name);
-    aliasToTargetDef.set(name, decision.definition);
+    aliasToTargetModule.delete(nameKey);
+    aliasToTargetDef.set(nameKey, decision.definition);
   }
 
-  return { aliasToTargetDef, aliasToTargetModule };
+  return { aliasToTargetDef, aliasToTargetModule, aliasKey };
 }

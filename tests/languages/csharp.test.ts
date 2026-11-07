@@ -3585,6 +3585,166 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  /**
+   * What every consumer of a type alias reports for the `Run` call in Use.cs: navigation on `Run`,
+   * the Use.cs lines that reference each file's declared `Run`, the detailed-graph call edges out
+   * of `M`, and the source text each alias binding range covers. Fixture files declare
+   * `N.Second.Nested.Run`, the `Other.B.Nested.Run` decoy, and one Use.cs built from `useLines`.
+   */
+  type VerbatimAliasOutcome = {
+    goto: string;
+    secondReferences: number[];
+    otherReferences: number[];
+    calls: string[];
+    aliasText: string;
+    importedText: string;
+  };
+
+  async function verbatimAliasOutcome(root: string, useLines: string[]): Promise<VerbatimAliasOutcome> {
+    const nested = "public class Nested { public static void Run() {} }";
+    const secondSource = `namespace N; public class Second { ${nested} }\n`;
+    const otherSource = `namespace Other; public class B { ${nested} }\n`;
+    const useSource = useLines.join("\n") + "\n";
+    const paths = await writeFixtureFiles(root, {
+      "Second.cs": secondSource,
+      "Other.cs": otherSource,
+      "Use.cs": useSource,
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const useFile = paths["Use.cs"]!;
+    const callLine = useLines.findIndex((text) => text.includes("Run()")) + 1;
+    const run = await goToDefinition(index, {
+      file: useFile,
+      line: callLine,
+      column: columnOf(useLines, callLine, "Run"),
+    });
+    const useLinesFor = async (file: string, source: string): Promise<number[]> => {
+      const result = await findReferences(index, {
+        file: paths[file]!,
+        line: 1,
+        column: source.indexOf("Run()") + 1,
+      });
+      if (result.status !== "ok") throw new Error(`Expected references for ${file}`);
+      const lines = new Set(
+        result.references
+          .filter((reference) => normalizePath(reference.file) === useFile)
+          .map((reference) => reference.range.start.line),
+      );
+      return [...lines].sort((left, right) => left - right);
+    };
+    const alias = index.byFile
+      .get(fileIdentityKey(useFile))
+      ?.imports.find((binding) => binding.kind === "named" && binding.explicitAlias);
+    if (alias?.kind !== "named") throw new Error("Expected the explicit type alias binding");
+    const rangeText = (range: { start: { index?: number }; end: { index?: number } } | undefined): string => {
+      const start = range?.start.index;
+      const end = range?.end.index;
+      return start === undefined || end === undefined ? "" : useSource.slice(start, end);
+    };
+    const graph = await buildSymbolGraphDetailed(index);
+    const calls = graph.edges
+      .flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || !from || !to) return [];
+        if (from.name !== "M" || normalizePath(from.file) !== useFile) return [];
+        return [`${to.name}@${path.basename(to.file)}`];
+      })
+      .sort();
+    return {
+      goto:
+        run.status === "ok" ? `${path.basename(run.definition.file)}:${run.definition.range.start.line}` : run.status,
+      secondReferences: await useLinesFor("Second.cs", secondSource),
+      otherReferences: await useLinesFor("Other.cs", otherSource),
+      calls,
+      aliasText: rangeText(alias.localRange),
+      importedText: rangeText(alias.importedRange),
+    };
+  }
+
+  it.each([
+    { name: "a verbatim alias with a plain use", alias: "@B", use: "B" },
+    { name: "a plain alias with a verbatim use", alias: "B", use: "@B" },
+    { name: "a verbatim alias with a verbatim use", alias: "@B", use: "@B" },
+    { name: "a plain alias with a plain use", alias: "B", use: "B" },
+  ])("binds $name to the aliased type at file scope", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-"));
+    try {
+      const useLines = [
+        `using ${alias} = N.Second;`,
+        "using Other;",
+        `class Use { void M() { ${use}.Nested.Run(); } }`,
+      ];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "Second.cs:1",
+        secondReferences: [3],
+        otherReferences: [],
+        calls: ["Run@Second.cs"],
+        aliasText: alias,
+        importedText: "Second",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a verbatim alias with a plain use", alias: "@B", use: "B" },
+    { name: "a plain alias with a verbatim use", alias: "B", use: "@B" },
+    { name: "a verbatim alias with a verbatim use", alias: "@B", use: "@B" },
+  ])("binds $name to the aliased type inside its namespace block", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-scoped-"));
+    try {
+      const useLines = [
+        "namespace C {",
+        `  using ${alias} = N.Second;`,
+        "  using Other;",
+        `  class Use { void M() { ${use}.Nested.Run(); } }`,
+        "}",
+      ];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "Second.cs:1",
+        secondReferences: [4],
+        otherReferences: [],
+        calls: ["Run@Second.cs"],
+        aliasText: alias,
+        importedText: "Second",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "a plain use", alias: "@B", use: "B", scoped: false },
+    { name: "a verbatim use", alias: "B", use: "@B", scoped: false },
+    { name: "a plain use in a namespace block", alias: "@B", use: "B", scoped: true },
+    { name: "a verbatim use in a namespace block", alias: "B", use: "@B", scoped: true },
+  ])("keeps an alias with no indexed target bound for $name", async ({ alias, use, scoped }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-type-alias-missing-"));
+    try {
+      const useLines = scoped
+        ? [
+            "namespace C {",
+            `  using ${alias} = Missing.Box;`,
+            "  using Other;",
+            `  class Use { void M() { ${use}.Nested.Run(); } }`,
+            "}",
+          ]
+        : [`using ${alias} = Missing.Box;`, "using Other;", `class Use { void M() { ${use}.Nested.Run(); } }`];
+      expect(await verbatimAliasOutcome(root, useLines)).toEqual({
+        goto: "not_found",
+        secondReferences: [],
+        otherReferences: [],
+        calls: [],
+        aliasText: alias,
+        importedText: "Box",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps C# file-local types inside their declaring file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-file-local-"));
     try {
@@ -4721,6 +4881,274 @@ describe("C# inherited member lookup", () => {
         .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "Call")
         .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
       expect(targets).toEqual([paths["Grand.cs"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# verbatim alias review boundaries", () => {
+  it.each([
+    { alias: "B", use: "B" },
+    { alias: "@B", use: "B" },
+    { alias: "B", use: "@B" },
+    { alias: "@B", use: "@B" },
+  ])(
+    "keeps $alias/$use targets and decoys identical across namespace scopes and disk snapshots",
+    async ({ alias, use }) => {
+      for (const scope of ["compilation-unit", "block", "file-scoped"] as const) {
+        const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-cache-"));
+        try {
+          const directive = `using ${alias} = global::N.Target;`;
+          const body = `class Use { void M() { ${use}.Run(); } }`;
+          let useLines = [directive, "using Other;", body];
+          if (scope === "block") useLines = ["namespace App {", ...useLines, "}"];
+          if (scope === "file-scoped") useLines = ["namespace App;", ...useLines];
+          const callLine = useLines.indexOf(body) + 1;
+          const declarations = {
+            "Target.cs": "public class Target { public static void Run() {} }",
+            "Decoy.cs": "public class B { public static void Run() {} }",
+          };
+          const paths = await writeFixtureFiles(root, {
+            "Target.cs": `namespace N;\n${declarations["Target.cs"]}\n`,
+            "Decoy.cs": `namespace Other;\n${declarations["Decoy.cs"]}\n`,
+            "Use.cs": useLines.join("\n"),
+          });
+          const assertTargets = async (index: ProjectIndex): Promise<void> => {
+            for (const token of [use, "Run"]) {
+              const result = await goToDefinition(index, {
+                file: paths["Use.cs"]!,
+                line: callLine,
+                column: columnOf(useLines, callLine, token),
+              });
+              expect(result.status, `${scope}: ${token}`).toBe("ok");
+              if (result.status !== "ok") throw new Error("Expected the verbatim alias target");
+              expect(normalizePath(result.definition.file), scope).toBe(paths["Target.cs"]);
+            }
+            for (const file of ["Target.cs", "Decoy.cs"] as const) {
+              const references = await findReferences(index, {
+                file: paths[file]!,
+                line: 2,
+                column: declarations[file].indexOf("Run") + 1,
+              });
+              expect(references.status, `${scope}: ${file}`).toBe("ok");
+              if (references.status !== "ok") throw new Error("Expected method references");
+              expect(
+                references.references
+                  .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+                  .map((reference) => reference.range.start.line),
+                `${scope}: ${file}`,
+              ).toEqual(file === "Target.cs" ? [callLine] : []);
+              expect(references.referenceCoverage.state, `${scope}: ${file}`).toBe("complete");
+            }
+            const graph = await buildSymbolGraphDetailed(index);
+            const edges = graph.edges.flatMap((edge) => {
+              const from = graph.nodes.get(edge.from);
+              const to = graph.nodes.get(edge.to);
+              if (!from || !to || from.file !== paths["Use.cs"] || from.name !== "M") return [];
+              if (edge.label !== "calls" && edge.label !== "uses") return [];
+              return [`${edge.label} ${to.name}@${path.basename(to.file)}`];
+            });
+            expect(edges.sort(), scope).toEqual(["calls Run@Target.cs", "uses Target@Target.cs"]);
+          };
+          await assertTargets(await buildProjectIndex(root, { cache: "off" }));
+          const options = { cache: "disk" as const, cacheDir: path.join(root, ".cache"), threads: 1 };
+          await assertTargets(await buildProjectIndex(root, options));
+          clearMemoryCache();
+          await assertTargets(await buildProjectIndex(root, options));
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  it.each([
+    { alias: "@B", binding: "B", use: "@B" },
+    { alias: "B", binding: "@B", use: "B" },
+    { alias: "@b", binding: "b", use: "@b" },
+    { alias: "@class", binding: "@class", use: "@class" },
+    { alias: "@this", binding: "@this", use: "@this" },
+  ])("keeps parameter $binding used as $use on its declared instance type", async ({ alias, binding, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-parameter-"));
+    try {
+      const lines = [
+        `using ${alias} = N.Target;`,
+        "using Values;",
+        `class Use { void M(Value ${binding}) { ${use}.Run(); } }`,
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace N;\npublic class Target { public static void Run() {} }\n",
+        "Value.cs": "namespace Values;\npublic class Value { public void Run() {} }\n",
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected the parameter's instance member");
+      expect(normalizePath(result.definition.file)).toBe(paths["Value.cs"]);
+      for (const [file, declaration] of [
+        ["Value.cs", "public class Value { public void Run() {} }"],
+        ["Target.cs", "public class Target { public static void Run() {} }"],
+      ] as const) {
+        const references = await findReferences(index, {
+          file: paths[file]!,
+          line: 2,
+          column: declaration.indexOf("Run") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected receiver method references");
+        expect(
+          references.references
+            .filter((reference) => normalizePath(reference.file) === paths["Use.cs"])
+            .map((reference) => reference.range.start.line),
+        ).toEqual(file === "Value.cs" ? [3] : []);
+        expect(references.referenceCoverage.state).toBe("complete");
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === paths["Use.cs"])
+        .map((edge) => path.basename(graph.nodes.get(edge.to)!.file));
+      expect(calls).toEqual(["Value.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["@class", "@this", "@b"])("keeps lowercase or keyword alias %s distinct from decoys", async (alias) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-keyword-alias-"));
+    try {
+      const plain = alias.slice(1);
+      const lines = [`using ${alias} = N.Target;`, "using Other;", `class Use { void M() { ${alias}.Run(); } }`];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace N;\npublic class Target { public static void Run() {} }\n",
+        "Decoy.cs": `namespace Other;\npublic class @${plain} { public static void Run() {} }\n`,
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected the keyword alias target");
+      expect(normalizePath(result.definition.file)).toBe(paths["Target.cs"]);
+      const references = await findReferences(index, {
+        file: paths["Target.cs"]!,
+        line: 2,
+        column: "public class Target { public static void ".length + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected keyword alias references");
+      expect(references.referenceCoverage.state).toBe("complete");
+      expect(references.references.some((reference) => reference.file === paths["Use.cs"])).toBe(true);
+      const graph = await buildSymbolGraphDetailed(index);
+      const edges = graph.edges.filter(
+        (edge) =>
+          graph.nodes.get(edge.from)?.file === paths["Use.cs"] &&
+          graph.nodes.get(edge.to)?.file === paths["Decoy.cs"] &&
+          (edge.label === "calls" || edge.label === "uses"),
+      );
+      expect(edges).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { alias: "@B", use: "B" },
+    { alias: "B", use: "@B" },
+  ])("keeps generic alias $alias/$use unresolved with partial coverage instead of a decoy", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-generic-"));
+    try {
+      const lines = [`using ${alias} = N.Box<int>;`, "using Other;", `class Use { void M() { ${use}.Nested.Run(); } }`];
+      const nested = "public class Nested { public static void Run() {} }";
+      const paths = await writeFixtureFiles(root, {
+        "Generic.cs": `namespace N;\npublic class Box<T> { ${nested} }\n`,
+        "Decoy.cs": `namespace Other;\npublic class B { ${nested} }\n`,
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("not_found");
+      for (const [file, declaration] of [
+        ["Generic.cs", `public class Box<T> { ${nested} }`],
+        ["Decoy.cs", `public class B { ${nested} }`],
+      ] as const) {
+        const references = await findReferences(index, {
+          file: paths[file]!,
+          line: 2,
+          column: declaration.indexOf("Run") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected generic alias candidate references");
+        expect(references.references.filter((reference) => reference.file === paths["Use.cs"])).toEqual([]);
+        expect(references.referenceCoverage.state).toBe("partial");
+        expect(references.referenceCoverage.reasons).toContain("strategy_unavailable");
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const edges = graph.edges.filter(
+        (edge) =>
+          graph.nodes.get(edge.from)?.file === paths["Use.cs"] && (edge.label === "calls" || edge.label === "uses"),
+      );
+      expect(edges).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { alias: "@B", use: "B" },
+    { alias: "B", use: "@B" },
+  ])("keeps namespace qualifier $alias/$use on its single-file namespace target", async ({ alias, use }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-qualified-call-"));
+    try {
+      const lines = [`using ${alias} = N;`, "using Other;", `class Use { void M() { ${use}::Target.Run(); } }`];
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace N;\npublic class Target { public static void Run() {} }\n",
+        "Decoy.cs": "namespace Other;\npublic class B { public class Target { public static void Run() {} } }\n",
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: paths["Use.cs"]!,
+        line: 3,
+        column: columnOf(lines, 3, "Run"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected the namespace-qualified member");
+      expect(normalizePath(result.definition.file)).toBe(paths["Target.cs"]);
+      const references = await findReferences(index, {
+        file: paths["Target.cs"]!,
+        line: 2,
+        column: "public class Target { public static void ".length + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected namespace-qualified references");
+      expect(references.referenceCoverage.state).toBe("complete");
+      expect(
+        references.references
+          .filter((reference) => reference.file === paths["Use.cs"])
+          .map((reference) => reference.range.start.line),
+      ).toEqual([3]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const edges = graph.edges.flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (!from || !to || from.file !== paths["Use.cs"] || from.name !== "M") return [];
+        if (edge.label !== "calls" && edge.label !== "uses") return [];
+        return [`${edge.label} ${to.name}@${path.basename(to.file)}`];
+      });
+      expect(edges.sort()).toEqual(["calls Run@Target.cs", "uses Run@Target.cs", "uses Target@Target.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

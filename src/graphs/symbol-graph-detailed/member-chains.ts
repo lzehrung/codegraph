@@ -22,6 +22,8 @@ export function createMemberChainResolver(args: {
   source: string;
   constStringOf: Map<string, string>;
   aliasToTargetModule: Map<string, string>;
+  /** The key the alias map is stored under; a use-site spelling must go through it. */
+  aliasKey: (name: string) => string;
   resolveMemberPathFromModule: (startFile: string, names: string[]) => SymbolDef | null;
   resolveNamespaceAlias?: (alias: string, useNode: SyntaxNodeLike) => string | undefined;
 }): MemberChainResolver {
@@ -40,7 +42,7 @@ export function createMemberChainResolver(args: {
     const alias = sliceText(chain.base, args.source);
     const targetFile = args.resolveNamespaceAlias
       ? args.resolveNamespaceAlias(alias, chain.base)
-      : args.aliasToTargetModule.get(alias);
+      : args.aliasToTargetModule.get(args.aliasKey(alias));
     if (!targetFile) return null;
     return args.resolveMemberPathFromModule(targetFile, chain.names);
   };

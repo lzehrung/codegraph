@@ -1502,6 +1502,70 @@ describe("Find References", () => {
     });
   });
 
+  it("keeps nearest verbatim aliases separate from sibling and reopened namespace blocks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-verbatim-scoped-references-"));
+    try {
+      const useLines = [
+        "namespace Outer {",
+        "  using @B = N.First;",
+        "  class One { void M() { B.Run(); } }",
+        "  namespace Inner {",
+        "    using B = Q;",
+        "    class Two { void M() { @B.Second.Run(); } }",
+        "  }",
+        "}",
+        "namespace Sibling { using Other; class Three { void M() { B.Run(); } } }",
+        "namespace Outer { using Other; class Four { void M() { @B.Run(); } } }",
+      ];
+      const declaration = "public static void Run() {}";
+      const sources = {
+        "First.cs": `namespace N;\npublic class First { ${declaration} }\n`,
+        "Second.cs": `namespace Q;\npublic class Second { ${declaration} }\n`,
+        "Decoy.cs": `namespace Other;\npublic class B { ${declaration} }\n`,
+      };
+      const paths = await writeFixtureFiles(root, { ...sources, "Use.cs": useLines.join("\n") });
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      for (const [file, expected] of [
+        ["First.cs", [3]],
+        ["Second.cs", [6]],
+        ["Decoy.cs", [9, 10]],
+      ] as const) {
+        const result = await indexer.findReferences(index, {
+          file: paths[file]!,
+          line: 2,
+          column: sources[file].split("\n")[1]!.indexOf("Run") + 1,
+        });
+        expect(result.status, file).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected scoped alias references");
+        expect(result.referenceCoverage.state, file).toBe("complete");
+        expect(
+          result.references
+            .filter((reference) => reference.file === paths["Use.cs"])
+            .map((reference) => reference.range.start.line),
+          file,
+        ).toEqual(expected);
+        for (const line of expected) {
+          const goto = await goToDefinition(index, {
+            file: paths["Use.cs"]!,
+            line,
+            column: columnInLines(useLines, line, "Run"),
+          });
+          expect(goto.status, `${file}:${line}`).toBe("ok");
+          if (goto.status !== "ok") throw new Error("Expected scoped alias navigation");
+          expect(goto.definition.file, `${file}:${line}`).toBe(paths[file]);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.flatMap((edge) => {
+        if (edge.label !== "calls" || graph.nodes.get(edge.from)?.file !== paths["Use.cs"]) return [];
+        return [`${edge.site?.range.start.line}:${path.basename(graph.nodes.get(edge.to)!.file)}`];
+      });
+      expect(calls.sort()).toEqual(["10:Decoy.cs", "3:First.cs", "6:Second.cs", "9:Decoy.cs"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   describe("cross-language import binding references", () => {
     const cases: Array<{
       label: string;
@@ -1626,6 +1690,38 @@ describe("Find References", () => {
         importLine: 1,
         usageLine: 3,
         usageName: "AliasType",
+      },
+      {
+        label: "C# verbatim alias with plain use",
+        files: {
+          "Utils.cs": "namespace Utils { public class Target {} }\n",
+          "Consumer.cs": "using @AliasType = Utils.Target;\nclass Consumer { AliasType value; }\n",
+        },
+        sourceFile: "Utils.cs",
+        consumerFile: "Consumer.cs",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "@AliasType",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "AliasType",
+      },
+      {
+        label: "C# plain alias with verbatim use",
+        files: {
+          "Utils.cs": "namespace Utils { public class Target {} }\n",
+          "Consumer.cs": "using AliasType = Utils.Target;\nclass Consumer { @AliasType value; }\n",
+        },
+        sourceFile: "Utils.cs",
+        consumerFile: "Consumer.cs",
+        exportedName: "Target",
+        importedName: "Target",
+        localName: "AliasType",
+        definitionLine: 1,
+        importLine: 1,
+        usageLine: 2,
+        usageName: "@AliasType",
       },
       {
         label: "Swift dotted symbol import",

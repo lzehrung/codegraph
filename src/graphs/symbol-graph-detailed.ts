@@ -385,7 +385,7 @@ export async function buildSymbolGraphDetailed(
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
-      const { aliasToTargetDef, aliasToTargetModule } = buildImportAliasMaps(
+      const { aliasToTargetDef, aliasToTargetModule, aliasKey } = buildImportAliasMaps(
         index,
         moduleEntry,
         resolveExportNamespace,
@@ -396,7 +396,7 @@ export async function buildSymbolGraphDetailed(
       if (isJsTsLanguage(sup.id)) {
         for (const imp of moduleEntry.imports) {
           if (imp.kind !== "namespace" || typeof imp.resolved !== "string") continue;
-          const target = aliasToTargetModule.get(imp.localNS);
+          const target = aliasToTargetModule.get(aliasKey(imp.localNS));
           if (target && fileIdentityKey(imp.resolved) === fileIdentityKey(target)) {
             aliasToSpecifier.set(imp.localNS, imp.from);
           }
@@ -411,7 +411,6 @@ export async function buildSymbolGraphDetailed(
           if (exported?.kind !== "resolved") aliasToTargetDef.delete(alias);
         }
       }
-
       const { functionNodes, classNodes, constStringOf } = collectDetailedDeclarations(
         tree.rootNode,
         sup,
@@ -424,6 +423,7 @@ export async function buildSymbolGraphDetailed(
         source: src,
         constStringOf,
         aliasToTargetModule,
+        aliasKey,
         resolveMemberPathFromModule,
         resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
           const imported =
@@ -445,7 +445,7 @@ export async function buildSymbolGraphDetailed(
             if (typeof imported?.resolved === "string") return imported.resolved;
             if (sup.id === "csharp" || sup.id === "zig") return undefined;
           }
-          return aliasToTargetModule.get(alias);
+          return aliasToTargetModule.get(aliasKey(alias));
         },
       });
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
@@ -514,7 +514,7 @@ export async function buildSymbolGraphDetailed(
       const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
         if (sup.id === "csharp") return csharpAliasTableAnswers(moduleEntry, name, node);
         if (hasIncompleteJvmPackage) {
-          const target = aliasToTargetDef.get(name);
+          const target = aliasToTargetDef.get(aliasKey(name));
           const resolved = resolveIdentifier(name, node);
           return !!target && !!resolved && defNodeId(target) === defNodeId(resolved);
         }
@@ -535,6 +535,7 @@ export async function buildSymbolGraphDetailed(
         optionalMemberTypes,
         aliasToTargetDef,
         aliasToTargetModule,
+        aliasKey,
         aliasTableAnswers,
         resolveIdentifier,
         resolveName,
@@ -566,7 +567,7 @@ export async function buildSymbolGraphDetailed(
               const name = src.slice(expression.startIndex, expression.endIndex);
               // The receiver lookup selects the alias in scope itself.
               if (!aliasTableAnswers(name, expression)) return null;
-              const imported = aliasToTargetDef.get(name);
+              const imported = aliasToTargetDef.get(aliasKey(name));
               if (imported) return imported;
               return resolveIdentifier(name, expression);
             },

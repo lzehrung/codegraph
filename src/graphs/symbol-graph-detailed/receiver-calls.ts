@@ -483,6 +483,12 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
   return identifiers[identifiers.length - 1]!;
 }
 
+/** C# verbatim spelling does not change the value binding that proves a receiver's type. */
+function sameReceiverBindingName(sup: LanguageSupport, binding: string, receiver: string): boolean {
+  if (binding === receiver) return true;
+  return sup.id === "csharp" && sup.normalizeIdentifier(binding) === sup.normalizeIdentifier(receiver);
+}
+
 /**
  * Whether a scope encloses `receiver` and binds `receiverName` as a value before it.
  * Nested scopes that do not contain the receiver are skipped, so an unrelated
@@ -506,7 +512,7 @@ function bindsLocalValue(
         for (const name of names) {
           if (
             (isReceiverNameNode(sup, name.type) || name.type === "identifier" || name.type === "constant") &&
-            sliceText(name, source) === receiverName
+            sameReceiverBindingName(sup, sliceText(name, source), receiverName)
           ) {
             return true;
           }
@@ -515,7 +521,7 @@ function bindsLocalValue(
     }
     if (VALUE_BINDING_TYPES[node.type]) {
       const name = bindingIdentifier(node, sup);
-      if (name && sliceText(name, source) === receiverName) return true;
+      if (name && sameReceiverBindingName(sup, sliceText(name, source), receiverName)) return true;
     }
     return node.namedChildren.some(declaresName);
   };
@@ -854,15 +860,18 @@ function bindingDeclaresReceiverName(
     if (goNames.some((name) => sliceText(name, source) === receiverName)) return true;
   }
   const name = bindingIdentifier(node, sup);
-  if (name && sliceText(name, source) === receiverName) return true;
+  if (name && sameReceiverBindingName(sup, sliceText(name, source), receiverName)) return true;
   if (node.type === "property_declaration") {
     return node.namedChildren.some((child) => {
       if (child.type === "variable_declaration" || child.type === "pattern") {
         return child.namedChildren.some(
-          (inner) => isReceiverNameNode(sup, inner.type) && sliceText(inner, source) === receiverName,
+          (inner) =>
+            isReceiverNameNode(sup, inner.type) && sameReceiverBindingName(sup, sliceText(inner, source), receiverName),
         );
       }
-      return isReceiverNameNode(sup, child.type) && sliceText(child, source) === receiverName;
+      return (
+        isReceiverNameNode(sup, child.type) && sameReceiverBindingName(sup, sliceText(child, source), receiverName)
+      );
     });
   }
   return false;
@@ -1433,7 +1442,7 @@ function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeL
     return false;
   }
   if (!isReceiverNameNode(sup, receiver.type)) return false;
-  const first = text[0];
+  const first = (sup.id === "csharp" ? sup.normalizeIdentifier(text) : text)[0];
   return !!first && first === first.toUpperCase() && first !== first.toLowerCase();
 }
 

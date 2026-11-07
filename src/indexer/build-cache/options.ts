@@ -97,8 +97,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
  * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
  * import statement in source order and do not revive locals excluded from the target's exports.
+ * Epoch 115 rebuilds detailed graphs with normalized C# verbatim alias keys and receiver value proofs.
  */
-export const CORE_ALGORITHM_EPOCH = 112;
+export const CORE_ALGORITHM_EPOCH = 115;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
