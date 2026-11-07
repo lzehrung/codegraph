@@ -20,6 +20,7 @@ import {
   resolvePhpObjectCreationTarget,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
+  resolveSwiftAliasContainer,
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -1789,6 +1790,37 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
   for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
 }
 
+/** The syntax type of the declaration a Swift definition names (`protocol_declaration`, `typealias_declaration`, ...). */
+async function swiftDeclarationType(context: EdgePassContext, def: SymbolDef): Promise<string | undefined> {
+  const tree =
+    fileIdentityKey(def.file) === fileIdentityKey(context.moduleEntry.file)
+      ? context.tree
+      : (await context.loadParsedFile(def.file))?.tree;
+  const start = def.range.start.index;
+  if (!tree || start === undefined) return undefined;
+  return tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent?.type;
+}
+
+/**
+ * Swift protocols are indexed as types, and one declared in another file is absent from this file's interface
+ * ids. Only a proven protocol declaration relabels a conformance as inheritance: any other type-kind target, such
+ * as a typealias to a class, keeps its inheritance edge.
+ */
+async function namesSwiftProtocol(context: EdgePassContext, target: SymbolDef): Promise<boolean> {
+  if (context.sup.id !== "swift" || target.kind !== SymbolKind.TypeAlias) return false;
+  return (await swiftDeclarationType(context, target)) === "protocol_declaration";
+}
+
+/**
+ * The nominal type an unconditional extension header names: the type itself, or the single nominal type a
+ * typealias provably reaches. An unproven alias names none, so it can neither gain nor donate a conformance.
+ */
+async function swiftExtendedNominal(context: EdgePassContext, target: SymbolDef): Promise<SymbolDef | null> {
+  if ((await swiftDeclarationType(context, target)) !== "typealias_declaration") return target;
+  const nominal = await resolveSwiftAliasContainer(context.index, target);
+  return nominal && !nominal.swiftExtensionOwner ? nominal : null;
+}
+
 async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
@@ -1833,20 +1865,7 @@ async function recordIdentifierRelations(
     if (seen.has(targetId)) continue;
     seen.add(targetId);
     let relation = relationForTarget(target, index, identifier);
-    if (context.sup.id === "swift" && relation === "extends" && target.kind === SymbolKind.TypeAlias) {
-      // Swift protocols are indexed as types; a protocol from another file is
-      // absent from this file's interfaceIds, so prove its declaration before
-      // labeling an extension's conformance as inheritance.
-      const targetTree =
-        fileIdentityKey(target.file) === fileIdentityKey(context.moduleEntry.file)
-          ? context.tree
-          : (await context.loadParsedFile(target.file))?.tree;
-      const start = target.range.start.index;
-      if (!targetTree || start === undefined) continue;
-      const name = targetTree.rootNode.descendantForIndex(start, target.range.end.index ?? start);
-      if (name.parent?.type !== "protocol_declaration") continue;
-      relation = "implements";
-    }
+    if (relation === "extends" && (await namesSwiftProtocol(context, target))) relation = "implements";
     if (extensionNominal !== undefined) {
       // An extension is not a second implementing type. Conditional or
       // unproven extensions cannot establish unconditional conformance.
@@ -1947,7 +1966,8 @@ export async function emitClassInheritanceEdges(
         const target = context.resolveIdentifier(sliceText(singleType, context.source), singleType);
         if (target && declaresMembers(target)) {
           recordDefEdge(context, fromId, target, "uses", singleType);
-          if (!isSwiftConstrainedExtension(cls.node, context.source)) extensionNominal = target;
+          const conditional = isSwiftConstrainedExtension(cls.node, context.source);
+          if (!conditional) extensionNominal = await swiftExtendedNominal(context, target);
         }
       }
     }

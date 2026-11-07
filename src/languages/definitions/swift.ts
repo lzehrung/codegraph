@@ -2,6 +2,7 @@ import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { normalizeSwiftIdentifier } from "../../util/identifiers.js";
+import { swiftExtensionOwnerType } from "../../util/swift-tree.js";
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
@@ -172,12 +173,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       return "class";
     }
     // Native query enrichment may return the identifier inside a captured user_type.
-    if (
-      parent.type === "user_type" &&
-      parent.parent?.type === "class_declaration" &&
-      parent.parent.childForFieldName("declaration_kind")?.text === "extension"
-    )
-      return "class";
+    if (swiftExtensionOwnerType(node)) return "class";
     if (
       parent.type === "protocol_declaration" ||
       parent.type === "typealias_declaration" ||

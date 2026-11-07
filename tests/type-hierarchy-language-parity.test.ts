@@ -436,4 +436,43 @@ nativeDescribe("type hierarchy language parity", () => {
     if (implementations.status !== "ok") throw new Error("Expected unique Swift implementing type");
     expect(implementations.implementations.map((match) => match.symbolId)).toEqual([nominal!.id]);
   });
+
+  it("follows a typealias to its nominal conformer and keeps class inheritance through an alias", async () => {
+    const root = await mkTmpDir("cg-hierarchy-swift-alias-");
+    roots.push(root);
+    await fs.writeFile(
+      path.join(root, "Types.swift"),
+      "protocol P {}\nstruct Widget {}\nclass Base {}\ntypealias Alias = Widget\ntypealias BaseAlias = Base\nclass Sub: BaseAlias {}\nextension Alias: P {}\n",
+    );
+    await fs.writeFile(
+      path.join(root, "Generic.swift"),
+      "struct Box<Element> {}\ntypealias IntBox = Box<Int>\nextension IntBox: P {}\n",
+    );
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const named = (name: string, file: string, kind: string) =>
+      [...graph.nodes.values()].find(
+        (node) => node.name === name && path.basename(node.file) === file && node.kind === kind,
+      );
+    const protocol = named("P", "Types.swift", "type");
+    const nominal = named("Widget", "Types.swift", "class");
+    const alias = named("Alias", "Types.swift", "type");
+    const baseAlias = named("BaseAlias", "Types.swift", "type");
+    const sub = named("Sub", "Types.swift", "class");
+    const box = named("Box", "Generic.swift", "class");
+    for (const target of [protocol, nominal, alias, baseAlias, sub, box]) expect(target).toBeDefined();
+    const supers = (id: string): Array<[string, string]> => {
+      const hierarchy = findTypeHierarchy(graph, id, "super");
+      if (hierarchy.status !== "ok") throw new Error("Expected a Swift hierarchy");
+      return hierarchy.relations.map((relation) => [relation.targetId, relation.relation]);
+    };
+    expect(supers(nominal!.id)).toEqual([[protocol!.id, "implements"]]);
+    expect(supers(alias!.id)).toEqual([]);
+    expect(supers(box!.id)).toEqual([]);
+    expect(supers(sub!.id)).toEqual([[baseAlias!.id, "extends"]]);
+    const implementations = findImplementations(index, graph, protocol!.id);
+    expect(implementations.status).toBe("ok");
+    if (implementations.status !== "ok") throw new Error("Expected the aliased nominal implementation");
+    expect(implementations.implementations.map((match) => match.symbolId)).toEqual([nominal!.id]);
+  });
 });

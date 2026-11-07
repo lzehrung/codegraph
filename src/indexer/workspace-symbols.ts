@@ -2,6 +2,7 @@ import picomatch from "picomatch";
 import type { Range } from "../types.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import { isDeclaredSymbol } from "./declarations.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
@@ -134,6 +135,7 @@ function getWorkspaceSymbolLookup(index: ProjectIndex): WorkspaceSymbolLookup {
   const locals: LocalCandidate[] = [];
   for (const moduleIndex of index.byFile.values()) {
     for (const def of moduleIndex.locals) {
+      if (!isDeclaredSymbol(def)) continue;
       locals.push({
         def,
         exportedNames: [...(exportedNamesById.get(defNodeId(def)) ?? [])].sort(),

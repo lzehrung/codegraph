@@ -1,5 +1,6 @@
 import type { SymbolNode } from "../graphs/symbol-graph.js";
 import type { SymbolDef } from "../indexer/types.js";
+import { isDeclaredSymbol } from "../indexer/declarations.js";
 import { compareCodeUnits } from "../util/collections.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { isAgentSqlObjectNode, normalizeAgentFilePath } from "./normalize.js";
@@ -97,9 +98,10 @@ function buildSymbolSearchIndex(snapshot: AgentProjectSnapshot): SymbolSearchInd
   const docs: SearchField[] = [];
 
   for (const node of snapshot.symbolGraph.nodes.values()) {
-    // A symbol without a definition never yields a result, whatever it scores.
+    // A symbol without a definition never yields a result, whatever it scores. A Swift extension header is the
+    // graph's member owner, not a symbol: the type it extends is the one result.
     const def = lookup.defById.get(node.id);
-    if (!def) continue;
+    if (!def || !isDeclaredSymbol(def)) continue;
     const slot = nodes.length;
     nodes.push(node);
     defs.push(def);

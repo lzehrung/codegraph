@@ -502,6 +502,7 @@ function hasValidCallableSymbol(value: unknown): boolean {
     javaProtectedMember?: unknown;
     jvmTypeOwnerStartIndex?: unknown;
     jvmStaticMember?: unknown;
+    swiftExtensionOwner?: unknown;
   };
   const callableValid =
     symbol.kind === "function"
@@ -512,7 +513,8 @@ function hasValidCallableSymbol(value: unknown): boolean {
     (symbol.javaPackagePrivate === undefined || typeof symbol.javaPackagePrivate === "boolean") &&
     (symbol.javaProtectedMember === undefined || typeof symbol.javaProtectedMember === "boolean") &&
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
-    (symbol.jvmStaticMember === undefined || typeof symbol.jvmStaticMember === "boolean")
+    (symbol.jvmStaticMember === undefined || typeof symbol.jvmStaticMember === "boolean") &&
+    (symbol.swiftExtensionOwner === undefined || typeof symbol.swiftExtensionOwner === "boolean")
   );
 }
 

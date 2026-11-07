@@ -50,6 +50,11 @@ export type SymbolDef = {
   javaProtectedMember?: boolean;
   /** C tag identity; a reference can introduce an incomplete tag if no visible tag exists. */
   cTag?: "declaration" | "forward" | "reference";
+  /**
+   * Swift `extension` header. It groups the extension's members under a type declared elsewhere and declares
+   * no type itself, so symbol listings and handle lookups skip it while the graph keeps it as the member owner.
+   */
+  swiftExtensionOwner?: boolean;
   docstring?: string;
   lineSpan?: number;
   complexity?: number;

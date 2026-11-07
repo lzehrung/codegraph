@@ -6355,6 +6355,44 @@ describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imp
     }
   });
 
+  it("resolves Swift extension headers in the type namespace and keeps dotted owner suffixes unproven", async () => {
+    const factory = ["import Foundation", "func URL(_ number: Int) -> Int { return number }"].join("\n");
+    const extensions = [
+      "import Foundation",
+      "extension URL { func custom() {} }",
+      "extension Outer.Inner { func nested() {} }",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-extension-namespace-goto-", {
+      "Factory.swift": factory,
+      "Extensions.swift": extensions,
+      "Models.swift": "struct Outer { struct Inner {} }",
+    });
+    try {
+      const unindexed = await goToDefinition(index, {
+        file: paths["Extensions.swift"]!,
+        line: 2,
+        column: columnOf(extensions, 2, "URL"),
+      });
+      expect(unindexed.status).toBe("not_found");
+      await testGoToDefinition(
+        index,
+        paths["Extensions.swift"]!,
+        3,
+        columnOf(extensions, 3, "Outer"),
+        paths["Models.swift"]!,
+        1,
+      );
+      const suffix = await goToDefinition(index, {
+        file: paths["Extensions.swift"]!,
+        line: 3,
+        column: columnOf(extensions, 3, "Inner"),
+      });
+      expect(suffix).toEqual({ status: "not_found", reason: "Unresolved qualified type" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a Swift self member declared in an extension", async () => {
     const a = ["class Box {", "  func ping() {}", "  func run() { self.pong() }", "}"].join("\n");
     const b = ["extension Box {", "  func pong() {}", "}"].join("\n");

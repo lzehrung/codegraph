@@ -176,19 +176,6 @@ export function isSwiftExtensionContainer(container: SyntaxNodeLike, source: str
   return container.type === "class_declaration" && swiftKeywordText(container, source) === "extension";
 }
 
-/** The name in an extension header is a use of an existing type, not a new type declaration. */
-export function isSwiftExtensionTypeName(node: SyntaxNodeLike, source: string): boolean {
-  const name = node.parent;
-  const container = name?.parent;
-  return (
-    node.type === "type_identifier" &&
-    name?.type === "user_type" &&
-    !!container &&
-    container.childForFieldName("name")?.id === name.id &&
-    isSwiftExtensionContainer(container, source)
-  );
-}
-
 function appendSwiftConstraintTokens(node: SyntaxNodeLike, source: string, tokens: string[]): void {
   if (node.type === "comment" || node.type === "line_comment" || node.type === "multiline_comment") return;
   const first = node.child(0);

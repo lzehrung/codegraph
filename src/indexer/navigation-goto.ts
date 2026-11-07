@@ -2738,8 +2738,14 @@ export async function resolveRubySuperDefinition(
   return resolveKeywordReceiverMember(index, mod, node, member, "any", true);
 }
 
-/** Follow a Swift typealias only when its right-hand side is a single indexed nominal type. */
-async function resolveSwiftAliasContainer(index: ProjectIndex, alias: SymbolDef): Promise<SymbolDef | undefined> {
+/**
+ * Follow a Swift typealias only when its right-hand side is a single indexed nominal type. Shared by receiver
+ * navigation and the detailed graph, so an alias names the same type everywhere.
+ */
+export async function resolveSwiftAliasContainer(
+  index: ProjectIndex,
+  alias: SymbolDef,
+): Promise<SymbolDef | undefined> {
   let current = alias;
   const seen = new Set<string>();
   while (current.kind === SymbolKind.TypeAlias) {

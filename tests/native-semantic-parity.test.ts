@@ -3445,6 +3445,17 @@ nativeDescribe("native semantic coverage", () => {
         extensionModule?.locals.map((local) => local.localName),
         phase,
       ).toContain("Widget");
+      expect(extensionModule?.locals.find((local) => local.localName === "Widget")?.swiftExtensionOwner, phase).toBe(
+        true,
+      );
+      expect(
+        index.byFile
+          .get(fileIdentityKey(declaration.file))
+          ?.locals.filter((local) => local.localName === "Widget")
+          .map((local) => local.swiftExtensionOwner ?? false)
+          .sort(),
+        phase,
+      ).toEqual([false, true]);
       expect(
         extensionModule?.exports.some((entry) => entry.type === "local" && entry.exportedAs === "Widget"),
         phase,
