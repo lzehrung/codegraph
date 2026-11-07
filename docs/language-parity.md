@@ -79,6 +79,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Receiver navigation (`obj.method()`) works in every source language except C; the others are `limitedLanguages` in `diagnostics.memberResolutionCoverage` and may miss receiver-only consumers in impact.
 - `super`, `base`, `parent` walk class ancestors breadth-first and return only a unique shallowest match; interfaces beside the superclass are skipped.
 - TypeScript, TSX, Java, C#, and Kotlin follow explicitly typed field chains (`this.middle.repo.find()`); unannotated or ambiguous hops stay unresolved.
+- Kotlin and Java package-qualified types, nested classifiers, and Kotlin qualified constructors resolve through their proven owners rather than a same-named bare import. Unproven qualified names remain unresolved with partial reference coverage; C# qualified type uses also exclude a same-named bare import.
 - A member call on a local, parameter, field, or `this`/`self` never uses a free function, except in Kotlin and Go.
 
 #### Same-package peers

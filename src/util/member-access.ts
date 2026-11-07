@@ -83,6 +83,91 @@ export function isReceiverNameNode(sup: LanguageSupport, nodeType: string): bool
   return sup.nodeTypes.identifier.includes(nodeType) || isMemberObjectIdentifier(nodeType);
 }
 
+/** The qualified type containing a name, retaining its qualifier for receiver and import lookup. */
+export function qualifiedTypeContaining(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const hasQualifiedTypeSyntax = sup.id === "java" || sup.id === "kotlin" || sup.id === "csharp";
+  if (!hasQualifiedTypeSyntax) return null;
+  let part = node;
+  if (sup.id === "csharp" && part.parent?.type === "generic_name") part = part.parent;
+  const parent = part.parent;
+  if (!parent) return null;
+  if (sup.id === "kotlin" && parent.type === "user_type") {
+    let identifiers = 0;
+    for (let index = 0; ; index += 1) {
+      const child = parent.child(index);
+      if (!child) break;
+      if (child.type === "identifier") identifiers += 1;
+      if (identifiers > 1) return parent;
+    }
+    return null;
+  }
+  if (sup.id === "java" && parent.type === "scoped_type_identifier") return parent;
+  if (sup.id === "csharp" && parent.type === "qualified_name") return parent;
+  return null;
+}
+
+/** A later segment cannot use the bare-name binding of its own spelling. */
+export function isQualifiedTypeSuffix(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  const qualified = qualifiedTypeContaining(sup, node);
+  return !!qualified && node.startIndex > qualified.startIndex;
+}
+
+function collectJvmScopedTypeSegments(part: SyntaxNodeLike, endIndex: number, segments: SyntaxNodeLike[]): boolean {
+  if (part.startIndex >= endIndex) return true;
+  if (part.type === "identifier" || part.type === "type_identifier") {
+    segments.push(part);
+    return true;
+  }
+  if (part.type !== "scoped_type_identifier") return false;
+  for (const child of part.namedChildren) {
+    if (child.type === "line_comment" || child.type === "block_comment") continue;
+    if (!collectJvmScopedTypeSegments(child, endIndex, segments)) return false;
+  }
+  return true;
+}
+
+/** JVM type-name segments through `node`, retaining identifier syntax and ignoring type arguments. */
+export function jvmQualifiedTypeSegments(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike[] | null {
+  if (sup.id === "kotlin") {
+    let type: SyntaxNodeLike | null = null;
+    if (node.type === "user_type") type = node;
+    else if (node.parent?.type === "user_type") type = node.parent;
+    if (!type) return null;
+    const segments: SyntaxNodeLike[] = [];
+    let genericOwner = false;
+    for (let index = 0; ; index += 1) {
+      const child = type.child(index);
+      if (!child) break;
+      if (child.type === "identifier") {
+        if (genericOwner) return null;
+        segments.push(child);
+        if (node !== type && child.startIndex === node.startIndex) break;
+      } else if (child.type === "type_arguments" && segments.length) {
+        genericOwner = true;
+      }
+    }
+    return segments.length > 1 ? segments : null;
+  }
+  if (sup.id !== "java") return null;
+  let type: SyntaxNodeLike | null = null;
+  if (node.type === "scoped_type_identifier") type = node;
+  else if (node.parent?.type === "scoped_type_identifier") type = node.parent;
+  if (!type) return null;
+  const endIndex = node === type ? type.endIndex : node.endIndex;
+  const segments: SyntaxNodeLike[] = [];
+  return collectJvmScopedTypeSegments(type, endIndex, segments) && segments.length > 1 ? segments : null;
+}
+
+/** Kotlin's member token in a dotted expression, or the expression itself. */
+export function kotlinQualifiedExpression(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (sup.id !== "kotlin") return null;
+  if (node.type === "navigation_expression") return node;
+  const parent = node.parent;
+  if (parent?.type !== "navigation_expression") return null;
+  const property = getMemberAccessParts(sup, parent).property;
+  return property?.startIndex === node.startIndex && property.endIndex === node.endIndex ? parent : null;
+}
+
 export function isMemberReferencePropertyIdentifier(sup: LanguageSupport, nodeType: string): boolean {
   return memberReferencePropertyIdentifierTypes(sup).includes(nodeType);
 }
