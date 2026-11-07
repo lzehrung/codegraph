@@ -49,8 +49,16 @@ import {
   CSHARP_ALIAS_BOUNDARIES,
   csharpAliasBoundaryFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
-import { CSHARP_INHERITED_ALIAS_CASES } from "./helpers/csharp-inherited-alias-fixture.js";
-import { expectInheritedAliasConsumers } from "./helpers/csharp-inherited-alias-assertions.js";
+import {
+  CSHARP_INHERITED_ALIAS_CASES,
+  CSHARP_INHERITED_ALIAS_CALL_CASES,
+  CSHARP_INHERITED_TYPE_CASES,
+} from "./helpers/csharp-inherited-alias-fixture.js";
+import {
+  expectInheritedAliasConsumers,
+  expectInheritedAliasCallConsumers,
+  expectInheritedTypeConsumers,
+} from "./helpers/csharp-inherited-alias-assertions.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -1529,6 +1537,31 @@ nativeDescribe("native semantic coverage", () => {
       }
     },
   );
+
+  it.each(CSHARP_INHERITED_TYPE_CASES)("keeps native C# type positions beside an inherited $name", async (testCase) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-inherited-types-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, testCase.files);
+    for (let build = 0; build < 2; build += 1) {
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      await expectInheritedTypeConsumers(index, files, testCase);
+    }
+  });
+
+  it.each(CSHARP_INHERITED_ALIAS_CALL_CASES)("keeps native C# $name on disk reload", async (testCase) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-inherited-overload-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, testCase.files);
+    for (let build = 0; build < 2; build += 1) {
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      await expectInheritedAliasCallConsumers(index, files, testCase);
+    }
+  });
 
   it("keeps native C# scope-header reads and alias scope exits consistent after cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-header-reads-"));

@@ -2,7 +2,13 @@ import path from "node:path";
 import { expect } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { findReferences, goToDefinition, type ProjectIndex } from "../../src/index.js";
-import type { CsharpInheritedAliasCase } from "./csharp-inherited-alias-fixture.js";
+import {
+  CSHARP_INHERITED_TYPE_LINES,
+  CSHARP_INHERITED_TYPE_SITES,
+  type CsharpInheritedAliasCase,
+  type CsharpInheritedAliasCallCase,
+  type CsharpInheritedTypeCase,
+} from "./csharp-inherited-alias-fixture.js";
 
 /** Project-relative fixture path to the absolute path `writeFixtureFiles` returned. */
 type FixturePaths = Readonly<Record<string, string>>;
@@ -158,4 +164,130 @@ export async function expectInheritedAliasConsumers(
   await expectInheritedAliasName(index, files, testCase);
   await expectInheritedAliasReferences(index, files, testCase);
   await expectInheritedAliasEdges(index, files, testCase);
+}
+
+/** Type positions and `nameof` agree through navigation, references, and detailed type-use/construction edges. */
+export async function expectInheritedTypeConsumers(
+  index: ProjectIndex,
+  files: FixturePaths,
+  testCase: CsharpInheritedTypeCase,
+): Promise<void> {
+  const label = testCase.name;
+  const expectedFile = testCase.outcome === "alias" ? files["N.cs"] : files["Base.cs"];
+  const expectedName = testCase.outcome === "alias" ? "Target" : "A";
+  for (const line of CSHARP_INHERITED_TYPE_SITES) {
+    const result = await goToDefinition(index, {
+      file: files["Use.cs"]!,
+      line,
+      column: CSHARP_INHERITED_TYPE_LINES[line - 1]!.indexOf("A") + 1,
+    });
+    if (testCase.outcome === "unresolved") {
+      expect(result.status, `${label}: type line ${line}`).toBe("not_found");
+    } else {
+      expect(result.status, `${label}: type line ${line}`).toBe("ok");
+      if (result.status === "ok") {
+        expect(result.definition.file, label).toBe(expectedFile);
+        expect(result.definition.localName, label).toBe(expectedName);
+      }
+    }
+  }
+  if (testCase.outcome !== "unresolved") {
+    const nameOf = await goToDefinition(index, {
+      file: files["Use.cs"]!,
+      line: 15,
+      column: CSHARP_INHERITED_TYPE_LINES[14].indexOf("A") + 1,
+    });
+    expect(nameOf.status, `${label}: nameof`).toBe("ok");
+    if (nameOf.status === "ok") expect(nameOf.definition.file, label).toBe(files["Base.cs"]);
+  }
+  for (const target of ["N.cs", "Base.cs"] as const) {
+    if (target === "Base.cs" && testCase.outcome === "unresolved") continue;
+    const line = target === "N.cs" ? 1 : 2;
+    const sourceLine = testCase.files[target]!.split("\n")[line - 1]!;
+    const token = target === "N.cs" ? "Target" : "A";
+    const refs = await findReferences(index, {
+      file: files[target]!,
+      line,
+      column: sourceLine.indexOf(token === "A" ? " A" : token) + (token === "A" ? 2 : 1),
+    });
+    expect(refs.status, `${label}: ${target} references`).toBe("ok");
+    if (refs.status !== "ok") continue;
+    const typeLines = refs.references
+      .filter(
+        (site) =>
+          site.file === files["Use.cs"] && CSHARP_INHERITED_TYPE_SITES.some((line) => line === site.range.start.line),
+      )
+      .map((site) => site.range.start.line);
+    const ownsTypes = testCase.outcome !== "unresolved" && files[target] === expectedFile;
+    expect(typeLines, `${label}: ${target} type references`).toEqual(ownsTypes ? [...CSHARP_INHERITED_TYPE_SITES] : []);
+    expect(refs.referenceCoverage.state, label).toBe(testCase.outcome === "unresolved" ? "partial" : "complete");
+  }
+  const graph = await buildSymbolGraphDetailed(index);
+  const typeEdges = graph.edges.flatMap((edge) => {
+    const from = graph.nodes.get(edge.from);
+    const to = graph.nodes.get(edge.to);
+    if (from?.file !== files["Use.cs"] || !to || (to.name !== "Target" && to.name !== "A")) return [];
+    if (edge.label !== "uses" && edge.label !== "instantiates") return [];
+    return [{ label: edge.label, caller: from.name, file: to.file, name: to.name }];
+  });
+  if (testCase.outcome === "unresolved") {
+    expect(typeEdges, label).toEqual([]);
+  } else {
+    expect(typeEdges, label).toEqual(
+      expect.arrayContaining([
+        { label: "uses", caller: "Create", file: expectedFile, name: expectedName },
+        { label: "uses", caller: "Types", file: expectedFile, name: expectedName },
+        { label: "instantiates", caller: "Types", file: expectedFile, name: expectedName },
+      ]),
+    );
+    expect(
+      typeEdges.filter((edge) => edge.file !== expectedFile),
+      label,
+    ).toEqual([]);
+  }
+}
+
+/** Bare calls use the same inherited overload target in navigation, references, and graph edges. */
+export async function expectInheritedAliasCallConsumers(
+  index: ProjectIndex,
+  files: FixturePaths,
+  testCase: CsharpInheritedAliasCallCase,
+): Promise<void> {
+  const label = testCase.name;
+  const useLine = testCase.files["Use.cs"]!.split("\n")[1]!;
+  const result = await goToDefinition(index, {
+    file: files["Use.cs"]!,
+    line: 2,
+    column: useLine.indexOf("A(") + 1,
+  });
+  expect(result.status, label).toBe(testCase.outcome === "base" ? "ok" : "not_found");
+  if (result.status === "ok") {
+    expect(result.definition.file, label).toBe(files["Base.cs"]);
+    expect(result.definition.localName, label).toBe("A");
+  }
+  for (const target of ["Base.cs", "Mid.cs"] as const) {
+    const sourceLine = testCase.files[target]!.split("\n")[1]!;
+    const refs = await findReferences(index, {
+      file: files[target]!,
+      line: 2,
+      column: sourceLine.indexOf("A(") + 1,
+    });
+    expect(refs.status, label).toBe("ok");
+    if (refs.status !== "ok") continue;
+    const calls = refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line);
+    expect(calls, `${label}: ${target} references`).toEqual(
+      testCase.outcome === "base" && target === "Base.cs" ? [2] : [],
+    );
+    expect(refs.referenceCoverage.state, `${label}: ${target} coverage`).toBe(
+      testCase.outcome === "base" ? "complete" : "partial",
+    );
+  }
+  const graph = await buildSymbolGraphDetailed(index);
+  const calls = graph.edges.flatMap((edge) => {
+    const from = graph.nodes.get(edge.from);
+    const to = graph.nodes.get(edge.to);
+    if (edge.label !== "calls" || from?.file !== files["Use.cs"] || from.name !== "F" || !to) return [];
+    return [`${path.basename(to.file)}::${to.name}`];
+  });
+  expect(calls, label).toEqual(testCase.outcome === "base" ? ["Base.cs::A"] : []);
 }

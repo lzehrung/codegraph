@@ -58,8 +58,17 @@ import {
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
-import { CSHARP_INHERITED_ALIAS_CASES } from "./helpers/csharp-inherited-alias-fixture.js";
-import { expectInheritedAliasGoto, expectInheritedAliasName } from "./helpers/csharp-inherited-alias-assertions.js";
+import {
+  CSHARP_INHERITED_ALIAS_CASES,
+  CSHARP_INHERITED_ALIAS_CALL_CASES,
+  CSHARP_INHERITED_TYPE_CASES,
+} from "./helpers/csharp-inherited-alias-fixture.js";
+import {
+  expectInheritedAliasGoto,
+  expectInheritedAliasName,
+  expectInheritedAliasCallConsumers,
+  expectInheritedTypeConsumers,
+} from "./helpers/csharp-inherited-alias-assertions.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
   csharpNearerReceiverFixture,
@@ -3219,6 +3228,28 @@ describe("Go to Definition", () => {
         const index = await createTestIndexFromFiles(root, Object.values(files));
         await expectInheritedAliasGoto(index, files, testCase);
         await expectInheritedAliasName(index, files, testCase);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_INHERITED_TYPE_CASES)("navigates C# type positions beside an inherited $name", async (testCase) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-types-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, testCase.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectInheritedTypeConsumers(index, files, testCase);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_INHERITED_ALIAS_CALL_CASES)("navigates C# $name before an alias", async (testCase) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-overload-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, testCase.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectInheritedAliasCallConsumers(index, files, testCase);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

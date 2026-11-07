@@ -18,7 +18,10 @@ import {
   csharpAliasCallFixture,
   csharpGenericAliasReceiverFixture,
 } from "../../helpers/csharp-alias-call-fixture.js";
-import { csharpInheritedAliasCase } from "../../helpers/csharp-inherited-alias-fixture.js";
+import {
+  CSHARP_INHERITED_ALIAS_CALL_CASES,
+  csharpInheritedAliasCase,
+} from "../../helpers/csharp-inherited-alias-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
@@ -49,10 +52,26 @@ const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "me
 };
 
 export const csharpCells: MatrixCell[] = [
-  // A member of an enclosing type binds an alias's name first (dotnet); an unproven member or base is not the alias.
+  // Enclosing project members precede aliases; external members are outside the index.
   inheritedAliasCell("inherited field", "yields-to-inherited-field", "member"),
   inheritedAliasCell("inherited field declared in another file", "yields-to-inherited-field-in-another-file", "member"),
-  inheritedAliasCell("external base class", "unproven-external-base", "unresolved"),
+  inheritedAliasCell("external base class", "kept-beside-external-base", "alias"),
+  inheritedAliasCell("qualified project base", "kept-beside-empty-qualified-base", "alias"),
+  inheritedAliasCell("qualified project base field", "yields-to-qualified-base-field", "member"),
+  ...CSHARP_INHERITED_ALIAS_CALL_CASES.map(
+    (testCase): MatrixCell => ({
+      id: `csharp/alias-${testCase.name.replaceAll(" ", "-")}`,
+      language: "csharp",
+      callForm: "overload-arity",
+      files: testCase.files,
+      use: { file: "Use.cs", line: 2, token: "A" },
+      expected: testCase.outcome === "base" ? { file: "Base.cs", line: 2, token: "A" } : "not_found",
+      decoy: { file: "Mid.cs", line: 2, token: "A" },
+      decoyKind: "callable",
+      decoyAmbiguous: testCase.outcome === "unresolved",
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "F" },
+    }),
+  ),
   inheritedAliasCell("private field of a base", "kept-beside-private-base-field", "alias"),
   ...CSHARP_GENERIC_ALIAS_CASES.map(({ alias, parameter, scope }): MatrixCell => {
     const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);

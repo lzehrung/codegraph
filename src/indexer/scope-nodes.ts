@@ -180,11 +180,20 @@ export function pythonFunctionPendingInDefault(defStart: number | undefined, use
   return false;
 }
 
-/** C# type syntax does not bind a same-named value; a constant pattern can still be a value read. */
-export function csharpTypeOnlyName(node: SyntaxNodeLike): boolean {
+/**
+ * C# type syntax does not bind a same-named value. The grammar parses a bare `is A` operand as a constant pattern;
+ * alias lookup can prove that spelling is a type, while ordinary constant patterns must remain value reads.
+ */
+export function csharpTypeOnlyName(node: SyntaxNodeLike, typeAliasPattern = false): boolean {
   for (let current = node; current.parent; current = current.parent) {
     const parent = current.parent;
     if (parent.childForFieldName("type")?.id === current.id) return true;
+    if (parent.childForFieldName("returns")?.id === current.id) return true;
+    const typeOperand = parent.type === "as_expression" || parent.type === "is_expression";
+    if (typeOperand && parent.childForFieldName("right")?.id === current.id) return true;
+    if (typeAliasPattern && parent.type === "constant_pattern") {
+      return parent.parent?.type === "is_pattern_expression";
+    }
     if (parent.type === "type_argument_list" || parent.type === "attribute") return true;
     const nameWrapper =
       parent.type === "qualified_name" ||

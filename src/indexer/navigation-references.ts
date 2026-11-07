@@ -55,7 +55,11 @@ import {
   resolveExport,
   resolveImported,
 } from "./navigation-resolve.js";
-import { isAmbiguousResolutionReason, UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
+import {
+  AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  isAmbiguousResolutionReason,
+  UNRESOLVED_QUALIFIED_TYPE_REASON,
+} from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
   phpNamespaceSymbolIndexFor,
@@ -801,6 +805,8 @@ export async function collectVerifiedNamedNodeReferences(
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
       if (
         resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
+        // Qualified C# bases are reachable without an import-closure edge.
+        resolved.reason === AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON ||
         (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
         (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
       ) {

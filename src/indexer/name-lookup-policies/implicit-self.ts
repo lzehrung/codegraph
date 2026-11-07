@@ -131,12 +131,10 @@ function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoTo
 }
 
 /**
- * The use is an expression name that a using alias also names. Type positions never reach a member, and `X::` reaches
- * aliases only, so a member of an enclosing type can hide the alias only for the names left.
+ * Enclosing members precede an alias: only nested types participate in type positions, and `X::` bypasses both.
  */
-function namesAliasInExpression({ use, closestBinding }: NameLookupState): boolean {
-  if (!closestBinding?.import) return false;
-  if (csharpTypeOnlyName(use.node) || isCsharpAliasQualifier(use.node, use.parsed.sup)) return false;
+function namesAliasRequiringMemberLookup({ use, closestBinding }: NameLookupState): boolean {
+  if (!closestBinding?.import || isCsharpAliasQualifier(use.node, use.parsed.sup)) return false;
   return !!csharpAliasAt(use.mod, use.name, use.node);
 }
 
@@ -171,7 +169,7 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   // A member of an enclosing type binds an alias's name before the alias does. Finding one reads other files, so the
   // alias stays the fallback of a deferred member lookup.
   wrapRest(state, rest) {
-    if (!namesAliasInExpression(state)) return rest();
+    if (!namesAliasRequiringMemberLookup(state)) return rest();
     return {
       status: "deferred",
       request: { kind: "csharp-alias-member", lookupName: state.use.name },
@@ -179,7 +177,7 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     };
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
-    if (!closestBinding?.import || !csharpTypeOnlyName(use.node)) return undefined;
+    if (!closestBinding?.import || !csharpTypeOnlyName(use.node, true)) return undefined;
     const alias = csharpAliasAt(use.mod, lookupName, use.node);
     if (alias?.kind !== "named") return undefined;
     const reason = csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source);

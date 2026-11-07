@@ -522,8 +522,11 @@ export async function buildSymbolGraphDetailed(
         node: SyntaxNodeLike,
         skipKotlinQualifiedExpression = false,
       ): NameResolution | null => resolveBareName(bareNameUse(name, node), false, skipKotlinQualifiedExpression);
-      const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null =>
-        indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
+      const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null => {
+        const enclosing = hiddenAliasUses?.get(node.startIndex);
+        if (enclosing) return indexedOrNull(enclosing.status === "member" ? enclosing.member : null);
+        return indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
+      };
       const settleName = async (
         name: string,
         node: SyntaxNodeLike,

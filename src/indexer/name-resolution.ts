@@ -24,6 +24,7 @@ import {
 import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
+  AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -344,16 +345,15 @@ export type SettleNameOptions = {
 };
 
 /**
- * A C# expression name that a using alias also names: a member of an enclosing type, own or inherited, binds it
- * first, so the alias answers only where that lookup proves no such member. A base the project cannot resolve may
- * declare one, which leaves the use unproven.
+ * A C# name that a using alias also names: a member of an enclosing type binds it first (only a nested type in a type
+ * position). Project bases and partial parts must be readable; members of external bases are not indexed.
  */
 async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Promise<GoToResult | undefined> {
   const { index, mod, node } = use;
   const lookup = await csharpAliasMemberLookup(index, mod, node, lookupName);
   if (lookup.status === "none") return undefined;
   if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
-  if (!lookup.member) return { status: "not_found", reason: "No unique member through the implicit receiver" };
+  if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }
 

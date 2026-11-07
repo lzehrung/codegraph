@@ -29,8 +29,16 @@ import {
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "../helpers/csharp-alias-shadow-fixture.js";
-import { CSHARP_INHERITED_ALIAS_CASES } from "../helpers/csharp-inherited-alias-fixture.js";
-import { expectInheritedAliasConsumers } from "../helpers/csharp-inherited-alias-assertions.js";
+import {
+  CSHARP_INHERITED_ALIAS_CASES,
+  CSHARP_INHERITED_ALIAS_CALL_CASES,
+  CSHARP_INHERITED_TYPE_CASES,
+} from "../helpers/csharp-inherited-alias-fixture.js";
+import {
+  expectInheritedAliasConsumers,
+  expectInheritedAliasCallConsumers,
+  expectInheritedTypeConsumers,
+} from "../helpers/csharp-inherited-alias-assertions.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -2926,6 +2934,28 @@ describe("C# partial class members across files", () => {
       const files = await writeFixtureFiles(root, testCase.files);
       const index = await buildProjectIndex(root, { cache: "off" });
       await expectInheritedAliasConsumers(index, files, testCase);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_INHERITED_TYPE_CASES)("keeps inherited $name in the C# type namespace", async (testCase) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-types-"));
+    try {
+      const files = await writeFixtureFiles(root, testCase.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectInheritedTypeConsumers(index, files, testCase);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_INHERITED_ALIAS_CALL_CASES)("selects C# $name before an alias", async (testCase) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-overload-alias-"));
+    try {
+      const files = await writeFixtureFiles(root, testCase.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectInheritedAliasCallConsumers(index, files, testCase);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

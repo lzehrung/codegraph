@@ -10,10 +10,11 @@ export const AMBIGUOUS_CPP_USING_DIRECTIVE_REASON = "No unique C++ using-directi
 /** The name may bind through its qualifier, but a bare import cannot decide it. */
 export const UNRESOLVED_QUALIFIED_TYPE_REASON = "Unresolved qualified type";
 /**
- * A C# alias used where a base type the project cannot resolve may declare a member of the alias's name, so the
- * alias and that member are both candidates.
+ * A project base or partial type cannot be inspected, so an enclosing member may hide a using alias.
  */
 export const UNPROVEN_CSHARP_ALIAS_MEMBER_REASON = "C# alias may be hidden by a member of an unresolved base type";
+/** Enclosing members hide the alias, but arity and visibility do not prove one applicable declaration. */
+export const AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON = "No unique applicable C# member before using alias";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -21,6 +22,7 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_CPP_USING_DECLARATION_REASON,
   AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
+  AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
 ]);
 
 export function isAmbiguousResolutionReason(reason: string | undefined): boolean {

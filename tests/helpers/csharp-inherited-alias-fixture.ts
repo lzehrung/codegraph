@@ -1,7 +1,7 @@
 /**
  * C# simple-name lookup searches the enclosing types, each with its base classes, before any namespace or `using`
- * alias, so a member named like an alias binds `a.Run()` first. dotnet compiled every case below; `outcome` is what
- * go-to-definition, references, and the detailed graph must answer for the one `.Run()` call in `Use.cs`:
+ * alias, so a member named like an alias binds `a.Run()` first. Roslyn checks every fixture (including diagnostics).
+ * `outcome` is the shared consumer answer; external members are deliberately outside the documented project scope:
  *  - alias: `N.Target.Run`, the alias target; no member of that name is proven;
  *  - member: `Decoy.Target.Run`, the type the member declares, read in the file that declares it;
  *  - unresolved: a member hides the alias or may, but its type is not a project type or the base is unproven:
@@ -192,43 +192,84 @@ const SOURCES: readonly CsharpInheritedAliasSource[] = [
     others: { "Base.cs": "class Base { protected System.Text.StringBuilder a = null; }\n" },
     memberFile: "Base.cs",
   },
-  // A base the project cannot read may declare a member of that name.
+  // External members are outside the project index. Preserve alias binding rather than rejecting ordinary bases.
   {
     name: "external base class",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["class Use : System.Exception { void F() { a.Run(); } }"],
   },
   {
     name: "external base class named through a using",
-    outcome: "unresolved",
+    outcome: "alias",
     header: ["using System;", ALIAS],
     body: ["class Use : Exception { void F() { a.Run(); } }"],
   },
   {
     name: "external interface",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["class Use : System.IDisposable { public void Dispose() { } void F() { a.Run(); } }"],
   },
   {
+    name: "external event base",
+    outcome: "alias",
+    body: ["class Use : System.EventArgs { void F() { a.Run(); } }"],
+  },
+  {
+    name: "external controller base",
+    outcome: "alias",
+    header: ["using Microsoft.AspNetCore.Mvc;", ALIAS],
+    body: ["class Use : ControllerBase { void F() { a.Run(); } }"],
+  },
+  // Roslyn: CS1061, Exception.Message is a string. Codegraph intentionally cannot see external members.
+  {
+    name: "external member named like the alias",
+    outcome: "alias",
+    alias: "Message",
+    header: ["using Message = N.Target;"],
+    body: ["class Use : System.Exception { void F() { Message.Run(); } }"],
+  },
+  {
     name: "qualified project base",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["class Use : Lib.Base { void F() { a.Run(); } }"],
     others: { "Lib.cs": "namespace Lib { public class Base { } }\n" },
   },
   {
+    name: "qualified project base field",
+    outcome: "member",
+    body: ["class Use : Lib.Base { void F() { a.Run(); } }"],
+    others: { "Base.cs": `namespace Lib { public ${BASE_FIELD} }\n` },
+    memberFile: "Base.cs",
+  },
+  {
+    name: "global-qualified project base field",
+    outcome: "member",
+    body: ["class Use : global::Lib.Base { void F() { a.Run(); } }"],
+    others: { "Base.cs": `namespace Lib { public ${BASE_FIELD} }\n` },
+    memberFile: "Base.cs",
+  },
+  {
+    name: "namespace-aliased project base field",
+    outcome: "member",
+    header: ["using L = Lib;", ALIAS],
+    body: ["class Use : L.Base { void F() { a.Run(); } }"],
+    others: { "Base.cs": `namespace Lib { public ${BASE_FIELD} }\n` },
+    memberFile: "Base.cs",
+  },
+  {
     name: "base that no file declares",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["class Use : MissingBase { void F() { a.Run(); } }"],
   },
   {
     name: "external base two levels up",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["class Use : Base { void F() { a.Run(); } }"],
     others: { "Base.cs": "class Base : System.Exception { }\n" },
   },
   {
     name: "partial type whose other part has an external base",
-    outcome: "unresolved",
+    outcome: "alias",
     body: ["partial class Use { void F() { a.Run(); } }"],
     others: { "Part.cs": "partial class Use : System.Exception { }\n" },
   },
@@ -359,3 +400,106 @@ export const CSHARP_INHERITED_TYPE_POSITION_CASE: CsharpInheritedAliasCase = bui
   others: { "Base.cs": `${BASE_FIELD}\n` },
   site: "new a()",
 });
+
+/** Roslyn binds every type site to the alias beside values, but to an inherited nested type when one is reachable. */
+export type CsharpInheritedTypeCase = {
+  name: string;
+  outcome: "alias" | "nested" | "unresolved";
+  files: Readonly<Record<string, string>>;
+};
+
+export const CSHARP_INHERITED_TYPE_LINES = [
+  "using A = N.Target;",
+  "class Use : Lib.Base {",
+  "  public A Create() { return null; }",
+  "  void Types(object o) {",
+  "    A value = null;",
+  "    var created = new A();",
+  "    _ = typeof(A);",
+  "    _ = default(A);",
+  "    _ = (A)o;",
+  "    _ = o as A;",
+  "    _ = o is A;",
+  "    _ = o is A item;",
+  "    System.Collections.Generic.List<A> values = null;",
+  "  }",
+  "  void Names() { _ = nameof(A); }",
+  "}",
+] as const;
+
+export const CSHARP_INHERITED_TYPE_SITES = [3, 5, 6, 7, 8, 9, 10, 11, 12, 13] as const;
+
+export const CSHARP_INHERITED_TYPE_CASES: readonly CsharpInheritedTypeCase[] = (
+  [
+    { name: "field", outcome: "alias", member: "protected N.Target A = null;" },
+    { name: "property", outcome: "alias", member: "protected N.Target A { get; }" },
+    { name: "method", outcome: "alias", member: "protected void A() { }" },
+    { name: "nested type", outcome: "nested", member: "public class A { }" },
+    { name: "unavailable partial nested type", outcome: "unresolved", member: "" },
+  ] as const
+).map(
+  ({ name, outcome, member }): CsharpInheritedTypeCase => ({
+    name,
+    outcome,
+    files: {
+      "N.cs": "namespace N; public class Target { }\n",
+      "Base.cs": `namespace Lib;\npublic ${outcome === "unresolved" ? "partial " : ""}class Base { ${member} }\n`,
+      "Use.cs": `${CSHARP_INHERITED_TYPE_LINES.join("\n")}\n`,
+      ...(outcome === "unresolved"
+        ? { "parts/Part.cs": "namespace Lib; public partial class Base { public class A { } }\n" }
+        : {}),
+    },
+  }),
+);
+
+/** Arity selects inherited overloads; type ranking and calls with no applicable overload stay unresolved. */
+export type CsharpInheritedAliasCallCase = {
+  name: string;
+  outcome: "base" | "unresolved";
+  files: Readonly<Record<string, string>>;
+};
+
+export const CSHARP_INHERITED_ALIAS_CALL_CASES: readonly CsharpInheritedAliasCallCase[] = (
+  [
+    { name: "grandparent overload", outcome: "base", base: "void A(int x)", mid: "void A()", arguments: "1" },
+    {
+      name: "inherited optional overload",
+      outcome: "base",
+      base: "void A(int x = 0)",
+      mid: "void A(string x)",
+      arguments: "",
+    },
+    {
+      name: "same-arity overload ambiguity",
+      outcome: "unresolved",
+      base: "void A(int x)",
+      mid: "void A(string x)",
+      arguments: "1",
+    },
+    {
+      name: "no applicable overload",
+      outcome: "unresolved",
+      base: "void A(int x)",
+      mid: "void A()",
+      arguments: "1, 2",
+    },
+    {
+      name: "override hides inherited defaults",
+      outcome: "unresolved",
+      base: "virtual void A(int x = 0)",
+      mid: "override void A(int x)",
+      arguments: "",
+    },
+  ] as const
+).map(
+  ({ name, outcome, base, mid, arguments: args }): CsharpInheritedAliasCallCase => ({
+    name,
+    outcome,
+    files: {
+      "N.cs": "namespace N; public class Target { }\n",
+      "Base.cs": `namespace Lib;\npublic class Base { protected ${base} { } }\n`,
+      "Mid.cs": `namespace Lib;\npublic class Mid : Base { protected ${mid} { } }\n`,
+      "Use.cs": `using A = N.Target;\nclass Use : Lib.Mid { void F() { A(${args}); } }\n`,
+    },
+  }),
+);
