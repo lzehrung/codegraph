@@ -51,6 +51,12 @@ import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import {
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_SHADOW_SITES,
+  CSHARP_ALIAS_TYPE_FORMS,
+  csharpAliasTypeFixture,
+} from "./helpers/csharp-alias-shadow-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -4087,6 +4093,73 @@ describe("Find References", () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp");
       const utilsFile = path.join(samplePath, "Utils.cs").replace(/\\/g, "/");
       await testFindReferences(index, utilsFile, 2, 20, 3);
+    });
+
+    it("keeps C# alias targets out of dynamic parameter and local references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-shadow-refs-"));
+      try {
+        const files = await writeFixtureFiles(root, CSHARP_ALIAS_SHADOW_FILES);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const use = files["Use.cs"]!;
+        const sitesFor = async (file: "Plain.cs" | "Second.cs", token: "Run" | "Second") => {
+          const result = await indexer.findReferences(index, {
+            file: files[file]!,
+            line: 1,
+            column: CSHARP_ALIAS_SHADOW_FILES[file].indexOf(token) + 1,
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error(`Expected references to ${file}::${token}`);
+          return result.references
+            .filter((reference) => fileIdentityKey(reference.file) === fileIdentityKey(use))
+            .map((reference) => reference.range.start.line)
+            .sort((left, right) => left - right);
+        };
+        expect(await sitesFor("Second.cs", "Run")).toEqual([
+          CSHARP_ALIAS_SHADOW_SITES.visible,
+          CSHARP_ALIAS_SHADOW_SITES.restored,
+        ]);
+        expect(await sitesFor("Plain.cs", "Run")).toEqual([
+          CSHARP_ALIAS_SHADOW_SITES.outer,
+          CSHARP_ALIAS_SHADOW_SITES.outside,
+        ]);
+        const typeSites = await sitesFor("Second.cs", "Second");
+        expect(typeSites).toContain(CSHARP_ALIAS_SHADOW_SITES.typed);
+        for (const line of [
+          CSHARP_ALIAS_SHADOW_SITES.parameter,
+          CSHARP_ALIAS_SHADOW_SITES.unused,
+          CSHARP_ALIAS_SHADOW_SITES.local,
+        ]) {
+          expect(typeSites).not.toContain(line);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_ALIAS_TYPE_FORMS)("keeps C# $name references off parameters", async (form) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-type-refs-"));
+      try {
+        const fixture = csharpAliasTypeFixture(form);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const result = await indexer.findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: fixture.files["Second.cs"].indexOf("Second") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          const bodySites = result.references.filter(
+            (site) => site.file === files["Use.cs"] && site.range.start.line === fixture.use,
+          );
+          expect(bodySites).toHaveLength(form.aliasUse ? 1 : 0);
+          expect(result.references.some((site) => site.file === files["Use.cs"] && site.range.start.line === 3)).toBe(
+            false,
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("keeps a local function's references scoped to its own method, not a same-named local function in another method", async () => {

@@ -11,6 +11,7 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { sliceText } from "../../util/ast.js";
 import {
+  csharpAliasAt,
   csharpAliasQualifiedLookupName,
   csharpAliasUnprovenReason,
   csharpChainQualifier,
@@ -23,13 +24,15 @@ import {
   csharpLookupName,
   csharpQualifiedNameNode,
   csharpQualifiedThroughGenericOwner,
+  csharpTypeOnlyName,
   definitionForBinding,
 } from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
-import { resolveCsharpQualifiedName } from "../navigation-resolve.js";
+import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
+import { fileBindingIsUnshadowed } from "../scope.js";
 
 const implicitSelf = (state: NameLookupState, fallback: NameResolution | null): NameResolution => ({
   status: "deferred",
@@ -133,6 +136,26 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     return reason ? { status: "not_found", reason } : undefined;
   },
   shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),
+  moduleAliasIsUnshadowed({ use, closestBinding }) {
+    if (!csharpAliasAt(use.mod, use.name, use.node)) return true;
+    return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
+  },
+  onUnboundLocal({ use, lookupName, closestBinding }) {
+    if (!closestBinding?.import || !csharpTypeOnlyName(use.node)) return undefined;
+    const alias = csharpAliasAt(use.mod, lookupName, use.node);
+    if (alias?.kind !== "named") return undefined;
+    const reason = csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source);
+    if (reason) return { status: "not_found", reason };
+    const target = resolveImported(use.index, alias, alias.imported);
+    if (!target || "namespace" in target) {
+      return { status: "not_found", reason: "C# alias does not name an indexed type" };
+    }
+    return okGoToResult(use.index, target, {
+      via: { importedFrom: target.file, exportedName: alias.imported },
+      resolution: "import",
+      confidence: "high",
+    });
+  },
   // A static member function reaches only static members of its type.
   onLocal(state, local) {
     if (!bindsTypeMethod(state) || !isImplicitSelfCall(state)) return undefined;

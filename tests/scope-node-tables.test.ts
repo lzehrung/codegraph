@@ -208,6 +208,12 @@ const UNNAMED_FUNCTION_SCOPE_FIXTURES = [
     bindsContainerName: true,
   },
   {
+    languageId: "csharp",
+    nodeType: "lambda_expression",
+    source: "class Probe { void M() { System.Action<dynamic> f = value => value.Run(); } }\n",
+    bindsContainerName: false,
+  },
+  {
     languageId: "kotlin",
     nodeType: "lambda_literal",
     source: "fun main() {\n  val f = { x: Int -> x }\n}\n",

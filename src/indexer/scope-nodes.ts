@@ -348,7 +348,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   csharp: {
     parameterParents: new Set(["parameter"]),
     functionNameTypes: new Set(["method_declaration", "local_function_statement"]),
-    unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration"]),
+    unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration", "lambda_expression"]),
     classNameTypes: new Set(["class_declaration", "struct_declaration", "record_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration", "delegate_declaration"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
@@ -537,6 +537,11 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
 
 /** Python defaults use enclosing scopes; class bodies are not closures for nested runtime scopes. */
 export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeLike): boolean {
+  // A C# foreach variable belongs to the loop body, not its collection expression.
+  if (scope.node.type === "foreach_statement") {
+    const iterable = scope.node.childForFieldName("right");
+    if (iterable && use.startIndex >= iterable.startIndex && use.endIndex <= iterable.endIndex) return false;
+  }
   if (row.moduleBindingsAtFunctionRuntime && scope.kind === "function") {
     const body = scope.node.childForFieldName("body");
     const isFunctionBodyUse = !!body && use.startIndex >= body.startIndex && use.endIndex <= body.endIndex;

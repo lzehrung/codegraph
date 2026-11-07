@@ -258,6 +258,24 @@ function effectivePythonModuleScopeBinding(
   return null;
 }
 
+/** C# type-only syntax does not bind a same-named value, even when that value hides a using alias in expressions. */
+export function csharpTypeOnlyName(node: SyntaxNodeLike): boolean {
+  for (let current = node; current.parent; current = current.parent) {
+    const parent = current.parent;
+    if (parent.childForFieldName("type")?.id === current.id) return true;
+    if (parent.type === "type_argument_list" || parent.type === "attribute") return true;
+    if (parent.type === "constant_pattern" && parent.parent?.type === "is_pattern_expression") return true;
+    const nameWrapper =
+      parent.type === "qualified_name" ||
+      parent.type === "alias_qualified_name" ||
+      parent.type === "generic_name" ||
+      parent.type === "nullable_type" ||
+      parent.type === "array_type";
+    if (!nameWrapper) return false;
+  }
+  return false;
+}
+
 export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -283,6 +301,7 @@ export function findClosestScopeBinding(
   let currentScope = closestContainingScope(scopeIndex, currentNode);
 
   const methodCall = isExplicitMethodCall(row, currentNode);
+  const typeOnlyName = support.id === "csharp" && csharpTypeOnlyName(currentNode);
   const pythonModuleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   while (currentScope) {
@@ -292,12 +311,19 @@ export function findClosestScopeBinding(
     }
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
-      while (
-        binding &&
-        ((methodCall && binding.kind === "local") ||
-          ((!pythonModuleLookupAtRuntime || currentScope.kind !== "module") &&
-            !bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode)))
-      ) {
+      while (binding) {
+        const wrongNamespace =
+          (methodCall && binding.kind === "local") ||
+          (typeOnlyName && (binding.kind === "local" || binding.kind === "param" || binding.kind === "function"));
+        if (!wrongNamespace) {
+          const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
+          if (
+            atModuleRuntime ||
+            bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode)
+          ) {
+            break;
+          }
+        }
         binding = binding.earlierSameScope;
       }
     }
@@ -308,7 +334,9 @@ export function findClosestScopeBinding(
       continue;
     }
     if (binding) return binding;
-    if (laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode)) return null;
+    const blockedByLaterValue =
+      !typeOnlyName && laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode);
+    if (blockedByLaterValue) return null;
     currentScope = currentScope.parent;
   }
 
@@ -322,6 +350,7 @@ export function laterLocalShadowsUse(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
 ): boolean {
+  if (support.id === "csharp" && csharpTypeOnlyName(currentNode)) return false;
   const row = scopeNodesFor(support.id);
   if (!row.laterLocalBlocksOuterKinds && !row.moduleBindingsAtFunctionRuntime) return false;
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);

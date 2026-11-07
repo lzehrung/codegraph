@@ -34,6 +34,11 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import {
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_BOUNDARIES,
+  csharpAliasBoundaryFixture,
+} from "./helpers/csharp-alias-shadow-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -1438,6 +1443,71 @@ nativeDescribe("native semantic coverage", () => {
     // This serial fixture matrix is CPU-bound. Under parallel native CI on Windows,
     // deterministic assertions can exceed 60 seconds, so retain headroom for host variance.
   }, 120_000);
+
+  it("keeps native C# alias calls off dynamic bindings while retaining visible aliases and typed receivers", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-alias-shadow-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, CSHARP_ALIAS_SHADOW_FILES);
+    const index = await buildProjectIndexFromFiles(root, Object.values(files), { cache: "off" });
+    for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+    const graph = await buildSymbolGraphDetailed(index);
+    const edges = graph.edges.flatMap((edge) => {
+      const from = graph.nodes.get(edge.from);
+      const to = graph.nodes.get(edge.to);
+      if (from?.file !== files["Use.cs"] || !to) return [];
+      if (to.file !== files["Second.cs"] && to.file !== files["Plain.cs"]) return [];
+      if (edge.label !== "calls" && edge.label !== "uses") return [];
+      return [`${from.name} ${edge.label} ${path.basename(to.file)}::${to.name}`];
+    });
+    for (const site of [
+      "Visible calls Second.cs::Run",
+      "Local calls Second.cs::Run",
+      "Outer calls Plain.cs::Run",
+      "Outside calls Plain.cs::Run",
+      "Typed calls Second.cs::Act",
+    ]) {
+      expect(edges).toContain(site);
+    }
+    expect(edges.filter((edge) => edge.startsWith("Parameter ") || edge.startsWith("Unused "))).toEqual([]);
+    expect(edges.filter((edge) => edge === "Local calls Second.cs::Run")).toHaveLength(1);
+  });
+
+  it.each(CSHARP_ALIAS_BOUNDARIES)("keeps native C# $name shadowing on disk reload", async (boundary) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-alias-boundary-"));
+    tempDirs.push(root);
+    const fixture = csharpAliasBoundaryFixture(boundary);
+    const files = await writeFixtureFiles(root, fixture.files);
+    for (let build = 0; build < 2; build += 1) {
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      const aliasCalls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+          graph.nodes.get(edge.to)?.file === files["Second.cs"],
+      );
+      expect(aliasCalls.map((edge) => edge.site?.range.start.line)).toEqual([fixture.visible]);
+      const visible = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.visible,
+        column: columnOf(fixture.lines, fixture.visible, "Run"),
+      });
+      expect(visible.status).toBe("ok");
+      if (visible.status === "ok") expect(visible.definition.file).toBe(files["Second.cs"]);
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: fixture.files["Second.cs"].indexOf("Run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([fixture.visible]);
+      }
+    }
+  });
 
   it.each(["ts", "js", "tsx"])("keeps %s cycle calls separate from a shadowed parameter", async (extension) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-star-cycle-"));

@@ -41,6 +41,13 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_TYPES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
+import {
+  CSHARP_ALIAS_TYPE_FORMS,
+  csharpAliasTypeFixture,
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_SHADOW_LINES,
+  CSHARP_ALIAS_SHADOW_SITES,
+} from "./helpers/csharp-alias-shadow-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -2977,6 +2984,55 @@ describe("Go to Definition", () => {
       const utilsFile = path.join(samplePath, "Utils.cs").replace(/\\/g, "/");
       // UUtils.HelperFunction() on 'U' UUtils line 10 col 5
       await testGoToDefinition(index, mainFile, 10, 5, utilsFile, 2);
+    });
+
+    it("does not navigate dynamic parameter or block-local calls to an in-scope C# alias", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-binding-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, CSHARP_ALIAS_SHADOW_FILES);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        for (const line of [CSHARP_ALIAS_SHADOW_SITES.visible, CSHARP_ALIAS_SHADOW_SITES.restored]) {
+          await testGoToDefinition(
+            index,
+            files["Use.cs"]!,
+            line,
+            columnInLines(CSHARP_ALIAS_SHADOW_LINES, line, "Run"),
+            files["Second.cs"]!,
+            1,
+          );
+        }
+        for (const line of [CSHARP_ALIAS_SHADOW_SITES.parameter, CSHARP_ALIAS_SHADOW_SITES.local]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnInLines(CSHARP_ALIAS_SHADOW_LINES, line, "Run"),
+          });
+          expect(result.status).toBe("not_found");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_ALIAS_TYPE_FORMS)("keeps C# $name separate from same-named parameters", async (form) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-type-goto-"));
+      try {
+        const fixture = csharpAliasTypeFixture(form);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: fixture.use,
+          column: columnInLines(fixture.lines, fixture.use, "B"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(form.aliasUse ? files["Second.cs"] : files["Use.cs"]);
+          expect(result.definition.localName).toBe(form.aliasUse ? "Second" : "B");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("resolves using static members by owner namespace and argument count, and ignores global using static", async () => {
