@@ -42,6 +42,8 @@ import {
   JVM_INCOMPLETE_WILDCARD_TYPES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
 import {
+  CSHARP_ALIAS_TYPE_FORMS,
+  csharpAliasTypeFixture,
   CSHARP_ALIAS_SHADOW_FILES,
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
@@ -3006,6 +3008,27 @@ describe("Go to Definition", () => {
             column: columnInLines(CSHARP_ALIAS_SHADOW_LINES, line, "Run"),
           });
           expect(result.status).toBe("not_found");
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_ALIAS_TYPE_FORMS)("keeps C# $name separate from same-named parameters", async (form) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-type-goto-"));
+      try {
+        const fixture = csharpAliasTypeFixture(form);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: fixture.use,
+          column: columnInLines(fixture.lines, fixture.use, "B"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(form.aliasUse ? files["Second.cs"] : files["Use.cs"]);
+          expect(result.definition.localName).toBe(form.aliasUse ? "Second" : "B");
         }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

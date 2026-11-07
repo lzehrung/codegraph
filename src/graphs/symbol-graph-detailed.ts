@@ -36,7 +36,7 @@ import {
 } from "../indexer/navigation-goto.js";
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
-import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import {
   assertQuerySourceForIndex,
@@ -569,9 +569,11 @@ export async function buildSymbolGraphDetailed(
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
               // The receiver lookup selects the alias in scope itself.
-              if (!aliasTableAnswers(name, expression)) return null;
-              const imported = aliasToTargetDef.get(aliasKey(name));
+              const imported = aliasTableAnswers(name, expression) ? aliasToTargetDef.get(aliasKey(name)) : undefined;
               if (imported) return imported;
+              if (sup.id === "csharp" && findClosestScopeBinding(scopeIndex, name, expression, sup)?.import) {
+                return null;
+              }
               return resolveIdentifier(name, expression);
             },
             loadParsedFile,

@@ -34,7 +34,11 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
-import { CSHARP_ALIAS_SHADOW_FILES } from "./helpers/csharp-alias-shadow-fixture.js";
+import {
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_BOUNDARIES,
+  csharpAliasBoundaryFixture,
+} from "./helpers/csharp-alias-shadow-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -1466,6 +1470,43 @@ nativeDescribe("native semantic coverage", () => {
     }
     expect(edges.filter((edge) => edge.startsWith("Parameter ") || edge.startsWith("Unused "))).toEqual([]);
     expect(edges.filter((edge) => edge === "Local calls Second.cs::Run")).toHaveLength(1);
+  });
+
+  it.each(CSHARP_ALIAS_BOUNDARIES)("keeps native C# $name shadowing on disk reload", async (boundary) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-alias-boundary-"));
+    tempDirs.push(root);
+    const fixture = csharpAliasBoundaryFixture(boundary);
+    const files = await writeFixtureFiles(root, fixture.files);
+    for (let build = 0; build < 2; build += 1) {
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      const aliasCalls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+          graph.nodes.get(edge.to)?.file === files["Second.cs"],
+      );
+      expect(aliasCalls.map((edge) => edge.site?.range.start.line)).toEqual([fixture.visible]);
+      const visible = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.visible,
+        column: columnOf(fixture.lines, fixture.visible, "Run"),
+      });
+      expect(visible.status).toBe("ok");
+      if (visible.status === "ok") expect(visible.definition.file).toBe(files["Second.cs"]);
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: fixture.files["Second.cs"].indexOf("Run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([fixture.visible]);
+      }
+    }
   });
 
   it.each(["ts", "js", "tsx"])("keeps %s cycle calls separate from a shadowed parameter", async (extension) => {

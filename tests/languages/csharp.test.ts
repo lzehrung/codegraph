@@ -23,6 +23,8 @@ import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import {
+  CSHARP_ALIAS_BOUNDARIES,
+  csharpAliasBoundaryFixture,
   CSHARP_ALIAS_SHADOW_FILES,
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
@@ -2854,6 +2856,35 @@ describe("C# partial class members across files", () => {
         });
         expect(result.status).toBe("not_found");
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_ALIAS_BOUNDARIES)("keeps a $name from falling back to a using alias", async (boundary) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-boundary-language-"));
+    try {
+      const fixture = csharpAliasBoundaryFixture(boundary);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.shadowed,
+        column: columnOf(fixture.lines, fixture.shadowed, "Run"),
+      });
+      if (boundary.name === "nested type") {
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Use.cs"]);
+      } else {
+        expect(result.status).toBe("not_found");
+      }
+      const visible = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.visible,
+        column: columnOf(fixture.lines, fixture.visible, "Run"),
+      });
+      expect(visible.status).toBe("ok");
+      if (visible.status === "ok") expect(visible.definition.file).toBe(files["Second.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

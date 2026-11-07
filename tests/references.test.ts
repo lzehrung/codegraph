@@ -51,7 +51,12 @@ import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
-import { CSHARP_ALIAS_SHADOW_FILES, CSHARP_ALIAS_SHADOW_SITES } from "./helpers/csharp-alias-shadow-fixture.js";
+import {
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_SHADOW_SITES,
+  CSHARP_ALIAS_TYPE_FORMS,
+  csharpAliasTypeFixture,
+} from "./helpers/csharp-alias-shadow-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -4125,6 +4130,32 @@ describe("Find References", () => {
           CSHARP_ALIAS_SHADOW_SITES.local,
         ]) {
           expect(typeSites).not.toContain(line);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_ALIAS_TYPE_FORMS)("keeps C# $name references off parameters", async (form) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-type-refs-"));
+      try {
+        const fixture = csharpAliasTypeFixture(form);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const result = await indexer.findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: fixture.files["Second.cs"].indexOf("Second") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          const bodySites = result.references.filter(
+            (site) => site.file === files["Use.cs"] && site.range.start.line === fixture.use,
+          );
+          expect(bodySites).toHaveLength(form.aliasUse ? 1 : 0);
+          expect(result.references.some((site) => site.file === files["Use.cs"] && site.range.start.line === 3)).toBe(
+            false,
+          );
         }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });

@@ -5,11 +5,20 @@ import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js
 import { buildProjectIndex, findReferences, goToDefinition } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import {
+  CSHARP_ALIAS_BOUNDARIES,
+  CSHARP_ALIAS_TYPE_FORMS,
+  csharpAliasBoundaryFixture,
+  csharpAliasTypeFixture,
   CSHARP_ALIAS_SHADOW_FILES,
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
-import { CSHARP_ALIAS_ONLY_FILES, CSHARP_ALIAS_ONLY_LINES } from "./helpers/csharp-alias-only-shadow-fixture.js";
+import {
+  CSHARP_ALIAS_ONLY_FILES,
+  CSHARP_ALIAS_ONLY_LINES,
+  CSHARP_ALIAS_VALUE_SPELLINGS,
+  csharpAliasValueFixture,
+} from "./helpers/csharp-alias-only-shadow-fixture.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const fixtures = [
@@ -481,6 +490,443 @@ describe("module import alias shadowing", () => {
             .map((site) => site.range.start.line)
             .sort(),
         ).toEqual([2, 3]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each(CSHARP_ALIAS_BOUNDARIES)("C# $name shadowing respects ::", async (boundary) => {
+    for (const qualified of [false, true]) {
+      const root = await mkTmpDir("cg-csharp-alias-boundary-");
+      try {
+        const fixture = csharpAliasBoundaryFixture(boundary, qualified);
+        const files = await writeFixtureFiles(root, fixture.files);
+        for (const cache of ["off", "disk", "disk"] as const) {
+          const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+          const graph = await buildSymbolGraphDetailed(index);
+          const call = async (line: number) =>
+            goToDefinition(index, {
+              file: files["Use.cs"]!,
+              line,
+              column: columnOf(fixture.lines, line, "Run"),
+            });
+          const visible = await call(fixture.visible);
+          expect(visible.status).toBe("ok");
+          if (visible.status === "ok") expect(visible.definition.file).toBe(files["Second.cs"]);
+          const shadowed = await call(fixture.shadowed);
+          const nestedType = !qualified && boundary.name === "nested type";
+          if (qualified || nestedType) {
+            expect(shadowed.status).toBe("ok");
+            if (shadowed.status === "ok") {
+              expect(shadowed.definition.file).toBe(nestedType ? files["Use.cs"] : files["Second.cs"]);
+            }
+          } else {
+            expect(shadowed.status).toBe("not_found");
+          }
+          const targetEdges = graph.edges.filter((edge) => {
+            const from = graph.nodes.get(edge.from);
+            const to = graph.nodes.get(edge.to);
+            return from?.file === files["Use.cs"] && to?.file === files["Second.cs"];
+          });
+          expect(
+            targetEdges
+              .filter((edge) => edge.label === "calls")
+              .map((edge) => edge.site?.range.start.line)
+              .sort(),
+          ).toEqual(qualified ? [fixture.shadowed, fixture.visible] : [fixture.visible]);
+          if (!qualified) {
+            expect(targetEdges.filter((edge) => graph.nodes.get(edge.from)?.name === "Shadowed")).toEqual([]);
+          }
+          expect(
+            graph.edges.filter(
+              (edge) =>
+                graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+                graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
+            ),
+          ).toEqual([]);
+          if (nestedType) {
+            expect(
+              graph.edges.some((edge) => {
+                if (edge.label !== "calls") return false;
+                const from = graph.nodes.get(edge.from);
+                const to = graph.nodes.get(edge.to);
+                return from?.name === "Shadowed" && to?.file === files["Use.cs"] && to.name === "Run";
+              }),
+            ).toBe(true);
+          }
+          const references = await findReferences(index, {
+            file: files["Second.cs"]!,
+            line: 1,
+            column: fixture.files["Second.cs"].indexOf("Run") + 1,
+          });
+          expect(references.status).toBe("ok");
+          if (references.status === "ok") {
+            expect(
+              references.references
+                .filter((site) => site.file === files["Use.cs"])
+                .map((site) => site.range.start.line)
+                .sort(),
+            ).toEqual(qualified ? [fixture.shadowed, fixture.visible] : [fixture.visible]);
+          }
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.each(CSHARP_ALIAS_TYPE_FORMS)("C# $name keeps alias and value uses separate", async (form) => {
+    for (const shadowed of [false, true]) {
+      const root = await mkTmpDir("cg-csharp-alias-type-");
+      try {
+        const fixture = csharpAliasTypeFixture(form, shadowed);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const aliasUse = !shadowed || form.aliasUse;
+        for (const cache of ["off", "disk", "disk"] as const) {
+          const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line: fixture.use,
+            column: columnOf(fixture.lines, fixture.use, form.token),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.definition.file).toBe(aliasUse ? files["Second.cs"] : files["Use.cs"]);
+          }
+          const graph = await buildSymbolGraphDetailed(index);
+          const uses = graph.edges.filter(
+            (edge) =>
+              edge.label === "uses" &&
+              graph.nodes.get(edge.from)?.name === "Types" &&
+              graph.nodes.get(edge.to)?.file === files["Second.cs"],
+          );
+          expect(uses).toHaveLength(aliasUse ? 1 : 0);
+          expect(graph.edges.filter((edge) => graph.nodes.get(edge.to)?.file === files["Decoy.cs"])).toEqual([]);
+          const references = await findReferences(index, {
+            file: files["Second.cs"]!,
+            line: 1,
+            column: fixture.files["Second.cs"].indexOf("Second") + 1,
+          });
+          expect(references.status).toBe("ok");
+          if (references.status === "ok") {
+            const bodySites = references.references.filter(
+              (site) => site.file === files["Use.cs"] && site.range.start.line === fixture.use,
+            );
+            const expectedCount = aliasUse ? 1 : 0;
+            expect(bodySites).toHaveLength(expectedCount);
+          }
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+  it.each(CSHARP_ALIAS_VALUE_SPELLINGS)("C# keeps $name bound to its proven value", async (spelling) => {
+    const root = await mkTmpDir("cg-csharp-alias-verbatim-value-");
+    try {
+      const fixture = csharpAliasValueFixture(spelling);
+      const files = await writeFixtureFiles(root, fixture.files);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        for (const line of [5, 6]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Value.cs"]);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const edges = graph.edges.filter((edge) => graph.nodes.get(edge.from)?.name === "M");
+        expect(
+          edges
+            .filter((edge) => edge.label === "calls")
+            .map((edge) => [graph.nodes.get(edge.to)?.file, edge.site?.range.start.line]),
+        ).toEqual([
+          [files["Value.cs"], 5],
+          [files["Value.cs"], 6],
+        ]);
+        expect(edges.filter((edge) => graph.nodes.get(edge.to)?.file === files["Second.cs"])).toEqual([]);
+        for (const target of ["Second.cs", "Value.cs"] as const) {
+          const result = await findReferences(index, {
+            file: files[target]!,
+            line: 1,
+            column: fixture.files[target].indexOf("Run") + 1,
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(
+              result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+            ).toEqual(target === "Value.cs" ? [5, 6] : []);
+          }
+        }
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("C# restores aliases after transient binding scopes", async () => {
+    const transientNames = [
+      "local",
+      "lambda parameter",
+      "parenthesized lambda parameter",
+      "foreach variable",
+      "pattern variable",
+      "out variable",
+      "local function",
+    ];
+    for (const boundary of CSHARP_ALIAS_BOUNDARIES) {
+      if (!transientNames.includes(boundary.name)) continue;
+      const root = await mkTmpDir("cg-csharp-alias-scope-exit-");
+      try {
+        const fixture = csharpAliasBoundaryFixture(boundary);
+        const lines = [...fixture.lines.slice(0, 5), "    B.Nested.Run();", ...fixture.lines.slice(5)];
+        const files = await writeFixtureFiles(root, { ...fixture.files, "Use.cs": lines.join("\n") + "\n" });
+        const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: 6,
+          column: columnOf(lines, 6, "Run"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Second.cs"]);
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" &&
+            graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+            graph.nodes.get(edge.to)?.file === files["Second.cs"],
+        );
+        expect(calls.map((edge) => edge.site?.range.start.line).sort()).toEqual([6, 9]);
+        const references = await findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: fixture.files["Second.cs"].indexOf("Run") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(
+            references.references
+              .filter((site) => site.file === files["Use.cs"])
+              .map((site) => site.range.start.line)
+              .sort(),
+          ).toEqual([6, 9]);
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("C# foreach reads its collection before the iteration variable shadows the alias", async () => {
+    const root = await mkTmpDir("cg-csharp-alias-foreach-collection-");
+    try {
+      const lines = [
+        "using B = N.Second;",
+        "class Use {",
+        "  void Loop() {",
+        "    foreach (var B in B.Items) { B.Nested.Run(); }",
+        "    B.Nested.Run();",
+        "  }",
+        "}",
+      ];
+      const second =
+        "namespace N; public class Second { public static dynamic[] Items; " +
+        "public class Nested { public static void Run() {} } }\n";
+      const files = await writeFixtureFiles(root, { "Second.cs": second, "Use.cs": lines.join("\n") + "\n" });
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const collection = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 4,
+        column: columnOf(lines, 4, "Items"),
+      });
+      expect(collection.status).toBe("ok");
+      if (collection.status === "ok") {
+        expect(collection.definition.file).toBe(files["Second.cs"]);
+        expect(collection.definition.localName).toBe("Items");
+      }
+      const body = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 4,
+        column: columnOf(lines, 4, "Run"),
+      });
+      expect(body.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(graph.edges.filter((edge) => edge.label === "calls").map((edge) => edge.site?.range.start.line)).toEqual([
+        5,
+      ]);
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: second.indexOf("Run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([5]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("C# attributes are alias type uses, not their same-named value declarations", async () => {
+    const root = await mkTmpDir("cg-csharp-attribute-alias-value-");
+    try {
+      const lines = ["using B = N.MarkerAttribute;", "class Use {", "  dynamic B;", "  [B] void M(dynamic B) {}", "}"];
+      const files = await writeFixtureFiles(root, {
+        "Marker.cs": "namespace N; public class MarkerAttribute : System.Attribute {}\n",
+        "Decoy.cs": "namespace Decoy; public class MarkerAttribute : System.Attribute {}\n",
+        "Use.cs": lines.join("\n") + "\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 4,
+        column: columnOf(lines, 4, "B"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") expect(result.definition.file).toBe(files["Marker.cs"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const uses = graph.edges.filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "M");
+      expect(uses.map((edge) => graph.nodes.get(edge.to)?.file)).toEqual([files["Marker.cs"]]);
+      const references = await findReferences(index, { file: files["Marker.cs"]!, line: 1, column: 27 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(
+          references.references
+            .filter((site) => site.file === files["Use.cs"] && site.range.start.line > 1)
+            .map((site) => [site.range.start.line, site.range.start.column]),
+        ).toEqual([[4, columnOf(lines, 4, "B")]]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("C# leaves proven receivers alone when no using alias declares their name", async () => {
+    const root = await mkTmpDir("cg-csharp-no-alias-receivers-");
+    try {
+      const lines = [
+        "using N;",
+        "class Use {",
+        "  Second field;",
+        "  void Param(Second s) { s.Act(); }",
+        "  void Local() { var s = new Second(); s.Act(); }",
+        "  void Field() { field.Act(); }",
+        "  void Lambda() { System.Action<Second> f = (Second s) => s.Act(); }",
+        "  void Foreach(Second[] values) { foreach (var s in values) s.Act(); }",
+        "}",
+      ];
+      const secondSource = "namespace N; public class Second { public void Act() {} }\n";
+      const files = await writeFixtureFiles(root, {
+        "Second.cs": secondSource,
+        "Decoy.cs": "namespace Other; public class Decoy { public void Act() {} }\n",
+        "Use.cs": lines.join("\n") + "\n",
+      });
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls");
+        expect(calls.map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.file]).sort()).toEqual([
+          ["Lambda", files["Second.cs"]],
+          ["Local", files["Second.cs"]],
+          ["Param", files["Second.cs"]],
+        ]);
+        // Untyped foreach elements and a bare field keep the baseline's conservative graph result.
+        for (const line of [4, 5, 7]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(lines, line, "Act()"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Second.cs"]);
+        }
+        expect(
+          graph.edges.filter(
+            (edge) =>
+              graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+              graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
+          ),
+        ).toEqual([]);
+        const references = await findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: secondSource.indexOf("Act") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          const callLines = references.references
+            .filter((site) => site.file === files["Use.cs"])
+            .map((site) => site.range.start.line);
+          for (const line of [4, 5, 7]) expect(callLines).toContain(line);
+        }
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("C# type-only names retain the nearest alias beside a shadowing parameter", async () => {
+    const root = await mkTmpDir("cg-csharp-scoped-type-alias-");
+    try {
+      const lines = [
+        "using B = N.Plain;",
+        "namespace C {",
+        "  using B = N.Second;",
+        "  class Use {",
+        "    void Types(dynamic B) {",
+        "      B item = null;",
+        "      _ = typeof(B);",
+        "      B.Nested.Run();",
+        "    }",
+        "  }",
+        "}",
+        "class Outside {",
+        "  void Visible() { B.Nested.Run(); }",
+        "}",
+      ];
+      const files = await writeFixtureFiles(root, {
+        ...CSHARP_ALIAS_SHADOW_FILES,
+        "Use.cs": lines.join("\n") + "\n",
+      });
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        for (const line of [6, 7]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(lines, line, "B"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Second.cs"]);
+        }
+        const shadowed = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: 8,
+          column: columnOf(lines, 8, "Run"),
+        });
+        expect(shadowed.status).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls");
+        expect(calls.map((edge) => [graph.nodes.get(edge.to)?.file, edge.site?.range.start.line])).toEqual([
+          [files["Plain.cs"], 13],
+        ]);
+        const references = await findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: CSHARP_ALIAS_SHADOW_FILES["Second.cs"].indexOf("Second") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(
+            references.references
+              .filter((site) => site.file === files["Use.cs"] && site.range.start.line >= 5)
+              .map((site) => site.range.start.line),
+          ).toEqual([6, 7]);
+        }
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true });

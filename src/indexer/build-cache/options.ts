@@ -100,8 +100,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 115 rebuilds detailed graphs with normalized C# verbatim alias keys and receiver value proofs.
  * Epoch 116 matches Kotlin quoted and plain names across package imports, navigation, and graph edges
  * without rewriting source-spelled JVM facts or binding ranges.
- * Epoch 117 rebuilds detailed graphs so C# parameter and local bindings cannot emit calls or uses
- * through a shadowed using alias.
+ * Epoch 117 rebuilds C# alias results after lexical value bindings shadow expression receivers.
+ * Type-only names retain their aliases, and declaration names cannot emit alias-use edges.
  */
 export const CORE_ALGORITHM_EPOCH = 117;
 /**
@@ -112,8 +112,10 @@ export const CORE_ALGORITHM_EPOCH = 117;
  * properties, scopes Ruby block parameters, reads Go selector `field_identifier` names, and skips
  * TypeScript parameter type annotations when binding names.
  * Epoch 12 treats Kotlin backticks as identifier delimiters, preserving case and source spelling.
+ * Epoch 13 scopes C# lambda parameters, foreach variables, properties, and `out`/catch declarations,
+ * and reads implicit lambda parameters as declarations.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 12;
+export const LANGUAGE_BEHAVIOR_EPOCH = 13;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
