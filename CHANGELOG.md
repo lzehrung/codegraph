@@ -16,6 +16,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - Incremental indexing restores Java, Kotlin, C#, PHP, and C++ import bindings when an existing file declares their target again. Rechecks use newly declared names only, so body edits do not revisit unrelated external imports; navigation, references, and detailed graphs match cold builds.
+- Kotlin named imports resolve declarations in the default package and stay conservative beside unread files; Java cannot import from that package.
 - C# type aliases treat `B` and `@B` as the same identifier in go-to-definition, references, and detailed graphs. Source spelling and ranges stay unchanged; unresolved aliases still block same-named imported types. Declared and constructed receiver proofs use the same identifier equality, preventing a verbatim value name from becoming a false static receiver.
 - Kotlin quoted and plain identifiers resolve to the same declaration across package imports, navigation, references, and graph edges, including Java imports of Kotlin classes. Shadowed aliases do not create false graph uses. Source spelling and binding ranges stay unchanged; caches rebuild.
 - Swift references include same-spelled backtick-quoted receiver members instead of incorrectly reporting complete coverage without their uses.

@@ -28,6 +28,7 @@ import {
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -3191,6 +3192,67 @@ nativeDescribe("native semantic coverage", () => {
           `${phase}: ${row.file}`,
         ).toEqual([...row.lines]);
       }
+    }
+  });
+  it("keeps Kotlin default-package imports and graph edges across a disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-default-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-default-cache-"));
+    tempDirs.push(root, cacheDir);
+    const files = await writeFixtureFiles(root, KOTLIN_DEFAULT_PACKAGE_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const lines = KOTLIN_DEFAULT_PACKAGE_SOURCES["app/Use.kt"].split("\n");
+    for (const index of [cold, warm]) {
+      const result = await goToDefinition(index, {
+        file: files["app/Use.kt"]!,
+        line: 6,
+        column: columnOf(lines, 6, "chosen"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected default-package function");
+      expect(result.definition.file).toBe(files["Default.kt"]);
+      const refs = await findReferences(index, { file: files["Default.kt"]!, line: 2, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected default-package function references");
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(refs.references.some((ref) => ref.file === files["app/Use.kt"] && ref.range.start.line === 6)).toBe(true);
+      expect(refs.references.some((ref) => ref.file === files["Named.kt"])).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "make")
+        .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targets).toContain(files["Default.kt"]);
+      expect(targets).not.toContain(files["Named.kt"]);
+    }
+  });
+  it("keeps unread default-package imports unresolved on a disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-default-unread-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-default-unread-cache-"));
+    tempDirs.push(root, cacheDir);
+    const files = await writeFixtureFiles(root, {
+      ...KOTLIN_DEFAULT_PACKAGE_SOURCES,
+      "Unread.kt": "class Before\n)\nfun defaultFn() = 0\n",
+    });
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    for (const index of [cold, warm]) {
+      const module = index.byFile.get(fileIdentityKey(files["app/Use.kt"]!));
+      expect(module).toMatchObject({ parserDegraded: true, importLookupIncomplete: true });
+      expect(module?.imports.map((entry) => entry.resolved)).toEqual([
+        { external: "DefaultThing" },
+        { external: "defaultFn" },
+      ]);
+      const result = await goToDefinition(index, { file: files["app/Use.kt"]!, line: 6, column: 5 });
+      expect(result.status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            graph.nodes.get(edge.from)?.name === "make" && graph.nodes.get(edge.to)?.file === files["Default.kt"],
+        ),
+      ).toBe(false);
     }
   });
 });

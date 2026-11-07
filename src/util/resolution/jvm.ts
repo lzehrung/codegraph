@@ -112,8 +112,7 @@ async function getJvmLanguageProjectSymbolIndex(
           return [];
         }
         const packageName =
-          languageId === "kotlin" ? normalizeKotlinQualifiedName(facts.packageName ?? "") : facts.packageName;
-        if (!packageName) return [];
+          languageId === "kotlin" ? normalizeKotlinQualifiedName(facts.packageName ?? "") : (facts.packageName ?? "");
         if (facts.incomplete) {
           incompleteFilesByPackage.set(packageName, [...(incompleteFilesByPackage.get(packageName) ?? []), filePath]);
         }
@@ -225,15 +224,10 @@ async function findJvmImport(
 ): Promise<JvmImportLookup> {
   const parts = normalizeKotlinQualifiedName(spec).split(".").filter(Boolean);
   const projectIndex = await getJvmProjectSymbolIndex(indexRoot, options.languageId);
-  if (parts.length < 2) {
-    // Kotlin can import a top-level declaration of the default package; Java cannot.
-    if (options.languageId !== "kotlin") return { file: null, incomplete: false, packageKnown: false };
-    const packageCandidates = projectIndex.filesByPackage.get(normalizeKotlinQualifiedName(spec)) ?? [];
-    const file = await confineJvmResolvedPath(
-      projectRoot,
-      packageCandidates[0] ? path.resolve(packageCandidates[0]) : null,
-    );
-    return { file, incomplete: false, packageKnown: false };
+  // Kotlin can import a declaration in the unnamed package; Java imports cannot name it.
+  // A single-segment miss is authoritative, not a path-like nested-type lookup.
+  if (!parts.length || (parts.length === 1 && options.languageId === "java")) {
+    return { file: null, incomplete: false, packageKnown: true };
   }
 
   const importedName = parts[parts.length - 1]!;
@@ -256,7 +250,8 @@ async function findJvmImport(
   }
   const otherLanguageId = options.languageId === "java" ? "kotlin" : "java";
   const otherIndex = await getJvmProjectSymbolIndex(indexRoot, otherLanguageId);
-  const packageKnown = projectIndex.filesByPackage.has(packageName) || otherIndex.filesByPackage.has(packageName);
+  const packageKnown =
+    parts.length === 1 || projectIndex.filesByPackage.has(packageName) || otherIndex.filesByPackage.has(packageName);
 
   const ownFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
   const otherFiles = otherIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
