@@ -92,6 +92,10 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  withDuplicateDeclarations,
+} from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
   PHP_PATH_IMPORT_FORMS,
@@ -8852,6 +8856,56 @@ describe("Find References: Python module-level use before a later local declarat
     }
   });
 });
+
+describe("removed duplicate declaration references", () => {
+  it.each(DUPLICATE_DECLARATION_CASES)(
+    "finds the importer's $languageId uses after the $declarer duplicate is removed by $mutation, and excludes decoys",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        const {
+          removed,
+          removedCold,
+          restored,
+          restoredCold,
+          declaration,
+          consumer,
+          decoy,
+          unrelated,
+          first,
+          survivor,
+        } = project;
+        const usesConsumer = (result: FindReferencesResult): boolean =>
+          result.status === "ok" &&
+          result.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumer) &&
+              reference.range.start.line === fixture.useLine,
+          );
+        const usesExcluded = (result: FindReferencesResult): boolean =>
+          result.status === "ok" &&
+          result.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(decoy) ||
+              fileIdentityKey(reference.file) === fileIdentityKey(unrelated),
+          );
+        const afterRemoval = await findReferences(removed, declaration);
+        expect(afterRemoval).toEqual(await findReferences(removedCold, declaration));
+        expect(afterRemoval.status).toBe("ok");
+        expect(usesConsumer(afterRemoval)).toBe(true);
+        expect(usesExcluded(afterRemoval)).toBe(false);
+
+        // Restoring the duplicate makes the name ambiguous, so the survivor loses the importer's use. PHP binds
+        // the first declaring file, which is the survivor only when the second duplicate was edited.
+        const afterRestore = await findReferences(restored, declaration);
+        expect(afterRestore).toEqual(await findReferences(restoredCold, declaration));
+        const importerStillBindsSurvivor = fixture.duplicatedTarget === "first" && survivor === first;
+        expect(usesConsumer(afterRestore)).toBe(importerStillBindsSurvivor);
+        expect(usesExcluded(afterRestore)).toBe(false);
+      });
+    },
+  );
+});
+
 describe("restored declaration import references", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "finds the restored $languageId importer's uses and excludes decoys",

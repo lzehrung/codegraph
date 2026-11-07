@@ -5,17 +5,24 @@ import {
   buildProjectIndex,
   buildProjectIndexIncremental,
   type BuildReport,
+  type ImportBinding,
   type ModuleIndex,
   type ProjectIndex,
 } from "../src/index.js";
+import { supportById, type LanguageSupport } from "../src/languages.js";
 import * as filePrep from "../src/languages/file-prep.js";
 import * as specifierTargets from "../src/util/resolution/specifier-targets.js";
 import { collectDirectDependents } from "../src/indexer/incremental-plan.js";
 import {
   computeApiSurface,
+  declarationImportRecheck,
+  declarationNameChanges,
+  deletedDeclarationNameChanges,
   propagateReexportSurfaceChanges,
   publicSurfaceKind,
+  type DeclarationNameChanges,
 } from "../src/indexer/public-surface.js";
+import * as publicSurface from "../src/indexer/public-surface.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
 const roots = createTempRootRegistry();
@@ -468,7 +475,7 @@ describe("surface dependents", () => {
   });
 });
 
-describe("declaration import rechecks are bounded by newly declared names", () => {
+describe("declaration import rechecks are bounded by changed declaration names", () => {
   const externalImportFiles = (): Record<string, string> => {
     const files: Record<string, string> = {};
     for (let index = 0; index < 40; index += 1) {
@@ -488,13 +495,17 @@ describe("declaration import rechecks are bounded by newly declared names", () =
     const root = await indexedProject(files);
     const edited = path.join(root, "units/C0.cs");
     const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    const recheck = vi.spyOn(publicSurface, "declarationImportRecheck");
     await fsp.writeFile(edited, files["units/C0.cs"]!.replace("=> 1;", "=> 2;"), "utf8");
     const { index, extracted, report } = await update(root);
     expect(extracted).toEqual(["units/C0.cs"]);
     expect(report.files).toMatchObject({ total: 40, parsed: 1, changed: 1, cached: 39 });
     const unrelatedLookups = resolve.mock.calls.filter(([file]) => normalize(file) !== normalize(edited));
     expect(unrelatedLookups).toEqual([]);
+    // No declaration name changed, so no cached importer binding was examined at all.
+    expect(recheck).not.toHaveBeenCalled();
     resolve.mockRestore();
+    recheck.mockRestore();
     await expectSameAsColdBuild(root, index);
   });
 
@@ -523,5 +534,436 @@ describe("declaration import rechecks are bounded by newly declared names", () =
     ).toBe(true);
     resolve.mockRestore();
     await expectSameAsColdBuild(root, index);
+  });
+
+  it("resolves a duplicate import after a C# deletion, rechecking only the importers that name the deleted type", async () => {
+    const duplicate = "namespace Lib;\npublic class Gadget {}\n";
+    const root = await indexedProject({
+      ...externalImportFiles(),
+      "lib/First.cs": duplicate,
+      "lib/Second.cs": duplicate,
+      "app/Use.cs": "using Gadget = Lib.Gadget;\nclass Use { Gadget value; }\n",
+      "app/Unrelated.cs": "using Gadget = Missing.Gadget;\nclass Unrelated { Gadget value; }\n",
+    });
+    const consumer = path.join(root, "app/Use.cs");
+    const unrelated = path.join(root, "app/Unrelated.cs");
+    await fsp.rm(path.join(root, "lib/Second.cs"));
+    const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    const { index, extracted, report } = await update(root);
+    expect(extracted).toEqual(["app/Use.cs"]);
+    expect(report.files).toMatchObject({ total: 43, parsed: 1, changed: 1, cached: 42 });
+    // Only the two importers of a `Gadget` were looked up again: the 40 files that import only
+    // `System` namespaces were never touched.
+    const lookedUp = new Set(resolve.mock.calls.map(([file]) => normalize(path.relative(root, file))));
+    expect([...lookedUp].sort()).toEqual(["app/Unrelated.cs", "app/Use.cs"]);
+    expect(
+      resolve.mock.calls.filter(([file]) => normalize(file) === normalize(unrelated)).map(([, specifier]) => specifier),
+    ).toEqual(["Missing.Gadget"]);
+    expect(
+      resolve.mock.calls.some(
+        ([file, specifier]) => normalize(file) === normalize(consumer) && specifier === "Lib.Gadget",
+      ),
+    ).toBe(true);
+    resolve.mockRestore();
+    const bindings = importsOf(index, root, "app/Use.cs");
+    expect(
+      bindings.map((binding) => (typeof binding.resolved === "string" ? normalize(binding.resolved) : null)),
+    ).toEqual([normalize(path.join(root, "lib/First.cs"))]);
+    await expectSameAsColdBuild(root, index);
+  });
+
+  it("resolves a duplicate import after a C# rename away, then makes it ambiguous again when the name returns", async () => {
+    const duplicate = "namespace Lib;\npublic class Gadget {}\n";
+    const root = await indexedProject({
+      ...externalImportFiles(),
+      "lib/First.cs": duplicate,
+      "lib/Second.cs": duplicate,
+      "app/Use.cs": "using Gadget = Lib.Gadget;\nclass Use { Gadget value; }\n",
+    });
+    const edited = path.join(root, "lib/Second.cs");
+    const consumer = path.join(root, "app/Use.cs");
+    const unrelatedLookups = (calls: ReadonlyArray<readonly [string, ...unknown[]]>): string[] =>
+      calls
+        .map(([file]) => normalize(file))
+        .filter((file) => file !== normalize(edited) && file !== normalize(consumer));
+
+    const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    await fsp.writeFile(edited, "namespace Lib;\npublic class Different {}\n", "utf8");
+    const renamed = await update(root);
+    expect(renamed.extracted).toEqual(["app/Use.cs", "lib/Second.cs"]);
+    expect(renamed.report.files).toMatchObject({ total: 43, parsed: 2, changed: 2, cached: 41 });
+    expect(unrelatedLookups(resolve.mock.calls)).toEqual([]);
+    expect(importsOf(renamed.index, root, "app/Use.cs").map((binding) => typeof binding.resolved)).toEqual(["string"]);
+    await expectSameAsColdBuild(root, renamed.index);
+
+    // The same name returns to the same file. The importer's resolved alias names it exactly, so only that
+    // importer extracts again; the external-import files stay cached and are never looked up.
+    resolve.mockClear();
+    await fsp.writeFile(edited, duplicate, "utf8");
+    const restored = await update(root);
+    expect(restored.extracted).toEqual(["app/Use.cs", "lib/Second.cs"]);
+    expect(restored.report.files).toMatchObject({ total: 43, parsed: 2, changed: 2, cached: 41 });
+    expect(unrelatedLookups(resolve.mock.calls)).toEqual([]);
+    expect(importsOf(restored.index, root, "app/Use.cs").map((binding) => typeof binding.resolved)).toEqual(["object"]);
+    resolve.mockRestore();
+    await expectSameAsColdBuild(root, restored.index);
+  });
+
+  it("does not extract an importer of a same-named type in another namespace when a duplicate is renamed away and back", async () => {
+    const duplicate = "namespace Lib;\npublic class Gadget {}\n";
+    const root = await indexedProject({
+      "lib/First.cs": duplicate,
+      "lib/Second.cs": duplicate,
+      "other/Gadget.cs": "namespace Other;\npublic class Gadget {}\n",
+      "app/Use.cs": "using Gadget = Lib.Gadget;\nclass Use { Gadget value; }\n",
+      "app/Decoy.cs": "using Gadget = Other.Gadget;\nclass Decoy { Gadget value; }\n",
+    });
+    const edited = path.join(root, "lib/Second.cs");
+    await fsp.writeFile(edited, "namespace Lib;\npublic class Different {}\n", "utf8");
+    const renamed = await update(root);
+    expect(renamed.extracted).toEqual(["app/Use.cs", "lib/Second.cs"]);
+    expect(renamed.report.files).toMatchObject({ total: 5, parsed: 2, changed: 2, cached: 3 });
+    await expectSameAsColdBuild(root, renamed.index);
+    await fsp.writeFile(edited, duplicate, "utf8");
+    const restored = await update(root);
+    expect(restored.extracted).toEqual(["app/Use.cs", "lib/Second.cs"]);
+    expect(restored.report.files).toMatchObject({ total: 5, parsed: 2, changed: 2, cached: 3 });
+    await expectSameAsColdBuild(root, restored.index);
+  });
+
+  it("resolves a duplicate Kotlin import after a deletion beside many external imports", async () => {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      files[`units/U${index}.kt`] = `package units\nimport kotlin.collections.List\nclass U${index}\n`;
+    }
+    const duplicate = "package lib\nclass Gadget\n";
+    const root = await indexedProject({
+      ...files,
+      "lib/First.kt": duplicate,
+      "lib/Second.kt": duplicate,
+      "app/Use.kt": "package app\nimport lib.Gadget\nfun use(value: Gadget): Gadget = value\n",
+    });
+    await fsp.rm(path.join(root, "lib/Second.kt"));
+    const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+    const { index, extracted, report } = await update(root);
+    expect(extracted).toEqual(["app/Use.kt"]);
+    expect(report.files).toMatchObject({ total: 42, parsed: 1, changed: 1, cached: 41 });
+    expect(new Set(resolve.mock.calls.map(([file]) => normalize(path.relative(root, file))))).toEqual(
+      new Set(["app/Use.kt"]),
+    );
+    resolve.mockRestore();
+    await expectSameAsColdBuild(root, index);
+  });
+
+  describe("PHP", () => {
+    const phpExternalImportFiles = (): Record<string, string> => {
+      const files: Record<string, string> = {};
+      for (let index = 0; index < 40; index += 1) {
+        files[`units/C${index}.php`] = [
+          "<?php",
+          "namespace Bench;",
+          `use Vendor\\Pkg\\Thing${index};`,
+          `class C${index} { public function value() { return 1; } }`,
+          "",
+        ].join("\n");
+      }
+      return files;
+    };
+    const declarer = (namespace: string, body = "class Gadget {}"): string =>
+      `<?php\nnamespace ${namespace};\n${body}\n`;
+    const lookedUpFiles = (root: string, calls: ReadonlyArray<readonly [string, ...unknown[]]>): string[] =>
+      [...new Set(calls.map(([file]) => normalize(path.relative(root, file))))].sort();
+
+    it("does no importer recheck after a body-only PHP edit beside many external imports", async () => {
+      const files = phpExternalImportFiles();
+      const root = await indexedProject(files);
+      const edited = path.join(root, "units/C0.php");
+      const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+      const recheck = vi.spyOn(publicSurface, "declarationImportRecheck");
+      await fsp.writeFile(edited, files["units/C0.php"]!.replace("return 1;", "return 2;"), "utf8");
+      const { index, extracted, report } = await update(root);
+      expect(extracted).toEqual(["units/C0.php"]);
+      expect(report.files).toMatchObject({ total: 40, parsed: 1, changed: 1, cached: 39 });
+      expect(resolve.mock.calls.filter(([file]) => normalize(file) !== normalize(edited))).toEqual([]);
+      expect(recheck).not.toHaveBeenCalled();
+      resolve.mockRestore();
+      recheck.mockRestore();
+      await expectSameAsColdBuild(root, index);
+    });
+
+    it("rechecks only the importers that name a declaration after a namespace-only move and back", async () => {
+      const root = await indexedProject({
+        ...phpExternalImportFiles(),
+        "lib/Gadget.php": declarer("Lib2"),
+        "app/Use.php":
+          "<?php\nnamespace App;\nuse Lib\\Gadget;\nfunction consume(Gadget $value): Gadget { return $value; }\n",
+      });
+      const edited = path.join(root, "lib/Gadget.php");
+      const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+      await fsp.writeFile(edited, declarer("Lib"), "utf8");
+      const bound = await update(root);
+      expect(bound.extracted).toEqual(["app/Use.php", "lib/Gadget.php"]);
+      expect(bound.report.files).toMatchObject({ total: 42, parsed: 2, changed: 2, cached: 40 });
+      expect(lookedUpFiles(root, resolve.mock.calls)).toEqual(["app/Use.php"]);
+      expect(importsOf(bound.index, root, "app/Use.php").map((binding) => binding.resolved)).toEqual([
+        normalize(edited),
+      ]);
+      await expectSameAsColdBuild(root, bound.index);
+
+      // The importer is bound to the declarer now, so its manifest edge extracts it; nothing else is looked up.
+      resolve.mockClear();
+      await fsp.writeFile(edited, declarer("Lib2"), "utf8");
+      const unbound = await update(root);
+      expect(unbound.extracted).toEqual(["app/Use.php", "lib/Gadget.php"]);
+      expect(unbound.report.files).toMatchObject({ total: 42, parsed: 2, changed: 2, cached: 40 });
+      expect(lookedUpFiles(root, resolve.mock.calls)).toEqual(["app/Use.php"]);
+      expect(importsOf(unbound.index, root, "app/Use.php").map((binding) => binding.resolved)).toEqual([
+        { external: "Lib\\Gadget" },
+      ]);
+      resolve.mockRestore();
+      await expectSameAsColdBuild(root, unbound.index);
+    });
+
+    it("binds a namespace import when its declarer moves from a deeper namespace into it", async () => {
+      const root = await indexedProject({
+        ...phpExternalImportFiles(),
+        "lib/Gadget.php": declarer("Lib\\Sub"),
+        "app/Use.php": "<?php\nnamespace App;\nuse Lib;\nfunction consume(Lib\\Gadget $value) {}\n",
+      });
+      const edited = path.join(root, "lib/Gadget.php");
+      const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+      // `Lib` was only a prefix of the declarer's namespace; it is now the package that holds the class.
+      await fsp.writeFile(edited, declarer("Lib"), "utf8");
+      const { index, extracted, report } = await update(root);
+      expect(extracted).toEqual(["app/Use.php", "lib/Gadget.php"]);
+      expect(report.files).toMatchObject({ total: 42, parsed: 2, changed: 2, cached: 40 });
+      expect(lookedUpFiles(root, resolve.mock.calls)).toEqual(["app/Use.php"]);
+      expect(importsOf(index, root, "app/Use.php").map((binding) => binding.resolved)).toEqual([normalize(edited)]);
+      resolve.mockRestore();
+      await expectSameAsColdBuild(root, index);
+    });
+
+    it("re-resolves unresolved imports when a syntax error appears or is fixed, and extracts none that stay unresolved", async () => {
+      const files = {
+        ...phpExternalImportFiles(),
+        "lib/Other.php": declarer("Lib", "class Other {}"),
+        "app/Use.php": "<?php\nnamespace App;\nuse Lib\\Gadget;\nfunction consume(Gadget $value) {}\n",
+      };
+      const root = await indexedProject(files);
+      const edited = path.join(root, "lib/Other.php");
+      const resolve = vi.spyOn(specifierTargets, "resolveSpecifierTargets");
+      const unresolvedImporters = [...Object.keys(files).filter((file) => file.startsWith("units/")), "app/Use.php"];
+
+      await fsp.writeFile(edited, declarer("Lib", "class Other {}\nclass"), "utf8");
+      const broken = await update(root);
+      expect(broken.extracted).toEqual(["lib/Other.php"]);
+      expect(broken.report.files).toMatchObject({ total: 42, parsed: 1, changed: 1, cached: 41 });
+      expect(lookedUpFiles(root, resolve.mock.calls)).toEqual([...unresolvedImporters].sort());
+      await expectSameAsColdBuild(root, broken.index);
+
+      resolve.mockClear();
+      await fsp.writeFile(edited, declarer("Lib", "class Other {}"), "utf8");
+      const fixed = await update(root);
+      expect(fixed.extracted).toEqual(["lib/Other.php"]);
+      expect(fixed.report.files).toMatchObject({ total: 42, parsed: 1, changed: 1, cached: 41 });
+      expect(lookedUpFiles(root, resolve.mock.calls)).toEqual([...unresolvedImporters].sort());
+      resolve.mockRestore();
+      await expectSameAsColdBuild(root, fixed.index);
+    });
+  });
+});
+
+describe("declaration name changes and import recheck decisions", () => {
+  const support = (languageId: string): LanguageSupport => {
+    const found = supportById(languageId);
+    if (!found) throw new Error(`missing ${languageId} support`);
+    return found;
+  };
+  const changes = (added: string[] = [], removed: string[] = []): DeclarationNameChanges => ({
+    added: new Set(added),
+    removed: new Set(removed),
+  });
+  const named = (from: string, imported: string, resolved?: string): ImportBinding => ({
+    kind: "named",
+    local: imported,
+    imported,
+    from,
+    ...(resolved ? { resolved } : {}),
+  });
+  const star = (from: string, resolved?: string): ImportBinding => ({
+    kind: "star",
+    from,
+    ...(resolved ? { resolved } : {}),
+  });
+  const kotlinModule = (file: string, symbols: string[], packageName = "lib"): ModuleIndex => ({
+    file,
+    exports: [],
+    imports: [],
+    locals: [],
+    jvmFacts: { packageName, symbols },
+  });
+  const phpModule = (identities: string[], flags: Partial<ModuleIndex> = {}): ModuleIndex => ({
+    file: "/p/decl/Thing.php",
+    exports: [],
+    imports: [],
+    locals: [],
+    phpDeclarationNames: identities,
+    ...flags,
+  });
+
+  it("reports no change for a body edit and the exact names of a rename", () => {
+    const kotlin = support("kotlin");
+    const before = kotlinModule("/p/Second.kt", ["Gadget"]);
+    expect(declarationNameChanges(before, kotlinModule("/p/Second.kt", ["Gadget"]), kotlin, "/p")).toBeUndefined();
+    const renamed = declarationNameChanges(before, kotlinModule("/p/Second.kt", ["Different"]), kotlin, "/p");
+    expect(renamed).toEqual({
+      added: new Set(["Different", "lib.Different"]),
+      removed: new Set(["Gadget", "lib.Gadget"]),
+    });
+    // Without the previous module every current name is new and no removal is known.
+    expect(declarationNameChanges(undefined, kotlinModule("/p/Second.kt", ["Gadget"]), kotlin, "/p")).toEqual({
+      added: new Set(["lib", "Gadget", "lib.Gadget"]),
+      removed: new Set(),
+    });
+  });
+
+  it("names everything a deleted declaration file declared, and nothing without its module", () => {
+    const kotlin = support("kotlin");
+    expect(deletedDeclarationNameChanges(kotlinModule("/p/Second.kt", ["Gadget"]), kotlin)).toEqual({
+      added: new Set(),
+      removed: new Set(["lib", "Gadget", "lib.Gadget"]),
+    });
+    expect(deletedDeclarationNameChanges(undefined, kotlin)).toEqual({ added: new Set(), removed: new Set() });
+  });
+
+  it("resolves an unresolved binding again only when a changed name can be its own", () => {
+    const kotlin = support("kotlin");
+    const unresolved = named("lib.Gadget", "Gadget");
+    expect(declarationImportRecheck(unresolved, kotlin, changes([], ["lib.Gadget", "Gadget", "lib"]))).toBe("resolve");
+    expect(declarationImportRecheck(unresolved, kotlin, changes(["lib.Gadget"]))).toBe("resolve");
+    expect(declarationImportRecheck(unresolved, kotlin, changes([], ["lib.Widget", "Widget"]))).toBe("none");
+    expect(declarationImportRecheck(unresolved, kotlin, changes())).toBe("none");
+  });
+
+  it("extracts a resolved binding again only for an added declaration of its exact name", () => {
+    const kotlin = support("kotlin");
+    const resolved = named("lib.Gadget", "Gadget", "/p/First.kt");
+    expect(declarationImportRecheck(resolved, kotlin, changes(["lib.Gadget"]))).toBe("reextract");
+    // A same-named type in another package, and a removal, never move a resolved import.
+    expect(declarationImportRecheck(resolved, kotlin, changes(["other.Gadget", "Gadget", "other"]))).toBe("none");
+    expect(declarationImportRecheck(resolved, kotlin, changes([], ["lib.Gadget"]))).toBe("none");
+    expect(declarationImportRecheck(star("lib", "/p/First.kt"), kotlin, changes(["lib"]))).toBe("reextract");
+  });
+
+  it("matches a C# alias by the type it names, whether it keeps the type or its namespace as `from`", () => {
+    const csharp = support("csharp");
+    expect(declarationImportRecheck(named("Lib", "Gadget", "/p/First.cs"), csharp, changes(["Lib.Gadget"]))).toBe(
+      "reextract",
+    );
+    expect(
+      declarationImportRecheck(named("Lib.Gadget", "Gadget", "/p/First.cs"), csharp, changes(["Lib.Gadget"])),
+    ).toBe("reextract");
+    expect(declarationImportRecheck(named("Lib", "Gadget", "/p/First.cs"), csharp, changes(["Other.Gadget"]))).toBe(
+      "none",
+    );
+    expect(declarationImportRecheck(named("Lib.Gadget", "Gadget"), csharp, changes([], ["Lib.Gadget"]))).toBe(
+      "resolve",
+    );
+  });
+
+  it("compares PHP declarations by role, namespace prefix, and the package that holds them", () => {
+    const php = support("php");
+    const gadget = ["class:lib\\gadget", "namespace:lib"];
+    // A body edit keeps every identity.
+    expect(declarationNameChanges(phpModule(gadget), phpModule([...gadget]), php, "/p")).toBeUndefined();
+    // A namespace-only move changes qualified names, prefixes, and packages while the class keeps its spelling.
+    expect(
+      declarationNameChanges(phpModule(["class:lib2\\gadget", "namespace:lib2"]), phpModule(gadget), php, "/p"),
+    ).toEqual({
+      added: new Set(["lib\\gadget", "lib"]),
+      removed: new Set(["lib2\\gadget", "lib2"]),
+    });
+    // `Lib\Sub` to `Lib` adds no namespace identity for `Lib`, because it was already a prefix. `Lib` now holds the
+    // class, so it is added as a package.
+    expect(
+      declarationNameChanges(
+        phpModule(["class:lib\\sub\\gadget", "namespace:lib\\sub", "namespace:lib"]),
+        phpModule(gadget),
+        php,
+        "/p",
+      ),
+    ).toEqual({
+      added: new Set(["lib\\gadget", "lib"]),
+      removed: new Set(["lib\\sub\\gadget", "lib\\sub"]),
+    });
+    // A class that becomes a function of the same name changes both roles.
+    expect(
+      declarationNameChanges(phpModule(gadget), phpModule(["function:lib\\gadget", "namespace:lib"]), php, "/p"),
+    ).toEqual({ added: new Set(["lib\\gadget"]), removed: new Set(["lib\\gadget"]) });
+    // A new file adds every name and removes none.
+    expect(declarationNameChanges(undefined, phpModule(gadget), php, "/p")).toEqual({
+      added: new Set(["lib\\gadget", "lib"]),
+      removed: new Set(),
+    });
+  });
+
+  it("tracks whether PHP declarations are certain in both directions, including legacy rows", () => {
+    const php = support("php");
+    const gadget = ["class:lib\\gadget", "namespace:lib"];
+    const broken = phpModule([...gadget, "incomplete:"]);
+    expect(declarationNameChanges(phpModule(gadget), broken, php, "/p")).toEqual({
+      added: new Set(["incomplete:"]),
+      removed: new Set(),
+    });
+    expect(declarationNameChanges(broken, phpModule(gadget), php, "/p")).toEqual({
+      added: new Set(),
+      removed: new Set(["incomplete:"]),
+    });
+    // A row cached without the marker still counts as incomplete through its parse diagnostics.
+    expect(declarationNameChanges(phpModule(gadget, { parserDegraded: true }), broken, php, "/p")).toBeUndefined();
+    expect(declarationNameChanges(phpModule(gadget, { parseErrorRanges: [] }), broken, php, "/p")).toEqual({
+      added: new Set(["incomplete:"]),
+      removed: new Set(),
+    });
+    // A deleted file stops declaring every name it declared, its uncertainty included.
+    expect(deletedDeclarationNameChanges(broken, php)).toEqual({
+      added: new Set(),
+      removed: new Set(["lib\\gadget", "lib", "incomplete:"]),
+    });
+  });
+
+  it("rechecks PHP bindings by qualified name and package, and re-resolves every unresolved one on a certainty change", () => {
+    const php = support("php");
+    const unresolved = named("Lib\\Gadget", "Gadget");
+    expect(declarationImportRecheck(unresolved, php, changes(["lib\\gadget"]))).toBe("resolve");
+    expect(declarationImportRecheck(unresolved, php, changes(["lib"]))).toBe("resolve");
+    expect(declarationImportRecheck(unresolved, php, changes([], ["lib\\gadget"]))).toBe("resolve");
+    expect(declarationImportRecheck(unresolved, php, changes(["lib2\\gadget", "lib2"], ["lib2\\gadget"]))).toBe("none");
+    // `use Lib;` names a package, so a file that starts holding declarations in `Lib` can bind it.
+    expect(declarationImportRecheck(named("Lib", "Lib"), php, changes(["lib"]))).toBe("resolve");
+    expect(declarationImportRecheck(named("Lib", "Lib"), php, changes(["lib2"]))).toBe("none");
+
+    const resolved = named("Lib\\Gadget", "Gadget", "/p/First.php");
+    expect(declarationImportRecheck(resolved, php, changes(["lib\\gadget"]))).toBe("reextract");
+    expect(declarationImportRecheck(resolved, php, changes(["lib2\\gadget"]))).toBe("none");
+    expect(declarationImportRecheck(resolved, php, changes([], ["lib\\gadget"]))).toBe("none");
+
+    for (const certainty of [changes(["incomplete:"]), changes([], ["incomplete:"])]) {
+      // An unreadable file proves any import, whatever it spells; a bound import follows its manifest edge.
+      expect(declarationImportRecheck(named("Missing\\Gadget", "Gadget"), php, certainty)).toBe("resolve");
+      expect(declarationImportRecheck(resolved, php, certainty)).toBe("none");
+      // Other languages never read the marker.
+      expect(declarationImportRecheck(named("Missing.Gadget", "Gadget"), support("kotlin"), certainty)).toBe("none");
+    }
+  });
+
+  it("rechecks C++ named modules exactly and never an include", () => {
+    const cpp = support("cpp");
+    expect(declarationImportRecheck(star("lib"), cpp, changes([], ["lib"]))).toBe("resolve");
+    expect(declarationImportRecheck(star("lib", "/p/First.cpp"), cpp, changes(["lib"]))).toBe("reextract");
+    expect(declarationImportRecheck(star("lib"), cpp, changes([], ["other"]))).toBe("none");
+    const include: ImportBinding = { kind: "star", from: "lib.h", includeForm: "literal" };
+    expect(declarationImportRecheck(include, cpp, changes([], ["lib.h"]))).toBe("none");
+    expect(declarationImportRecheck(star("dir/lib.h"), cpp, changes([], ["dir/lib.h"]))).toBe("none");
   });
 });

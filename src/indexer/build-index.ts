@@ -58,7 +58,6 @@ import {
   collectPhpModuleImportNames,
   phpDeclarationImportNames,
   phpModuleImportNamesFromDeclarations,
-  PHP_INCOMPLETE_DECLARATION_IDENTITY,
   type PhpModuleImportNames,
 } from "./php-namespace-symbols.js";
 import {
@@ -178,11 +177,15 @@ import {
   probePathExistence,
 } from "./incremental-plan.js";
 import {
-  newlyDeclaredImportNames,
-  normalizeDeclarationImportName,
+  declarationImportRecheck,
+  declarationLanguageGroup,
+  declarationNameChanges,
+  deletedDeclarationNameChanges,
   propagateReexportSurfaceChanges,
   publicSurfaceKind,
   publicSurfaceSignature,
+  recordDeclarationNameChanges,
+  type DeclarationNameChanges,
 } from "./public-surface.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
@@ -3270,6 +3273,19 @@ async function buildProjectIndexIncrementalInProbeCache(
         const previous = peekCachedModule(projectRoot, file, opts);
         if (previous) retiredModules.set(key, previous.mod);
       }
+      // A deleted declarer leaves no fresh module. Its last cached module names what its importers can no longer
+      // find there, so a binding left ambiguous by it can resolve.
+      const deletedDeclarationNames = new Map<string, DeclarationNameChanges>();
+      for (const file of deletedTrackedFiles) {
+        const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);
+        if (!support || !DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(support.id)) continue;
+        const previous = peekCachedModule(projectRoot, file, opts);
+        recordDeclarationNameChanges(
+          deletedDeclarationNames,
+          support,
+          deletedDeclarationNameChanges(previous?.mod, support),
+        );
+      }
       if (
         initialChangedFiles.some((file) =>
           readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id),
@@ -3349,40 +3365,26 @@ async function buildProjectIndexIncrementalInProbeCache(
           if (allFiles.has(importer) && !changedFiles.has(importer)) reparseCachedFile(importer);
         }
       }
-      // Only a newly declared name can restore an external binding. Body edits never visit
-      // cached importers, and declaration edits resolve only bindings naming the new surface.
-      const collectRestoredDeclarationImporters = async (
-        namesByLanguage: ReadonlyMap<string, ReadonlySet<string>>,
+      // Declaration imports resolve through the files that declare their names. A body edit changes no names and
+      // never visits a cached importer. An edited, added, or deleted declarer rechecks only the bindings that name
+      // what it started or stopped declaring (see `declarationImportRecheck`).
+      const collectRecheckedDeclarationImporters = async (
+        changesByLanguage: ReadonlyMap<string, DeclarationNameChanges>,
       ): Promise<string[]> => {
-        if (!namesByLanguage.size) return [];
+        if (!changesByLanguage.size) return [];
         const candidates = Array.from(collectSpecifierEdgeCandidates(trackedEntries, true));
-        const restoredImports = await mapLimit(candidates, conc, async (candidate) => {
+        const rechecked = await mapLimit(candidates, conc, async (candidate) => {
           if (!allFiles.has(candidate) || changedFiles.has(candidate)) return false;
           const support = supportForFileWithoutHeaderSample(candidate, opts?.languageExtensions);
           if (!support) return false;
-          const languageGroup = isJvmLanguage(support.id) ? "jvm" : support.id;
-          const names = namesByLanguage.get(languageGroup);
-          if (!names) return false;
+          const changes = changesByLanguage.get(declarationLanguageGroup(support.id));
+          if (!changes) return false;
           const mod = modules.get(fileIdentityKey(candidate));
-          if (!mod || !cachedModuleHasExternalImport(mod)) return false;
-          const phpDeclarationsBecameUncertain = support.id === "php" && names.has(PHP_INCOMPLETE_DECLARATION_IDENTITY);
+          if (!mod) return false;
           for (const binding of mod.imports) {
-            if (typeof binding.resolved === "string") continue;
-            const specifier = normalizeDeclarationImportName(binding.from, support);
-            if (support.id === "cpp") {
-              // Includes name files, not module declarations. An existing header's body
-              // cannot make its missing path appear, so never re-resolve includes here.
-              if ("includeForm" in binding && binding.includeForm) continue;
-              if (!isCppNamedModuleSpecifier(specifier) || !names.has(specifier)) continue;
-            } else if (!phpDeclarationsBecameUncertain && !names.has(specifier)) {
-              const separator = support.id === "php" ? "\\" : ".";
-              const lastSeparator = specifier.lastIndexOf(separator);
-              const importedName = specifier.slice(lastSeparator + 1);
-              const matchesImportedName = names.has(importedName);
-              const matchesPhpNamespace =
-                support.id === "php" && lastSeparator >= 0 && names.has(specifier.slice(0, lastSeparator));
-              if (!matchesImportedName && !matchesPhpNamespace) continue;
-            }
+            const recheck = declarationImportRecheck(binding, support, changes);
+            if (recheck === "none") continue;
+            if (recheck === "reextract") return true;
             const packageWildcard = binding.kind === "star" && !!binding.jvmTypeWildcardName;
             const targets = await resolveSpecifierTargets(candidate, binding.from, support.id, {
               projectRoot,
@@ -3396,7 +3398,7 @@ async function buildProjectIndexIncrementalInProbeCache(
           }
           return false;
         });
-        return candidates.filter((_, index) => restoredImports[index]);
+        return candidates.filter((_, index) => rechecked[index]);
       };
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
@@ -3441,7 +3443,10 @@ async function buildProjectIndexIncrementalInProbeCache(
         );
       };
       let wave = changedList;
-      while (wave.length) {
+      // A deleted declarer needs no extraction to name what it stopped declaring, so the first recheck reads it and a
+      // build that only deletes files still resolves the imports that file left ambiguous.
+      let pendingNameChanges = deletedDeclarationNames;
+      while (wave.length || pendingNameChanges.size) {
         const parseStart = performance.now();
         const unpreparedProjectFiles = wave.filter((file) => !projectFileExtractions.has(file));
         const nextExtractions = await extractProjectFilesBeforeResolution({
@@ -3507,7 +3512,8 @@ async function buildProjectIndexIncrementalInProbeCache(
           }
         });
         const pendingIncrementalCacheWrites: PendingModuleCacheWrite[] = [];
-        const newDeclarationNames = new Map<string, Set<string>>();
+        const nameChanges = pendingNameChanges;
+        pendingNameChanges = new Map<string, DeclarationNameChanges>();
         for (const [file, mod, cacheWrite] of fileResults) {
           const key = fileIdentityKey(file);
           modules.set(key, mod);
@@ -3515,16 +3521,9 @@ async function buildProjectIndexIncrementalInProbeCache(
           const surface = publicSurfaceSignature(file, mod, projectRoot, opts?.languageExtensions);
           if (surface !== undefined) freshSurfaces.set(key, surface);
           const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);
-          const changedDeclarer =
-            trackedEntries[file] && support && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(support.id);
-          if (changedDeclarer) {
-            const names = newlyDeclaredImportNames(retiredModules.get(key), mod, support, projectRoot);
-            if (names.size) {
-              const group = isJvmLanguage(support.id) ? "jvm" : support.id;
-              let addedNames = newDeclarationNames.get(group);
-              if (!addedNames) newDeclarationNames.set(group, (addedNames = new Set<string>()));
-              for (const name of names) addedNames.add(name);
-            }
+          if (support && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(support.id)) {
+            const changes = declarationNameChanges(retiredModules.get(key), mod, support, projectRoot);
+            if (changes) recordDeclarationNameChanges(nameChanges, support, changes);
           }
           if (cacheWrite) pendingIncrementalCacheWrites.push(cacheWrite);
         }
@@ -3532,9 +3531,9 @@ async function buildProjectIndexIncrementalInProbeCache(
           writeModulesToCache(projectRoot, pendingIncrementalCacheWrites, opts);
         }
         parseMs += performance.now() - parseStart;
-        const restoredImporters = await collectRestoredDeclarationImporters(newDeclarationNames);
+        const recheckedImporters = await collectRecheckedDeclarationImporters(nameChanges);
         wave = collectSurfaceDependents();
-        if (restoredImporters.length) wave = [...new Set([...wave, ...restoredImporters])];
+        if (recheckedImporters.length) wave = [...new Set([...wave, ...recheckedImporters])];
         if (!wave.length) break;
         for (const file of wave) rebuildDependent(file);
         plannedFiles += wave.length;

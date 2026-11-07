@@ -28,6 +28,11 @@ import {
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
 import {
+  DUPLICATE_DECLARATION_CASES,
+  expectDuplicateRemovalMatchesColdBuilds,
+  withDuplicateDeclarations,
+} from "../helpers/duplicate-declaration-import-fixture.js";
+import {
   PHP_PATH_IMPORT_FORMS,
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
@@ -1281,6 +1286,17 @@ describe("PHP inherited member lookup", () => {
   });
 });
 
+describe("PHP removed duplicate declarations", () => {
+  it.each(DUPLICATE_DECLARATION_CASES.filter((candidate) => candidate.languageId === "php"))(
+    "follows the first declaring file after the $declarer duplicate is removed by $mutation, then restores it",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        expectDuplicateRemovalMatchesColdBuilds(fixture, project);
+      });
+    },
+  );
+});
+
 describe("PHP restored declaration imports", () => {
   it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "php"))(
     "restores a namespace import when its class returns in a non-path-matching file",
@@ -1290,6 +1306,79 @@ describe("PHP restored declaration imports", () => {
         expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
         expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
       });
+    },
+  );
+});
+
+describe("PHP namespace-only declaration moves", () => {
+  it.each([
+    ["a sibling namespace", "Lib2"],
+    ["a deeper namespace", "Lib\\Sub"],
+  ])(
+    "binds a class import after the class moves from %s into the imported namespace, and unbinds it on the way back",
+    async (_name, from) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-namespace-move-"));
+      try {
+        const declaration = (namespace: string): string => `<?php\nnamespace ${namespace};\nclass Gadget {}\n`;
+        const consumerLines = [
+          "<?php",
+          "namespace App;",
+          "use Lib\\Gadget;",
+          "function consume(Gadget $value): Gadget { return $value; }",
+          "",
+        ];
+        const files = await writeFixtureFiles(root, {
+          "lib/Gadget.php": declaration(from),
+          "app/Use.php": consumerLines.join("\n"),
+          "other/Decoy.php": declaration("Decoy"),
+        });
+        const declarer = files["lib/Gadget.php"]!;
+        const consumer = files["app/Use.php"]!;
+        const decoy = files["other/Decoy.php"]!;
+        const options = { cache: "disk", threads: 1 } as const;
+        await buildProjectIndex(root, options);
+        const query = { file: consumer, line: 4, column: columnOf(consumerLines, 4, "Gadget") };
+        const declarationSite = {
+          file: declarer,
+          line: 3,
+          column: columnOf(declaration("Lib").split("\n"), 3, "Gadget"),
+        };
+
+        await writeFile(declarer, declaration("Lib"), "utf8");
+        const moved = await buildProjectIndexIncremental(root, options);
+        const movedCold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        expect(declarationImportTargets(moved, consumer)).toEqual([`file:${fileIdentityKey(declarer)}`]);
+        expect(declarationImportTargets(moved, consumer)).toEqual(declarationImportTargets(movedCold, consumer));
+        expect(declarationImportTargets(moved, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+        const definition = await goToDefinition(moved, query);
+        expect(definition).toEqual(await goToDefinition(movedCold, query));
+        expect(definition.status).toBe("ok");
+        if (definition.status !== "ok") throw new Error("expected the moved class to be navigable");
+        expect(fileIdentityKey(definition.definition.file)).toBe(fileIdentityKey(declarer));
+        const references = await findReferences(moved, declarationSite);
+        expect(references).toEqual(await findReferences(movedCold, declarationSite));
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("expected references to the moved class");
+        expect(
+          references.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumer) && reference.range.start.line === 4,
+          ),
+        ).toBe(true);
+        expect(
+          references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(decoy)),
+        ).toBe(false);
+
+        await writeFile(declarer, declaration(from), "utf8");
+        const back = await buildProjectIndexIncremental(root, options);
+        const backCold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        expect(declarationImportTargets(back, consumer)).toEqual(["external:Lib\\Gadget"]);
+        expect(declarationImportTargets(back, consumer)).toEqual(declarationImportTargets(backCold, consumer));
+        expect(await goToDefinition(back, query)).toEqual(await goToDefinition(backCold, query));
+        expect((await goToDefinition(back, query)).status).toBe("not_found");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     },
   );
 });

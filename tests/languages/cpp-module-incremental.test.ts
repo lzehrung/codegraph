@@ -11,6 +11,11 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  expectDuplicateRemovalMatchesColdBuilds,
+  withDuplicateDeclarations,
+} from "../helpers/duplicate-declaration-import-fixture.js";
 
 const DISK_BUILD = { cache: "disk" as const, threads: 1 };
 
@@ -229,6 +234,17 @@ describe("C++20 module resolution across incremental rebuilds", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("C++ removed duplicate module declarations", () => {
+  it.each(DUPLICATE_DECLARATION_CASES.filter((candidate) => candidate.languageId === "cpp"))(
+    "binds the surviving module after the $declarer duplicate is removed by $mutation, then returns to ambiguous",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        expectDuplicateRemovalMatchesColdBuilds(fixture, project);
+      });
+    },
+  );
 });
 
 describe("C++ restored declaration imports", () => {

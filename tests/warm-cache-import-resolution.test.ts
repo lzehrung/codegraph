@@ -28,6 +28,11 @@ import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtu
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { csharpInheritedAliasCase } from "./helpers/csharp-inherited-alias-fixture.js";
 import {
+  DUPLICATE_DECLARATION_FIXTURES,
+  expectDuplicateRemovalMatchesColdBuilds,
+  withDuplicateDeclarations,
+} from "./helpers/duplicate-declaration-import-fixture.js";
+import {
   RESTORED_DECLARATION_FIXTURES,
   declarationImportTargets,
   withRestoredDeclarationImport,
@@ -1807,6 +1812,50 @@ describe("PHP incomplete declaration cache parity", () => {
         closeDiskCacheDatabase(root, options);
         await fsp.rm(root, { recursive: true, force: true });
       }
+    },
+  );
+});
+describe("removed duplicate declarations resolve cached ambiguous imports", () => {
+  const cases = DUPLICATE_DECLARATION_FIXTURES.flatMap((fixture) =>
+    (["delete", "rename"] as const).flatMap((mutation) =>
+      (["disk", "memory"] as const).map((cache) => ({ fixture, languageId: fixture.languageId, mutation, cache })),
+    ),
+  );
+
+  it.each(cases)(
+    "binds the survivor of a $languageId duplicate removed by $mutation, and ambiguity returns on restore ($cache)",
+    async ({ fixture, mutation, cache }) => {
+      await withDuplicateDeclarations(fixture, { cache, mutation, declarer: "second" }, async (project) => {
+        expectDuplicateRemovalMatchesColdBuilds(fixture, project);
+        if (cache !== "disk") return;
+        // Only the edited duplicate and the importer it moves are extracted. PHP binds the first duplicate, so
+        // removing the second one leaves its importer cached. The decoy, the survivor, and the importer of a
+        // missing name stay cached throughout.
+        const importerMoves = fixture.duplicatedTarget === "ambiguous";
+        const extractedByRemoval = (mutation === "rename" ? 1 : 0) + (importerMoves ? 1 : 0);
+        const filesAfterRemoval = mutation === "delete" ? 4 : 5;
+        expect(project.removedReport.files).toMatchObject({
+          total: filesAfterRemoval,
+          parsed: extractedByRemoval,
+          changed: extractedByRemoval,
+          cached: filesAfterRemoval - extractedByRemoval,
+        });
+        if (mutation === "rename") {
+          const extractedByRestore = importerMoves ? 2 : 1;
+          expect(project.restoredReport.files?.parsed).toBeGreaterThanOrEqual(1);
+          expect(project.restoredReport.files?.parsed).toBeLessThanOrEqual(2);
+          if (importerMoves) {
+            expect(project.restoredReport.files).toMatchObject({
+              parsed: extractedByRestore,
+              changed: extractedByRestore,
+              cached: 5 - extractedByRestore,
+            });
+          }
+        }
+        const unchangedReport: BuildReport = { timings: {} };
+        await buildProjectIndexIncremental(project.root, { cache, threads: 1, report: unchangedReport });
+        expectNoReprocessedFiles(unchangedReport);
+      });
     },
   );
 });
