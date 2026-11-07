@@ -63,6 +63,7 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
@@ -8780,6 +8781,31 @@ describe("Find References: C# qualified receiver types", () => {
         expect(
           result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
         ).toEqual(expected);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Find References: C# lowercase and keyword-verbatim aliases", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("keeps %s alias references separate from value receivers", async (alias) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-lowercase-alias-refs-"));
+    try {
+      const fixture = csharpAliasCallFixture(alias);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      for (const file of ["Target.cs", "Decoy.cs"] as const) {
+        const result = await findReferences(index, {
+          file: files[file]!,
+          line: 1,
+          column: fixture.files[file].indexOf("Run") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected alias call references");
+        expect(result.referenceCoverage.state).toBe("complete");
+        expect(
+          result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual(fixture.sites.filter((site) => site.target === file).map((site) => site.line));
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

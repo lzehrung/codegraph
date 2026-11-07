@@ -22,6 +22,7 @@ import {
   type ConsumerAgreementSite,
 } from "./helpers/consumer-agreement.js";
 import { collectGraphNavigationMismatches } from "./helpers/graph-navigation-parity.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
 
 const suite = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -669,6 +670,30 @@ const uses = (fromFile: string, fromName: string): AgreementRow["edge"] => ({
 });
 
 const rows: AgreementRow[] = [
+  ...CSHARP_ALIAS_CALL_SPELLINGS.flatMap((alias) => {
+    const fixture = csharpAliasCallFixture(alias);
+    // Caller-wide decoy exclusions use the single-target methods; parity below checks every site.
+    const singleTargetSites = fixture.sites.filter((site) => site.caller !== "Restored");
+    return singleTargetSites.flatMap((site) => [
+      useRow(
+        `C# ${alias} alias and value receiver at line ${site.line}`,
+        "C#",
+        fixture.files,
+        { file: "Use.cs", line: site.line, token: "Run" },
+        { file: site.target, line: 1 },
+        calls("Use.cs", site.caller),
+      ),
+      decoyRow(
+        `C# ${alias} alias and value receiver at line ${site.line}`,
+        "C#",
+        fixture.files,
+        { file: "Use.cs", line: site.line, token: "Run" },
+        { file: site.target === "Target.cs" ? "Decoy.cs" : "Target.cs", line: 1, token: "Run" },
+        "the alias or the shadowing value proves a different receiver type",
+        calls("Use.cs", site.caller),
+      ),
+    ]);
+  }),
   useRow(
     "C header prototype and definition",
     "C",

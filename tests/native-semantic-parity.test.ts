@@ -46,6 +46,7 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
@@ -3649,6 +3650,44 @@ nativeDescribe("native C# qualified receiver cache parity", () => {
           expect(result.status).toBe("ok");
           if (result.status === "ok") expect(result.definition.file).toBe(files[file]);
         }
+      }
+    }
+  });
+});
+nativeDescribe("native C# lowercase alias call cache parity", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("retains %s static and value targets on disk reload", async (alias) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-alias-calls-"));
+    tempDirs.push(root);
+    const fixture = csharpAliasCallFixture(alias);
+    const files = await writeFixtureFiles(root, fixture.files);
+    for (let build = 0; build < 2; build += 1) {
+      clearMemoryCache();
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const site of fixture.sites) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: site.line,
+          column: columnOf(fixture.lines, site.line, "Run"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files[site.target]);
+        const calls = graph.edges.filter((edge) => edge.label === "calls" && edge.site?.range.start.line === site.line);
+        expect(calls.map((edge) => graph.nodes.get(edge.to)?.file)).toEqual([files[site.target]]);
+      }
+      for (const file of ["Target.cs", "Decoy.cs"] as const) {
+        const result = await findReferences(index, {
+          file: files[file]!,
+          line: 1,
+          column: fixture.files[file].indexOf("Run") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected native alias call references");
+        expect(result.referenceCoverage.state).toBe("complete");
+        expect(
+          result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual(fixture.sites.filter((site) => site.target === file).map((site) => site.line));
       }
     }
   });

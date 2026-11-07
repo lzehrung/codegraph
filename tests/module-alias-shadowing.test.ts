@@ -20,6 +20,7 @@ import {
   csharpAliasValueFixture,
 } from "./helpers/csharp-alias-only-shadow-fixture.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpUnknownAliasReceiverFixture } from "./helpers/csharp-alias-call-fixture.js";
 
 const fixtures = [
   {
@@ -928,6 +929,45 @@ describe("module import alias shadowing", () => {
           ).toEqual([6, 7]);
         }
       }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("C# lowercase alias receiver proof", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("does not promote dynamic %s parameters or locals to types", async (alias) => {
+    const root = await mkTmpDir("cg-csharp-lowercase-alias-shadow-");
+    try {
+      const fixture = csharpUnknownAliasReceiverFixture(alias);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const line of [3, 4, 5]) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(fixture.lines, line, "Run"),
+        });
+        expect(result.status).toBe(line === 5 ? "ok" : "not_found");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Target.cs"]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.filter((edge) => edge.label === "calls");
+      expect(calls.map((edge) => [edge.site?.range.start.line, graph.nodes.get(edge.to)?.file])).toEqual([
+        [5, files["Target.cs"]],
+      ]);
+      const refs = await findReferences(index, {
+        file: files["Target.cs"]!,
+        line: 1,
+        column: fixture.files["Target.cs"].indexOf("Run") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected partial dynamic alias references");
+      expect(refs.referenceCoverage.state).toBe("partial");
+      expect(refs.referenceCoverage.reasons).toContain("strategy_unavailable");
+      expect(
+        refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+      ).toEqual([5]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

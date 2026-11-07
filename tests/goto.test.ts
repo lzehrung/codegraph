@@ -54,6 +54,7 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
@@ -6934,6 +6935,28 @@ describe("Go to Definition: C# qualified receiver types", () => {
           line,
           columnInLines(fixture.lines, line, "Run"),
           files[line === fixture.decoyCall ? "Other.cs" : "Value.cs"]!,
+          1,
+        );
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Go to Definition: C# lowercase and keyword-verbatim aliases", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("keeps %s alias and value calls on their own target", async (alias) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-lowercase-alias-goto-"));
+    try {
+      const fixture = csharpAliasCallFixture(alias);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      for (const site of fixture.sites) {
+        await testGoToDefinition(
+          index,
+          files["Use.cs"]!,
+          site.line,
+          columnInLines(fixture.lines, site.line, "Run"),
+          files[site.target]!,
           1,
         );
       }
