@@ -8,14 +8,31 @@
  * steps. Navigation settles immediately; the graph settles after its body walk.
  */
 
+import type { SyntaxNodeLike } from "../languages/types.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId } from "../types.js";
 
+import { sliceText } from "../util/ast.js";
+import { normalizeKotlinIdentifier } from "../util/identifiers.js";
+import {
+  collectMemberAccessChain,
+  isReceiverNameNode,
+  isQualifiedTypeSuffix,
+  jvmQualifiedTypeSegments,
+  kotlinQualifiedExpression,
+} from "../util/member-access.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { isAmbiguousResolutionReason, UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
+import { getPackageDeclarationName } from "./compilation-units.js";
+import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
+import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
+import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
+  resolveJvmPackageSymbol,
 } from "./navigation-goto.js";
 import {
   definitionForBinding,
@@ -32,6 +49,7 @@ import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-c
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
 import type {
   BareNameUse,
+  JvmTypeNameResolver,
   LoadingParsedFileProvider,
   NameLookupState,
   NameResolution,
@@ -121,6 +139,22 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
   return result;
 }
 
+/** Resolve JVM type syntax using the same on-demand parsed files as positioned navigation. */
+export const resolveJvmTypeName: JvmTypeNameResolver = (index, mod, parsed, scopeIndex, node) => {
+  const files = createLoadingParsedFileProvider(index, { file: mod.file, parsed });
+  const use: BareNameUse = {
+    index,
+    mod,
+    file: mod.file,
+    parsed,
+    scopeIndex,
+    files,
+    node,
+    name: sliceText(node, parsed.source),
+  };
+  return withParsedFiles(files, () => resolveBareName(use));
+};
+
 /** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */
 export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): boolean {
   const policy = nameLookupPolicyFor(use.parsed.sup.id);
@@ -130,6 +164,81 @@ export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): b
     return policy.moduleAliasIsUnshadowed({ use, lookupName: use.name, closestBinding });
   }
   return fileBindingIsUnshadowed(use.scopeIndex, closestBinding, aliasFrom);
+}
+
+/** A nested classifier is proven only by its recorded direct owner and visible declaration. */
+function jvmNestedType(use: BareNameUse, owner: SymbolDef, name: string): SymbolDef | undefined {
+  const module = use.index.byFile.get(fileIdentityKey(owner.file));
+  const support = supportForFileWithoutHeaderSample(owner.file, use.index.languageExtensions);
+  const ownerStart = owner.range.start.index;
+  if (!module || ownerStart === undefined || (support?.id !== "java" && support?.id !== "kotlin")) return undefined;
+  const consumerLanguage = use.parsed.sup.id === "java" ? "java" : "kotlin";
+  const samePackage =
+    getPackageDeclarationName(use.index, owner.file, support.id) ===
+    getPackageDeclarationName(use.index, use.file, consumerLanguage);
+  const normalized = support.normalizeIdentifier(normalizeKotlinIdentifier(name));
+  let result: SymbolDef | undefined;
+  for (const entry of module.exports) {
+    if (entry.type !== "local" || support.normalizeIdentifier(entry.exportedAs) !== normalized) continue;
+    if (!isJvmTypeWildcardMember(entry.target, ownerStart, support.id)) continue;
+    if (!isJvmPackageSymbolVisible(entry.target, support.id, consumerLanguage, samePackage)) continue;
+    if (result && result.range.start.index !== entry.target.range.start.index) return undefined;
+    result = entry.target;
+  }
+  return result;
+}
+
+function jvmNestedPath(use: BareNameUse, owner: SymbolDef, parts: readonly string[], start: number): SymbolDef | null {
+  let current = owner;
+  for (let index = start; index < parts.length; index += 1) {
+    const nested = jvmNestedType(use, current, parts[index]!);
+    if (!nested) return null;
+    current = nested;
+  }
+  return current;
+}
+
+/** Resolves a qualified JVM name through a visible type owner or a declared package, never a bare suffix. */
+function resolveQualifiedJvmName(
+  use: BareNameUse,
+  root: SyntaxNodeLike,
+  parts: readonly string[],
+  typeOnly: boolean,
+): SymbolDef | null {
+  const { index, file, parsed, scopeIndex } = use;
+  const languageId = parsed.sup.id === "java" ? "java" : "kotlin";
+  const rootName = parts[0]!;
+  let rootResult = resolveBareName({ ...use, node: root, name: rootName });
+  while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
+  const rootDefinition = rootResult?.status === "ok" ? rootResult.definition : null;
+  const rootBinding = findClosestScopeBinding(scopeIndex, rootName, root, parsed.sup);
+  if (rootDefinition || rootBinding) {
+    if (!rootDefinition || !declaresMembers(rootDefinition)) return null;
+    return jvmNestedPath(use, rootDefinition, parts, 1);
+  }
+  if (rootResult?.status === "not_found" && isAmbiguousResolutionReason(rootResult.reason)) return null;
+
+  let target: SymbolDef | null = null;
+  let packageName = normalizeKotlinIdentifier(rootName);
+  for (let position = 1; position < parts.length; position += 1) {
+    const name = parts[position]!;
+    const hasNestedSuffix = position + 1 < parts.length;
+    const owner = resolveJvmPackageSymbol(index, packageName, name, languageId, file, typeOnly || hasNestedSuffix);
+    if (owner === null) return null;
+    const resolved = owner ? jvmNestedPath(use, owner, parts, position + 1) : null;
+    if (owner && !resolved) return null;
+    if (resolved) {
+      if (
+        target &&
+        (fileIdentityKey(target.file) !== fileIdentityKey(resolved.file) ||
+          target.range.start.index !== resolved.range.start.index)
+      )
+        return null;
+      target = resolved;
+    }
+    packageName += `.${normalizeKotlinIdentifier(name)}`;
+  }
+  return target;
 }
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
@@ -142,6 +251,33 @@ export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): b
 export function resolveBareName(use: BareNameUse): NameResolution | null {
   const { index, mod, file, parsed, scopeIndex, node } = use;
   const { sup, source, tree } = parsed;
+  if (sup.id === "java" || sup.id === "kotlin") {
+    const qualifiedSuffix = isQualifiedTypeSuffix(sup, node);
+    const qualifiedContainer = node.type === "user_type" || node.type === "scoped_type_identifier";
+    const segments = qualifiedSuffix || qualifiedContainer ? jvmQualifiedTypeSegments(sup, node) : null;
+    if (segments) {
+      const parts = segments.map((segment) => sliceText(segment, source));
+      const target = resolveQualifiedJvmName(use, segments[0]!, parts, true);
+      return target
+        ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
+        : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    }
+    if (qualifiedSuffix) {
+      return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    }
+    const expression = kotlinQualifiedExpression(sup, node);
+    if (expression) {
+      const chain = collectMemberAccessChain({ sup, source, chainNode: expression });
+      if (!chain || !isReceiverNameNode(sup, chain.base.type)) {
+        return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+      }
+      const parts = [sliceText(chain.base, source), ...chain.names.toReversed()];
+      const target = resolveQualifiedJvmName(use, chain.base, parts, false);
+      return target
+        ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
+        : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    }
+  }
   const policy = nameLookupPolicyFor(sup.id);
   const lookupName = policy.lookupName?.(use) ?? use.name;
   const early = policy.beforeLexical?.(use, lookupName);
@@ -259,14 +395,4 @@ export function nameResolutionPreloadFiles(index: ProjectIndex, mod: ModuleIndex
     files.set(fileIdentityKey(file), file);
   }
   return [...files.values()];
-}
-
-/**
- * The definition a resolution names without running deferred member steps: a deferred step
- * contributes its fallback. For consumers that settle member lookups separately.
- */
-export function definitionWithoutDeferredSteps(resolution: NameResolution | null): SymbolDef | null {
-  let current = resolution;
-  while (current?.status === "deferred") current = current.fallback;
-  return current?.status === "ok" ? current.definition : null;
 }

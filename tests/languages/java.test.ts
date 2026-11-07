@@ -32,6 +32,7 @@ import {
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
 import { lookupJvmImport } from "../../src/util/resolution/jvm.js";
+import { JAVA_QUALIFIED_TYPE_SOURCES, JVM_QUALIFIED_REVIEW_CASES } from "../helpers/qualified-type-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "java",
@@ -2146,6 +2147,64 @@ describe("Java default-package imports", () => {
       expect(index.graph.edges.some((edge) => edge.from === files["app/Use.java"] && edge.to.type === "file")).toBe(
         false,
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java qualified type imports", () => {
+  it("does not attribute a qualified parameter type to a same-named import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-type-"));
+    try {
+      const files = await writeFixtureFiles(root, JAVA_QUALIFIED_TYPE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = (caller: string) =>
+        graph.edges
+          .filter((edge) => graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${edge.label}:${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`);
+      expect(targets("qualified")).toContain(`uses:${files["other/Widget.java"]}:Widget`);
+      expect(targets("qualified")).toContain(`calls:${files["other/Widget.java"]}:act`);
+      expect(targets("qualified")).not.toContain(`uses:${files["lib/Widget.java"]}:Widget`);
+      expect(targets("qualified")).not.toContain(`calls:${files["lib/Widget.java"]}:act`);
+      expect(targets("bare")).toContain(`uses:${files["lib/Widget.java"]}:Widget`);
+      expect(targets("bare")).toContain(`calls:${files["lib/Widget.java"]}:act`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Java qualified package and nested type identities", () => {
+  it("keeps same-named imports, package types, nested types, and constructed receivers separate", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-qualified-review-"));
+    try {
+      const row = JVM_QUALIFIED_REVIEW_CASES[1];
+      const files = await writeFixtureFiles(root, row.sources);
+      const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+      const targets = (caller: string, label: string) =>
+        graph.edges
+          .filter((edge) => edge.label === label && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+      for (const [caller, target, name] of [
+        ["a", row.other, "Widget"],
+        ["b", row.imported, "Widget"],
+        ["c", row.nested, "Inner"],
+        ["d", row.nested, "Inner"],
+        ["e", row.other, "Widget"],
+        ["bare", row.imported, "Widget"],
+      ] as const)
+        expect(targets(caller, "uses")).toContain(`${files[target]}::${name}`);
+      expect(targets("a", "uses")).not.toContain(`${files[row.imported]}::Widget`);
+      expect(targets("e", "uses")).not.toContain(`${files[row.imported]}::Widget`);
+      for (const caller of ["c", "d"]) {
+        expect(targets(caller, "uses")).not.toContain(`${files[row.otherNested]}::Inner`);
+        expect(targets(caller, "calls")).toContain(`${files[row.nested]}::go`);
+        expect(targets(caller, "calls")).not.toContain(`${files[row.otherNested]}::go`);
+      }
+      expect(targets("e", "calls")).toContain(`${files[row.other]}::act`);
+      expect(targets("e", "calls")).not.toContain(`${files[row.imported]}::act`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

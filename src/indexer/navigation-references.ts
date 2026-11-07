@@ -55,7 +55,7 @@ import {
   resolveExport,
   resolveImported,
 } from "./navigation-resolve.js";
-import { isAmbiguousResolutionReason } from "./ambiguous-resolution.js";
+import { isAmbiguousResolutionReason, UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
 import {
   ensurePhpNamespaceSymbolIndex,
   phpNamespaceSymbolIndexFor,
@@ -800,6 +800,7 @@ export async function collectVerifiedNamedNodeReferences(
     // it. A name with no binding at all is proven unrelated by scope and stays out.
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
       if (
+        resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
         (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
         (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
       ) {

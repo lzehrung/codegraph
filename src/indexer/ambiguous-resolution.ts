@@ -7,6 +7,8 @@ export const AMBIGUOUS_STAR_IMPORT_REASON = "Ambiguous star import";
 export const AMBIGUOUS_CPP_OVERLOAD_REASON = "Ambiguous C++ overload";
 export const AMBIGUOUS_CPP_USING_DECLARATION_REASON = "No unique C++ using-declaration target";
 export const AMBIGUOUS_CPP_USING_DIRECTIVE_REASON = "No unique C++ using-directive target";
+/** The name may bind through its qualifier, but a bare import cannot decide it. */
+export const UNRESOLVED_QUALIFIED_TYPE_REASON = "Unresolved qualified type";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,

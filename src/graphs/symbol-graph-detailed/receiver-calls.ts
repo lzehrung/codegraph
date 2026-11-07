@@ -21,6 +21,7 @@ import {
   isMemberAccessNode,
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
+  qualifiedTypeContaining,
   receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
@@ -722,8 +723,13 @@ export function rustImplSelfTypeNode(implItem: SyntaxNodeLike, sup: LanguageSupp
 function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
   if (expr.type !== "call" && expr.type !== "call_expression") return null;
   const callee = expr.childForFieldName("function") ?? expr.namedChildren[0] ?? null;
-  if (!callee || !isReceiverNameNode(sup, callee.type)) return null;
-  const name = sliceText(callee, source);
+  if (!callee) return null;
+  const member =
+    sup.id === "kotlin" && callee.type === "navigation_expression"
+      ? getMemberAccessParts(sup, callee).property
+      : callee;
+  if (!member || !isReceiverNameNode(sup, member.type)) return null;
+  const name = sliceText(member, source);
   if (!name) return null;
   const first = name[0]!;
   if (first !== first.toUpperCase()) return null;
@@ -821,7 +827,11 @@ function bindingValueExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
 
 export function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   const typeField = node.childForFieldName("type");
-  if (typeField) return unwrapNamedType(typeField, sup) ?? typeField;
+  if (typeField) {
+    const named = unwrapNamedType(typeField, sup);
+    if (!named) return typeField;
+    return sup.id === "csharp" ? named : (qualifiedTypeContaining(sup, named) ?? named);
+  }
   const typedChild = node.namedChildren.find(
     (child) =>
       child.type === "named_type" ||
@@ -829,7 +839,11 @@ export function declaredTypeNameNode(node: SyntaxNodeLike, sup: LanguageSupport)
       child.type === "type_annotation" ||
       child.type === "type",
   );
-  if (typedChild) return unwrapNamedType(typedChild, sup) ?? typedChild;
+  if (typedChild) {
+    const named = unwrapNamedType(typedChild, sup);
+    if (!named) return typedChild;
+    return sup.id === "csharp" ? named : (qualifiedTypeContaining(sup, named) ?? named);
+  }
   if (node.type === "let_declaration") return null;
   const ids = node.namedChildren.filter(
     (child) => isReceiverNameNode(sup, child.type) || child.type === "type_identifier" || child.type === "name",

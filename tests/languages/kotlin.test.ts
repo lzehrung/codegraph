@@ -24,6 +24,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
+import { JVM_QUALIFIED_REVIEW_CASES, KOTLIN_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -1876,6 +1877,70 @@ describe("Kotlin default-package imports", () => {
             graph.nodes.get(edge.from)?.name === "make" && graph.nodes.get(edge.to)?.file === files["Default.kt"],
         ),
       ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin qualified type imports", () => {
+  it("does not attribute a qualified parameter type to a same-named import", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-type-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_QUALIFIED_TYPE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = (caller: string) =>
+        graph.edges
+          .filter((edge) => graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${edge.label}:${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`);
+      expect(targets("qualified")).toContain(`uses:${files["other/Widget.kt"]}:Widget`);
+      expect(targets("qualified")).toContain(`calls:${files["other/Widget.kt"]}:act`);
+      expect(targets("qualified")).not.toContain(`uses:${files["lib/Widget.kt"]}:Widget`);
+      expect(targets("qualified")).not.toContain(`calls:${files["lib/Widget.kt"]}:act`);
+      expect(targets("bare")).toContain(`uses:${files["lib/Widget.kt"]}:Widget`);
+      expect(targets("bare")).toContain(`calls:${files["lib/Widget.kt"]}:act`);
+      expect(targets("generic")).toContain(`uses:${files["lib/Widget.kt"]}:Widget`);
+      expect(targets("qualifiedGeneric")).not.toContain(`uses:${files["lib/Widget.kt"]}:Widget`);
+      expect(targets("qualifiedGeneric")).toContain(`uses:${files["other/Widget.kt"]}:Widget`);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin qualified package and nested type identities", () => {
+  it("keeps same-named imports, package types, nested types, and constructed receivers separate", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-review-"));
+    try {
+      const row = JVM_QUALIFIED_REVIEW_CASES[0];
+      const files = await writeFixtureFiles(root, row.sources);
+      const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+      const targets = (caller: string, label: string) =>
+        graph.edges
+          .filter((edge) => edge.label === label && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+      for (const [caller, target, name] of [
+        ["a", row.other, "Widget"],
+        ["b", row.imported, "Widget"],
+        ["c", row.nested, "Inner"],
+        ["d", row.nested, "Inner"],
+        ["e", row.other, "Widget"],
+        ["bare", row.imported, "Widget"],
+      ] as const)
+        expect(targets(caller, "uses")).toContain(`${files[target]}::${name}`);
+      expect(targets("a", "uses")).not.toContain(`${files[row.imported]}::Widget`);
+      expect(targets("e", "uses")).not.toContain(`${files[row.imported]}::Widget`);
+      for (const caller of ["c", "d"]) {
+        expect(targets(caller, "uses")).not.toContain(`${files[row.otherNested]}::Inner`);
+        expect(targets(caller, "calls")).toContain(`${files[row.nested]}::go`);
+        expect(targets(caller, "calls")).not.toContain(`${files[row.otherNested]}::go`);
+      }
+      expect(targets("e", "calls")).toContain(`${files[row.other]}::act`);
+      expect(targets("e", "calls")).not.toContain(`${files[row.imported]}::act`);
+      expect(targets("shadow", "calls")).toContain(`${files[row.consumer]}::Widget`);
+      expect(targets("shadow", "uses")).not.toContain(`${files[row.imported]}::Widget`);
+      expect(targets("shadow", "calls")).not.toContain(`${files[row.other]}::Widget`);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

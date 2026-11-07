@@ -1,6 +1,6 @@
 /**
- * Types for the shared bare-name lookup (`./name-resolution.ts`) and its per-language policies
- * (`./name-lookup-policies/`). A leaf module, so policies can name these types without a cycle.
+ * Types and small result helpers for shared bare-name lookup and its per-language policies.
+ * A leaf module, so policies and member navigation can use them without a cycle.
  */
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
@@ -39,6 +39,22 @@ export type NameResolution =
       /** The answer when the lookup proves a hiding member that is not a valid target. */
       hidden?: GoToResult;
     };
+
+/** Resolve a JVM type with the parsed files required by the shared name lookup. */
+export type JvmTypeNameResolver = (
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  parsed: ParsedFileContext,
+  scopeIndex: ScopeIndex,
+  node: SyntaxNodeLike,
+) => Promise<NameResolution | null>;
+
+/** The definition a resolution names without running deferred member steps. */
+export function definitionWithoutDeferredSteps(resolution: NameResolution | null): SymbolDef | null {
+  let current = resolution;
+  while (current?.status === "deferred") current = current.fallback;
+  return current?.status === "ok" ? current.definition : null;
+}
 
 export type BareNameUse = {
   index: ProjectIndex;

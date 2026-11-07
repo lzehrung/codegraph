@@ -1,13 +1,14 @@
 import {
-  definitionWithoutDeferredSteps,
   moduleAliasIsUnshadowed,
   nameResolutionPreloadFiles,
   phpImportTypeAtPosition,
   resolveBareName,
+  resolveJvmTypeName,
   settleNameResolution,
   type BareNameUse,
   type NameResolution,
 } from "../indexer/name-resolution.js";
+import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
@@ -58,6 +59,7 @@ import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { replaceContents } from "../util/collections.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { isQualifiedTypeSuffix } from "../util/member-access.js";
 import { buildSymbolGraph, defNodeId, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
@@ -514,6 +516,7 @@ export async function buildSymbolGraphDetailed(
       const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
         moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name));
       const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
+        if (isQualifiedTypeSuffix(sup, node)) return false;
         if (sup.id === "csharp") {
           return csharpAliasTableAnswers(moduleEntry, name, node) && unshadowedModuleAlias(name, node);
         }
@@ -566,6 +569,7 @@ export async function buildSymbolGraphDetailed(
             tree,
             sup,
             scopeIndex,
+            resolveJvmTypeName,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
               // The receiver lookup selects the alias in scope itself.
