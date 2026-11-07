@@ -372,4 +372,68 @@ nativeDescribe("type hierarchy language parity", () => {
       }
     }
   });
+
+  it("classifies imported Swift extension protocol conformance without inheriting a decoy", async () => {
+    const root = await mkTmpDir("cg-hierarchy-swift-extension-");
+    roots.push(root);
+    await fs.writeFile(
+      path.join(root, "Models.swift"),
+      "protocol Proto {}\nstruct Widget {}\nstruct Box<Element> {}\n",
+    );
+    await fs.writeFile(path.join(root, "Extension.swift"), "import Models\nextension Widget: Proto {}\n");
+    await fs.writeFile(path.join(root, "Decoy.swift"), "private struct Widget {}\n");
+    await fs.writeFile(
+      path.join(root, "Conditional.swift"),
+      "import Models\nextension Box: Proto where Element: Equatable {}\n",
+    );
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const owner = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Extension.swift",
+    );
+    const nominal = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Models.swift",
+    );
+    const protocol = [...graph.nodes.values()].find(
+      (node) => node.name === "Proto" && path.basename(node.file) === "Models.swift",
+    );
+    const decoy = [...graph.nodes.values()].find(
+      (node) => node.name === "Widget" && path.basename(node.file) === "Decoy.swift",
+    );
+    const box = [...graph.nodes.values()].find(
+      (node) => node.name === "Box" && path.basename(node.file) === "Models.swift",
+    );
+    expect(owner).toBeDefined();
+    expect(nominal).toBeDefined();
+    expect(protocol).toBeDefined();
+    expect(decoy).toBeDefined();
+    expect(box).toBeDefined();
+    expect(
+      graph.edges.some((edge) => edge.from === owner!.id && edge.to === nominal!.id && edge.label === "uses"),
+    ).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === nominal!.id && edge.to === protocol!.id && edge.label === "implements"),
+    ).toBe(true);
+    expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id)).toBe(false);
+    expect(
+      graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id && edge.label === "extends"),
+    ).toBe(false);
+    expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === decoy!.id)).toBe(false);
+    const hierarchy = findTypeHierarchy(graph, owner!.id, "super");
+    expect(hierarchy.status).toBe("ok");
+    if (hierarchy.status !== "ok") throw new Error("Expected Swift extension conformance");
+    expect(hierarchy.relations).toEqual([]);
+    const nominalHierarchy = findTypeHierarchy(graph, nominal!.id, "super");
+    expect(nominalHierarchy.status).toBe("ok");
+    if (nominalHierarchy.status !== "ok") throw new Error("Expected the nominal type hierarchy");
+    expect(nominalHierarchy.relations.map((relation) => relation.targetId)).toEqual([protocol!.id]);
+    const boxHierarchy = findTypeHierarchy(graph, box!.id, "super");
+    expect(boxHierarchy.status).toBe("ok");
+    if (boxHierarchy.status !== "ok") throw new Error("Expected the nominal Box type hierarchy");
+    expect(boxHierarchy.relations).toEqual([]);
+    const implementations = findImplementations(index, graph, protocol!.id);
+    expect(implementations.status).toBe("ok");
+    if (implementations.status !== "ok") throw new Error("Expected unique Swift implementing type");
+    expect(implementations.implementations.map((match) => match.symbolId)).toEqual([nominal!.id]);
+  });
 });

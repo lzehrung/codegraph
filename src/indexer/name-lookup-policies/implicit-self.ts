@@ -31,6 +31,7 @@ import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
+import { isSwiftExtensionTypeName } from "../shared-owner-identity.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
 import { csharpTypeOnlyName } from "../scope-nodes.js";
 
@@ -81,6 +82,12 @@ function namesEnclosingSwiftType(state: NameLookupState, def: SymbolDef): boolea
 }
 
 export const swiftLookupPolicy: NameLookupPolicy = {
+  beforeLexical(use) {
+    if (!isSwiftExtensionTypeName(use.node, use.parsed.source)) return undefined;
+    if (use.node.parent?.namedChildren.length === 1) return undefined;
+    // A qualified extension requires proof of its owner, not a bare suffix match.
+    return { status: "not_found", reason: "Qualified Swift extension type is not proven" };
+  },
   fromClosestBinding: ownOverloadDeclaration,
   // Swift checks every bare name through `self`; method-local bindings still win.
   onLocal(state, local) {
@@ -89,6 +96,7 @@ export const swiftLookupPolicy: NameLookupPolicy = {
     return implicitSelf(state, lexical(state, local));
   },
   afterCrossModule(state, resolved: GoToResult | null) {
+    if (isSwiftExtensionTypeName(state.use.node, state.use.parsed.source)) return resolved;
     if (resolved?.status === "ok" && namesEnclosingSwiftType(state, resolved.definition)) return resolved;
     // A member reached only by name, not through `self`, is not a module-level target.
     const memberOnly = resolved?.status === "ok" && !!resolved.definition.isMember;

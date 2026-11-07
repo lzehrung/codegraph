@@ -3409,6 +3409,91 @@ nativeDescribe("native semantic coverage", () => {
       expect(warmTargets, `${peerCase.name}: warm call edge`).toEqual(coldTargets);
     }
   });
+  it("reopens Swift extension type uses from disk without reviving extension exports", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-extension-header-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-extension-header-cache-"));
+    tempDirs.push(root, cacheDir);
+    const models = ["protocol Proto {}", "struct Widget {}", "extension Widget { func own() {} }"];
+    const extensions = [
+      "import Models",
+      "extension Widget: Proto { func added() {} }",
+      "extension String { func builtIn() {} }",
+    ];
+    const paths = await writeFixtureFiles(root, {
+      "Models.swift": `${models.join("\n")}\n`,
+      "Extensions.swift": `${extensions.join("\n")}\n`,
+      "Decoy.swift": "private struct Widget {}\n",
+    });
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    clearMemoryCache();
+    const warm = await buildProjectIndex(root, options);
+    const header = { file: paths["Extensions.swift"]!, line: 2, column: columnOf(extensions, 2, "Widget") };
+    const declaration = { file: paths["Models.swift"]!, line: 2, column: columnOf(models, 2, "Widget") };
+    const expectedReferences = [
+      `${paths["Models.swift"]}:2`,
+      `${paths["Models.swift"]}:3`,
+      `${paths["Extensions.swift"]}:2`,
+    ].sort();
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      const extensionModule = index.byFile.get(fileIdentityKey(header.file));
+      expect(
+        extensionModule?.locals.map((local) => local.localName),
+        phase,
+      ).toContain("Widget");
+      expect(
+        extensionModule?.exports.some((entry) => entry.type === "local" && entry.exportedAs === "Widget"),
+        phase,
+      ).toBe(false);
+      const target = await goToDefinition(index, header);
+      expect(target.status, phase).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected indexed Swift type on an extension header");
+      expect(target.definition.file, phase).toBe(declaration.file);
+      expect(target.definition.range.start.line, phase).toBe(declaration.line);
+      const missing = await goToDefinition(index, {
+        file: header.file,
+        line: 3,
+        column: columnOf(extensions, 3, "String"),
+      });
+      expect(missing.status, phase).toBe("not_found");
+      const refs = await findReferences(index, declaration);
+      expect(refs.status, phase).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected complete Swift extension type references");
+      expect(refs.referenceCoverage, phase).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refs.references.map((reference) => `${reference.file}:${reference.range.start.line}`).sort(),
+        phase,
+      ).toEqual(expectedReferences);
+      expect(
+        refs.references.some((reference) => reference.file === paths["Decoy.swift"]),
+        phase,
+      ).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      const owner = [...graph.nodes.values()].find((node) => node.file === header.file && node.name === "Widget");
+      expect(owner, phase).toBeDefined();
+      const targetEdges = graph.edges
+        .filter((edge) => edge.from === owner?.id && edge.label === "uses")
+        .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targetEdges, phase).toEqual([declaration.file]);
+      const nominal = [...graph.nodes.values()].find(
+        (node) => node.file === declaration.file && node.name === "Widget",
+      );
+      expect(nominal, phase).toBeDefined();
+      const protocolEdges = graph.edges
+        .filter((edge) => edge.from === nominal?.id && edge.label === "implements")
+        .map((edge) => `${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`);
+      expect(protocolEdges, phase).toEqual([`${declaration.file}:Proto`]);
+      expect(
+        graph.edges.some((edge) => edge.from === owner?.id && edge.label === "implements"),
+        phase,
+      ).toBe(false);
+    }
+  });
+
   it("keeps quoted Swift names and source ranges stable across a native disk-cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-"));
     const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-cache-"));

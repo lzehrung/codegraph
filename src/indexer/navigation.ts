@@ -88,6 +88,7 @@ import {
 } from "./reference-query-index.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
+import { isSwiftExtensionTypeName } from "./shared-owner-identity.js";
 import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
@@ -390,7 +391,7 @@ export async function goToDefinition(
   const localAtPosition = mod.locals.find(
     (local) => local.range.start.index === node.startIndex && local.range.end.index === node.endIndex,
   );
-  if (localAtPosition) {
+  if (localAtPosition && (sup.id !== "swift" || !isSwiftExtensionTypeName(node, source))) {
     return okGoToResult(index, localAtPosition, {
       resolution: "exact",
       confidence: "high",
@@ -671,6 +672,13 @@ async function findReferencesInternal(
         column: req.column,
       }),
     );
+    let isSwiftExtensionHeader = false;
+    if (localAtPosition && supportForFileWithoutHeaderSample(req.file, index.languageExtensions)?.id === "swift") {
+      const parsed = await ensureParsedContextForIndex(index, req.file);
+      const pos = toTreeSitterPosition({ line: req.line, column: req.column });
+      const node = parsed.tree.rootNode.descendantForPosition(pos, pos);
+      isSwiftExtensionHeader = !!node && isSwiftExtensionTypeName(node, parsed.source);
+    }
     // A column can share a table's name. Only a syntactically proven object or routine mention
     // overrides the definition that encloses the position; a column stays on that definition.
     const namesObject =
@@ -682,7 +690,7 @@ async function findReferencesInternal(
     if (sqlMention && sqlTarget?.status === "ok") {
       def = sqlTarget.definition;
       provenance = sqlTarget.provenance;
-    } else if (localAtPosition) {
+    } else if (localAtPosition && !isSwiftExtensionHeader) {
       def = localAtPosition;
       provenance = createNavigationProvenance("exact", "high");
       const canonical = await canonicalizePythonReceiverAttributeDefinition(index, def, {

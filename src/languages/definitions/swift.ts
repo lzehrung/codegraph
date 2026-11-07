@@ -97,9 +97,6 @@ export const SWIFT_DEF: LanguageDefinition = {
       (source_file (class_declaration declaration_kind: "enum" name: (_) @name))
       (class_body (class_declaration declaration_kind: "enum" name: (_) @name))
       (enum_class_body (class_declaration declaration_kind: "enum" name: (_) @name))
-      (source_file (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
-      (class_body (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
-      (enum_class_body (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name)))
       (source_file (class_declaration declaration_kind: "actor" name: (_) @name))
       (class_body (class_declaration declaration_kind: "actor" name: (_) @name))
       (enum_class_body (class_declaration declaration_kind: "actor" name: (_) @name))
@@ -132,7 +129,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       (class_declaration declaration_kind: "class" name: (_) @name)
       (class_declaration declaration_kind: "struct" name: (_) @name)
       (class_declaration declaration_kind: "enum" name: (_) @name)
-      (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name))
+      (class_declaration declaration_kind: "extension" name: (user_type) @name)
       (class_declaration declaration_kind: "actor" name: (_) @name)
       (enum_entry name: (simple_identifier) @name)
       (protocol_declaration name: (type_identifier) @name)
@@ -174,9 +171,13 @@ export const SWIFT_DEF: LanguageDefinition = {
       if (declarationKind === "enum") return "type";
       return "class";
     }
-    // Extension names are wrapped in a user_type node
-    // (`extension Container { ... }` -> name: (user_type (type_identifier))).
-    if (parent.type === "user_type" && parent.parent?.type === "class_declaration") return "class";
+    // Native query enrichment may return the identifier inside a captured user_type.
+    if (
+      parent.type === "user_type" &&
+      parent.parent?.type === "class_declaration" &&
+      parent.parent.childForFieldName("declaration_kind")?.text === "extension"
+    )
+      return "class";
     if (
       parent.type === "protocol_declaration" ||
       parent.type === "typealias_declaration" ||
@@ -189,14 +190,6 @@ export const SWIFT_DEF: LanguageDefinition = {
     const parent = node.parent;
     if (!parent) return false;
     if (isNameFieldOnParent(node, ["class_declaration"])) return true;
-    // Extension names are wrapped in a user_type node
-    // (`extension Container { ... }` -> name: (user_type (type_identifier))).
-    if (
-      parent.type === "user_type" &&
-      parent.parent?.type === "class_declaration" &&
-      parent.parent.childForFieldName("name")?.id === parent.id
-    )
-      return true;
     if (
       isNameFieldOnParent(node, [
         "protocol_declaration",

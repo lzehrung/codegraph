@@ -87,6 +87,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - Bare names reach same-unit peers: same directory and package (Go, Java, Kotlin), compatible namespaces (C#), same directory (Swift).
 - C# partial types and Swift extensions share members only with a matching full owner identity.
+- Swift [extensions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/extensions/) name an existing type: `goToDefinition` on an unqualified header type opens its indexed declaration, `findReferences` includes that header, and the detailed graph links the extension to its type while preserving member ownership. Unindexed types and qualified extension names such as `Outer.Inner` return `not_found` rather than guessing a bare suffix. An unconditional cross-file protocol conformance belongs to the nominal type as an `implements` edge, not to a second extension type; conditional or unproven conformances do not imply an unconditional hierarchy edge.
 - Maven/Gradle source sets, `.csproj` items, and SwiftPM targets are not read: same-package JVM files outside the directory, and C# or Swift files elsewhere, give `partial` (`strategy_unavailable`).
 - A package-less JVM file is complete only if no other indexed JVM file can join it and all were readable.
 - C# partial-type and Swift extension members follow the same rule.

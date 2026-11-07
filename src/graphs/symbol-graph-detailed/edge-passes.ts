@@ -1798,6 +1798,7 @@ async function recordIdentifierRelations(
     index: number,
     identifier: SyntaxNodeLike,
   ) => "extends" | "implements" | "trait" | "mixin",
+  extensionNominal?: SymbolDef | null,
 ): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
@@ -1831,7 +1832,30 @@ async function recordIdentifierRelations(
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    recordDefEdge(context, fromId, target, relationForTarget(target, index, identifier), identifier);
+    let relation = relationForTarget(target, index, identifier);
+    if (context.sup.id === "swift" && relation === "extends" && target.kind === SymbolKind.TypeAlias) {
+      // Swift protocols are indexed as types; a protocol from another file is
+      // absent from this file's interfaceIds, so prove its declaration before
+      // labeling an extension's conformance as inheritance.
+      const targetTree =
+        fileIdentityKey(target.file) === fileIdentityKey(context.moduleEntry.file)
+          ? context.tree
+          : (await context.loadParsedFile(target.file))?.tree;
+      const start = target.range.start.index;
+      if (!targetTree || start === undefined) continue;
+      const name = targetTree.rootNode.descendantForIndex(start, target.range.end.index ?? start);
+      if (name.parent?.type !== "protocol_declaration") continue;
+      relation = "implements";
+    }
+    if (extensionNominal !== undefined) {
+      // An extension is not a second implementing type. Conditional or
+      // unproven extensions cannot establish unconditional conformance.
+      if (relation === "implements" && extensionNominal) {
+        recordDefEdge(context, ensureNode(context, extensionNominal), target, relation, identifier);
+      }
+    } else {
+      recordDefEdge(context, fromId, target, relation, identifier);
+    }
   }
 }
 
@@ -1914,6 +1938,19 @@ export async function emitClassInheritanceEdges(
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
+    let extensionNominal: SymbolDef | null | undefined;
+    if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
+      extensionNominal = null;
+      const name = cls.node.childForFieldName("name");
+      const singleType = name?.namedChildren.length === 1 ? name.namedChildren[0] : undefined;
+      if (singleType?.type === "type_identifier") {
+        const target = context.resolveIdentifier(sliceText(singleType, context.source), singleType);
+        if (target && declaresMembers(target)) {
+          recordDefEdge(context, fromId, target, "uses", singleType);
+          if (!isSwiftConstrainedExtension(cls.node, context.source)) extensionNominal = target;
+        }
+      }
+    }
 
     if ((context.sup.id === "ts" || context.sup.id === "tsx") && cls.node.type === "class_declaration") {
       const heritage = cls.node.namedChildren.find((child) => child.type === "class_heritage");
@@ -1931,8 +1968,13 @@ export async function emitClassInheritanceEdges(
       }
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
-        await recordIdentifierRelations(context, fromId, specifiers, (target, index, identifier) =>
-          baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
+        await recordIdentifierRelations(
+          context,
+          fromId,
+          specifiers,
+          (target, index, identifier) =>
+            baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
+          extensionNominal,
         );
       }
     }

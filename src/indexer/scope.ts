@@ -14,6 +14,7 @@ import {
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
+import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
   isExplicitMethodCall,
@@ -1082,8 +1083,11 @@ export function buildScopeIndexFromSource(
       }
     }
     if (row.classNameTypes?.has(node.type)) {
-      const name = node.childForFieldName("name");
-      if (name) addDecl(name, "class");
+      const isExtension = support.id === "swift" && isSwiftExtensionContainer(node, source);
+      if (!isExtension) {
+        const name = node.childForFieldName("name");
+        if (name) addDecl(name, "class");
+      }
     }
     if (row.typeNameTypes?.has(node.type)) {
       const name = node.childForFieldName("name");

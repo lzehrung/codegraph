@@ -177,6 +177,8 @@ describe("Swift quoted and plain identifier identity", () => {
         [site("Imports.swift", 1, "`Widget`"), "Api.swift", 3],
         [site("Imports.swift", 2, "`top`"), "Api.swift", 1],
         [site("Imports.swift", 3, "helper"), "Api.swift", 4],
+        [site("Extension.swift", 1, "Widget"), "Api.swift", 3],
+        [site("Extension.swift", 4, "`Plain`"), "Api.swift", 7],
         [site("Extension.swift", 2, "`helper`"), "Api.swift", 4],
         [site("Extension.swift", 5, "helper"), "Api.swift", 8],
         [site("Api.swift", 13, "`class`"), "Api.swift", 12],
@@ -1052,8 +1054,8 @@ describe("Swift construction inside extensions", () => {
       if (direct.status !== "ok" || extension.status !== "ok") throw new Error("Expected nominal type construction");
       expect(normalizePath(extension.definition.file)).toBe(normalizePath(direct.definition.file));
       expect(extension.definition.range.start).toEqual(direct.definition.range.start);
-      expect(normalizePath(extension.definition.file)).toBe(paths["Use.swift"]);
-      expect(extension.definition.range.start.line).toBe(19);
+      expect(normalizePath(extension.definition.file)).toBe(paths["Types.swift"]);
+      expect(extension.definition.range.start.line).toBe(6);
       expect(normalizePath(extension.definition.file)).not.toBe(paths["other/Worker.swift"]);
 
       const graph = await buildSymbolGraphDetailed(index);
@@ -1064,8 +1066,196 @@ describe("Swift construction inside extensions", () => {
       const constructions = graph.edges
         .filter((edge) => edge.from === factory?.id && edge.label === "instantiates")
         .map((edge) => normalizePath(graph.nodes.get(edge.to)!.file));
-      expect(constructions).toEqual([paths["Use.swift"]]);
+      expect(constructions).toEqual([paths["Types.swift"]]);
       expect(constructions).not.toContain(paths["other/Worker.swift"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift extension header type references", () => {
+  it("navigates to the nominal type and keeps extension members and conformance connected", async () => {
+    const models = [
+      "protocol Proto {}",
+      "struct Widget { func original() {} }",
+      "extension Widget { func sameFile() {} }",
+      "struct Outer { struct Inner {} }",
+    ];
+    const extensions = [
+      "import Models",
+      "extension Widget: Proto {",
+      "  func added() { self.original() }",
+      "}",
+      "extension String { func builtIn() {} }",
+      "extension Outer.Inner { func nested() {} }",
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-header-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Models.swift": `${models.join("\n")}\n`,
+        "Extensions.swift": `${extensions.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const model = paths["Models.swift"]!;
+      const extension = paths["Extensions.swift"]!;
+      for (const [file, lines, line] of [
+        [model, models, 3],
+        [extension, extensions, 2],
+      ] as const) {
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, "Widget") });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected the nominal Widget declaration");
+        expect(normalizePath(result.definition.file)).toBe(model);
+        expect(result.definition.range.start.line).toBe(2);
+      }
+      const member = await goToDefinition(index, {
+        file: extension,
+        line: 3,
+        column: columnOf(extensions, 3, "original"),
+      });
+      expect(member.status).toBe("ok");
+      if (member.status !== "ok") throw new Error("Expected an extension member call to resolve");
+      expect(normalizePath(member.definition.file)).toBe(model);
+      expect(member.definition.range.start.line).toBe(2);
+      for (const [line, token] of [
+        [5, "String"],
+        [6, "Outer"],
+        [6, "Inner"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: extension,
+          line,
+          column: columnOf(extensions, line, token),
+        });
+        expect(result.status, token).toBe("not_found");
+      }
+      const missingRefs = await findReferences(index, {
+        file: extension,
+        line: 5,
+        column: columnOf(extensions, 5, "String"),
+      });
+      expect(missingRefs.status).toBe("not_found");
+
+      const references = await findReferences(index, {
+        file: model,
+        line: 2,
+        column: columnOf(models, 2, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected extension header references");
+      expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        references.references
+          .map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`)
+          .sort(),
+      ).toEqual([`${model}:2`, `${model}:3`, `${extension}:2`].sort());
+      const headerRefs = await findReferences(index, {
+        file: extension,
+        line: 2,
+        column: columnOf(extensions, 2, "Widget"),
+      });
+      expect(headerRefs).toEqual(references);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const nominal = [...graph.nodes.values()].find(
+        (node) => node.name === "Widget" && normalizePath(node.file) === model,
+      );
+      const protocol = [...graph.nodes.values()].find(
+        (node) => node.name === "Proto" && normalizePath(node.file) === model,
+      );
+      const owner = [...graph.nodes.values()].find(
+        (node) => node.name === "Widget" && normalizePath(node.file) === extension,
+      );
+      expect(nominal).toBeDefined();
+      expect(protocol).toBeDefined();
+      expect(owner).toBeDefined();
+      expect(
+        graph.edges.some((edge) => edge.from === owner!.id && edge.to === nominal!.id && edge.label === "uses"),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) => edge.from === nominal!.id && edge.to === protocol!.id && edge.label === "implements",
+        ),
+      ).toBe(true);
+      expect(graph.edges.some((edge) => edge.from === owner!.id && edge.to === protocol!.id)).toBe(false);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "uses" &&
+            graph.nodes.get(edge.from)?.name === "String" &&
+            normalizePath(graph.nodes.get(edge.from)?.file ?? "") === extension,
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes the same-named type in another directory without claiming a complete module boundary", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-decoy-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Models.swift": "protocol Proto {}\nstruct Widget {}\n",
+        "Extensions.swift": "import Models\nextension Widget: Proto { func added() {} }\n",
+        "Other/Widget.swift": "struct Widget {}\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const header = await goToDefinition(index, { file: paths["Extensions.swift"]!, line: 2, column: 11 });
+      expect(header.status).toBe("ok");
+      if (header.status !== "ok") throw new Error("Expected the imported nominal type");
+      expect(normalizePath(header.definition.file)).toBe(paths["Models.swift"]);
+      expect(normalizePath(header.definition.file)).not.toBe(paths["Other/Widget.swift"]);
+      const refs = await findReferences(index, { file: paths["Models.swift"]!, line: 2, column: 8 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected module-scoped references");
+      expect(refs.references.map((reference) => normalizePath(reference.file)).sort()).toEqual(
+        [paths["Models.swift"], paths["Extensions.swift"]].sort(),
+      );
+      expect(refs.references.some((reference) => normalizePath(reference.file) === paths["Other/Widget.swift"])).toBe(
+        false,
+      );
+      expect(refs.referenceCoverage).toEqual({
+        scope: "indexed_candidates",
+        state: "partial",
+        reasons: ["strategy_unavailable"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves class, struct, enum, and protocol extension headers as type uses", async () => {
+    const names = ["ClassWidget", "StructWidget", "EnumWidget", "ProtocolWidget"] as const;
+    const lines = [
+      "class ClassWidget {}",
+      "struct StructWidget {}",
+      "enum EnumWidget { case value }",
+      "protocol ProtocolWidget {}",
+      ...names.map((name) => `extension ${name} {}`),
+    ];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-kinds-"));
+    try {
+      const paths = await writeFixtureFiles(root, { "Types.swift": `${lines.join("\n")}\n` });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const file = paths["Types.swift"]!;
+      for (const [position, name] of names.entries()) {
+        const line = names.length + position + 1;
+        const result = await goToDefinition(index, { file, line, column: columnOf(lines, line, name) });
+        expect(result.status, name).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected a type declaration for ${name}`);
+        expect(normalizePath(result.definition.file)).toBe(file);
+        expect(result.definition.range.start.line).toBe(position + 1);
+        const refs = await findReferences(index, {
+          file,
+          line: position + 1,
+          column: columnOf(lines, position + 1, name),
+        });
+        expect(refs.status, name).toBe("ok");
+        if (refs.status !== "ok") throw new Error(`Expected extension references for ${name}`);
+        expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(refs.references.map((reference) => reference.range.start.line)).toEqual([position + 1, line]);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -3978,6 +3978,45 @@ describe("Find References", () => {
       }
     });
 
+    it("counts Swift extension headers as type uses but excludes a private same-named decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-extension-header-refs-"));
+      try {
+        const models = ["struct Widget {}", "extension Widget { func own() {} }"];
+        const extensions = ["import Models", "extension Widget { func added() {} }"];
+        const paths = await writeFixtureFiles(root, {
+          "Models.swift": `${models.join("\n")}\n`,
+          "Extensions.swift": `${extensions.join("\n")}\n`,
+          "Decoy.swift": "private struct Widget {}\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const declaration = { file: paths["Models.swift"]!, line: 1, column: columnInLines(models, 1, "Widget") };
+        const extension = { file: paths["Extensions.swift"]!, line: 2, column: columnInLines(extensions, 2, "Widget") };
+        const expected = [
+          `${declaration.file}:${declaration.line}:${declaration.column}`,
+          `${paths["Models.swift"]}:2:${columnInLines(models, 2, "Widget")}`,
+          `${extension.file}:${extension.line}:${extension.column}`,
+        ].sort();
+        for (const position of [declaration, extension]) {
+          const refs = await findReferences(index, position);
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error("Expected Swift type references");
+          expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          expect(
+            refs.references
+              .map((reference) => `${reference.file}:${reference.range.start.line}:${reference.range.start.column}`)
+              .sort(),
+          ).toEqual(expected);
+          expect(refs.references.some((reference) => reference.file === paths["Decoy.swift"])).toBe(false);
+        }
+        const decoy = await findReferences(index, { file: paths["Decoy.swift"]!, line: 1, column: 16 });
+        expect(decoy.status).toBe("ok");
+        if (decoy.status !== "ok") throw new Error("Expected the private decoy declaration");
+        expect(decoy.references.map((reference) => reference.file)).toEqual([paths["Decoy.swift"]]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("reports complete Swift references for both spellings without including same-named decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-references-"));
       try {
@@ -4046,6 +4085,7 @@ describe("Find References", () => {
           site("Use.swift", 13, "`Widget`", 1),
           site("Imports.swift", 1, "`Widget`"),
           site("Imports.swift", 3, "`Widget`"),
+          site("Extension.swift", 1, "Widget"),
         ]);
         await assertExact(site("Api.swift", 12, "`class`"), [
           site("Api.swift", 12, "`class`"),
