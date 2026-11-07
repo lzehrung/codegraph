@@ -14,6 +14,11 @@ import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "../helpers/restored-declaration-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",
@@ -1227,4 +1232,17 @@ describe("PHP inherited member lookup", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("PHP restored declaration imports", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "php"))(
+    "restores a namespace import when its class returns in a non-path-matching file",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async ({ restored, cold, owner, consumer, decoy }) => {
+        expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+        expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+        expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+      });
+    },
+  );
 });

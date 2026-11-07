@@ -102,8 +102,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * without rewriting source-spelled JVM facts or binding ranges.
  * Epoch 117 rebuilds C# alias results after lexical value bindings shadow expression receivers.
  * Type-only names retain their aliases, and declaration names cannot emit alias-use edges.
+ * Epoch 118 rebuilds imports and symbol bindings restored by changes to existing declaration files.
  */
-export const CORE_ALGORITHM_EPOCH = 117;
+export const CORE_ALGORITHM_EPOCH = 118;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -6,6 +6,11 @@ import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } fro
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import type { ProjectIndex } from "../../src/indexer/types.js";
 import { mkTmpDir } from "../helpers/filesystem.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "../helpers/restored-declaration-import-fixture.js";
 
 const DISK_BUILD = { cache: "disk" as const, threads: 1 };
 
@@ -224,4 +229,17 @@ describe("C++20 module resolution across incremental rebuilds", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("C++ restored declaration imports", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "cpp"))(
+    "restores cached symbol bindings as well as file edges when a module declaration returns",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async ({ restored, cold, owner, consumer, decoy }) => {
+        expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+        expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+        expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+      });
+    },
+  );
 });

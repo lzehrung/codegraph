@@ -57,6 +57,10 @@ import {
   CSHARP_ALIAS_TYPE_FORMS,
   csharpAliasTypeFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  withRestoredDeclarationImport,
+} from "./helpers/restored-declaration-import-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -8429,4 +8433,39 @@ describe("Find References: Python module-level use before a later local declarat
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("restored declaration import references", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES)(
+    "finds the restored $languageId importer's uses and excludes decoys",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async (project) => {
+        const { restored, cold, declaration, consumer, decoy, unrelated } = project;
+        const actual = await findReferences(restored, declaration);
+        const expected = await findReferences(cold, declaration);
+        expect(actual).toEqual(expected);
+        expect(actual.status).toBe("ok");
+        if (actual.status !== "ok") throw new Error("expected references to the restored declaration");
+        expect(actual.referenceCoverage).toEqual(
+          fixture.languageId === "csharp"
+            ? { scope: "indexed_candidates", state: "partial", reasons: ["strategy_unavailable"] }
+            : { scope: "indexed_candidates", state: "complete" },
+        );
+        expect(
+          actual.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(consumer) &&
+              reference.range.start.line === fixture.useLine,
+          ),
+        ).toBe(true);
+        expect(
+          actual.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(decoy) ||
+              fileIdentityKey(reference.file) === fileIdentityKey(unrelated),
+          ),
+        ).toBe(false);
+      });
+    },
+  );
 });

@@ -26,6 +26,11 @@ import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf } from "./languages/callable-consumer-fixtures.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "./helpers/restored-declaration-import-fixture.js";
 
 const DISK_BUILD = { cache: "disk" as const };
 
@@ -1559,4 +1564,67 @@ describe("mixed JVM wildcard cache invalidation", () => {
       });
     }
   }
+});
+
+describe("changed declaration files restore unresolved cached imports", () => {
+  for (const cache of ["disk", "memory"] as const) {
+    it.each(RESTORED_DECLARATION_FIXTURES)(
+      `restores $languageId imports after a declaration returns (${cache})`,
+      async (fixture) => {
+        await withRestoredDeclarationImport(fixture, cache, async (project) => {
+          const { owner, consumer, unrelated, decoy, initial, missing, missingCold, restored, cold, report } = project;
+          const expected = [`file:${fileIdentityKey(owner)}`];
+          expect(declarationImportTargets(initial, consumer)).toEqual(expected);
+          expect(declarationImportTargets(missing, consumer)).toEqual([`external:${fixture.specifier}`]);
+          expect(declarationImportTargets(missing, consumer)).toEqual(declarationImportTargets(missingCold, consumer));
+          expect(declarationImportTargets(restored, consumer)).toEqual(expected);
+          expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+          expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+          expect(declarationImportTargets(restored, unrelated)).toEqual(declarationImportTargets(initial, unrelated));
+          expect(
+            restored.byFile
+              .get(fileIdentityKey(consumer))
+              ?.imports.some(
+                (binding) =>
+                  typeof binding.resolved === "string" && fileIdentityKey(binding.resolved) === fileIdentityKey(owner),
+              ),
+          ).toBe(true);
+          if (cache === "disk") {
+            // Only the edited declarer and the importer it restores are extracted. The same-named
+            // decoy and a second unresolved importer stay cached throughout both transitions.
+            expect(project.missingReport.files).toMatchObject({ parsed: 2, changed: 2, cached: 2 });
+            expect(report.files).toMatchObject({ parsed: 2, changed: 2, cached: 2 });
+            const unchangedReport: BuildReport = { timings: {} };
+            const reopened = await buildProjectIndexIncremental(project.root, {
+              cache,
+              threads: 1,
+              report: unchangedReport,
+            });
+            expect(declarationImportTargets(reopened, consumer)).toEqual(expected);
+            expectNoReprocessedFiles(unchangedReport);
+          }
+        });
+      },
+    );
+  }
+});
+
+describe("graph deltas restore declaration import bindings", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES)(
+    "updates cached $languageId importer bindings through buildGraphDelta",
+    async (fixture) => {
+      await withRestoredDeclarationImport(
+        fixture,
+        "disk",
+        async (project) => {
+          expect(project.delta?.changedFiles).toContain(`lib/${fixture.ownerName}.${fixture.extension}`);
+          expect(declarationImportTargets(project.restored, project.consumer)).toEqual(
+            declarationImportTargets(project.cold, project.consumer),
+          );
+          expect((await goToDefinition(project.restored, project.query)).status).toBe("ok");
+        },
+        true,
+      );
+    },
+  );
 });

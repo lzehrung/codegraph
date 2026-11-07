@@ -39,6 +39,10 @@ import {
   CSHARP_ALIAS_BOUNDARIES,
   csharpAliasBoundaryFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  withRestoredDeclarationImport,
+} from "./helpers/restored-declaration-import-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -3189,4 +3193,42 @@ nativeDescribe("native semantic coverage", () => {
       }
     }
   });
+});
+
+nativeDescribe("restored declaration imports retain native semantic parity", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES)(
+    "restores $languageId symbol edges across incremental and disk snapshot builds",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async (project) => {
+        const { root, restored, cold, owner, consumer, decoy, query, declaration } = project;
+        const reopened = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+        const coldGraph = await buildSymbolGraphDetailed(cold);
+        const expectedEdges = coldGraph.edges.map((edge) => JSON.stringify(edge)).sort();
+        for (const index of [restored, reopened]) {
+          const graph = await buildSymbolGraphDetailed(index);
+          expect(graph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(expectedEdges);
+          const target = [...graph.nodes.values()].find(
+            (node) => fileIdentityKey(node.file) === fileIdentityKey(owner) && node.name === "Gadget",
+          );
+          expect(target).toBeDefined();
+          expect(
+            graph.edges.some(
+              (edge) =>
+                edge.to === target!.id &&
+                fileIdentityKey(graph.nodes.get(edge.from)!.file) === fileIdentityKey(consumer),
+            ),
+          ).toBe(true);
+          expect(
+            graph.edges.some(
+              (edge) =>
+                fileIdentityKey(graph.nodes.get(edge.from)!.file) === fileIdentityKey(consumer) &&
+                fileIdentityKey(graph.nodes.get(edge.to)!.file) === fileIdentityKey(decoy),
+            ),
+          ).toBe(false);
+          expect(await goToDefinition(index, query)).toEqual(await goToDefinition(cold, query));
+          expect(await findReferences(index, declaration)).toEqual(await findReferences(cold, declaration));
+        }
+      });
+    },
+  );
 });

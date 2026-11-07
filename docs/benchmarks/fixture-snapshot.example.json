@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-07T05:29:27.120Z",
+  "generatedAt": "2026-11-07T06:49:14.030Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1072,
+  "numTotalTests": 1076,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 187,
-      "passed": 187,
+      "tests": 188,
+      "passed": 188,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 54,
-      "passed": 54,
+      "tests": 55,
+      "passed": 55,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 42,
-      "passed": 42,
+      "tests": 43,
+      "passed": 43,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -176,8 +176,8 @@
       "files": [
         "tests/languages/php.test.ts"
       ],
-      "tests": 60,
-      "passed": 60,
+      "tests": 61,
+      "passed": 61,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -335,8 +335,8 @@
       "tests/languages/import-from-captures.test.ts",
       "tests/languages/query-hygiene.test.ts"
     ],
-    "tests": 95,
-    "passed": 95,
+    "tests": 96,
+    "passed": 96,
     "failed": 0,
     "skipped": 0
   }
