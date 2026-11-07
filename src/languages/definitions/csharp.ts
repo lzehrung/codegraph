@@ -3,6 +3,27 @@ import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 
+const SCOPED_DECLARATION_PARENTS = ["property_declaration", "declaration_expression", "catch_declaration"];
+const DECLARATION_NAME_PARENTS = [
+  "class_declaration",
+  "record_declaration",
+  "struct_declaration",
+  "interface_declaration",
+  "enum_declaration",
+  "delegate_declaration",
+  "enum_member_declaration",
+  "method_declaration",
+  "constructor_declaration",
+  "destructor_declaration",
+  "local_function_statement",
+  "property_declaration",
+  "variable_declarator",
+  "parameter",
+  "declaration_pattern",
+  "declaration_expression",
+  "catch_declaration",
+];
+
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs", ".csx"],
@@ -98,7 +119,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     importBindings: "",
   },
   nodeTypes: {
-    identifier: ["identifier"],
+    identifier: ["identifier", "implicit_parameter"],
     memberExpression: "member_access_expression",
   },
   supportsCrossModuleSymbols: true,
@@ -120,26 +141,15 @@ export const CSHARP_DEF: LanguageDefinition = {
     "constructor_declaration",
     "destructor_declaration",
     "local_function_statement",
+    "lambda_expression",
   ]),
-  createsBlockScope: nodeTypeIn(["block", "declaration_list"]),
+  createsBlockScope: nodeTypeIn(["block", "declaration_list", "foreach_statement"]),
+  scopeDeclarationNames: (node) =>
+    isNameFieldOnParent(node, SCOPED_DECLARATION_PARENTS) || node.parent?.type === "foreach_statement",
   isDeclarationName: (node) =>
-    isNameFieldOnParent(node, [
-      "class_declaration",
-      "record_declaration",
-      "struct_declaration",
-      "interface_declaration",
-      "enum_declaration",
-      "delegate_declaration",
-      "enum_member_declaration",
-      "method_declaration",
-      "constructor_declaration",
-      "destructor_declaration",
-      "local_function_statement",
-      "property_declaration",
-      "variable_declarator",
-      "parameter",
-      "declaration_pattern",
-    ]),
+    node.type === "implicit_parameter" ||
+    (node.parent?.type === "foreach_statement" && node.parent.childForFieldName("left")?.id === node.id) ||
+    isNameFieldOnParent(node, DECLARATION_NAME_PARENTS),
   normalizeIdentifier: normalizeCsharpIdentifier,
 };
 registerLanguage(CSHARP_DEF);

@@ -22,6 +22,13 @@ import {
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import {
+  CSHARP_ALIAS_BOUNDARIES,
+  csharpAliasBoundaryFixture,
+  CSHARP_ALIAS_SHADOW_FILES,
+  CSHARP_ALIAS_SHADOW_LINES,
+  CSHARP_ALIAS_SHADOW_SITES,
+} from "../helpers/csharp-alias-shadow-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
@@ -2811,6 +2818,73 @@ describe("C# partial class members across files", () => {
         edgeFiles: { Q: ["Plain.cs"], M: ["Second.cs"] },
       });
       expect(outcome.edges).toEqual(expect.arrayContaining(["Q calls Plain.cs", "M calls Second.cs"]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps namespace aliases visible outside parameter and local scopes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-alias-shadow-"));
+    try {
+      const paths = await writeFixtureFiles(root, CSHARP_ALIAS_SHADOW_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const useFile = paths["Use.cs"]!;
+      const secondFile = paths["Second.cs"]!;
+      const plainFile = paths["Plain.cs"]!;
+      for (const [line, targetFile] of [
+        [CSHARP_ALIAS_SHADOW_SITES.visible, secondFile],
+        [CSHARP_ALIAS_SHADOW_SITES.restored, secondFile],
+        [CSHARP_ALIAS_SHADOW_SITES.outer, plainFile],
+        [CSHARP_ALIAS_SHADOW_SITES.outside, plainFile],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: useFile,
+          line,
+          column: columnOf(CSHARP_ALIAS_SHADOW_LINES, line, "Run"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(normalizePath(result.definition.file)).toBe(targetFile);
+          expect(result.definition.localName).toBe("Run");
+        }
+      }
+      for (const line of [CSHARP_ALIAS_SHADOW_SITES.parameter, CSHARP_ALIAS_SHADOW_SITES.local]) {
+        const result = await goToDefinition(index, {
+          file: useFile,
+          line,
+          column: columnOf(CSHARP_ALIAS_SHADOW_LINES, line, "Run"),
+        });
+        expect(result.status).toBe("not_found");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_ALIAS_BOUNDARIES)("keeps a $name from falling back to a using alias", async (boundary) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-boundary-language-"));
+    try {
+      const fixture = csharpAliasBoundaryFixture(boundary);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.shadowed,
+        column: columnOf(fixture.lines, fixture.shadowed, "Run"),
+      });
+      if (boundary.name === "nested type") {
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Use.cs"]);
+      } else {
+        expect(result.status).toBe("not_found");
+      }
+      const visible = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: fixture.visible,
+        column: columnOf(fixture.lines, fixture.visible, "Run"),
+      });
+      expect(visible.status).toBe("ok");
+      if (visible.status === "ok") expect(visible.definition.file).toBe(files["Second.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

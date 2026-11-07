@@ -48,7 +48,7 @@ export type {
 } from "./name-resolution-types.js";
 
 import { type GoToResult, type ImportBinding, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
-import type { Binding, ScopeIndex } from "./scope.js";
+import { fileBindingIsUnshadowed } from "./scope.js";
 
 import { importBindingReferenceSites } from "./navigation-references.js";
 
@@ -119,15 +119,6 @@ export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step:
     result = step();
   }
   return result;
-}
-
-/** A closer lexical binding hides a file alias unless that local holds the same module. */
-export function fileBindingIsUnshadowed(scopeIndex: ScopeIndex, binding: Binding | null, aliasFrom?: string): boolean {
-  return (
-    !binding ||
-    (!!binding.import && scopeIndex.allScopes[0]?.map.get(binding.canonicalName) === binding) ||
-    (binding.kind === "local" && aliasFrom !== undefined && binding.heldModuleSpecifier === aliasFrom)
-  );
 }
 
 /** File import aliases yield to closer lexical bindings unless a language policy says otherwise. */

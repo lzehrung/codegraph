@@ -36,7 +36,7 @@ import {
 } from "../indexer/navigation-goto.js";
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
-import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import {
   assertQuerySourceForIndex,
@@ -511,8 +511,12 @@ export async function buildSymbolGraphDetailed(
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
       // A Kotlin import alias is valid only where the positioned name lookup still selects it, so a
       // shadowing local or an unread wildcard package never proves the alias target.
+      const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
+        moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name));
       const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
-        if (sup.id === "csharp") return csharpAliasTableAnswers(moduleEntry, name, node);
+        if (sup.id === "csharp") {
+          return csharpAliasTableAnswers(moduleEntry, name, node) && unshadowedModuleAlias(name, node);
+        }
         if (sup.id !== "kotlin") return true;
         const target = aliasToTargetDef.get(aliasKey(name));
         if (!target) return !hasIncompleteJvmPackage;
@@ -539,8 +543,7 @@ export async function buildSymbolGraphDetailed(
         resolveIdentifier,
         resolveName,
         settleName,
-        moduleAliasIsUnshadowed: (name: string, node: SyntaxNodeLike): boolean =>
-          moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name)),
+        moduleAliasIsUnshadowed: unshadowedModuleAlias,
         resolveExportFrom,
         resolveMemberChainTarget,
         cppDeclaresClass: (def: SymbolDef): boolean => {
@@ -562,12 +565,15 @@ export async function buildSymbolGraphDetailed(
             source: src,
             tree,
             sup,
+            scopeIndex,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
               // The receiver lookup selects the alias in scope itself.
-              if (!aliasTableAnswers(name, expression)) return null;
-              const imported = aliasToTargetDef.get(aliasKey(name));
+              const imported = aliasTableAnswers(name, expression) ? aliasToTargetDef.get(aliasKey(name)) : undefined;
               if (imported) return imported;
+              if (sup.id === "csharp" && findClosestScopeBinding(scopeIndex, name, expression, sup)?.import) {
+                return null;
+              }
               return resolveIdentifier(name, expression);
             },
             loadParsedFile,

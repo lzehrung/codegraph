@@ -1,10 +1,43 @@
 /** C# call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import {
+  CSHARP_ALIAS_BOUNDARIES,
+  csharpAliasBoundaryFixture,
+  csharpAliasTypeFixture,
+  CSHARP_ALIAS_TYPE_FORMS,
+} from "../../helpers/csharp-alias-shadow-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_ALIAS_BOUNDARIES.map((boundary): MatrixCell => {
+    const fixture = csharpAliasBoundaryFixture(boundary);
+    const nestedType = boundary.name === "nested type";
+    return {
+      id: `csharp/alias-shadow-${boundary.name.replaceAll(" ", "-")}`,
+      language: "csharp",
+      callForm: "imported-alias",
+      files: fixture.files,
+      use: { file: "Use.cs", line: fixture.shadowed, token: "Run" },
+      expected: nestedType ? { file: "Use.cs", line: 3, token: "Run" } : "not_found",
+      decoy: { file: "Second.cs", line: 1, token: "Run" },
+      decoyKind: "callable",
+      decoyAmbiguous: !nestedType,
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "Shadowed" },
+    };
+  }),
+  {
+    id: "csharp/alias-construction-beside-value",
+    language: "csharp",
+    callForm: "construction",
+    files: csharpAliasTypeFixture(CSHARP_ALIAS_TYPE_FORMS[1]).files,
+    use: { file: "Use.cs", line: 4, token: "B" },
+    expected: { file: "Second.cs", line: 1, token: "Second" },
+    decoy: { file: "Decoy.cs", line: 1, token: "Second" },
+    decoyKind: "type",
+    edge: { label: "instantiates", fromFile: "Use.cs", fromName: "Types" },
+  },
   {
     id: "csharp/bare-call",
     language: "csharp",
@@ -301,6 +334,29 @@ export const csharpCells: MatrixCell[] = [
     decoy: { file: "Decoy.cs", line: 2, token: "Add" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "Use.cs", fromName: "SumPair" },
+  },
+  {
+    id: "csharp/imported-alias-local-shadow",
+    language: "csharp",
+    callForm: "imported-alias",
+    files: {
+      "second.cs": "namespace N; public class Second { public class Nested { public static void Run() {} } }\n",
+      "use.cs": [
+        "using B = N.Second;",
+        "class Use {",
+        "  void Visible() { B.Nested.Run(); }",
+        "  void Shadowed(dynamic B) { B.Nested.Run(); }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use.cs", line: 4, token: "Run" },
+    expected: "not_found",
+    decoy: { file: "second.cs", line: 1, token: "Run" },
+    decoyKind: "callable",
+    // A dynamic receiver stays unresolved and retains partial reference coverage.
+    decoyAmbiguous: true,
+    edge: { label: "calls", fromFile: "use.cs", fromName: "Shadowed" },
   },
   {
     id: "csharp/namespace-alias",
