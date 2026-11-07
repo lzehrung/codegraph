@@ -136,7 +136,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ### Identifiers and file extensions
 
 - Extra extensions: `.pyw` (Python), `.rbw`/`.rake`/`.gemspec` (Ruby), `.ktm` (Kotlin), `.csx` (C#), `.phtml`/`.php4`/`.php8` (PHP), `.xhtml` (HTML), `.ddl`/`.pgsql`/`.mysql` (SQL).
-- Identifier equality: Python NFKC, Rust NFC, Java and C# ignore formatting characters; Kotlin, Go, and JS/TS compare code points, so differently spelled forms stay distinct.
+- Identifier equality: Python NFKC, Rust NFC, Java and C# ignore formatting characters; Kotlin removes identifier backticks but preserves case. Kotlin, Go, and JS/TS otherwise compare code points.
 - Explicit links and includes resolve to aliases (`href="page.xhtml"`, `include 'partial.phtml'`); extensionless imports do not (`import util` is not `util.pyw`).
 - Unsupported, with no grammar pinned: `.sass`, Objective-C, Stylus (`.styl`), Go templates (`.templ`), Zig manifests (`.zon`).
 
@@ -236,7 +236,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ## Kotlin
 
 - The native grammar is a pinned fork of `tree-sitter-kotlin-ng` with upstream parser fixes, including multi-dollar strings (`$$"..."`, whose `$${name}` and `$$name` templates are references and whose shorter runs of dollars are text) and collection literals (`[]`). No Kotlin form that the corpus checks leave unparsed is known; a file that still ends in an `ERROR` declares only the names read before it, and its references stay `partial`.
-- Package and import lookups read each file's top-level names from its syntax tree. A function is declared under its own name, an extension or generic one included, never under its receiver type, and a name that two files declare stays unresolved. A file with an `ERROR` at the top of its tree is incomplete (see Same-package peers). A declaration the grammar misreads without an `ERROR` (one after `context(...)` receivers, or after a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file. A backtick-quoted declaration (``class `Widget` ``) matches only an import that quotes the name the same way; `import p.Widget` stays unresolved.
+- Package and import lookups read each file's top-level names from its syntax tree. A function is declared under its own name, an extension or generic one included, never under its receiver type, and a name that two files declare stays unresolved. A file with an `ERROR` at the top of its tree is incomplete (see Same-package peers). A declaration the grammar misreads without an `ERROR` (one after `context(...)` receivers, or after a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file. Kotlin backticks do not change identifier identity: quoted and plain names match in package segments, imports, navigation, references, and graph edges, including Java imports of Kotlin classes. Stored source spelling and ranges stay unchanged.
 - Custom `codegraph grep --query` patterns must use `tree-sitter-kotlin-ng` node names: `identifier`, not `simple_identifier` or `type_identifier`.
 - `import pkg.*` considers top-level callables from every file in the package and picks an overload by argument count; a call two candidates accept stays unresolved.
 - Wildcards import top-level package declarations, never class or companion members; same-named declarations in another package are not imported.

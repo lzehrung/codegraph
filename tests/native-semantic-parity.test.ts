@@ -19,6 +19,7 @@ import {
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
+import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_LINES } from "./helpers/kotlin-quoted-fixture.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
@@ -2287,6 +2288,64 @@ nativeDescribe("native semantic coverage", () => {
     const { cls, fn, astral } = KOTLIN_UNICODE_NAMES;
     const { defs, use, decoy } = KOTLIN_UNICODE_FILES;
     const peerCases: PeerCase[] = [
+      {
+        name: "Kotlin backtick-quoted function imported quoted and called quoted",
+        files: KOTLIN_QUOTED_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_FILES.use,
+          line: 13,
+          token: "`quoted name`",
+          expectedFile: KOTLIN_QUOTED_FILES.defs,
+          expectedLine: 5,
+        },
+        references: {
+          file: KOTLIN_QUOTED_FILES.defs,
+          line: 5,
+          token: "`quoted name`",
+          expectedSites: [
+            `${KOTLIN_QUOTED_FILES.defs}:5`,
+            `${KOTLIN_QUOTED_FILES.use}:4`,
+            `${KOTLIN_QUOTED_FILES.use}:13`,
+          ],
+          decoyFile: KOTLIN_QUOTED_FILES.decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: KOTLIN_QUOTED_FILES.use,
+          expectedTarget: `${KOTLIN_QUOTED_FILES.defs}::\`quoted name\``,
+          absentTargets: [`${KOTLIN_QUOTED_FILES.decoy}::\`quoted name\``],
+          label: "calls",
+        },
+      },
+      {
+        name: "Kotlin plain function imported with a quoted spelling and called plainly",
+        files: KOTLIN_QUOTED_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_FILES.use,
+          line: 13,
+          token: "plainName",
+          expectedFile: KOTLIN_QUOTED_FILES.defs,
+          expectedLine: 7,
+        },
+        references: {
+          file: KOTLIN_QUOTED_FILES.defs,
+          line: 7,
+          token: "plainName",
+          expectedSites: [
+            `${KOTLIN_QUOTED_FILES.defs}:7`,
+            `${KOTLIN_QUOTED_FILES.use}:5`,
+            `${KOTLIN_QUOTED_FILES.use}:13`,
+          ],
+          decoyFile: KOTLIN_QUOTED_FILES.decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: KOTLIN_QUOTED_FILES.use,
+          expectedTarget: `${KOTLIN_QUOTED_FILES.defs}::plainName`,
+          absentTargets: [`${KOTLIN_QUOTED_FILES.decoy}::plainName`],
+          label: "calls",
+        },
+      },
       {
         name: "Go same-package sibling function",
         files: {

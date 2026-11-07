@@ -260,7 +260,7 @@ export const kotlinCells: MatrixCell[] = [
       "shapes.kt": [
         "package shapes",
         "",
-        "fun area(radius: Double): Double {",
+        "fun `area`(radius: Double): Double {",
         "    return radius * radius",
         "}",
         "",
@@ -274,7 +274,7 @@ export const kotlinCells: MatrixCell[] = [
         "import shapes.area as circleArea",
         "",
         "fun computeArea(): Double {",
-        "    return circleArea(2.0)",
+        "    return `circleArea`(2.0)",
         "}",
         "",
       ].join("\n"),

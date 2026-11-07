@@ -13,6 +13,7 @@ import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../pat
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import { jvmPackageHead } from "../project-file-facts.js";
+import { normalizeKotlinIdentifier, normalizeKotlinQualifiedName } from "../identifiers.js";
 
 type JvmImportResolutionOptions = {
   languageId: JvmLanguageId;
@@ -82,13 +83,12 @@ async function readJvmFileFacts(filePath: string, languageId: JvmLanguageId): Pr
   return facts;
 }
 
-/** The names a file's declarations can be imported by; Java also matches a name without its ignorable characters. */
+/** Import names share identifier identity without changing the source-spelled file facts. */
 function importableNames(facts: JvmFileFacts, languageId: JvmLanguageId): Set<string> {
   const names = new Set(facts.symbols);
-  if (languageId === "java") {
-    const { normalizeIdentifier } = supportById("java")!;
-    for (const name of facts.symbols) names.add(normalizeIdentifier(name));
-  }
+  const normalizeIdentifier =
+    languageId === "java" ? supportById("java")!.normalizeIdentifier : normalizeKotlinIdentifier;
+  for (const name of facts.symbols) names.add(normalizeIdentifier(name));
   return names;
 }
 
@@ -111,7 +111,8 @@ async function getJvmLanguageProjectSymbolIndex(
           unplacedFiles.push(filePath);
           return [];
         }
-        const packageName = facts.packageName;
+        const packageName =
+          languageId === "kotlin" ? normalizeKotlinQualifiedName(facts.packageName ?? "") : facts.packageName;
         if (!packageName) return [];
         if (facts.incomplete) {
           incompleteFilesByPackage.set(packageName, [...(incompleteFilesByPackage.get(packageName) ?? []), filePath]);
@@ -176,7 +177,11 @@ export async function resolveJvmPackageImportPaths(
   spec: string,
   fromFile: string,
 ): Promise<string[]> {
-  return await jvmPackageFiles(projectRoot, await jvmIndexRoot(projectRoot, fromFile), spec);
+  return await jvmPackageFiles(
+    projectRoot,
+    await jvmIndexRoot(projectRoot, fromFile),
+    normalizeKotlinQualifiedName(spec),
+  );
 }
 
 /**
@@ -218,12 +223,12 @@ async function findJvmImport(
   options: JvmImportResolutionOptions,
   importerSharesPackage: boolean,
 ): Promise<JvmImportLookup> {
-  const parts = spec.split(".").filter(Boolean);
+  const parts = normalizeKotlinQualifiedName(spec).split(".").filter(Boolean);
   const projectIndex = await getJvmProjectSymbolIndex(indexRoot, options.languageId);
   if (parts.length < 2) {
     // Kotlin can import a top-level declaration of the default package; Java cannot.
     if (options.languageId !== "kotlin") return { file: null, incomplete: false, packageKnown: false };
-    const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
+    const packageCandidates = projectIndex.filesByPackage.get(normalizeKotlinQualifiedName(spec)) ?? [];
     const file = await confineJvmResolvedPath(
       projectRoot,
       packageCandidates[0] ? path.resolve(packageCandidates[0]) : null,
@@ -232,7 +237,7 @@ async function findJvmImport(
   }
 
   const importedName = parts[parts.length - 1]!;
-  const packageName = packageOf(spec);
+  const packageName = parts.slice(0, -1).join(".");
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
   if (importedName === "*") {
@@ -259,7 +264,11 @@ async function findJvmImport(
     options.languageId === "java"
       ? await Promise.all(
           otherFiles.map(async (file) =>
-            (await readJvmFileFacts(file, "kotlin"))?.javaTypes?.includes(importedName) ? file : null,
+            (await readJvmFileFacts(file, "kotlin"))?.javaTypes?.some(
+              (typeName) => normalizeKotlinIdentifier(typeName) === importedName,
+            )
+              ? file
+              : null,
           ),
         )
       : otherFiles;
@@ -299,7 +308,12 @@ async function findJvmImport(
  */
 async function importerMayShare(options: JvmImportResolutionOptions, packageName: string): Promise<boolean> {
   const facts = await readJvmFileFacts(options.fromFile, options.languageId).catch(() => null);
-  return !facts || !isJvmPackageKnown(facts) || facts.packageName === packageName;
+  return (
+    !facts ||
+    !isJvmPackageKnown(facts) ||
+    (options.languageId === "kotlin" ? normalizeKotlinQualifiedName(facts.packageName ?? "") : facts.packageName) ===
+      packageName
+  );
 }
 
 /**
@@ -316,7 +330,7 @@ export async function lookupJvmImport(
 ): Promise<JvmImportLookup> {
   const cache = options.languageId === "kotlin" ? kotlinImportResolutionCache : javaImportResolutionCache;
   const indexRoot = await jvmIndexRoot(projectRoot, options.fromFile);
-  const importerSharesPackage = await importerMayShare(options, packageOf(spec));
+  const importerSharesPackage = await importerMayShare(options, packageOf(normalizeKotlinQualifiedName(spec)));
   const cacheKey = `${path.resolve(projectRoot)}::${indexRoot}::${importerSharesPackage ? "shares" : "apart"}::${spec}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;

@@ -37,6 +37,7 @@ import {
   KOTLIN_UNICODE_NAMES,
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
+import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_LINES, KOTLIN_QUOTED_SOURCES } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import {
@@ -3812,6 +3813,72 @@ describe("Find References", () => {
         await expectExactly(site(decoy, decoyLines, 3, cls), [site(decoy, decoyLines, 9, cls)]);
         await expectExactly(site(decoy, decoyLines, 5, fn), [site(decoy, decoyLines, 9, fn)]);
         await expectExactly(site(decoy, decoyLines, 7, astral), [site(decoy, decoyLines, 9, astral)]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds exact references to backtick-quoted and plain spellings of Kotlin declarations, including Java, and excludes the decoy", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_SOURCES);
+        const defs = paths[KOTLIN_QUOTED_FILES.defs]!;
+        const boxed = paths[KOTLIN_QUOTED_FILES.boxed]!;
+        const use = paths[KOTLIN_QUOTED_FILES.use]!;
+        const pkgUse = paths[KOTLIN_QUOTED_FILES.quotedPackageUse]!;
+        const java = paths[KOTLIN_QUOTED_FILES.java]!;
+        const decoy = paths[KOTLIN_QUOTED_FILES.decoy]!;
+        const defsLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.defs]!;
+        const boxedLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.boxed]!;
+        const useLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.use]!;
+        const pkgLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.quotedPackageUse]!;
+        const javaLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.java]!;
+        const decoyLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.decoy]!;
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const site = (file: string, lines: readonly string[], line: number, token: string): ReferenceLocation => ({
+          file,
+          line,
+          column: columnInLines(lines, line, token),
+        });
+        const expectExactly = async (declaration: ReferenceLocation, uses: readonly ReferenceLocation[]) => {
+          const result = await testFindReferences(index, declaration.file, declaration.line, declaration.column, [
+            declaration,
+            ...uses,
+          ]);
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          }
+        };
+
+        await expectExactly(site(defs, defsLines, 3, "`Widget`"), [
+          site(use, useLines, 3, "Widget"),
+          site(use, useLines, 11, "Widget"),
+          site(java, javaLines, 3, "Widget"),
+          site(java, javaLines, 6, "Widget"),
+        ]);
+        await expectExactly(site(defs, defsLines, 5, "`quoted name`"), [
+          site(use, useLines, 4, "`quoted name`"),
+          site(use, useLines, 6, "`quoted name`"),
+          site(use, useLines, 6, "Alias"),
+          site(use, useLines, 13, "`quoted name`"),
+          site(use, useLines, 13, "Alias"),
+          site(use, useLines, 13, "`Alias`"),
+        ]);
+        await expectExactly(site(defs, defsLines, 7, "plainName"), [
+          site(use, useLines, 5, "`plainName`"),
+          site(use, useLines, 13, "plainName"),
+        ]);
+        await expectExactly(site(boxed, boxedLines, 3, "Boxed"), [
+          site(use, useLines, 9, "Boxed"),
+          site(pkgUse, pkgLines, 3, "Boxed"),
+          site(pkgUse, pkgLines, 5, "Boxed"),
+          site(use, useLines, 15, "Boxed"),
+        ]);
+
+        await expectExactly(site(decoy, decoyLines, 3, "`Widget`"), [site(decoy, decoyLines, 9, "Widget")]);
+        await expectExactly(site(decoy, decoyLines, 5, "`quoted name`"), [site(decoy, decoyLines, 9, "`quoted name`")]);
+        await expectExactly(site(decoy, decoyLines, 7, "plainName"), [site(decoy, decoyLines, 9, "plainName")]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

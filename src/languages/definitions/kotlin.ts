@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, hasParentType, nodeTypeIn } from "./shared.js";
+import { normalizeKotlinIdentifier } from "../../util/identifiers.js";
 
 /** Parent types whose direct `identifier` child is a declared name. */
 const KOTLIN_DECLARATION_NAME_PARENT_TYPES = [
@@ -115,5 +116,6 @@ export const KOTLIN_DEF: LanguageDefinition = {
   supportsCrossModuleSymbols: true,
   membersAreImplicitlyInScope: true,
   exportScopeBlockers: ["function_body", "lambda_literal", "anonymous_function"],
+  normalizeIdentifier: normalizeKotlinIdentifier,
 };
 registerLanguage(KOTLIN_DEF);

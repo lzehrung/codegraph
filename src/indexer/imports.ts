@@ -23,6 +23,7 @@ import type { NativeQueryExecution, NativeQueryResults } from "../native/tree-si
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { collectCsharpImportDirectives } from "../util/csharp-tree.js";
 import { collectJvmImportDirectives, jvmPackageName } from "../util/jvm-tree.js";
+import { normalizeKotlinQualifiedName } from "../util/identifiers.js";
 import {
   isJvmLanguage,
   parseSyntaxTree,
@@ -264,7 +265,9 @@ export async function collectImportsForFile(
   const resolver = opts?.resolver ?? (await createFileImportResolver(file, projectRoot, resolvedSup.id, opts));
   const resolveFrom = resolver.resolve;
   const jvmPackageFiles = resolver.jvmPackageFiles;
-  const jvmDeclaredPackage = jvmLanguageId && directiveTree ? jvmPackageName(directiveTree, jvmLanguageId) : null;
+  const declaredPackage = jvmLanguageId && directiveTree ? jvmPackageName(directiveTree, jvmLanguageId) : null;
+  const jvmDeclaredPackage =
+    jvmLanguageId === "kotlin" && declaredPackage ? normalizeKotlinQualifiedName(declaredPackage) : declaredPackage;
 
   const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
   const languageContext = {
@@ -294,7 +297,7 @@ export async function collectImportsForFile(
         binding.kind === "named" &&
         typeof binding.resolved === "string" &&
         jvmLanguageId &&
-        jvmDeclaredPackage === binding.from.slice(0, binding.from.lastIndexOf("."))
+        jvmDeclaredPackage === normalizeKotlinQualifiedName(binding.from.slice(0, binding.from.lastIndexOf(".")))
       ) {
         binding.jvmSamePackage = true;
       }
@@ -304,15 +307,18 @@ export async function collectImportsForFile(
       if (binding.jvmTypeWildcardName && files?.includes(binding.resolved) && jvmLanguageId) {
         binding.jvmPackageFiles = files;
         binding.jvmPackageLanguageId = jvmLanguageId;
-        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === binding.from) binding.jvmSamePackage = true;
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === normalizeKotlinQualifiedName(binding.from))
+          binding.jvmSamePackage = true;
       }
       if (binding.jvmTypeWildcardName && !binding.jvmPackageFiles && jvmLanguageId) {
         const typePackage = binding.from.slice(0, -(binding.jvmTypeWildcardName.length + 1));
-        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === normalizeKotlinQualifiedName(typePackage))
+          binding.jvmSamePackage = true;
       }
       if (binding.jvmStaticWildcardName && jvmLanguageId === "java") {
         const typePackage = binding.from.slice(0, -(binding.jvmStaticWildcardName.length + 1));
-        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === typePackage) binding.jvmSamePackage = true;
+        if (jvmDeclaredPackage !== null && jvmDeclaredPackage === normalizeKotlinQualifiedName(typePackage))
+          binding.jvmSamePackage = true;
       }
     }
   };

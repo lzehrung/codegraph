@@ -13,6 +13,7 @@ import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.
 import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { KOTLIN_UNICODE_NAMES } from "../helpers/kotlin-unicode-fixture.js";
+import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_SOURCES } from "../helpers/kotlin-quoted-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -791,6 +792,77 @@ describe("Kotlin backtick-quoted top-level names", () => {
         "com.acme.lib.`quoted function`": paths["lib/Quoted.kt"],
         "com.acme.lib.`Missing Type`": "external",
       });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds quoted and plain spellings of one declaration from Kotlin and Java and leaves a missing name external", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-bindings-"));
+    try {
+      const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const defs = paths[KOTLIN_QUOTED_FILES.defs]!;
+      const boxed = paths[KOTLIN_QUOTED_FILES.boxed]!;
+      const named = (relative: string): Array<Extract<ImportBinding, { kind: "named" }>> =>
+        (index.byFile.get(fileIdentityKey(paths[relative]!))?.imports ?? []).filter(
+          (binding): binding is Extract<ImportBinding, { kind: "named" }> => binding.kind === "named",
+        );
+      const targetOf = (binding: Extract<ImportBinding, { kind: "named" }>): string =>
+        typeof binding.resolved === "string" ? normalizePath(binding.resolved) : "external";
+      const spelledBy = (
+        source: string,
+        range: Extract<ImportBinding, { kind: "named" }>["importedRange"],
+      ): string | undefined => {
+        if (range?.start.index === undefined || range.end.index === undefined) return undefined;
+        return source.slice(range.start.index, range.end.index);
+      };
+      const fileDeps = (relative: string): string[] => {
+        const from = fileIdentityKey(paths[relative]!);
+        const targets = index.graph.edges.flatMap((edge) =>
+          edge.to.type === "file" && fileIdentityKey(edge.from) === from ? [normalizePath(edge.to.path)] : [],
+        );
+        return [...new Set(targets)].sort();
+      };
+
+      const useSource = KOTLIN_QUOTED_SOURCES[KOTLIN_QUOTED_FILES.use]!;
+      const useBindings = named(KOTLIN_QUOTED_FILES.use);
+      const rows = useBindings.map((binding) => ({
+        from: binding.from,
+        target: targetOf(binding),
+        spelling: spelledBy(useSource, binding.importedRange),
+      }));
+      expect(rows).toHaveLength(6);
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          { from: "kquoted.app.Widget", target: defs, spelling: "Widget" },
+          { from: "kquoted.app.`quoted name`", target: defs, spelling: "`quoted name`" },
+          { from: "kquoted.app.`plainName`", target: defs, spelling: "`plainName`" },
+          { from: "kquoted.app.`Missing Name`", target: "external", spelling: "`Missing Name`" },
+          { from: "kqpkg.lib.Boxed", target: boxed, spelling: "Boxed" },
+        ]),
+      );
+
+      const alias = useBindings.find((binding) => binding.explicitAlias);
+      expect(alias?.local).toBe("Alias");
+      expect(spelledBy(useSource, alias?.localRange)).toBe("Alias");
+      expect(spelledBy(useSource, alias?.importedRange)).toBe("`quoted name`");
+      expect(alias && targetOf(alias)).toBe(defs);
+
+      expect(
+        named(KOTLIN_QUOTED_FILES.java).map((binding) => ({ from: binding.from, target: targetOf(binding) })),
+      ).toEqual([{ from: "kquoted.app.Widget", target: defs }]);
+      expect(
+        named(KOTLIN_QUOTED_FILES.quotedPackageUse).map((binding) => ({
+          from: binding.from,
+          target: targetOf(binding),
+        })),
+      ).toEqual([{ from: "`kqpkg`.lib.Boxed", target: boxed }]);
+
+      expect(fileDeps(KOTLIN_QUOTED_FILES.use)).toEqual([defs, boxed].sort());
+      expect(fileDeps(KOTLIN_QUOTED_FILES.java)).toEqual([defs]);
+      expect(fileDeps(KOTLIN_QUOTED_FILES.quotedPackageUse)).toEqual([boxed]);
+      expect(fileDeps(KOTLIN_QUOTED_FILES.decoy)).toEqual([]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

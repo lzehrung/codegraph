@@ -78,6 +78,16 @@ export function normalizeCsharpQualifiedName(text: string): string {
   return globalPrefix + body.split(".").map(normalizeCsharpIdentifier).join(".");
 }
 
+/** Kotlin backticks quote one identifier; they are not part of its case-sensitive identity. */
+export function normalizeKotlinIdentifier(name: string): string {
+  return name.length >= 2 && name.startsWith("`") && name.endsWith("`") ? name.slice(1, -1) : name;
+}
+
+/** Normalize the individual identifier segments of a JVM package or import path. */
+export function normalizeKotlinQualifiedName(name: string): string {
+  return name.includes("`") ? name.split(".").map(normalizeKotlinIdentifier).join(".") : name;
+}
+
 /**
  * Go identifiers (`unicode_letter`/`unicode_digit` in the Go spec's `identifier` production)
  * permit a Unicode letter (Lu/Ll/Lt/Lm/Lo) or underscore at every position; continuation

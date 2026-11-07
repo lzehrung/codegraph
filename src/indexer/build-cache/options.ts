@@ -98,8 +98,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
  * import statement in source order and do not revive locals excluded from the target's exports.
  * Epoch 115 rebuilds detailed graphs with normalized C# verbatim alias keys and receiver value proofs.
+ * Epoch 116 matches Kotlin quoted and plain names across package imports, navigation, and graph edges
+ * without rewriting source-spelled JVM facts or binding ranges.
  */
-export const CORE_ALGORITHM_EPOCH = 115;
+export const CORE_ALGORITHM_EPOCH = 116;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -107,8 +109,9 @@ export const CORE_ALGORITHM_EPOCH = 115;
  * Epoch 11 exports nested Ruby constants by qualified path, captures PHP promoted constructor
  * properties, scopes Ruby block parameters, reads Go selector `field_identifier` names, and skips
  * TypeScript parameter type annotations when binding names.
+ * Epoch 12 treats Kotlin backticks as identifier delimiters, preserving case and source spelling.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 11;
+export const LANGUAGE_BEHAVIOR_EPOCH = 12;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

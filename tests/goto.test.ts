@@ -25,6 +25,7 @@ import {
   KOTLIN_UNICODE_NAMES,
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
+import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_LINES, KOTLIN_QUOTED_SOURCES } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import {
@@ -2501,6 +2502,57 @@ describe("Go to Definition", () => {
           expect(callersOf(defs, name), `callers of ${name} in app`).toEqual(["useNames"]);
           expect(callersOf(decoy, name), `callers of ${name} in the decoy package`).toEqual(["useDecoys"]);
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves backtick-quoted and plain spellings of one Kotlin declaration across packages and keeps the decoy out", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_SOURCES);
+        const defs = paths[KOTLIN_QUOTED_FILES.defs]!;
+        const boxed = paths[KOTLIN_QUOTED_FILES.boxed]!;
+        const use = paths[KOTLIN_QUOTED_FILES.use]!;
+        const pkgUse = paths[KOTLIN_QUOTED_FILES.quotedPackageUse]!;
+        const javaUse = paths[KOTLIN_QUOTED_FILES.java]!;
+        const decoy = paths[KOTLIN_QUOTED_FILES.decoy]!;
+        const useLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.use]!;
+        const pkgLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.quotedPackageUse]!;
+        const javaLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.java]!;
+        const decoyLines = KOTLIN_QUOTED_LINES[KOTLIN_QUOTED_FILES.decoy]!;
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+
+        await testGoToDefinition(index, use, 3, columnInLines(useLines, 3, "Widget"), defs, 3);
+        await testGoToDefinition(index, use, 4, columnInLines(useLines, 4, "`quoted name`"), defs, 5);
+        await testGoToDefinition(index, use, 5, columnInLines(useLines, 5, "`plainName`"), defs, 7);
+        await testGoToDefinition(index, use, 9, columnInLines(useLines, 9, "Boxed"), boxed, 3);
+        await testGoToDefinition(index, use, 13, columnInLines(useLines, 13, "Alias(3)"), defs, 5);
+        await testGoToDefinition(index, use, 13, columnInLines(useLines, 13, "`Alias`(4)"), defs, 5);
+        await testGoToDefinition(index, use, 11, columnInLines(useLines, 11, "Widget"), defs, 3);
+        await testGoToDefinition(index, pkgUse, 3, columnInLines(pkgLines, 3, "Boxed"), boxed, 3);
+        await testGoToDefinition(index, javaUse, 3, columnInLines(javaLines, 3, "Widget"), defs, 3);
+        await testGoToDefinition(index, javaUse, 6, columnInLines(javaLines, 6, "Widget"), defs, 3);
+        await testGoToDefinition(index, decoy, 9, columnInLines(decoyLines, 9, "`quoted name`"), decoy, 5);
+        await testGoToDefinition(index, decoy, 9, columnInLines(decoyLines, 9, "plainName"), decoy, 7);
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const callersOf = (targetFile: string, targetName: string): string[] => {
+          const targetKey = fileIdentityKey(targetFile);
+          const callers: string[] = [];
+          for (const edge of graph.edges) {
+            if (edge.label !== "calls") continue;
+            const callee = graph.nodes.get(edge.to);
+            if (callee?.name !== targetName || fileIdentityKey(callee.file) !== targetKey) continue;
+            const caller = graph.nodes.get(edge.from)?.name;
+            if (caller !== undefined) callers.push(caller);
+          }
+          return [...new Set(callers)].sort();
+        };
+        expect(callersOf(defs, "`quoted name`"), "callers of quoted name in app").toEqual(["useNames"]);
+        expect(callersOf(defs, "plainName"), "callers of plainName in app").toEqual(["useNames"]);
+        expect(callersOf(decoy, "`quoted name`"), "callers of quoted name in the decoy package").toEqual(["useDecoys"]);
+        expect(callersOf(decoy, "plainName"), "callers of plainName in the decoy package").toEqual(["useDecoys"]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

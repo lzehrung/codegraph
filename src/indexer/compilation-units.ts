@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
-import { GO_IDENTIFIER_SOURCE, normalizeCsharpQualifiedName } from "../util/identifiers.js";
+import {
+  GO_IDENTIFIER_SOURCE,
+  normalizeCsharpQualifiedName,
+  normalizeKotlinQualifiedName,
+} from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
@@ -128,7 +132,11 @@ function packageDeclarationFor(
   const fileKey = fileIdentityKey(filePath);
   if (languageId !== "go") {
     const facts = index.byFile.get(fileKey)?.jvmFacts;
-    return { name: facts?.packageName ?? null, readable: !!facts && isJvmPackageKnown(facts) };
+    const packageName = facts?.packageName ?? null;
+    return {
+      name: languageId === "kotlin" && packageName ? normalizeKotlinQualifiedName(packageName) : packageName,
+      readable: !!facts && isJvmPackageKnown(facts),
+    };
   }
   let cache = packageNameCaches.get(index);
   if (!cache) {
