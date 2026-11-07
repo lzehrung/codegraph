@@ -567,7 +567,7 @@ function nearestCsharpAlias(
 
 type CsharpAliasTable = {
   size: number;
-  /** The type aliases (`using B = N.Plain;`) by local name. */
+  /** The type aliases (`using B = N.Plain;`) by normalized local name; `@B` and `B` are one alias. */
   types: Map<string, ImportBinding[]>;
   /** The namespace aliases (`using X = N;`) by normalized local name. */
   namespaces: Map<string, ImportBinding[]>;
@@ -589,7 +589,7 @@ function csharpAliasTable(mod: ModuleIndex): CsharpAliasTable {
     if (imp.kind === "namespace") {
       add(table.namespaces, CSHARP_SUPPORT.normalizeIdentifier(imp.localNS), imp);
     } else if ((imp.kind === "named" || imp.kind === "default") && !isExpandedStarBinding(imp, mod.imports)) {
-      add(table.types, imp.local, imp);
+      add(table.types, CSHARP_SUPPORT.normalizeIdentifier(imp.local), imp);
     }
   }
   csharpAliasTables.set(mod.imports, table);
@@ -602,7 +602,7 @@ function csharpAliasTable(mod: ModuleIndex): CsharpAliasTable {
  */
 export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): ImportBinding | undefined {
   const namespaceAlias = innermostNamespaceImport(mod.imports, name, useNode, CSHARP_SUPPORT.normalizeIdentifier);
-  const typeAliases = csharpAliasTable(mod).types.get(name) ?? [];
+  const typeAliases = csharpAliasTable(mod).types.get(CSHARP_SUPPORT.normalizeIdentifier(name)) ?? [];
   return nearestCsharpAlias(mod, namespaceAlias ? [namespaceAlias, ...typeAliases] : typeAliases, useNode.startIndex);
 }
 
@@ -614,7 +614,7 @@ export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNod
  */
 export function csharpAliasTableAnswers(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): boolean {
   const table = csharpAliasTable(mod);
-  const types = table.types.get(name);
+  const types = table.types.get(CSHARP_SUPPORT.normalizeIdentifier(name));
   const namespaces = table.namespaces.get(CSHARP_SUPPORT.normalizeIdentifier(name));
   const declared = (types?.length ?? 0) + (namespaces?.length ?? 0);
   if (!declared) return true;
