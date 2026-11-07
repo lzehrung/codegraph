@@ -5,7 +5,7 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText } from "../util/ast.js";
-import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
+import { normalizeCsharpQualifiedName, normalizeSwiftIdentifier } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import {
@@ -223,7 +223,7 @@ function getSwiftFullPath(container: SyntaxNodeLike, source: string): string | n
   if (!raw) return null;
   const nameParts = raw
     .split(".")
-    .map((part) => part.trim())
+    .map((part) => normalizeSwiftIdentifier(part.trim()))
     .filter((part) => part.length > 0);
   if (!nameParts.length) return null;
   const outer: string[] = [];
@@ -234,7 +234,7 @@ function getSwiftFullPath(container: SyntaxNodeLike, source: string): string | n
       if (outerRaw) {
         const outerParts = outerRaw
           .split(".")
-          .map((part) => part.trim())
+          .map((part) => normalizeSwiftIdentifier(part.trim()))
           .filter((part) => part.length > 0);
         for (let i = outerParts.length - 1; i >= 0; i -= 1) outer.push(outerParts[i] as string);
       }

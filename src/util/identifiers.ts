@@ -83,6 +83,11 @@ export function normalizeKotlinIdentifier(name: string): string {
   return name.length >= 2 && name.startsWith("`") && name.endsWith("`") ? name.slice(1, -1) : name;
 }
 
+/** Swift backticks delimit an identifier but do not change its case-sensitive identity. */
+export function normalizeSwiftIdentifier(name: string): string {
+  return name.length >= 2 && name.startsWith("`") && name.endsWith("`") ? name.slice(1, -1) : name;
+}
+
 /** Normalize the individual identifier segments of a JVM package or import path. */
 export function normalizeKotlinQualifiedName(name: string): string {
   return name.includes("`") ? name.split(".").map(normalizeKotlinIdentifier).join(".") : name;

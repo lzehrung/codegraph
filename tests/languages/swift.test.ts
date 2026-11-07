@@ -7,6 +7,7 @@ import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.
 import { normalizePath } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
+import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "../helpers/swift-quoted-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -146,6 +147,115 @@ describe("Swift quoted member references", () => {
       });
       expect(targets).toContain(`${declaration.file}::\`class\``);
       expect(targets).not.toContain(`${paths["Other.swift"]}::\`class\``);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift quoted and plain identifier identity", () => {
+  it("resolves both spellings for functions, types, self members, imports, and extensions without decoy edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-identity-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_QUOTED_SOURCES);
+      const site = (name: string, line: number, token: string, occurrence = 0) =>
+        swiftQuotedSite(paths, name, line, token, occurrence);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const cases = [
+        [site("Api.swift", 5, "helper"), "Api.swift", 4],
+        [site("Api.swift", 5, "helper", 1), "Api.swift", 4],
+        [site("Api.swift", 9, "`helper`"), "Api.swift", 8],
+        [site("Use.swift", 4, "top"), "Api.swift", 1],
+        [site("Use.swift", 5, "`top`"), "Api.swift", 1],
+        [site("Use.swift", 6, "regular"), "Api.swift", 2],
+        [site("Use.swift", 7, "`regular`"), "Api.swift", 2],
+        [site("Use.swift", 10, "Widget"), "Api.swift", 3],
+        [site("Use.swift", 13, "`Widget`"), "Api.swift", 3],
+        [site("Use.swift", 11, "helper"), "Api.swift", 4],
+        [site("Use.swift", 12, "`helper`"), "Api.swift", 4],
+        [site("Use.swift", 16, "`helper`"), "Api.swift", 8],
+        [site("Imports.swift", 1, "`Widget`"), "Api.swift", 3],
+        [site("Imports.swift", 2, "`top`"), "Api.swift", 1],
+        [site("Imports.swift", 3, "helper"), "Api.swift", 4],
+        [site("Extension.swift", 2, "`helper`"), "Api.swift", 4],
+        [site("Extension.swift", 5, "helper"), "Api.swift", 8],
+        [site("Api.swift", 13, "`class`"), "Api.swift", 12],
+        [site("Api.swift", 16, "`default`"), "Api.swift", 15],
+        [site("Other.swift", 4, "helper"), "Other.swift", 2],
+        [site("Other.swift", 4, "`default`"), "Other.swift", 5],
+        [site("Api.swift", 19, "`plainOnly`"), "Api.swift", 18],
+        [site("Use.swift", 18, "`plainOnly`"), "Api.swift", 18],
+        [site("Other.swift", 6, "plainOnly"), "Other.swift", 6],
+      ] as const;
+      for (const [use, name, line] of cases) {
+        const result = await goToDefinition(index, use);
+        expect(result.status, `${use.file}:${use.line}:${use.column}`).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.file).toBe(paths[name]);
+        expect(result.definition.range.start.line).toBe(line);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = (name: string, fromFile: string) => {
+        const caller = [...graph.nodes.values()].find((node) => node.file === paths[fromFile] && node.name === name);
+        expect(caller).toBeDefined();
+        return graph.edges.flatMap((edge) => {
+          if (edge.from !== caller?.id || (edge.label !== "calls" && edge.label !== "instantiates")) return [];
+          const callee = graph.nodes.get(edge.to);
+          return callee ? [`${edge.label}:${callee.file}:${callee.name}`] : [];
+        });
+      };
+      expect(targets("invokeQuoted", "Api.swift")).toEqual([
+        `calls:${paths["Api.swift"]}:\`helper\``,
+        `calls:${paths["Api.swift"]}:\`helper\``,
+        `calls:${paths["Api.swift"]}:\`helper\``,
+      ]);
+      expect(targets("invokePlain", "Api.swift")).toEqual([`calls:${paths["Api.swift"]}:helper`]);
+      expect(targets("invokeSolo", "Api.swift")).toEqual([`calls:${paths["Api.swift"]}:plainOnly`]);
+      expect(targets("useSolo", "Use.swift").sort()).toEqual(
+        [`calls:${paths["Api.swift"]}:plainOnly`, `instantiates:${paths["Api.swift"]}:Solo`].sort(),
+      );
+      expect(targets("useFunctions", "Use.swift").sort()).toEqual(
+        [
+          `calls:${paths["Api.swift"]}:\`top\``,
+          `calls:${paths["Api.swift"]}:\`top\``,
+          `calls:${paths["Api.swift"]}:regular`,
+          `calls:${paths["Api.swift"]}:regular`,
+        ].sort(),
+      );
+      expect(targets("useTypes", "Use.swift").sort()).toEqual(
+        [
+          `instantiates:${paths["Api.swift"]}:\`Widget\``,
+          `instantiates:${paths["Api.swift"]}:\`Widget\``,
+          `instantiates:${paths["Api.swift"]}:Plain`,
+          `calls:${paths["Api.swift"]}:\`helper\``,
+          `calls:${paths["Api.swift"]}:\`helper\``,
+          `calls:${paths["Api.swift"]}:\`helper\``,
+          `calls:${paths["Api.swift"]}:helper`,
+        ].sort(),
+      );
+      expect(targets("imported", "Imports.swift").sort()).toEqual(
+        [
+          `calls:${paths["Api.swift"]}:\`top\``,
+          `instantiates:${paths["Api.swift"]}:\`Widget\``,
+          `calls:${paths["Api.swift"]}:\`helper\``,
+        ].sort(),
+      );
+      expect(targets("extensionUse", "Extension.swift")).toEqual([`calls:${paths["Api.swift"]}:\`helper\``]);
+      expect(targets("extensionPlain", "Extension.swift")).toEqual([`calls:${paths["Api.swift"]}:helper`]);
+      expect(targets("invokeKeyword", "Api.swift")).toEqual([`calls:${paths["Api.swift"]}:\`class\``]);
+      expect(targets("invokeDefault", "Api.swift")).toEqual([`calls:${paths["Api.swift"]}:\`default\``]);
+      for (const [name, file] of [
+        ["invokeQuoted", "Api.swift"],
+        ["useTypes", "Use.swift"],
+        ["imported", "Imports.swift"],
+        ["extensionUse", "Extension.swift"],
+        ["extensionPlain", "Extension.swift"],
+        ["invokeSolo", "Api.swift"],
+        ["useSolo", "Use.swift"],
+      ] as const) {
+        expect(targets(name, file).some((target) => target.includes(paths["Other.swift"]!))).toBe(false);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

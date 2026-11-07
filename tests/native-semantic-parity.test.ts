@@ -45,6 +45,7 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -3145,6 +3146,172 @@ nativeDescribe("native semantic coverage", () => {
       expect(warmTargets, `${peerCase.name}: warm call edge`).toEqual(coldTargets);
     }
   });
+  it("keeps quoted Swift names and source ranges stable across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, SWIFT_QUOTED_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const site = (name: string, line: number, token: string, occurrence = 0) =>
+      swiftQuotedSite(paths, name, line, token, occurrence);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      const api = index.byFile.get(fileIdentityKey(paths["Api.swift"]!));
+      const names = api?.locals.map((local) => local.localName);
+      expect(names, phase).toContain("`helper`");
+      expect(names, phase).toContain("helper");
+      expect(names, phase).toContain("`Widget`");
+      const declaration = site("Api.swift", 4, "`helper`");
+      const uses = [
+        site("Api.swift", 5, "helper"),
+        site("Api.swift", 5, "helper", 1),
+        site("Api.swift", 5, "`helper`"),
+        site("Use.swift", 11, "helper"),
+        site("Use.swift", 12, "`helper`"),
+        site("Use.swift", 14, "helper"),
+        site("Imports.swift", 3, "helper"),
+        site("Extension.swift", 2, "`helper`"),
+      ];
+      for (const use of uses) {
+        const result = await goToDefinition(index, use);
+        expect(result.status, `${phase}: ${use.file}:${use.line}`).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file, phase).toBe(declaration.file);
+          expect(result.definition.range.start.line, phase).toBe(declaration.line);
+          expect(result.definition.localName, phase).toBe("`helper`");
+          expect(result.definition.range.end.column - result.definition.range.start.column, phase).toBe(
+            "`helper`".length,
+          );
+        }
+      }
+      const refs = await findReferences(index, declaration);
+      expect(refs.status, phase).toBe("ok");
+      if (refs.status !== "ok") continue;
+      expect(refs.referenceCoverage, phase).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refs.references
+          .map((reference) => `${reference.file}:${reference.range.start.line}:${reference.range.start.column}`)
+          .sort(),
+        phase,
+      ).toEqual(
+        [declaration, ...uses].map((location) => `${location.file}:${location.line}:${location.column}`).sort(),
+      );
+      for (const [use, spelling] of [
+        [site("Use.swift", 11, "helper"), "helper"],
+        [site("Use.swift", 12, "`helper`"), "`helper`"],
+      ] as const) {
+        const range = refs.references.find(
+          (reference) =>
+            reference.file === use.file &&
+            reference.range.start.line === use.line &&
+            reference.range.start.column === use.column,
+        )?.range;
+        expect(range, `${phase}: source spelling of ${spelling}`).toBeDefined();
+        if (range) expect(range.end.column - range.start.column, phase).toBe(spelling.length);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const extensionCaller = [...graph.nodes.values()].find(
+        (node) => node.file === paths["Extension.swift"] && node.name === "extensionUse",
+      );
+      expect(extensionCaller, phase).toBeDefined();
+      const extensionTargets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === extensionCaller?.id)
+        .map((edge) => graph.nodes.get(edge.to));
+      expect(
+        extensionTargets.map((node) => `${node?.file}:${node?.name}`),
+        phase,
+      ).toEqual([`${paths["Api.swift"]}:\`helper\``]);
+      const plainUse = site("Extension.swift", 5, "helper");
+      const plainGoto = await goToDefinition(index, plainUse);
+      expect(plainGoto.status, phase).toBe("ok");
+      if (plainGoto.status === "ok") {
+        expect(plainGoto.definition.file, phase).toBe(paths["Api.swift"]);
+        expect(plainGoto.definition.range.start.line, phase).toBe(8);
+      }
+      const plainRefs = await findReferences(index, site("Api.swift", 8, "helper"));
+      expect(plainRefs.status, phase).toBe("ok");
+      if (plainRefs.status === "ok") {
+        expect(plainRefs.referenceCoverage, phase).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(
+          plainRefs.references.map((reference) => `${reference.file}:${reference.range.start.line}`).sort(),
+          phase,
+        ).toEqual(
+          [
+            `${paths["Api.swift"]}:8`,
+            `${paths["Api.swift"]}:9`,
+            `${paths["Use.swift"]}:16`,
+            `${paths["Extension.swift"]}:5`,
+          ].sort(),
+        );
+      }
+      const plainCaller = [...graph.nodes.values()].find(
+        (node) => node.file === paths["Extension.swift"] && node.name === "extensionPlain",
+      );
+      expect(
+        graph.edges
+          .filter((edge) => edge.from === plainCaller?.id && edge.label === "calls")
+          .map((edge) => `${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`),
+        phase,
+      ).toEqual([`${paths["Api.swift"]}:helper`]);
+      const soloDeclaration = site("Api.swift", 18, "plainOnly");
+      const soloUses = [site("Api.swift", 19, "`plainOnly`"), site("Use.swift", 18, "`plainOnly`")];
+      for (const use of soloUses) {
+        const target = await goToDefinition(index, use);
+        expect(target.status, `${phase}: ${use.file}:${use.line}`).toBe("ok");
+        if (target.status === "ok") {
+          expect(target.definition.file, phase).toBe(soloDeclaration.file);
+          expect(target.definition.range.start.line, phase).toBe(soloDeclaration.line);
+          expect(target.definition.localName, phase).toBe("plainOnly");
+        }
+      }
+      const soloRefs = await findReferences(index, soloDeclaration);
+      expect(soloRefs.status, phase).toBe("ok");
+      if (soloRefs.status === "ok") {
+        expect(soloRefs.referenceCoverage, phase).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(
+          soloRefs.references
+            .map((reference) => `${reference.file}:${reference.range.start.line}:${reference.range.start.column}`)
+            .sort(),
+          phase,
+        ).toEqual(
+          [soloDeclaration, ...soloUses]
+            .map((location) => `${location.file}:${location.line}:${location.column}`)
+            .sort(),
+        );
+        for (const use of soloUses) {
+          const match = soloRefs.references.find(
+            (reference) =>
+              reference.file === use.file &&
+              reference.range.start.line === use.line &&
+              reference.range.start.column === use.column,
+          );
+          expect(match, phase).toBeDefined();
+          if (match) expect(match.range.end.column - match.range.start.column, phase).toBe("`plainOnly`".length);
+        }
+      }
+      for (const [callerName, callerFile] of [
+        ["invokeSolo", "Api.swift"],
+        ["useSolo", "Use.swift"],
+      ] as const) {
+        const caller = [...graph.nodes.values()].find(
+          (node) => node.file === paths[callerFile] && node.name === callerName,
+        );
+        expect(caller, phase).toBeDefined();
+        expect(
+          graph.edges
+            .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+            .map((edge) => `${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`),
+          phase,
+        ).toEqual([`${paths["Api.swift"]}:plainOnly`]);
+      }
+    }
+  });
+
   it("keeps unread wildcard calls and references conservative on a native disk-cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-unread-wildcards-"));
     const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-unread-wildcards-cache-"));

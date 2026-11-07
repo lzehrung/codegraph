@@ -1480,6 +1480,7 @@ export async function resolveMemberAccessDefinition(params: {
               scope: "any",
               useFile: mod.file,
               phpCaseInsensitive: targetContext.sup.id === "php",
+              normalizeIdentifier: targetContext.sup.id === "swift" ? normalizeIdentifier : undefined,
               keepUniqueArityMismatch: true,
             });
             memberDef = selected.status === "unique" ? selected.member : undefined;
@@ -2204,6 +2205,7 @@ async function resolveKeywordReceiverMember(
     keepUniqueArityMismatch: !startAtAncestor,
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
+    normalizeIdentifier: current.context.sup.id === "swift" ? current.context.sup.normalizeIdentifier : undefined,
     separateMemberScopes: hasSeparateMemberScopes(current.context.sup.id),
   });
   if (report) {
@@ -2923,6 +2925,7 @@ async function resolveMemberDefinitionForBase(
       scope: "any",
       useFile: baseDef.file,
       phpCaseInsensitive: languageId === "php",
+      normalizeIdentifier: languageId === "swift" ? normalizeIdentifier : undefined,
       firstDeclarationWins: languageId === "ruby",
       keepUniqueArityMismatch: true,
     });
@@ -3072,6 +3075,7 @@ async function findReceiverMemberDefinition(
       scope: "any",
       useFile: receiverDef.file,
       phpCaseInsensitive: targetContext.sup.id === "php",
+      normalizeIdentifier: targetContext.sup.id === "swift" ? normalizeIdentifier : undefined,
       keepUniqueArityMismatch: true,
     });
     return selected.status === "unique" ? selected.member : undefined;
