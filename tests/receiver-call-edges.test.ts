@@ -29,6 +29,7 @@ import {
   buildConsumerAgreementFixture,
   disposeConsumerAgreementFixture,
 } from "./helpers/consumer-agreement.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const roots: string[] = [];
@@ -3580,5 +3581,20 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
     expect(callsiteTexts(graph, firstTarget, second, files)).toBeNull();
     expect(outgoingCallCount(graph, nodeIn(graph, "use.zig", "rejectedPrivate"))).toBe(0);
     expect(outgoingCallCount(graph, nodeIn(graph, "use.zig", "rejectedScope"))).toBe(0);
+  });
+});
+
+nativeDescribe("C# lowercase and keyword-verbatim static alias calls", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("records %s alias calls and preserves value-shadowed calls", async (alias) => {
+    const fixture = csharpAliasCallFixture(alias);
+    const graph = await buildFixture("cg-csharp-lowercase-alias-edges-", fixture.files);
+    const calls = graph.edges
+      .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run")
+      .map((edge) => ({
+        line: edge.site!.range.start.line,
+        caller: graph.nodes.get(edge.from)?.name,
+        target: path.basename(graph.nodes.get(edge.to)!.file),
+      }));
+    expect(calls.sort((left, right) => left.line - right.line)).toEqual(fixture.sites);
   });
 });

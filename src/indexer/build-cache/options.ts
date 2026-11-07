@@ -107,8 +107,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 120 resolves qualified JVM types and constructors by owner, and excludes false C# type-use edges.
  * Epoch 121 rebuilds Swift quoted-name resolutions, shared-owner identities, and detailed call edges.
  * Epoch 122 resolves qualified C# declared and constructed receiver types through namespace-aware lookup.
+ * Epoch 123 rebuilds detailed calls through lowercase and keyword-verbatim C# type aliases.
  */
-export const CORE_ALGORITHM_EPOCH = 122;
+export const CORE_ALGORITHM_EPOCH = 123;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
