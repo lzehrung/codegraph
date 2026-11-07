@@ -223,6 +223,7 @@ export function isSwiftConstrainedExtension(container: SyntaxNodeLike, source: s
 }
 
 function isSwiftTypeContainer(container: SyntaxNodeLike, source: string): boolean {
+  if (container.type === "protocol_declaration") return true;
   if (container.type !== "class_declaration") return false;
   const text = swiftKeywordText(container, source);
   return text === "class" || text === "struct" || text === "enum" || text === "actor";

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { findTypeHierarchy } from "../../src/indexer/type-hierarchy.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
@@ -1256,6 +1257,114 @@ describe("Swift extension header type references", () => {
         expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
         expect(refs.references.map((reference) => reference.range.start.line)).toEqual([position + 1, line]);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift protocol extension default-method graph ownership", () => {
+  it("preserves calls from struct and class conformers without reaching a same-named decoy protocol", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-protocol-extension-calls-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Types.swift": [
+          "protocol Relay { func send() }",
+          "extension Relay { func announce() { send() } }",
+          "struct Labelled: Relay { func send() {} }",
+          "class Tagged: Relay { func send() {} }",
+        ].join("\n"),
+        "Calls.swift": [
+          "import Types",
+          "func useStruct(_ value: Labelled) { value.announce() }",
+          "func useClass(_ value: Tagged) { value.announce() }",
+        ].join("\n"),
+        "other/Decoy.swift": [
+          "protocol Relay { func send() }",
+          "extension Relay { func announce() { send() } }",
+          "struct Labelled: Relay { func send() {} }",
+          "func useDecoy(_ value: Labelled) { value.announce() }",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const symbol = (file: string, name: string) =>
+        [...graph.nodes.values()].find((node) => normalizePath(node.file) === paths[file] && node.name === name);
+      const protocol = [...graph.nodes.values()].find(
+        (node) => normalizePath(node.file) === paths["Types.swift"] && node.name === "Relay" && node.kind === "type",
+      );
+      const extension = [...graph.nodes.values()].find(
+        (node) => normalizePath(node.file) === paths["Types.swift"] && node.name === "Relay" && node.kind === "class",
+      );
+      const announcement = symbol("Types.swift", "announce");
+      const decoyProtocol = [...graph.nodes.values()].find(
+        (node) =>
+          normalizePath(node.file) === paths["other/Decoy.swift"] && node.name === "Relay" && node.kind === "type",
+      );
+      const decoyAnnouncement = symbol("other/Decoy.swift", "announce");
+      const labelled = symbol("Types.swift", "Labelled");
+      const tagged = symbol("Types.swift", "Tagged");
+      const decoyLabelled = symbol("other/Decoy.swift", "Labelled");
+      const useStruct = symbol("Calls.swift", "useStruct");
+      const useClass = symbol("Calls.swift", "useClass");
+      const useDecoy = symbol("other/Decoy.swift", "useDecoy");
+      for (const target of [
+        protocol,
+        extension,
+        announcement,
+        decoyProtocol,
+        decoyAnnouncement,
+        labelled,
+        tagged,
+        decoyLabelled,
+        useStruct,
+        useClass,
+        useDecoy,
+      ]) {
+        expect(target).toBeDefined();
+      }
+      expect(
+        graph.edges.some((edge) => edge.from === extension!.id && edge.to === protocol!.id && edge.label === "uses"),
+      ).toBe(true);
+      expect(
+        graph.edges.some(
+          (edge) => edge.from === announcement!.id && edge.to === protocol!.id && edge.label === "member_of",
+        ),
+      ).toBe(true);
+      for (const [caller, target] of [
+        [useStruct!, announcement!],
+        [useClass!, announcement!],
+        [useDecoy!, decoyAnnouncement!],
+      ] as const) {
+        expect(
+          graph.edges.filter((edge) => edge.from === caller.id && edge.label === "calls").map((edge) => edge.to),
+        ).toEqual([target.id]);
+      }
+      for (const conformer of [labelled!, tagged!]) {
+        const supers = findTypeHierarchy(graph, conformer.id, "super");
+        expect(supers.status).toBe("ok");
+        if (supers.status !== "ok") throw new Error("Expected Swift protocol conformance");
+        expect(supers.relations.map((relation) => [relation.targetId, relation.relation])).toContainEqual([
+          protocol!.id,
+          "implements",
+        ]);
+        expect(supers.relations.some((relation) => relation.targetId === decoyProtocol!.id)).toBe(false);
+        expect(
+          graph.edges.some(
+            (edge) => edge.from === conformer.id && edge.to === protocol!.id && edge.label === "extends",
+          ),
+        ).toBe(false);
+      }
+      const subtypes = findTypeHierarchy(graph, protocol!.id, "sub");
+      expect(subtypes.status).toBe("ok");
+      if (subtypes.status !== "ok") throw new Error("Expected Swift conforming types");
+      expect(subtypes.relations.map((relation) => relation.targetId).sort()).toEqual([labelled!.id, tagged!.id].sort());
+      expect(subtypes.relations.map((relation) => relation.relation)).toEqual(["implements", "implements"]);
+      const decoySubtypes = findTypeHierarchy(graph, decoyProtocol!.id, "sub");
+      expect(decoySubtypes.status).toBe("ok");
+      if (decoySubtypes.status !== "ok") throw new Error("Expected separate decoy conformer");
+      expect(decoySubtypes.relations.map((relation) => relation.targetId)).toEqual([decoyLabelled!.id]);
+      expect(decoySubtypes.relations.map((relation) => relation.relation)).toEqual(["implements"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

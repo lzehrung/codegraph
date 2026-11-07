@@ -212,7 +212,7 @@ function collectSharedOwnerContainers(root: SyntaxNodeLike, languageId: string, 
   if (languageId === "csharp") {
     if (CSHARP_PARTIAL_CONTAINER_TYPES.has(root.type)) out.push(root);
   } else if (languageId === "swift") {
-    if (root.type === "class_declaration") out.push(root);
+    if (root.type === "class_declaration" || root.type === "protocol_declaration") out.push(root);
   }
   for (const child of root.namedChildren ?? []) collectSharedOwnerContainers(child, languageId, out);
 }

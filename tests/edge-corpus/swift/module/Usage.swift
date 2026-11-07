@@ -9,7 +9,7 @@ let typedThird: Labelled.Type = Labelled.self
 // @ref Labelled
 let typedFourth: Labelled.Type = Labelled.self
 
-// @ref announce @known-gap default-method observed=none
+// @ref announce
 func useDefault(_ value: Labelled) { value.announce() }
 // @goto announce @known-gap default-method observed=not_found
 let defaultMethod = Labelled.announce
@@ -32,7 +32,7 @@ func useMembers(_ value: Labelled) {
     // @ref nestedValue @known-gap nested-property observed=none
     let number = child.nestedValue
     let another = Labelled()
-    // @ref announce @known-gap default-method observed=none
+    // @ref announce
     value.announce()
     // @ref labelledSend @known-gap argument-label observed=none
     value.send(to: "closure")
