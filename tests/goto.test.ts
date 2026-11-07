@@ -25,7 +25,14 @@ import {
   KOTLIN_UNICODE_NAMES,
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
-import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_LINES, KOTLIN_QUOTED_SOURCES } from "./helpers/kotlin-quoted-fixture.js";
+import {
+  KOTLIN_QUOTED_BOUNDARY_FILES,
+  KOTLIN_QUOTED_BOUNDARY_LINES,
+  KOTLIN_QUOTED_BOUNDARY_SOURCES,
+  KOTLIN_QUOTED_FILES,
+  KOTLIN_QUOTED_LINES,
+  KOTLIN_QUOTED_SOURCES,
+} from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import {
@@ -2553,6 +2560,97 @@ describe("Go to Definition", () => {
         expect(callersOf(defs, "plainName"), "callers of plainName in app").toEqual(["useNames"]);
         expect(callersOf(decoy, "`quoted name`"), "callers of quoted name in the decoy package").toEqual(["useDecoys"]);
         expect(callersOf(decoy, "plainName"), "callers of plainName in the decoy package").toEqual(["useDecoys"]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves quoted Kotlin boundary names without linking shadowed aliases or foreign-package decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-boundary-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_BOUNDARY_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const { defs, peer, javaDef, use, collisions, star, nestedStar, nestedReverse, javaUse, javaStar, decoy } =
+          KOTLIN_QUOTED_BOUNDARY_FILES;
+        const cases: Array<[string, number, string, string, number]> = [
+          [use, 17, "`Gadget`", defs, 2],
+          [use, 17, "PlainAlias", defs, 3],
+          [use, 17, "`-JsonWriter`", defs, 4],
+          [use, 17, "JsonWriter,", defs, 5],
+          [use, 17, "`123Widget`", defs, 6],
+          [use, 17, "AliasType", defs, 13],
+          [use, 17, "JavaThing", javaDef, 2],
+          [use, 18, "`fun`", defs, 7],
+          [use, 18, "`is`", defs, 8],
+          [use, 18, "`in`", defs, 9],
+          [use, 18, "`with space`", defs, 10],
+          [use, 19, "TaskAlias", defs, 11],
+          [use, 19, "`TaskAlias`", defs, 11],
+          [use, 19, "task(3)", defs, 11],
+          [use, 19, "`task`", defs, 11],
+          [use, 21, "`produce`", defs, 14],
+          [collisions, 6, "`Space Name`", defs, 16],
+          [collisions, 6, "SpaceName", defs, 17],
+          [collisions, 6, "lowercase", defs, 18],
+          [collisions, 6, "`Lowercase`", defs, 19],
+          [peer, 2, "Gadget", defs, 2],
+          [peer, 2, "task(1)", defs, 11],
+          [peer, 2, "`task`", defs, 11],
+          [star, 3, "Gadget", defs, 2],
+          [star, 3, "task(1)", defs, 11],
+          [star, 3, "`task`", defs, 11],
+          [star, 3, "`is`", defs, 8],
+          [nestedStar, 3, "`Inner`", defs, 15],
+          [nestedStar, 4, "`Inner`", defs, 15],
+          [nestedReverse, 3, "QuotedInner", defs, 20],
+          [nestedReverse, 4, "QuotedInner", defs, 20],
+          [javaUse, 3, "Gadget", defs, 2],
+          [javaStar, 3, "Gadget", defs, 2],
+          [javaStar, 3, "JavaThing", javaDef, 2],
+        ];
+        for (const [file, line, token, target, targetLine] of cases) {
+          const column = columnInLines(KOTLIN_QUOTED_BOUNDARY_LINES[file]!, line, token);
+          await testGoToDefinition(index, paths[file]!, line, column, paths[target]!, targetLine);
+        }
+        const nested = await goToDefinition(index, {
+          file: paths[nestedStar]!,
+          line: 3,
+          column: columnInLines(KOTLIN_QUOTED_BOUNDARY_LINES[nestedStar]!, 3, "`Inner`"),
+        });
+        expect(nested.status).toBe("ok");
+        if (nested.status === "ok") expect(nested.definition.localName).toBe("Inner");
+        const reverseNested = await goToDefinition(index, {
+          file: paths[nestedReverse]!,
+          line: 3,
+          column: columnInLines(KOTLIN_QUOTED_BOUNDARY_LINES[nestedReverse]!, 3, "QuotedInner"),
+        });
+        expect(reverseNested.status).toBe("ok");
+        if (reverseNested.status === "ok") expect(reverseNested.definition.localName).toBe("`QuotedInner`");
+
+        const graph = await buildSymbolGraphDetailed(index);
+        const edgesFrom = (file: string, name: string) => {
+          const caller = [...graph.nodes.values()].find((node) => node.file === paths[file] && node.name === name);
+          expect(caller, `${file}::${name}`).toBeDefined();
+          return graph.edges.flatMap((edge) => {
+            if (edge.from !== caller?.id) return [];
+            const target = graph.nodes.get(edge.to);
+            return target ? [{ label: edge.label, file: target.file, name: target.name }] : [];
+          });
+        };
+        for (const [file, caller, target, name] of [
+          [use, "taskCalls", defs, "`task`"],
+          [peer, "peer", defs, "`task`"],
+          [star, "star", defs, "`task`"],
+          [nestedStar, "makeNested", defs, "Inner"],
+          [nestedReverse, "createReverse", defs, "`QuotedInner`"],
+        ]) {
+          const edges = edgesFrom(file!, caller!);
+          expect(edges).toContainEqual({ label: "calls", file: paths[target!], name });
+          expect(edges.some((edge) => edge.file === paths[decoy])).toBe(false);
+        }
+        expect(edgesFrom(use, "shadow").some((edge) => edge.file === paths[defs] && edge.name === "`task`")).toBe(
+          false,
+        );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

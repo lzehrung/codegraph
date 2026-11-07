@@ -106,6 +106,52 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
+describe("Swift quoted member references", () => {
+  it("includes a backtick keyword receiver use and excludes another owner's member", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-member-"));
+    try {
+      const main = ["struct Demo {", "  func `class`() {}", "  func run() { self.`class`() }", "}"];
+      const other = ["struct Other {", "  func `class`() {}", "  func runOther() { self.`class`() }", "}"];
+      const paths = await writeFixtureFiles(root, {
+        "Demo.swift": `${main.join("\n")}\n`,
+        "Other.swift": `${other.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const declaration = { file: paths["Demo.swift"]!, line: 2, column: columnOf(main, 2, "`class`") };
+      const use = { file: paths["Demo.swift"]!, line: 3, column: columnOf(main, 3, "`class`") };
+      const result = await findReferences(index, declaration);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected Swift member references");
+      expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        result.references.map((reference) => ({
+          file: reference.file,
+          line: reference.range.start.line,
+          column: reference.range.start.column,
+        })),
+      ).toEqual(expect.arrayContaining([declaration, use]));
+      expect(result.references.some((reference) => reference.file === paths["Other.swift"])).toBe(false);
+
+      const goto = await goToDefinition(index, use);
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the Swift member definition");
+      expect(goto.definition.file).toBe(declaration.file);
+      expect(goto.definition.range.start.line).toBe(declaration.line);
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find((node) => node.file === declaration.file && node.name === "run");
+      const targets = graph.edges.flatMap((edge) => {
+        if (edge.from !== caller?.id || edge.label !== "calls") return [];
+        const target = graph.nodes.get(edge.to);
+        return target ? [`${target.file}::${target.name}`] : [];
+      });
+      expect(targets).toContain(`${declaration.file}::\`class\``);
+      expect(targets).not.toContain(`${paths["Other.swift"]}::\`class\``);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Swift associated types and export scope", () => {
   it("indexes protocol associated types, macros, and operators", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-associated-"));

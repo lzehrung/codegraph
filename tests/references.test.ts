@@ -12,7 +12,7 @@ import {
   REFERENCE_COVERAGE_REASON_ORDER,
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import { goToDefinition, type ProjectIndex } from "../src/index.js";
+import { findReferences, goToDefinition, type ProjectIndex } from "../src/index.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
@@ -37,7 +37,14 @@ import {
   KOTLIN_UNICODE_NAMES,
   KOTLIN_UNICODE_SOURCES,
 } from "./helpers/kotlin-unicode-fixture.js";
-import { KOTLIN_QUOTED_FILES, KOTLIN_QUOTED_LINES, KOTLIN_QUOTED_SOURCES } from "./helpers/kotlin-quoted-fixture.js";
+import {
+  KOTLIN_QUOTED_BOUNDARY_FILES,
+  KOTLIN_QUOTED_BOUNDARY_LINES,
+  KOTLIN_QUOTED_BOUNDARY_SOURCES,
+  KOTLIN_QUOTED_FILES,
+  KOTLIN_QUOTED_LINES,
+  KOTLIN_QUOTED_SOURCES,
+} from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import {
@@ -3879,6 +3886,107 @@ describe("Find References", () => {
         await expectExactly(site(decoy, decoyLines, 3, "`Widget`"), [site(decoy, decoyLines, 9, "Widget")]);
         await expectExactly(site(decoy, decoyLines, 5, "`quoted name`"), [site(decoy, decoyLines, 9, "`quoted name`")]);
         await expectExactly(site(decoy, decoyLines, 7, "plainName"), [site(decoy, decoyLines, 9, "plainName")]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps distinct quoted identifiers, aliases, wildcard uses, and Java references separate", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-boundary-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_BOUNDARY_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const { defs, peer, javaDef, use, collisions, star, nestedStar, nestedReverse, javaUse, javaStar, decoy } =
+          KOTLIN_QUOTED_BOUNDARY_FILES;
+        const site = (file: string, line: number, token: string): ReferenceLocation => ({
+          file: paths[file]!,
+          line,
+          column: columnInLines(KOTLIN_QUOTED_BOUNDARY_LINES[file]!, line, token),
+        });
+        const sitesFor = async (declaration: ReferenceLocation, expected: readonly ReferenceLocation[]) => {
+          const result = await findReferences(index, declaration);
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected reference results");
+          expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          const sites = result.references.map((reference) => ({
+            file: reference.file,
+            line: reference.range.start.line,
+            column: reference.range.start.column,
+          }));
+          expect(sites).toEqual(expect.arrayContaining([declaration, ...expected]));
+          expect(sites.some((reference) => reference.file === paths[decoy])).toBe(false);
+          return sites;
+        };
+
+        await sitesFor(site(defs, 2, "`Gadget`"), [
+          site(use, 2, "Gadget"),
+          site(use, 17, "`Gadget`"),
+          site(peer, 2, "Gadget"),
+          site(star, 3, "Gadget"),
+          site(javaUse, 2, "Gadget"),
+          site(javaUse, 3, "Gadget"),
+          site(javaStar, 3, "Gadget"),
+        ]);
+        await sitesFor(site(defs, 3, "Regular"), [site(use, 3, "`Regular`"), site(use, 17, "PlainAlias")]);
+        const quoted = await sitesFor(site(defs, 4, "`-JsonWriter`"), [
+          site(use, 4, "`-JsonWriter`"),
+          site(use, 17, "`-JsonWriter`"),
+        ]);
+        expect(quoted).not.toContainEqual(site(use, 17, "JsonWriter,"));
+        const plain = await sitesFor(site(defs, 5, "JsonWriter"), [
+          site(use, 5, "JsonWriter"),
+          site(use, 17, "JsonWriter,"),
+        ]);
+        expect(plain).not.toContainEqual(site(use, 17, "`-JsonWriter`"));
+        await sitesFor(site(defs, 6, "`123Widget`"), [site(use, 6, "`123Widget`"), site(use, 17, "`123Widget`")]);
+        await sitesFor(site(defs, 7, "`fun`"), [site(use, 7, "`fun`"), site(use, 18, "`fun`")]);
+        await sitesFor(site(defs, 8, "`is`"), [site(use, 18, "`is`"), site(star, 3, "`is`")]);
+        await sitesFor(site(defs, 9, "`in`"), [site(use, 9, "`in`"), site(use, 18, "`in`")]);
+        await sitesFor(site(defs, 10, "`with space`"), [site(use, 10, "`with space`"), site(use, 18, "`with space`")]);
+        const task = await sitesFor(site(defs, 11, "`task`"), [
+          site(use, 11, "`task`"),
+          site(use, 19, "TaskAlias"),
+          site(use, 19, "`TaskAlias`"),
+          site(use, 19, "task(3)"),
+          site(use, 19, "`task`"),
+          site(peer, 2, "task(1)"),
+          site(peer, 2, "`task`"),
+          site(star, 3, "task(1)"),
+          site(star, 3, "`task`"),
+        ]);
+        expect(task.some((reference) => reference.file === paths[use] && reference.line === 20)).toBe(false);
+        await sitesFor(site(defs, 13, "`AliasType`"), [site(use, 13, "AliasType"), site(use, 17, "AliasType")]);
+        await sitesFor(site(defs, 14, "`produce`"), [site(use, 21, "`produce`")]);
+        await sitesFor(site(defs, 15, "Inner"), [site(nestedStar, 3, "`Inner`"), site(nestedStar, 4, "`Inner`")]);
+        await sitesFor(site(defs, 20, "`QuotedInner`"), [
+          site(nestedReverse, 3, "QuotedInner"),
+          site(nestedReverse, 4, "QuotedInner"),
+        ]);
+        const spaced = await sitesFor(site(defs, 16, "`Space Name`"), [
+          site(collisions, 2, "`Space Name`"),
+          site(collisions, 6, "`Space Name`"),
+        ]);
+        expect(spaced).not.toContainEqual(site(collisions, 6, "SpaceName"));
+        const compact = await sitesFor(site(defs, 17, "SpaceName"), [
+          site(collisions, 3, "SpaceName"),
+          site(collisions, 6, "SpaceName"),
+        ]);
+        expect(compact).not.toContainEqual(site(collisions, 6, "`Space Name`"));
+        const lower = await sitesFor(site(defs, 18, "`lowercase`"), [
+          site(collisions, 4, "lowercase"),
+          site(collisions, 6, "lowercase"),
+        ]);
+        expect(lower).not.toContainEqual(site(collisions, 6, "`Lowercase`"));
+        const upper = await sitesFor(site(defs, 19, "Lowercase"), [
+          site(collisions, 5, "`Lowercase`"),
+          site(collisions, 6, "`Lowercase`"),
+        ]);
+        expect(upper).not.toContainEqual(site(collisions, 6, "lowercase"));
+        await sitesFor(site(javaDef, 2, "JavaThing"), [
+          site(use, 15, "`JavaThing`"),
+          site(use, 17, "JavaThing"),
+          site(javaStar, 3, "JavaThing"),
+        ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

@@ -1729,6 +1729,11 @@ async function findReferencesInternal(
   // visited are a prefix of that table; coverage counts them without listing them.
   let receiverScannedFileCount = 0;
   if (scansReceiverReferences) {
+    const kotlinDefinition = parsedContext.sup.id === "kotlin";
+    const swiftDefinition = parsedContext.sup.id === "swift";
+    const quotedSwiftDefinition =
+      swiftDefinition && referenceDef.localName.startsWith("`") && referenceDef.localName.endsWith("`");
+    const mayHaveUnprobeableQuotedName = kotlinDefinition || quotedSwiftDefinition;
     const canonicalNames = new Map<LanguageSupport | undefined, string>();
     for (const entry of referenceModuleTable(index).entries) {
       if (hasReachedCollectionLimit()) break;
@@ -1745,7 +1750,10 @@ async function findReferencesInternal(
             : normalizedName;
         canonicalNames.set(entry.support, canonicalName);
       }
-      if (filter && isBloomIdentifierToken(canonicalName) && !filter.mightContain(canonicalName)) continue;
+      if (filter) {
+        const canUseFilter = !mayHaveUnprobeableQuotedName || isBloomIdentifierToken(canonicalName);
+        if (canUseFilter && !filter.mightContain(canonicalName)) continue;
+      }
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
         index,

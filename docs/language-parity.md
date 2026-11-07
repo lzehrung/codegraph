@@ -238,6 +238,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - The native grammar is a pinned fork of `tree-sitter-kotlin-ng` with upstream parser fixes, including multi-dollar strings (`$$"..."`, whose `$${name}` and `$$name` templates are references and whose shorter runs of dollars are text) and collection literals (`[]`). No Kotlin form that the corpus checks leave unparsed is known; a file that still ends in an `ERROR` declares only the names read before it, and its references stay `partial`.
 - Package and import lookups read each file's top-level names from its syntax tree. A function is declared under its own name, an extension or generic one included, never under its receiver type, and a name that two files declare stays unresolved. A file with an `ERROR` at the top of its tree is incomplete (see Same-package peers). A declaration the grammar misreads without an `ERROR` (one after `context(...)` receivers, or after a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file. Kotlin backticks do not change identifier identity: quoted and plain names match in package segments, imports, navigation, references, and graph edges, including Java imports of Kotlin classes. Stored source spelling and ranges stay unchanged.
 - Custom `codegraph grep --query` patterns must use `tree-sitter-kotlin-ng` node names: `identifier`, not `simple_identifier` or `type_identifier`.
+- Explicit imports of default-package declarations and nested types can remain unresolved even when spelled plainly.
 - `import pkg.*` considers top-level callables from every file in the package and picks an overload by argument count; a call two candidates accept stays unresolved.
 - Wildcards import top-level package declarations, never class or companion members; same-named declarations in another package are not imported.
 - Type-name receivers reach only companion-object and `object` members.
@@ -267,6 +268,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `private` and `fileprivate` extension members stay out of owners in other files.
 - A `where` extension shares members only with extensions of the same type whose constraint tokens match; logically equivalent constraints are not inferred.
 - An unproven nominal receiver does not gain constrained extension members.
+- References include same-spelled backtick-quoted member uses such as ``self.`class`()``. Mixed quoted and plain spellings of an ordinary member are not yet equivalent and can be omitted even when reference coverage says complete.
 
 ## Zig
 
