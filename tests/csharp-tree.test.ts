@@ -20,6 +20,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
+  getNativeSyntaxTreeExecution,
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
@@ -35,6 +36,11 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  csharpAliasCallFixture,
+  csharpUnknownAliasReceiverFixture,
+} from "./helpers/csharp-alias-call-fixture.js";
 
 function setNativeTreeParseFailure(message: string): () => number {
   const state = loadBinding();
@@ -1604,5 +1610,19 @@ describe("C# qualified receiver syntax", () => {
       }
     }
     expect(names.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("C# lowercase alias call syntax", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("parses %s aliases and shadowing values without recovery", (alias) => {
+    for (const fixture of [csharpAliasCallFixture(alias), csharpUnknownAliasReceiverFixture(alias)]) {
+      for (const source of Object.values(fixture.files)) {
+        const { tree } = getNativeSyntaxTreeExecution(source, CSHARP_SUPPORT);
+        expect(tree).not.toBeNull();
+        if (!tree) throw new Error("Expected native C# alias syntax");
+        expect([...tree.kindIds].filter((id) => tree.kinds[id] === "ERROR")).toEqual([]);
+        expect([...tree.isMissing].filter(Boolean)).toEqual([]);
+      }
+    }
   });
 });

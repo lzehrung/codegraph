@@ -11,6 +11,7 @@ import {
 import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp.js";
 import {
   cppQualifiedOwnerHasImplicitThis,
+  csharpAliasAt,
   csharpQualifiedReceiverName,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
@@ -1248,6 +1249,13 @@ export async function emitFunctionBodyEdges(
     };
 
     const classifyImport = (name: string, node: SyntaxNodeLike): "module-import" | "static-type" | null => {
+      if (context.sup.id === "csharp") {
+        const alias = csharpAliasAt(context.moduleEntry, name, node);
+        if (alias?.kind === "named" && context.moduleAliasIsUnshadowed(name, node)) {
+          const target = context.resolveIdentifier(name, node);
+          if (target && declaresMembers(target)) return "static-type";
+        }
+      }
       if (isJsTsLanguage(context.sup.id) && isIdentifierType(context.sup, node.type)) {
         const imported =
           effectiveExplicitBinding(

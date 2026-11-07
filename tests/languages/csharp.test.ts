@@ -34,6 +34,7 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "../helpers/csharp-qualified-receiver-fixture.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "../helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   declarationImportTargets,
@@ -5326,6 +5327,37 @@ describe("C# qualified declared and constructed receivers", () => {
         expect(result.status).toBe("ok");
         if (result.status !== "ok") throw new Error(`Unresolved qualified receiver at ${line}`);
         expect(result.definition.file).toBe(files[line === fixture.decoyCall ? "Other.cs" : "Value.cs"]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("C# lowercase and keyword-verbatim type alias calls", () => {
+  it.each(CSHARP_ALIAS_CALL_SPELLINGS)("proves %s static calls without stealing value receivers", async (alias) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-calls-"));
+    try {
+      const fixture = csharpAliasCallFixture(alias);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const site of fixture.sites) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: site.line,
+          column: columnOf(fixture.lines, site.line, "Run"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files[site.target]);
+        const edges = graph.edges.filter(
+          (edge) =>
+            edge.label === "calls" &&
+            edge.site?.file === files["Use.cs"] &&
+            edge.site.range.start.line === site.line &&
+            graph.nodes.get(edge.to)?.name === "Run",
+        );
+        expect(edges.map((edge) => graph.nodes.get(edge.to)?.file)).toEqual([files[site.target]]);
       }
     } finally {
       await rm(root, { recursive: true, force: true });

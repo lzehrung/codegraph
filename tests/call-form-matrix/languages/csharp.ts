@@ -10,11 +10,30 @@ import {
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "../../helpers/csharp-qualified-receiver-fixture.js";
+import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "../../helpers/csharp-alias-call-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_ALIAS_CALL_SPELLINGS.flatMap((alias, aliasIndex) => {
+    const fixture = csharpAliasCallFixture(alias);
+    // The matrix's absent-edge assertion is caller-wide; Restored legitimately calls both types.
+    const singleTargetSites = fixture.sites.filter((site) => site.caller !== "Restored");
+    return singleTargetSites.map(
+      (site): MatrixCell => ({
+        id: `csharp/lowercase-alias-${aliasIndex}-${site.line}`,
+        language: "csharp",
+        callForm: "imported-alias",
+        files: fixture.files,
+        use: { file: "Use.cs", line: site.line, token: "Run" },
+        expected: { file: site.target, line: 1, token: "Run" },
+        decoy: { file: site.target === "Target.cs" ? "Decoy.cs" : "Target.cs", line: 1, token: "Run" },
+        decoyKind: "callable",
+        edge: { label: "calls", fromFile: "Use.cs", fromName: site.caller },
+      }),
+    );
+  }),
   ...CSHARP_QUALIFIED_RECEIVER_TYPES.flatMap((type, typeIndex) => {
     const fixture = csharpQualifiedReceiverFixture(type);
     return fixture.calls.map(
