@@ -41,6 +41,11 @@ import {
   CSHARP_ALIAS_BOUNDARIES,
   csharpAliasBoundaryFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import { clearMemoryCache } from "../src/indexer/build-cache.js";
+import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "./helpers/csharp-qualified-receiver-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
@@ -3600,4 +3605,51 @@ nativeDescribe("restored declaration imports retain native semantic parity", () 
       });
     },
   );
+});
+nativeDescribe("native C# qualified receiver cache parity", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("retains %s targets and references on disk reload", async (type) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-qualified-receiver-"));
+    tempDirs.push(root);
+    const fixture = csharpQualifiedReceiverFixture(type);
+    const files = await writeFixtureFiles(root, fixture.files);
+    for (let build = 0; build < 2; build += 1) {
+      clearMemoryCache();
+      const index = await buildProjectIndex(root, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const file of ["Value.cs", "Other.cs"] as const) {
+        const expected = file === "Value.cs" ? fixture.calls : [fixture.decoyCall];
+        expect(
+          graph.edges
+            .filter(
+              (edge) =>
+                edge.label === "calls" &&
+                graph.nodes.get(edge.to)?.file === files[file] &&
+                graph.nodes.get(edge.to)?.name === "Run",
+            )
+            .map((edge) => edge.site?.range.start.line),
+        ).toEqual(expected);
+        const refs = await findReferences(index, {
+          file: files[file]!,
+          line: 1,
+          column: fixture.files[file].indexOf("Run") + 1,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected cached qualified receiver references");
+        expect(refs.referenceCoverage.state).toBe("complete");
+        expect(
+          refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual(expected);
+        for (const line of expected) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files[file]);
+        }
+      }
+    }
+  });
 });

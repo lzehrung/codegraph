@@ -222,6 +222,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A `using` never binds another language's file (`using System;` beside `system.ts`).
 - `using X = Y;` adds an edge to `Y`; `extern alias` adds none.
 - Declared and constructed receiver proofs compare `value` and `@value` as one binding name; verbatim spelling does not make a value a static type receiver.
+- `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` resolve member calls on locals and parameters whose declared or constructed type is namespace-qualified (`N.Type`, `global::N.Type`, or `X::Type` for a namespace alias). Type names retain their namespace and alias shadowing rules; a same-named value does not hide a type-only name.
 - An alias for a namespace split across files stays unresolved; one with no first-party declaration stays external.
 - `X::Target` and `global::Ns.Target` resolve against same-directory declarations; `X.Type.Member` needs a single-file alias binding.
 - `X::Type` and `X.Type` stay unresolved while a project C# file has no readable syntax tree.

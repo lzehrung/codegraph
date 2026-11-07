@@ -60,6 +60,10 @@ import {
   csharpAliasTypeFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
 import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "./helpers/csharp-qualified-receiver-fixture.js";
+import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
@@ -8751,6 +8755,32 @@ describe("Find References: JVM package and nested type identities", () => {
           (edge) => graph.nodes.get(edge.from)?.name === "d" && graph.nodes.get(edge.to)?.name === "Inner",
         ),
       ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("Find References: C# qualified receiver types", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("keeps %s calls separate from the namespace decoy", async (type) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-receiver-refs-"));
+    try {
+      const fixture = csharpQualifiedReceiverFixture(type);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      for (const file of ["Value.cs", "Other.cs"] as const) {
+        const result = await findReferences(index, {
+          file: files[file]!,
+          line: 1,
+          column: fixture.files[file].indexOf("Run") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected qualified receiver references");
+        expect(result.referenceCoverage.state).toBe("complete");
+        const expected = file === "Value.cs" ? fixture.calls : [fixture.decoyCall];
+        expect(
+          result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual(expected);
+      }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
