@@ -509,16 +509,15 @@ export async function buildSymbolGraphDetailed(
       const hasIncompleteJvmPackage =
         sup.id === "kotlin" &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
-      // A package-wide class alias is safe as a type, but not as a call past unread factories.
-      // Reuse the positioned lookup rather than letting the file-wide alias table restore that target.
+      // A Kotlin import alias is valid only where the positioned name lookup still selects it, so a
+      // shadowing local or an unread wildcard package never proves the alias target.
       const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
         if (sup.id === "csharp") return csharpAliasTableAnswers(moduleEntry, name, node);
-        if (hasIncompleteJvmPackage) {
-          const target = aliasToTargetDef.get(aliasKey(name));
-          const resolved = resolveIdentifier(name, node);
-          return !!target && !!resolved && defNodeId(target) === defNodeId(resolved);
-        }
-        return true;
+        if (sup.id !== "kotlin") return true;
+        const target = aliasToTargetDef.get(aliasKey(name));
+        if (!target) return !hasIncompleteJvmPackage;
+        const resolved = resolveIdentifier(name, node);
+        return !!resolved && defNodeId(target) === defNodeId(resolved);
       };
 
       const edgePassContext = {

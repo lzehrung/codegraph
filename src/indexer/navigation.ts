@@ -6,6 +6,8 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
 import { assertQuerySourceForIndex, ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
+import { isBloomIdentifierToken } from "../util/bloom-filter.js";
+import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
 import { memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
@@ -1490,7 +1492,10 @@ async function findReferencesInternal(
           }
           const staticNamedImport = imp.kind === "named" && !!imp.jvmStaticWildcardName;
           if (staticNamedImport && !javaStaticNamedImportIncludes(index, imp, definition)) continue;
-          const hit = staticNamedImport ? null : resolveExport(index, targetFile, exported, exportOptions);
+          const targetLanguage = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
+          const jvmTarget = targetLanguage === "java" || targetLanguage === "kotlin";
+          const lookupName = jvmTarget ? normalizeKotlinIdentifier(exported) : exported;
+          const hit = staticNamedImport ? null : resolveExport(index, targetFile, lookupName, exportOptions);
           let matchesDef = staticNamedImport || (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def));
           let attributedByProof = matchesDef;
           if (!matchesDef && bindingSites.length) {
@@ -1724,6 +1729,11 @@ async function findReferencesInternal(
   // visited are a prefix of that table; coverage counts them without listing them.
   let receiverScannedFileCount = 0;
   if (scansReceiverReferences) {
+    const kotlinDefinition = parsedContext.sup.id === "kotlin";
+    const swiftDefinition = parsedContext.sup.id === "swift";
+    const quotedSwiftDefinition =
+      swiftDefinition && referenceDef.localName.startsWith("`") && referenceDef.localName.endsWith("`");
+    const mayHaveUnprobeableQuotedName = kotlinDefinition || quotedSwiftDefinition;
     const canonicalNames = new Map<LanguageSupport | undefined, string>();
     for (const entry of referenceModuleTable(index).entries) {
       if (hasReachedCollectionLimit()) break;
@@ -1740,7 +1750,10 @@ async function findReferencesInternal(
             : normalizedName;
         canonicalNames.set(entry.support, canonicalName);
       }
-      if (filter && !filter.mightContain(canonicalName)) continue;
+      if (filter) {
+        const canUseFilter = !mayHaveUnprobeableQuotedName || isBloomIdentifierToken(canonicalName);
+        if (canUseFilter && !filter.mightContain(canonicalName)) continue;
+      }
       const remainingReferences = remainingCollectionSlots();
       const ranges = await collectVerifiedNamedNodeReferences(
         index,

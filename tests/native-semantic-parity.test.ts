@@ -19,6 +19,12 @@ import {
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
+import {
+  KOTLIN_QUOTED_BOUNDARY_FILES,
+  KOTLIN_QUOTED_BOUNDARY_LINES,
+  KOTLIN_QUOTED_FILES,
+  KOTLIN_QUOTED_LINES,
+} from "./helpers/kotlin-quoted-fixture.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
@@ -2288,6 +2294,148 @@ nativeDescribe("native semantic coverage", () => {
     const { defs, use, decoy } = KOTLIN_UNICODE_FILES;
     const peerCases: PeerCase[] = [
       {
+        name: "Kotlin quoted keyword through a package wildcard",
+        files: KOTLIN_QUOTED_BOUNDARY_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.star,
+          line: 3,
+          token: "`is`",
+          expectedFile: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          expectedLine: 8,
+        },
+        references: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          line: 8,
+          token: "`is`",
+          expectedSites: [
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}:8`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.use}:18`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.star}:3`,
+          ],
+          decoyFile: KOTLIN_QUOTED_BOUNDARY_FILES.decoy,
+        },
+        edge: {
+          caller: "star",
+          callerFile: KOTLIN_QUOTED_BOUNDARY_FILES.star,
+          expectedTarget: `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}::\`is\``,
+          absentTargets: [`${KOTLIN_QUOTED_BOUNDARY_FILES.decoy}::\`is\``],
+        },
+      },
+      {
+        name: "Kotlin nested class through a quoted type wildcard",
+        files: KOTLIN_QUOTED_BOUNDARY_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.nestedStar,
+          line: 4,
+          token: "`Inner`",
+          expectedFile: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          expectedLine: 15,
+        },
+        references: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          line: 15,
+          token: "Inner",
+          expectedSites: [
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}:15`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.nestedStar}:3`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.nestedStar}:4`,
+          ],
+          decoyFile: KOTLIN_QUOTED_BOUNDARY_FILES.decoy,
+        },
+        edge: {
+          caller: "makeNested",
+          callerFile: KOTLIN_QUOTED_BOUNDARY_FILES.nestedStar,
+          expectedTarget: `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}::Inner`,
+          absentTargets: [`${KOTLIN_QUOTED_BOUNDARY_FILES.decoy}::Inner`],
+        },
+      },
+      {
+        name: "Kotlin quoted nested declaration through a plain type wildcard",
+        files: KOTLIN_QUOTED_BOUNDARY_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.nestedReverse,
+          line: 4,
+          token: "QuotedInner",
+          expectedFile: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          expectedLine: 20,
+        },
+        references: {
+          file: KOTLIN_QUOTED_BOUNDARY_FILES.defs,
+          line: 20,
+          token: "`QuotedInner`",
+          expectedSites: [
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}:20`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.nestedReverse}:3`,
+            `${KOTLIN_QUOTED_BOUNDARY_FILES.nestedReverse}:4`,
+          ],
+          decoyFile: KOTLIN_QUOTED_BOUNDARY_FILES.decoy,
+        },
+        edge: {
+          caller: "createReverse",
+          callerFile: KOTLIN_QUOTED_BOUNDARY_FILES.nestedReverse,
+          expectedTarget: `${KOTLIN_QUOTED_BOUNDARY_FILES.defs}::\`QuotedInner\``,
+          absentTargets: [`${KOTLIN_QUOTED_BOUNDARY_FILES.decoy}::\`QuotedInner\``],
+        },
+      },
+      {
+        name: "Kotlin backtick-quoted function imported quoted and called quoted",
+        files: KOTLIN_QUOTED_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_FILES.use,
+          line: 13,
+          token: "`quoted name`",
+          expectedFile: KOTLIN_QUOTED_FILES.defs,
+          expectedLine: 5,
+        },
+        references: {
+          file: KOTLIN_QUOTED_FILES.defs,
+          line: 5,
+          token: "`quoted name`",
+          expectedSites: [
+            `${KOTLIN_QUOTED_FILES.defs}:5`,
+            `${KOTLIN_QUOTED_FILES.use}:4`,
+            `${KOTLIN_QUOTED_FILES.use}:13`,
+          ],
+          decoyFile: KOTLIN_QUOTED_FILES.decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: KOTLIN_QUOTED_FILES.use,
+          expectedTarget: `${KOTLIN_QUOTED_FILES.defs}::\`quoted name\``,
+          absentTargets: [`${KOTLIN_QUOTED_FILES.decoy}::\`quoted name\``],
+          label: "calls",
+        },
+      },
+      {
+        name: "Kotlin plain function imported with a quoted spelling and called plainly",
+        files: KOTLIN_QUOTED_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_FILES.use,
+          line: 13,
+          token: "plainName",
+          expectedFile: KOTLIN_QUOTED_FILES.defs,
+          expectedLine: 7,
+        },
+        references: {
+          file: KOTLIN_QUOTED_FILES.defs,
+          line: 7,
+          token: "plainName",
+          expectedSites: [
+            `${KOTLIN_QUOTED_FILES.defs}:7`,
+            `${KOTLIN_QUOTED_FILES.use}:5`,
+            `${KOTLIN_QUOTED_FILES.use}:13`,
+          ],
+          decoyFile: KOTLIN_QUOTED_FILES.decoy,
+        },
+        edge: {
+          caller: "useNames",
+          callerFile: KOTLIN_QUOTED_FILES.use,
+          expectedTarget: `${KOTLIN_QUOTED_FILES.defs}::plainName`,
+          absentTargets: [`${KOTLIN_QUOTED_FILES.decoy}::plainName`],
+          label: "calls",
+        },
+      },
+      {
         name: "Go same-package sibling function",
         files: {
           "go/a.go": ["package p", "", "func Shared() int { return 1 }"],
@@ -2445,6 +2593,38 @@ nativeDescribe("native semantic coverage", () => {
           decoyFile: "swift/Decoy.swift",
         },
         edge: { caller: "use", callerFile: "swift/B.swift", expectedTarget: "swift/A.swift::helper" },
+      },
+      {
+        name: "Swift backtick keyword receiver member",
+        files: {
+          "swiftquoted/Demo.swift": ["struct Demo {", "  func `class`() {}", "  func run() { self.`class`() }", "}"],
+          "swiftquoted/Decoy.swift": [
+            "struct Other {",
+            "  func `class`() {}",
+            "  func runOther() { self.`class`() }",
+            "}",
+          ],
+        },
+        goto: {
+          file: "swiftquoted/Demo.swift",
+          line: 3,
+          token: "`class`",
+          expectedFile: "swiftquoted/Demo.swift",
+          expectedLine: 2,
+        },
+        references: {
+          file: "swiftquoted/Demo.swift",
+          line: 2,
+          token: "`class`",
+          expectedSites: ["swiftquoted/Demo.swift:2", "swiftquoted/Demo.swift:3"],
+          decoyFile: "swiftquoted/Decoy.swift",
+        },
+        edge: {
+          caller: "run",
+          callerFile: "swiftquoted/Demo.swift",
+          expectedTarget: "swiftquoted/Demo.swift::`class`",
+          absentTargets: ["swiftquoted/Decoy.swift::`class`"],
+        },
       },
       {
         name: "Java inherited method over a single static import",

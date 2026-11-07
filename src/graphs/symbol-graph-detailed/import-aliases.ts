@@ -20,6 +20,7 @@ import {
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
+import { normalizeKotlinIdentifier } from "../../util/identifiers.js";
 
 export type ImportAliasMaps = {
   aliasToTargetDef: Map<string, SymbolDef>;
@@ -79,9 +80,10 @@ export function buildImportAliasMaps(
   const aliasToTargetModule = new Map<string, string>();
   const languageSupport = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
   const languageId = languageSupport?.id ?? "";
-  // Preserve other languages' key conventions; only C# verbatim aliases change identity here.
+  // Preserve other languages' key conventions; only C# verbatim and Kotlin quoted aliases change identity here.
+  const normalizesAliasKey = languageId === "csharp" || languageId === "kotlin";
   const aliasKey =
-    languageSupport?.id === "csharp" ? languageSupport.normalizeIdentifier : (name: string): string => name;
+    languageSupport && normalizesAliasKey ? languageSupport.normalizeIdentifier : (name: string): string => name;
   const pythonLocalStartIndexes = new Map<string, number>();
   if (languageId === "python") {
     for (const binding of scopeIndex.allScopes[0]?.map.values() ?? []) {
@@ -199,7 +201,9 @@ export function buildImportAliasMaps(
     if (decision.status !== "resolved") continue;
     // An alias of the same identifier blocks the star even when the directive spells it `@B`
     // and the star publishes `B`, so the comparison goes through the language's alias key.
-    const nameKey = aliasKey(name);
+    const targetLanguage = supportForFileWithoutHeaderSample(decision.definition.file, index.languageExtensions)?.id;
+    const nameKey =
+      languageId === "java" && targetLanguage === "kotlin" ? normalizeKotlinIdentifier(name) : aliasKey(name);
     const effectiveBinding = effectiveExplicitOrLocalBinding(
       moduleEntry.imports,
       languageId,

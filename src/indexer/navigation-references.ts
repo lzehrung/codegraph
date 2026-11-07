@@ -5,6 +5,8 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
+import { isBloomIdentifierToken } from "../util/bloom-filter.js";
+import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import {
   classifyReceiver,
@@ -474,7 +476,10 @@ async function collectNamedNodeReferences(
       "type_identifier",
       "field_identifier",
     ]);
-    const canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
+    const canonicalSymbolName =
+      parsed.sup.id === "java" || parsed.sup.id === "kotlin"
+        ? parsed.sup.normalizeIdentifier(normalizeKotlinIdentifier(symbolName))
+        : parsed.sup.normalizeIdentifier(symbolName);
     const isPhp = parsed.sup.id === "php";
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
     let nameEquivalenceUnavailable = false;
@@ -959,13 +964,14 @@ export function importCanReferenceDefinition(
   const exportOptions = cNamespace ? { cNamespace } : undefined;
   if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) return false;
 
+  const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
+  const jvmTarget = targetLanguageId === "java" || targetLanguageId === "kotlin";
   const resolvesToDefinition = (exportedName: string): boolean => {
-    const hit = resolveExport(index, targetFile, exportedName, exportOptions);
-    if (hit?.kind === "resolved") {
-      return sameDef(hit.def, def, index.languageExtensions);
-    }
-    if (javaKotlinFunctionOverloadIncludes(index, targetFile, exportedName, def)) return true;
-    if (cppCanonicalStructuralExport(index, targetFile, exportedName, def, languageId)) {
+    const lookupName = jvmTarget ? normalizeKotlinIdentifier(exportedName) : exportedName;
+    const hit = resolveExport(index, targetFile, lookupName, exportOptions);
+    if (hit?.kind === "resolved") return sameDef(hit.def, def, index.languageExtensions);
+    if (javaKotlinFunctionOverloadIncludes(index, targetFile, lookupName, def)) return true;
+    if (cppCanonicalStructuralExport(index, targetFile, lookupName, def, languageId)) {
       return true;
     }
     return imp.kind === "namespace" && fileIdentityKey(targetFile) === fileIdentityKey(def.file);
@@ -1362,8 +1368,12 @@ export function getCachedReferenceCandidateFiles(
           const filter = index.bloomFilters?.get(jvmModule.key);
           const rootProbe = jvmModule.support.normalizeIdentifier(rootName);
           const nameProbe = jvmModule.support.normalizeIdentifier(def.localName);
+          const canProbeRoot = isBloomIdentifierToken(rootProbe);
+          const canProbeName = isBloomIdentifierToken(nameProbe);
           if (
             !filter ||
+            !canProbeRoot ||
+            !canProbeName ||
             (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
             (jvmModule.languageId === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
           ) {
