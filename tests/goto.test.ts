@@ -48,6 +48,10 @@ import {
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  withRestoredDeclarationImport,
+} from "./helpers/restored-declaration-import-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -6731,4 +6735,28 @@ describe("Go to Definition: SCSS Sass modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("restored declaration import navigation", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES)(
+    "navigates to the restored $languageId declaration, not a decoy",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async (project) => {
+        const { restored, cold, query, owner, decoy, unrelated } = project;
+        const actual = await goToDefinition(restored, query);
+        const expected = await goToDefinition(cold, query);
+        expect(actual).toEqual(expected);
+        expect(actual.status).toBe("ok");
+        if (actual.status !== "ok") throw new Error("expected the restored import to navigate");
+        expect(fileIdentityKey(actual.definition.file)).toBe(fileIdentityKey(owner));
+        expect(fileIdentityKey(actual.definition.file)).not.toBe(fileIdentityKey(decoy));
+        const unrelatedQuery = {
+          file: unrelated,
+          line: fixture.useLine,
+          column: columnInLines(fixture.unrelatedLines, fixture.useLine, "Gadget"),
+        };
+        expect((await goToDefinition(restored, unrelatedQuery)).status).toBe("not_found");
+      });
+    },
+  );
 });

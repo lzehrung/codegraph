@@ -29,6 +29,11 @@ import {
   JVM_INCOMPLETE_WILDCARD_CALLABLE_REFERENCES,
   JVM_INCOMPLETE_WILDCARD_TYPES,
 } from "../helpers/jvm-incomplete-wildcard-fixture.js";
+import {
+  RESTORED_DECLARATION_FIXTURES,
+  declarationImportTargets,
+  withRestoredDeclarationImport,
+} from "../helpers/restored-declaration-import-fixture.js";
 
 type TokenRange = {
   start: { line: number; column: number; index: number };
@@ -1807,4 +1812,17 @@ describe("Kotlin inherited member lookup", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Kotlin restored declaration imports", () => {
+  it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "kotlin"))(
+    "restores an import when a differently named file declares its type again",
+    async (fixture) => {
+      await withRestoredDeclarationImport(fixture, "disk", async ({ restored, cold, owner, consumer, decoy }) => {
+        expect(declarationImportTargets(restored, consumer)).toEqual(declarationImportTargets(cold, consumer));
+        expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+        expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
+      });
+    },
+  );
 });

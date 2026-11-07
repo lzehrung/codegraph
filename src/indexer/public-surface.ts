@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { fileIdentityKey, isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
 import type { ModuleIndex } from "./types.js";
+import {
+  foldPhpIdentifierCase,
+  normalizeCsharpQualifiedName,
+  normalizeKotlinQualifiedName,
+} from "../util/identifiers.js";
 
 /**
  * A file's public surface is what other files' cached index data can derive from its content.
@@ -96,6 +101,97 @@ export function publicSurfaceSignature(
 ): string | undefined {
   if (publicSurfaceKind(file, languageExtensions) === "content") return undefined;
   return computeApiSurface(mod, projectRoot);
+}
+
+const NO_NEW_DECLARATION_NAMES: ReadonlySet<string> = new Set<string>();
+
+function sameNames(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((name, index) => name === right[index]);
+}
+
+/** Declaration facts omit body positions; C# namespace-region offsets are intentionally ignored. */
+function sameDeclarationFacts(previous: ModuleIndex, current: ModuleIndex): boolean {
+  const oldJvm = previous.jvmFacts;
+  const newJvm = current.jvmFacts;
+  if (oldJvm || newJvm) {
+    if (!oldJvm || !newJvm || oldJvm.packageName !== newJvm.packageName) return false;
+    return sameNames(oldJvm.symbols, newJvm.symbols) && sameNames(oldJvm.javaTypes, newJvm.javaTypes);
+  }
+  const oldCsharp = previous.csharpNamespaceFacts;
+  const newCsharp = current.csharpNamespaceFacts;
+  if (oldCsharp || newCsharp) {
+    if (!oldCsharp || !newCsharp || oldCsharp.regions.length !== newCsharp.regions.length) return false;
+    if (!sameNames(oldCsharp.types, newCsharp.types)) return false;
+    return oldCsharp.regions.every((region, index) => region.name === newCsharp.regions[index]!.name);
+  }
+  return sameNames(previous.declaredContainers, current.declaredContainers);
+}
+
+/** Match source-spelled declaration facts and specifiers with their language's identifier identity. */
+export function normalizeDeclarationImportName(name: string, support: LanguageSupport): string {
+  if (support.id === "csharp") {
+    const normalized = normalizeCsharpQualifiedName(name);
+    return normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
+  }
+  if (support.id === "kotlin") return normalizeKotlinQualifiedName(name);
+  const normalized = support.normalizeIdentifier?.(name) ?? name;
+  if (support.id === "php") return foldPhpIdentifierCase(normalized).replace(/^\\+/u, "");
+  return normalized;
+}
+
+function declarationImportNames(mod: ModuleIndex, support: LanguageSupport): Set<string> {
+  const names = new Set<string>();
+  const add = (name: string): void => {
+    const normalized = normalizeDeclarationImportName(name, support);
+    if (!normalized) return;
+    names.add(normalized);
+    if (support.id === "cpp") return;
+    const separator = support.id === "php" ? "\\" : ".";
+    names.add(normalized.slice(normalized.lastIndexOf(separator) + 1));
+  };
+  if (mod.jvmFacts) {
+    const packageName = mod.jvmFacts.packageName;
+    if (packageName) add(packageName);
+    for (const name of mod.jvmFacts.symbols) {
+      add(name);
+      if (packageName) add(`${packageName}.${name}`);
+    }
+  } else if (mod.csharpNamespaceFacts) {
+    for (const region of mod.csharpNamespaceFacts.regions) add(region.name);
+    for (const name of mod.csharpNamespaceFacts.types) add(name);
+  } else if (support.id === "cpp") {
+    for (const name of mod.declaredContainers ?? []) add(name);
+  } else {
+    for (const entry of mod.exports) {
+      if (entry.type === "local" && !entry.target.isMember) add(entry.exportedAs);
+    }
+  }
+  return names;
+}
+
+/**
+ * New declaration-import names only. A body edit compares the same API surface used by the
+ * extraction waves plus stored package/namespace facts, without inspecting any importers.
+ */
+export function newlyDeclaredImportNames(
+  previous: ModuleIndex | undefined,
+  current: ModuleIndex,
+  support: LanguageSupport,
+  projectRoot: string,
+): ReadonlySet<string> {
+  if (
+    previous &&
+    sameDeclarationFacts(previous, current) &&
+    computeApiSurface(previous, projectRoot) === computeApiSurface(current, projectRoot)
+  ) {
+    return NO_NEW_DECLARATION_NAMES;
+  }
+  const currentNames = declarationImportNames(current, support);
+  if (!previous) return currentNames;
+  for (const name of declarationImportNames(previous, support)) currentNames.delete(name);
+  return currentNames;
 }
 
 /** Resolved project files that `mod` re-exports from (`export * from`, `export { x } from`, `export * as ns from`). */

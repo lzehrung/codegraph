@@ -30,6 +30,7 @@ import { primeCsharpNamespaceFacts, setCsharpNamespaceFactsReader } from "../uti
 import { primeJvmFileFacts, resolveJvmPackageImportPaths, setJvmFileFactsReader } from "../util/resolution/jvm.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
+import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -168,7 +169,13 @@ import {
   partitionTrackedManifestFiles,
   probePathExistence,
 } from "./incremental-plan.js";
-import { propagateReexportSurfaceChanges, publicSurfaceKind, publicSurfaceSignature } from "./public-surface.js";
+import {
+  newlyDeclaredImportNames,
+  normalizeDeclarationImportName,
+  propagateReexportSurfaceChanges,
+  publicSurfaceKind,
+  publicSurfaceSignature,
+} from "./public-surface.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
 type IndexedFileModuleResult = {
@@ -3141,6 +3148,16 @@ async function buildProjectIndexIncrementalInProbeCache(
       let projectExtractionMs = 0;
       let updateStartedAt: number | undefined;
       const initialChangedFiles = Array.from(changedFiles);
+      // Preserve changed declarers before their fresh rows replace the cached name surface.
+      for (const file of initialChangedFiles) {
+        if (!trackedEntries[file]) continue;
+        const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);
+        if (!support || !DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(support.id)) continue;
+        const key = fileIdentityKey(file);
+        if (retiredModules.has(key)) continue;
+        const previous = peekCachedModule(projectRoot, file, opts);
+        if (previous) retiredModules.set(key, previous.mod);
+      }
       if (
         initialChangedFiles.some((file) =>
           readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id),
@@ -3163,22 +3180,19 @@ async function buildProjectIndexIncrementalInProbeCache(
         });
         projectExtractionMs = performance.now() - updateStartedAt;
       }
-      // A deletion cannot make an unresolved specifier start resolving. Dependents of a
-      // deleted file are already rebuilt by collectDeletedTrackedFileDependents. An added
-      // file can: re-resolve only specifiers whose stem matches an added file. Edges that
-      // cannot round-trip (unstored resolution kind, or a C/C++ include with no form) are
-      // reparsed instead of guessed.
-      if (addedFiles.length) {
-        const reparseCachedFile = (candidate: string): void => {
-          const key = fileIdentityKey(candidate);
-          if (modules.has(key)) {
-            modules.delete(key);
-            if (fileReport) {
-              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
-            }
+      const reparseCachedFile = (candidate: string): void => {
+        const key = fileIdentityKey(candidate);
+        if (modules.has(key)) {
+          modules.delete(key);
+          if (fileReport) {
+            fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
           }
-          markAsChanged(candidate);
-        };
+        }
+        markAsChanged(candidate);
+      };
+      // An added file can satisfy a specifier whose stem matches it. Edges that cannot
+      // round-trip (unstored resolution kind, or a C/C++ include with no form) are reparsed.
+      if (addedFiles.length) {
         const addedStemsByLanguage = new Map<string, ReadonlySet<string>>();
         const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
           const existing = addedStemsByLanguage.get(languageId);
@@ -3216,6 +3230,54 @@ async function buildProjectIndexIncrementalInProbeCache(
           if (allFiles.has(importer) && !changedFiles.has(importer)) reparseCachedFile(importer);
         }
       }
+      // Only a newly declared name can restore an external binding. Body edits never visit
+      // cached importers, and declaration edits resolve only bindings naming the new surface.
+      const collectRestoredDeclarationImporters = async (
+        namesByLanguage: ReadonlyMap<string, ReadonlySet<string>>,
+      ): Promise<string[]> => {
+        if (!namesByLanguage.size) return [];
+        const candidates = Array.from(collectSpecifierEdgeCandidates(trackedEntries, true));
+        const restoredImports = await mapLimit(candidates, conc, async (candidate) => {
+          if (!allFiles.has(candidate) || changedFiles.has(candidate)) return false;
+          const support = supportForFileWithoutHeaderSample(candidate, opts?.languageExtensions);
+          if (!support) return false;
+          const languageGroup = isJvmLanguage(support.id) ? "jvm" : support.id;
+          const names = namesByLanguage.get(languageGroup);
+          if (!names) return false;
+          const mod = modules.get(fileIdentityKey(candidate));
+          if (!mod || !cachedModuleHasExternalImport(mod)) return false;
+          for (const binding of mod.imports) {
+            if (typeof binding.resolved === "string") continue;
+            const specifier = normalizeDeclarationImportName(binding.from, support);
+            if (support.id === "cpp") {
+              // Includes name files, not module declarations. An existing header's body
+              // cannot make its missing path appear, so never re-resolve includes here.
+              if ("includeForm" in binding && binding.includeForm) continue;
+              if (!isCppNamedModuleSpecifier(specifier) || !names.has(specifier)) continue;
+            } else if (!names.has(specifier)) {
+              const separator = support.id === "php" ? "\\" : ".";
+              const lastSeparator = specifier.lastIndexOf(separator);
+              const importedName = specifier.slice(lastSeparator + 1);
+              const matchesImportedName = names.has(importedName);
+              const matchesPhpNamespace =
+                support.id === "php" && lastSeparator >= 0 && names.has(specifier.slice(0, lastSeparator));
+              if (!matchesImportedName && !matchesPhpNamespace) continue;
+            }
+            const packageWildcard = binding.kind === "star" && !!binding.jvmTypeWildcardName;
+            const targets = await resolveSpecifierTargets(candidate, binding.from, support.id, {
+              projectRoot,
+              resolveNodeModules: !!graphOptions.resolveNodeModules,
+              ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+              ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+              ...(packageWildcard ? { jvmPackageWildcard: true } : {}),
+              ...(binding.kind === "named" && binding.phpImportType ? { phpImportType: binding.phpImportType } : {}),
+            });
+            if (targets.files.length) return true;
+          }
+          return false;
+        });
+        return candidates.filter((_, index) => restoredImports[index]);
+      };
       const changedList = Array.from(changedFiles);
       // Sized by the work that remains rather than the size of the project: an incremental build
       // touching a handful of files gets a handful of threads, or none.
@@ -3323,19 +3385,34 @@ async function buildProjectIndexIncrementalInProbeCache(
           }
         });
         const pendingIncrementalCacheWrites: PendingModuleCacheWrite[] = [];
+        const newDeclarationNames = new Map<string, Set<string>>();
         for (const [file, mod, cacheWrite] of fileResults) {
           const key = fileIdentityKey(file);
           modules.set(key, mod);
           extractedFiles.set(key, file);
           const surface = publicSurfaceSignature(file, mod, projectRoot, opts?.languageExtensions);
           if (surface !== undefined) freshSurfaces.set(key, surface);
+          const support = supportForFileWithoutHeaderSample(file, opts?.languageExtensions);
+          const changedDeclarer =
+            trackedEntries[file] && support && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(support.id);
+          if (changedDeclarer) {
+            const names = newlyDeclaredImportNames(retiredModules.get(key), mod, support, projectRoot);
+            if (names.size) {
+              const group = isJvmLanguage(support.id) ? "jvm" : support.id;
+              let addedNames = newDeclarationNames.get(group);
+              if (!addedNames) newDeclarationNames.set(group, (addedNames = new Set<string>()));
+              for (const name of names) addedNames.add(name);
+            }
+          }
           if (cacheWrite) pendingIncrementalCacheWrites.push(cacheWrite);
         }
         if (pendingIncrementalCacheWrites.length) {
           writeModulesToCache(projectRoot, pendingIncrementalCacheWrites, opts);
         }
         parseMs += performance.now() - parseStart;
+        const restoredImporters = await collectRestoredDeclarationImporters(newDeclarationNames);
         wave = collectSurfaceDependents();
+        if (restoredImporters.length) wave = [...new Set([...wave, ...restoredImporters])];
         if (!wave.length) break;
         for (const file of wave) rebuildDependent(file);
         plannedFiles += wave.length;
