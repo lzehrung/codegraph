@@ -21,6 +21,7 @@ import {
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   resolveSwiftAliasContainer,
+  resolveSwiftAliasHeritage,
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -1802,13 +1803,46 @@ async function swiftDeclarationType(context: EdgePassContext, def: SymbolDef): P
 }
 
 /**
- * Swift protocols are indexed as types, and one declared in another file is absent from this file's interface
- * ids. Only a proven protocol declaration relabels a conformance as inheritance: any other type-kind target, such
- * as a typealias to a class, keeps its inheritance edge.
+ * `swiftDeclarationType` for a type-kind definition: a protocol, enum, or typealias. A class, struct, or actor is
+ * never type-kind, so resolving one loads no syntax tree.
  */
-async function namesSwiftProtocol(context: EdgePassContext, target: SymbolDef): Promise<boolean> {
-  if (context.sup.id !== "swift" || target.kind !== SymbolKind.TypeAlias) return false;
-  return (await swiftDeclarationType(context, target)) === "protocol_declaration";
+async function swiftTypeKindDeclarationType(context: EdgePassContext, def: SymbolDef): Promise<string | undefined> {
+  if (def.kind !== SymbolKind.TypeAlias) return undefined;
+  return await swiftDeclarationType(context, def);
+}
+
+/** What a Swift base clause names once typealiases are followed, and whether that declaration is a protocol. */
+type SwiftBase = { target: SymbolDef; isProtocol: boolean };
+
+/**
+ * A Swift base clause names a class, a protocol, or a typealias for one. An alias is followed to the single class or
+ * protocol it provably reaches, so the edge targets that declaration, never the alias; an unproven alias names none
+ * and adds no edge.
+ */
+async function resolveSwiftBase(context: EdgePassContext, named: SymbolDef): Promise<SwiftBase | null> {
+  let target = named;
+  let declaration = await swiftTypeKindDeclarationType(context, target);
+  if (declaration === "typealias_declaration") {
+    const reached = await resolveSwiftAliasHeritage(context.index, target);
+    if (!reached) return null;
+    target = reached;
+    declaration = await swiftTypeKindDeclarationType(context, target);
+  }
+  return { target, isProtocol: declaration === "protocol_declaration" };
+}
+
+/**
+ * A protocol's own base clause refines other protocols (`extends`), so a protocol is never an implementation of a
+ * protocol it inherits. A class, struct, enum, actor, or extension conforms to a protocol (`implements`); a class
+ * base keeps the clause's superclass-first relation.
+ */
+function swiftBaseRelation(
+  clause: SyntaxNodeLike,
+  base: SwiftBase,
+  clauseRelation: ReceiverAncestryRelation,
+): ReceiverAncestryRelation {
+  if (clause.parent?.type === "protocol_declaration") return "extends";
+  return base.isProtocol ? "implements" : clauseRelation;
 }
 
 /**
@@ -1816,7 +1850,7 @@ async function namesSwiftProtocol(context: EdgePassContext, target: SymbolDef): 
  * typealias provably reaches. An unproven alias names none, so it can neither gain nor donate a conformance.
  */
 async function swiftExtendedNominal(context: EdgePassContext, target: SymbolDef): Promise<SymbolDef | null> {
-  if ((await swiftDeclarationType(context, target)) !== "typealias_declaration") return target;
+  if ((await swiftTypeKindDeclarationType(context, target)) !== "typealias_declaration") return target;
   const nominal = await resolveSwiftAliasContainer(context.index, target);
   return nominal && !nominal.swiftExtensionOwner ? nominal : null;
 }
@@ -1861,11 +1895,17 @@ async function recordIdentifierRelations(
       }
     }
     if (!target) continue;
+    let swiftBase: SwiftBase | null = null;
+    if (context.sup.id === "swift") {
+      swiftBase = await resolveSwiftBase(context, target);
+      if (!swiftBase) continue;
+      target = swiftBase.target;
+    }
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    let relation = relationForTarget(target, index, identifier);
-    if (relation === "extends" && (await namesSwiftProtocol(context, target))) relation = "implements";
+    const clauseRelation = relationForTarget(target, index, identifier);
+    const relation = swiftBase ? swiftBaseRelation(container, swiftBase, clauseRelation) : clauseRelation;
     if (extensionNominal !== undefined) {
       // An extension is not a second implementing type. Conditional or
       // unproven extensions cannot establish unconditional conformance.

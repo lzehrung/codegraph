@@ -4050,6 +4050,32 @@ describe("Find References", () => {
       }
     });
 
+    it("includes member uses reached through a typealias base and excludes a same-named decoy member", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-alias-base-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, {
+          "Models.swift": "class Base { func helper() {} }\nclass Decoy { func helper() {} }\n",
+          "Aliases.swift": "typealias Alias = Base\n",
+          "Derived.swift": "class Derived: Alias {\n  func run() {\n    super.helper()\n    helper()\n  }\n}\n",
+        });
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const site = (refs: FindReferencesResult): string[] => {
+          if (refs.status !== "ok") throw new Error("Expected references");
+          return refs.references
+            .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+            .sort();
+        };
+        const baseRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 1, column: 19 });
+        expect(site(baseRefs)).toEqual(["Derived.swift:3", "Derived.swift:4", "Models.swift:1"]);
+        if (baseRefs.status !== "ok") throw new Error("Expected base member references");
+        expect(baseRefs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        const decoyRefs = await findReferences(index, { file: paths["Models.swift"]!, line: 2, column: 20 });
+        expect(site(decoyRefs)).toEqual(["Models.swift:2"]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("reports complete Swift references for both spellings without including same-named decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-references-"));
       try {

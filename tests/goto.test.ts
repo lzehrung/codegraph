@@ -6393,6 +6393,47 @@ describe("Shared-owner member navigation (C# partials, Swift extensions, Zig imp
     }
   });
 
+  it("resolves Swift members through a typealias base across files and leaves an unproven alias unresolved", async () => {
+    const derived = [
+      "class Derived: Alias {",
+      "  func run() {",
+      "    super.helper()",
+      "    helper()",
+      "  }",
+      "}",
+      "class FromGeneric: IntGeneric {",
+      "  func run() { helper() }",
+      "}",
+    ].join("\n");
+    const { root, paths, index } = await buildFiles("cg-swift-alias-base-goto-", {
+      "Models.swift": "class Base { func helper() {} }\nclass Decoy { func helper() {} }",
+      "Generic.swift": "class Generic<Element> { func helper() {} }",
+      "Aliases.swift": "typealias Alias = Base\ntypealias IntGeneric = Generic<Int>",
+      "Derived.swift": derived,
+    });
+    try {
+      for (const line of [3, 4]) {
+        await testGoToDefinition(
+          index,
+          paths["Derived.swift"]!,
+          line,
+          columnOf(derived, line, "helper"),
+          paths["Models.swift"]!,
+          1,
+        );
+      }
+      // A generic specialization proves no base, so its member stays unresolved instead of being guessed.
+      const unproven = await goToDefinition(index, {
+        file: paths["Derived.swift"]!,
+        line: 8,
+        column: columnOf(derived, 8, "helper"),
+      });
+      expect(unproven.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a Swift self member declared in an extension", async () => {
     const a = ["class Box {", "  func ping() {}", "  func run() { self.pong() }", "}"].join("\n");
     const b = ["extension Box {", "  func pong() {}", "}"].join("\n");

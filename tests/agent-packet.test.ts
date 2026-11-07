@@ -6,6 +6,12 @@ import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import { formatAgentFollowUpAsCli } from "../src/agent/follow-ups.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
+import {
+  SWIFT_EXTENSION_OWNER_FILES,
+  SWIFT_EXTENSION_OWNER_HANDLE,
+  SWIFT_NOMINAL_HANDLE,
+} from "./helpers/swift-extension-owner-fixture.js";
+import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const tempRoots = createTempRootRegistry();
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -164,5 +170,29 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await expect(getCodegraphPacket({ root, target: "review:base=%;head=HEAD" })).rejects.toThrow(
       "Invalid review packet target",
     );
+  });
+
+  it("packets the Swift type an extension header extends and rejects a handle to the header", async () => {
+    const root = await mkTmpDir("cg-agent-packet-swift-extension-");
+    await writeFixtureFiles(root, SWIFT_EXTENSION_OWNER_FILES);
+    const buildOptions = { cache: "off" } as const;
+
+    // The header's file sorts first, so only the declared-symbol rule makes the name resolve to the type.
+    const byName = await getCodegraphPacket({ root, target: "Widget", buildOptions, maxDuplicates: 0 });
+    expect(byName.kind).toBe("symbol");
+    if (!("target" in byName.packet)) throw new Error("expected explanation packet");
+    expect(byName.packet.target).toMatchObject({ kind: "symbol", file: "Models.swift", handle: SWIFT_NOMINAL_HANDLE });
+    expect(byName.packet.symbols.map((symbol) => symbol.name)).toEqual(["Widget"]);
+    expect(byName.packet.references.map((reference) => reference.file).sort()).toEqual([
+      "Extensions.swift",
+      "Models.swift",
+    ]);
+
+    const byHandle = await getCodegraphPacket({ root, target: SWIFT_NOMINAL_HANDLE, buildOptions, maxDuplicates: 0 });
+    expect(byHandle.kind).toBe("symbol");
+
+    await expect(
+      getCodegraphPacket({ root, target: SWIFT_EXTENSION_OWNER_HANDLE, buildOptions, maxDuplicates: 0 }),
+    ).rejects.toThrow("Packet target did not resolve");
   });
 });

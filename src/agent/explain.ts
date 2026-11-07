@@ -8,6 +8,7 @@ import {
   type DuplicateSuggestion,
   type DuplicateTarget,
 } from "../duplicates.js";
+import { isDeclaredSymbol } from "../indexer/declarations.js";
 import { findReferences } from "../indexer/navigation.js";
 import type { BuildOptions, ImportBindingRole, ReferenceCoverage, Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
@@ -58,7 +59,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createRequestSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
-import { buildSymbolLookup, symbolDefsInFile, type SymbolLookup } from "./symbol-lookup.js";
+import { buildSymbolLookup, declaredSymbolDef, symbolDefsInFile, type SymbolLookup } from "./symbol-lookup.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
 
 export type AgentExplainTarget = {
@@ -383,7 +384,7 @@ function resolveSymbolHandle(
     const def = findHandleDefinition(snapshot, parsed, file);
     if (def) return symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def)));
     for (const node of snapshot.symbolGraph.nodes.values()) {
-      const nodeDef = lookup.defById.get(node.id);
+      const nodeDef = declaredSymbolDef(lookup, node.id);
       if (!nodeDef || isAgentSqlObjectNode(node)) continue;
       if (normalizePath(node.file) !== file) continue;
       if (node.name !== parsed.name) continue;
@@ -394,7 +395,7 @@ function resolveSymbolHandle(
   }
 
   const id = handle.slice("symbol:".length);
-  const def = lookup.defById.get(id);
+  const def = declaredSymbolDef(lookup, id);
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(id)) : null;
 }
 
@@ -440,18 +441,24 @@ function findSymbolByName(
   lookup: SymbolLookup,
   name: string,
 ): Extract<ResolvedExplainTarget, { kind: "symbol" }> | null {
-  const matches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => !isAgentSqlObjectNode(node) && node.name === name)
-    .sort(compareSymbolNodes);
+  // A Swift extension header carries the type's name but names no symbol: the type it extends is the answer.
+  const namesSymbol = (node: SymbolNode): boolean => {
+    if (isAgentSqlObjectNode(node) || node.name !== name) return false;
+    const def = lookup.defById.get(node.id);
+    return !def || isDeclaredSymbol(def);
+  };
+  const matches = [...snapshot.symbolGraph.nodes.values()].filter(namesSymbol).sort(compareSymbolNodes);
   const node = matches[0];
   if (node) {
     const def = lookup.defById.get(node.id);
     if (def) return symbolTarget(def, node);
   }
 
-  const defMatches = [...lookup.defById.values()]
-    .filter((def) => !isSqlFilePath(def.file, snapshot.index.languageExtensions) && def.localName === name)
-    .sort(compareSymbolDefs);
+  const namesDeclaredSymbol = (def: SymbolDef): boolean => {
+    if (isSqlFilePath(def.file, snapshot.index.languageExtensions)) return false;
+    return def.localName === name && isDeclaredSymbol(def);
+  };
+  const defMatches = [...lookup.defById.values()].filter(namesDeclaredSymbol).sort(compareSymbolDefs);
   const def = defMatches[0];
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def))) : null;
 }
@@ -700,6 +707,7 @@ function collectFileSymbols(
   const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(file));
   if (!moduleIndex) return [];
   return moduleIndex.locals
+    .filter(isDeclaredSymbol)
     .map((local) => ({
       name: local.localName,
       kind: local.kind,

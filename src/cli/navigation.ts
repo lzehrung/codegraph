@@ -1,3 +1,4 @@
+import { isDeclaredSymbol } from "../indexer/declarations.js";
 import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { findLocalSymbolDefinitions, parseQualifiedSymbolPath } from "../indexer/symbols.js";
@@ -341,6 +342,12 @@ function sortDefinitions(definitions: readonly SymbolDef[]): SymbolDef[] {
   });
 }
 
+/** The symbols a file declares, in source order. A Swift extension header names an existing type, so it is no symbol. */
+function declaredFileDefinitions(index: ProjectIndex, file: string): SymbolDef[] {
+  const locals = index.byFile.get(fileIdentityKey(file))?.locals ?? [];
+  return sortDefinitions(locals.filter(isDeclaredSymbol));
+}
+
 function writePrettyReferences(context: NavigationCommandContext, result: FindReferencesResult): void {
   if (result.status !== "ok") {
     context.writeStdoutLine(`not_found: ${result.reason}`);
@@ -380,7 +387,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     return;
   }
   if (input.line === undefined) {
-    const definitions = sortDefinitions(index.byFile.get(fileIdentityKey(resolvedFile.file))?.locals ?? []);
+    const definitions = declaredFileDefinitions(index, resolvedFile.file);
     if (definitions.length === 1) {
       const definition = definitions[0];
       if (definition === undefined) {
@@ -469,7 +476,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     return;
   }
 
-  const definitions = sortDefinitions(index.byFile.get(fileIdentityKey(resolvedFile.file))?.locals ?? []);
+  const definitions = declaredFileDefinitions(index, resolvedFile.file);
   if (!definitions.length) {
     const result = { status: "not_found" as const, reason: `No indexed symbols in ${input.file}` };
     if (pretty) {

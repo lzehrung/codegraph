@@ -970,6 +970,32 @@ describe("PHP enum interface conformance", () => {
   });
 });
 
+describe("PHP interface inheritance", () => {
+  it("finds conformers of a refining interface as implementations of the inherited interface, never the interface", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-interface-extends-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Contracts.php":
+          "<?php\ninterface Contract { public function run(): void; }\ninterface Refined extends Contract {}\ninterface Lonely extends Contract {}\n",
+        "Worker.php": "<?php\nclass Worker implements Refined { public function run(): void {} }\n",
+        "Direct.php": "<?php\nclass Direct implements Contract { public function run(): void {} }\n",
+      });
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      const graph = await buildSymbolGraphDetailed(index);
+      const contract = [...graph.nodes.values()].find((node) => node.name === "Contract");
+      expect(contract).toBeDefined();
+      const implementations = findImplementations(index, graph, contract!.id);
+      if (implementations.status !== "ok") throw new Error("Expected PHP interface implementations");
+      expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name).sort()).toEqual([
+        "Direct",
+        "Worker",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PHP explicit method receivers", () => {
   it("resolves instance and static receiver calls while preserving function imports", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-member-navigation-"));

@@ -1541,7 +1541,7 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
     );
   });
 
-  it("keeps class inheritance through a typealias and reads cross-file protocols as conformance", async () => {
+  it("follows typealiases to the class or protocol they provably name in base clauses", async () => {
     await withProject(
       {
         "Types.swift": lines(
@@ -1550,8 +1550,24 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
           "class Sub: Alias {}",
           "class Direct: Base {}",
           "protocol Proto {}",
+          "typealias ProtoAlias = Proto",
         ),
-        "Conform.swift": lines("struct Conforming: Proto {}", "class Mixed: Base, Proto {}"),
+        "Conform.swift": lines(
+          "struct Conforming: Proto {}",
+          "class Mixed: Base, Proto {}",
+          "struct ViaAlias: ProtoAlias {}",
+          "class MixedAlias: Alias, ProtoAlias {}",
+        ),
+        "Unproven.swift": lines(
+          "class Generic<Element> {}",
+          "struct Outer { class Inner {} }",
+          "typealias IntGeneric = Generic<Int>",
+          "typealias Nested = Outer.Inner",
+          "typealias Missing = Elsewhere",
+          "class FromGeneric: IntGeneric {}",
+          "class FromNested: Nested {}",
+          "class FromMissing: Missing {}",
+        ),
         "Other/Base.swift": lines("class Base {}"),
       },
       async ({ index, paths }) => {
@@ -1559,18 +1575,46 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
         expect(edgeKeys(graph, "extends")).toEqual(
           [
             "Conform.swift:Mixed->Types.swift:Base",
+            "Conform.swift:MixedAlias->Types.swift:Base",
             "Types.swift:Direct->Types.swift:Base",
-            "Types.swift:Sub->Types.swift:Alias",
+            "Types.swift:Sub->Types.swift:Base",
           ].sort(),
         );
         expect(edgeKeys(graph, "implements")).toEqual(
-          ["Conform.swift:Conforming->Types.swift:Proto", "Conform.swift:Mixed->Types.swift:Proto"].sort(),
+          [
+            "Conform.swift:Conforming->Types.swift:Proto",
+            "Conform.swift:Mixed->Types.swift:Proto",
+            "Conform.swift:MixedAlias->Types.swift:Proto",
+            "Conform.swift:ViaAlias->Types.swift:Proto",
+          ].sort(),
         );
+        const base = find(graph, paths["Types.swift"]!, "Base", "class");
+        const protocol = find(graph, paths["Types.swift"]!, "Proto", "type");
         const sub = find(graph, paths["Types.swift"]!, "Sub", "class");
-        const alias = find(graph, paths["Types.swift"]!, "Alias", "type");
-        expect(sub).toBeDefined();
-        expect(alias).toBeDefined();
-        expect(supers(graph, sub!.id)).toEqual([[alias!.id, "extends"]]);
+        const mixedAlias = find(graph, paths["Conform.swift"]!, "MixedAlias", "class");
+        const decoy = find(graph, paths["Other/Base.swift"]!, "Base", "class");
+        for (const target of [base, protocol, sub, mixedAlias, decoy]) expect(target).toBeDefined();
+        // An alias is never a hierarchy node: the class or protocol it names is the supertype.
+        expect(supers(graph, sub!.id)).toEqual([[base!.id, "extends"]]);
+        expect(supers(graph, mixedAlias!.id)).toEqual([
+          [base!.id, "extends"],
+          [protocol!.id, "implements"],
+        ]);
+        expect(supers(graph, decoy!.id)).toEqual([]);
+        // A generic specialization, a nested type, and an unindexed type prove no base, so they add no edge.
+        for (const name of ["FromGeneric", "FromNested", "FromMissing"]) {
+          const unproven = find(graph, paths["Unproven.swift"]!, name, "class");
+          expect(unproven, name).toBeDefined();
+          expect(supers(graph, unproven!.id), name).toEqual([]);
+        }
+        const subtypes = findTypeHierarchy(graph, base!.id, "sub");
+        if (subtypes.status !== "ok") throw new Error("Expected the base class subtypes");
+        expect(subtypes.relations.map((relation) => graph.nodes.get(relation.targetId)?.name).sort()).toEqual([
+          "Direct",
+          "Mixed",
+          "MixedAlias",
+          "Sub",
+        ]);
       },
     );
   });

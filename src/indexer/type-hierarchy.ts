@@ -293,23 +293,40 @@ function appendEdge(map: Map<string, HierarchyEdge[]>, key: string, edge: Hierar
   if (!existing.site && edge.site) edges[existingIndex] = edge;
 }
 
+/** A contract whose implementers implement the lookup target, with the relations that count as implementing it. */
+type ImplementedContract = { id: string; roots: ReadonlySet<TypeHierarchyRelationKind> };
+
 function collectTypeImplementations(
   graph: SymbolGraph,
   hierarchy: TypeHierarchyIndex,
   targetId: string,
   acceptedRootRelations: ReadonlySet<TypeHierarchyRelationKind>,
 ): ImplementationMatch[] {
-  const direct = hierarchy.incoming.get(targetId) ?? [];
-  const implementationRoots = direct.filter((edge) => acceptedRootRelations.has(edge.relation));
   const matches = new Map<string, ImplementationMatch>();
   const queue: string[] = [];
-  for (const edge of implementationRoots) {
-    matches.set(edge.from, {
-      symbolId: edge.from,
-      relation: edge.relation,
-      ...(edge.site ? { site: edge.site } : {}),
-    });
-    queue.push(edge.from);
+  // A contract that extends the target (Swift `protocol Child: Parent`, PHP `interface Child extends Parent`) is
+  // not an implementation of it, but whatever implements that contract does. Walk such contracts as intermediate
+  // nodes, each with the roots that count as implementing it.
+  const contracts: ImplementedContract[] = [{ id: targetId, roots: acceptedRootRelations }];
+  const walked = new Set<string>([targetId]);
+  for (let cursor = 0; cursor < contracts.length; cursor += 1) {
+    const contract = contracts[cursor]!;
+    for (const edge of hierarchy.incoming.get(contract.id) ?? []) {
+      if (contract.roots.has(edge.relation)) {
+        matches.set(edge.from, {
+          symbolId: edge.from,
+          relation: edge.relation,
+          ...(edge.site ? { site: edge.site } : {}),
+        });
+        queue.push(edge.from);
+        continue;
+      }
+      if (edge.relation !== "extends" || walked.has(edge.from)) continue;
+      const refining = graph.nodes.get(edge.from);
+      if (!refining) continue;
+      walked.add(edge.from);
+      contracts.push({ id: edge.from, roots: implementationRootRelations(hierarchy, edge.from, refining) });
+    }
   }
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor]!;

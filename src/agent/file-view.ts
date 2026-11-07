@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { isDeclaredSymbol } from "../indexer/declarations.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { openConfinedReadableFile, resolveProjectFile, type ConfinedReadableFile } from "../util/confined-file.js";
 import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
@@ -249,6 +250,7 @@ export function buildFileGraphContext(snapshot: AgentProjectSnapshot, file: stri
     }),
   ).slice(0, FILE_VIEW_GRAPH_CONTEXT_LIMIT);
   const symbols = moduleIndex.locals
+    .filter(isDeclaredSymbol)
     .map((symbol) => ({ name: symbol.localName, kind: symbol.kind, line: symbol.range.start.line }))
     .sort((left, right) => left.line - right.line || left.name.localeCompare(right.name))
     .slice(0, FILE_VIEW_GRAPH_CONTEXT_LIMIT);

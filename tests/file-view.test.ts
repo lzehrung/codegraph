@@ -8,6 +8,7 @@ import * as agentFacade from "../src/agent.js";
 import { type AgentSession } from "../src/agent/session.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { SWIFT_EXTENSION_OWNER_FILES } from "./helpers/swift-extension-owner-fixture.js";
 
 const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =
   agentFacade;
@@ -548,6 +549,28 @@ describe("agent file view", () => {
 
     expect(contextual.graphContext?.usedBy).toEqual(["src/server.ts"]);
     expect(contextual.graphContext?.symbols).toContainEqual({ name: "validateUser", kind: "function", line: 1 });
+  });
+
+  it("lists a Swift extension's members but not its header in graph context symbols", async () => {
+    const root = await makeTempDir("cg-file-view-swift-extension-");
+    for (const [file, source] of Object.entries(SWIFT_EXTENSION_OWNER_FILES)) await writeFile(root, file, source);
+
+    const extension = await getCodegraphFileView({
+      root,
+      file: "Extensions.swift",
+      limit: 1,
+      maxBytes: 100,
+      includeGraphContext: true,
+    });
+    expect(extension.graphContext?.symbols).toEqual([{ name: "added", kind: "function", line: 1 }]);
+    const models = await getCodegraphFileView({
+      root,
+      file: "Models.swift",
+      limit: 1,
+      maxBytes: 100,
+      includeGraphContext: true,
+    });
+    expect(models.graphContext?.symbols).toEqual([{ name: "Widget", kind: "class", line: 1 }]);
   });
 
   it("does not perform freshness or project-index work for a plain session read", async () => {

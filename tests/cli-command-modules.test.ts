@@ -48,6 +48,7 @@ import { getNativeRuntimeFingerprint } from "../src/native/tree-sitter-native.js
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
+import { SWIFT_EXTENSION_OWNER_FILES } from "./helpers/swift-extension-owner-fixture.js";
 import { limitJsonStringLength } from "./helpers/string-limit.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as projectFilesModule from "../src/util/project-files.js";
@@ -535,6 +536,46 @@ describe("CLI command modules", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("goto and refs list the symbols a Swift file declares, never an extension header", async () => {
+    const root = await mkTmpDir("codegraph-swift-extension-listing-");
+    for (const [file, source] of Object.entries(SWIFT_EXTENSION_OWNER_FILES)) {
+      await fsp.writeFile(path.join(root, file), source, "utf8");
+    }
+    const extensionFile = path.join(root, "Extensions.swift");
+    const gotoOutputs: Array<Record<string, unknown>> = [];
+    const refsOutputs: Array<Record<string, unknown>> = [];
+
+    try {
+      await handleGotoCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [extensionFile],
+          getOpt: (name) => (name === "--cache" ? "off" : undefined),
+          writeJSONLine: (value) => gotoOutputs.push(readJsonRecord(value)),
+        }),
+      );
+      await handleRefsCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [extensionFile],
+          getOpt: (name) => (name === "--cache" ? "off" : undefined),
+          writeJSONLine: (value) => refsOutputs.push(readJsonRecord(value)),
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+
+    // The file declares one symbol, the member it adds, so goto answers with it instead of listing two candidates.
+    expect(gotoOutputs).toHaveLength(1);
+    expect(gotoOutputs[0]).toMatchObject({ status: "ok", definition: { localName: "added", kind: "function" } });
+    expect(refsOutputs).toHaveLength(1);
+    expect(refsOutputs[0]).toMatchObject({
+      status: "ok",
+      symbols: [{ definition: { localName: "added", kind: "function" } }],
+    });
   });
 
   test("navigation commands forward --cache-verify to incremental index builds", async () => {

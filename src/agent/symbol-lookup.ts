@@ -1,4 +1,5 @@
 import { defNodeId } from "../graphs/symbol-graph.js";
+import { isDeclaredSymbol } from "../indexer/declarations.js";
 import type { SymbolDef } from "../indexer/types.js";
 import { normalizePath } from "../util/paths.js";
 import type { AgentProjectSnapshot } from "./session.js";
@@ -34,6 +35,15 @@ export function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolLookup 
   return lookup;
 }
 
+/**
+ * The definition of a graph node that names a symbol. A Swift extension header is a graph node, since it owns the
+ * extension's members, but it declares no type, so no handle, name, or listing may resolve to it.
+ */
+export function declaredSymbolDef(lookup: SymbolLookup, id: string): SymbolDef | undefined {
+  const def = lookup.defById.get(id);
+  return def && isDeclaredSymbol(def) ? def : undefined;
+}
+
 export type SymbolDefEntry = {
   id: string;
   def: SymbolDef;
@@ -43,9 +53,10 @@ const DEFS_BY_FILE = new WeakMap<SymbolLookup, Map<string, readonly SymbolDefEnt
 const NO_DEFS: readonly SymbolDefEntry[] = [];
 
 /**
- * The definitions of one project file, by normalized path and in lookup order. A handle names its file, so resolving
- * one reads that file's definitions rather than every definition in the project. The buckets belong to the snapshot's
- * lookup, so they are rebuilt with the snapshot after an edit.
+ * The declared symbols of one project file, by normalized path and in lookup order. A handle names its file, so
+ * resolving one reads that file's definitions rather than every definition in the project. The buckets belong to the
+ * snapshot's lookup, so they are rebuilt with the snapshot after an edit. A hidden extension header owner is left
+ * out: a handle to it would let a rename edit the header alone.
  */
 export function symbolDefsInFile(snapshot: AgentProjectSnapshot, file: string): readonly SymbolDefEntry[] {
   const lookup = buildSymbolLookup(snapshot);
@@ -54,6 +65,7 @@ export function symbolDefsInFile(snapshot: AgentProjectSnapshot, file: string): 
     const grouped = new Map<string, SymbolDefEntry[]>();
     const normalizedFiles = new Map<string, string>();
     for (const [id, def] of lookup.defById) {
+      if (!isDeclaredSymbol(def)) continue;
       let normalized = normalizedFiles.get(def.file);
       if (normalized === undefined) {
         normalized = normalizePath(def.file);

@@ -19,6 +19,7 @@ import {
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
+import { findImplementations } from "../src/indexer/type-hierarchy.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
 import {
   KOTLIN_QUOTED_BOUNDARY_FILES,
@@ -3502,6 +3503,65 @@ nativeDescribe("native semantic coverage", () => {
         graph.edges.some((edge) => edge.from === owner?.id && edge.label === "implements"),
         phase,
       ).toBe(false);
+    }
+  });
+
+  it("keeps Swift protocol refinement and typealias bases identical across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-bases-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-bases-cache-"));
+    tempDirs.push(root, cacheDir);
+    const models = [
+      "struct Widget: Child {}",
+      "struct Other {}",
+      "class Base { func helper() {} }",
+      "class Decoy { func helper() {} }",
+      "typealias Alias = Base",
+      "typealias ParentAlias = Parent",
+      "extension Other: ParentAlias {}",
+    ];
+    const derived = ["class Derived: Alias {", "  func run() { super.helper() }", "}"];
+    const paths = await writeFixtureFiles(root, {
+      "Parent.swift": "protocol Parent {}\n",
+      "Child.swift": "protocol Child: Parent {}\n",
+      "Models.swift": `${models.join("\n")}\n`,
+      "Derived.swift": `${derived.join("\n")}\n`,
+    });
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    clearMemoryCache();
+    const warm = await buildProjectIndex(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+      const hierarchy = graph.edges
+        .filter((edge) => edge.label === "extends" || edge.label === "implements")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}-${edge.label}->${graph.nodes.get(edge.to)?.name}`)
+        .sort();
+      expect(hierarchy, phase).toEqual([
+        "Child-extends->Parent",
+        "Derived-extends->Base",
+        "Other-implements->Parent",
+        "Widget-implements->Child",
+      ]);
+      const parent = [...graph.nodes.values()].find((node) => node.name === "Parent");
+      expect(parent, phase).toBeDefined();
+      const implementations = findImplementations(index, graph, parent!.id);
+      if (implementations.status !== "ok") throw new Error(`Expected Swift implementations in the ${phase} index`);
+      expect(
+        implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name).sort(),
+        phase,
+      ).toEqual(["Other", "Widget"]);
+      const call = await goToDefinition(index, {
+        file: paths["Derived.swift"]!,
+        line: 2,
+        column: columnOf(derived, 2, "helper"),
+      });
+      if (call.status !== "ok") throw new Error(`Expected super.helper() to resolve in the ${phase} index`);
+      expect(call.definition.file, phase).toBe(paths["Models.swift"]);
+      expect(call.definition.range.start.line, phase).toBe(3);
     }
   });
 
