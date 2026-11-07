@@ -105,8 +105,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 118 rebuilds imports and symbol bindings restored by changes to existing declaration files.
  * Epoch 119 indexes unnamed JVM packages for Kotlin named imports and rejects Java unnamed-package imports.
  * Epoch 120 resolves qualified JVM types and constructors by owner, and excludes false C# type-use edges.
+ * Epoch 121 rebuilds Swift quoted-name resolutions, shared-owner identities, and detailed call edges.
  */
-export const CORE_ALGORITHM_EPOCH = 120;
+export const CORE_ALGORITHM_EPOCH = 121;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -117,8 +118,9 @@ export const CORE_ALGORITHM_EPOCH = 120;
  * Epoch 12 treats Kotlin backticks as identifier delimiters, preserving case and source spelling.
  * Epoch 13 scopes C# lambda parameters, foreach variables, properties, and `out`/catch declarations,
  * and reads implicit lambda parameters as declarations.
+ * Epoch 14 gives Swift quoted and plain identifiers one case-sensitive identity.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 13;
+export const LANGUAGE_BEHAVIOR_EPOCH = 14;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

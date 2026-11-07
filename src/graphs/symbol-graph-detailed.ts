@@ -332,32 +332,46 @@ export async function buildSymbolGraphDetailed(
   };
   // Receiver calls into runtime and dependency APIs dominate real call sites. Build these
   // indexes lazily so a scoped graph that has no receiver calls pays no allocation cost.
-  let callableNames: { exact: Set<string>; phpFolded: Set<string> } | undefined;
-  const ensureCallableNames = (): { exact: Set<string>; phpFolded: Set<string> } => {
+  let callableNames: { exact: Set<string>; phpFolded: Set<string>; swiftNormalized?: Set<string> } | undefined;
+  const ensureCallableNames = (): { exact: Set<string>; phpFolded: Set<string>; swiftNormalized?: Set<string> } => {
     if (!callableNames) {
       callableNames = { exact: new Set(), phpFolded: new Set() };
       for (const entry of index.byFile.values()) {
-        const isPhp = supportForFileWithoutHeaderSample(entry.file, index.languageExtensions)?.id === "php";
+        const support = supportForFileWithoutHeaderSample(entry.file, index.languageExtensions);
         for (const local of entry.locals) {
           if (local.kind !== SymbolKind.Function) continue;
           callableNames.exact.add(local.localName);
-          if (isPhp) callableNames.phpFolded.add(foldPhpIdentifierCase(local.localName));
+          if (support?.id === "php") callableNames.phpFolded.add(foldPhpIdentifierCase(local.localName));
+          if (support?.id === "swift") {
+            (callableNames.swiftNormalized ??= new Set()).add(support.normalizeIdentifier(local.localName));
+          }
         }
       }
     }
     return callableNames;
   };
-  const hasCallableNamed = (name: string, phpCaseInsensitive = false): boolean => {
+  const hasCallableNamed = (candidate: ReceiverCallCandidate): boolean => {
     const names = ensureCallableNames();
-    return phpCaseInsensitive ? names.phpFolded.has(foldPhpIdentifierCase(name)) : names.exact.has(name);
+    if (candidate.caseInsensitiveMemberName) return names.phpFolded.has(foldPhpIdentifierCase(candidate.memberName));
+    if (names.exact.has(candidate.memberName)) return true;
+    const support = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions);
+    return (
+      support?.id === "swift" &&
+      (names.swiftNormalized?.has(support.normalizeIdentifier(candidate.memberName)) ?? false)
+    );
   };
   // Function-valued bindings (`const helper = () => 1`) index as variables, so the
   // kind scan above cannot see them; the detailed pass mirrors each name it proves
   // callable here as its files are processed.
-  const noteCallableName = (name: string, phpCaseInsensitive = false): void => {
+  const noteCallableName = (
+    name: string,
+    phpCaseInsensitive = false,
+    normalizeIdentifier?: (value: string) => string,
+  ): void => {
     const names = ensureCallableNames();
     names.exact.add(name);
     if (phpCaseInsensitive) names.phpFolded.add(foldPhpIdentifierCase(name));
+    if (normalizeIdentifier) (names.swiftNormalized ??= new Set()).add(normalizeIdentifier(name));
   };
 
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
@@ -618,9 +632,7 @@ export async function buildSymbolGraphDetailed(
   }
   // Function-valued bindings are proven while each file is processed. Apply the callable-name
   // prefilter only after that pass so receiver calls do not depend on file iteration order.
-  const callableReceiverCalls = receiverCalls.filter((candidate) =>
-    hasCallableNamed(candidate.memberName, candidate.caseInsensitiveMemberName),
-  );
+  const callableReceiverCalls = receiverCalls.filter(hasCallableNamed);
   const pythonReceiverTargets = new Map<ReceiverCallCandidate, string | null>();
   for (const candidate of callableReceiverCalls) {
     if (!candidate.pythonInstanceReceiver) continue;
@@ -679,10 +691,23 @@ export async function buildSymbolGraphDetailed(
   );
   const receiverMemberDefinitions = hasHierarchyReceiver ? new Map<string, SymbolDef>() : undefined;
   if (callableReceiverCalls.length) {
-    const names = new Set(callableReceiverCalls.map((candidate) => candidate.memberName));
+    const names = new Set<string>();
+    let swiftNames: Set<string> | undefined;
+    for (const candidate of callableReceiverCalls) {
+      names.add(candidate.memberName);
+      const support = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions);
+      if (support?.id === "swift") {
+        (swiftNames ??= new Set()).add(support.normalizeIdentifier(candidate.memberName));
+      }
+    }
     for (const mod of index.byFile.values()) {
+      const support = swiftNames ? supportForFileWithoutHeaderSample(mod.file, index.languageExtensions) : undefined;
+      const normalizeSwiftName = support?.id === "swift" ? support.normalizeIdentifier : undefined;
       for (const def of mod.locals) {
-        if (!def.callable || !names.has(def.localName)) continue;
+        if (!def.callable) continue;
+        if (!names.has(def.localName)) {
+          if (!normalizeSwiftName || !swiftNames?.has(normalizeSwiftName(def.localName))) continue;
+        }
         const id = defNodeId(def);
         memberIdentities.set(id, def.callable);
         receiverMemberDefinitions?.set(id, def);

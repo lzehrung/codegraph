@@ -80,8 +80,8 @@ export function buildImportAliasMaps(
   const aliasToTargetModule = new Map<string, string>();
   const languageSupport = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
   const languageId = languageSupport?.id ?? "";
-  // Preserve other languages' key conventions; only C# verbatim and Kotlin quoted aliases change identity here.
-  const normalizesAliasKey = languageId === "csharp" || languageId === "kotlin";
+  // Preserve other languages' key conventions; C# verbatim, Kotlin, and Swift quoted aliases change identity here.
+  const normalizesAliasKey = languageId === "csharp" || languageId === "kotlin" || languageId === "swift";
   const aliasKey =
     languageSupport && normalizesAliasKey ? languageSupport.normalizeIdentifier : (name: string): string => name;
   const pythonLocalStartIndexes = new Map<string, number>();

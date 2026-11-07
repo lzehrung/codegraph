@@ -144,7 +144,11 @@ type EdgePassContext = {
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
-  noteCallableName: (name: string, phpCaseInsensitive?: boolean) => void;
+  noteCallableName: (
+    name: string,
+    phpCaseInsensitive?: boolean,
+    normalizeIdentifier?: (name: string) => string,
+  ) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
   loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
 };
@@ -1130,7 +1134,11 @@ export async function emitFunctionBodyEdges(
     // the callable metadata records that this binding was proven to hold a function.
     if (provenNode && provenNode.kind !== "function" && provesCallableBinding(context, fn)) {
       provenNode.callable = true;
-      context.noteCallableName(fn.name, context.sup.id === "php");
+      context.noteCallableName(
+        fn.name,
+        context.sup.id === "php",
+        context.sup.id === "swift" ? context.sup.normalizeIdentifier : undefined,
+      );
     }
     const seenAliases = new Set<string>();
     // Calls whose target needs an async member lookup (C++ out-of-line owner members, included
@@ -1312,13 +1320,18 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (binding.kind === "own-type") {
+        const normalizedMemberName =
+          context.sup.id === "swift" ? context.sup.normalizeIdentifier(memberName) : memberName;
         const container = nearestMemberContainer(fn.node);
         const declared = container
           ? lexicalMembers(container).filter((candidate) => {
-              const candidateName = candidate.def.localName;
+              const candidateName =
+                context.sup.id === "swift"
+                  ? context.sup.normalizeIdentifier(candidate.def.localName)
+                  : candidate.def.localName;
               const nameMatches = phpCaseInsensitive
                 ? foldPhpIdentifierCase(candidateName) === foldPhpIdentifierCase(memberName)
-                : candidateName === memberName;
+                : candidateName === normalizedMemberName;
               if (!nameMatches) return false;
               if (binding.memberScope === "any") return true;
               return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
