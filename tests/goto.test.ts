@@ -85,6 +85,10 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  withDuplicateDeclarations,
+} from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
   PHP_PATH_IMPORT_FORMS,
@@ -7086,6 +7090,40 @@ describe("Go to Definition: SCSS Sass modules", () => {
     }
   });
 });
+describe("removed duplicate declaration navigation", () => {
+  it.each(DUPLICATE_DECLARATION_CASES)(
+    "navigates a $languageId import to the survivor after the $declarer duplicate is removed by $mutation, not a decoy",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        const { removed, removedCold, restored, restoredCold, query, first, survivor, decoy, unrelated } = project;
+        const afterRemoval = await goToDefinition(removed, query);
+        expect(afterRemoval).toEqual(await goToDefinition(removedCold, query));
+        expect(afterRemoval.status).toBe("ok");
+        if (afterRemoval.status !== "ok") throw new Error("expected the import to navigate to the survivor");
+        expect(fileIdentityKey(afterRemoval.definition.file)).toBe(fileIdentityKey(survivor));
+        expect(fileIdentityKey(afterRemoval.definition.file)).not.toBe(fileIdentityKey(decoy));
+        const unrelatedQuery = {
+          file: unrelated,
+          line: fixture.useLine,
+          column: columnInLines(fixture.unrelatedLines, fixture.useLine, "Gadget"),
+        };
+        expect((await goToDefinition(removed, unrelatedQuery)).status).toBe("not_found");
+
+        // Restoring the duplicate makes the name ambiguous again; PHP binds the first declaring file.
+        const afterRestore = await goToDefinition(restored, query);
+        expect(afterRestore).toEqual(await goToDefinition(restoredCold, query));
+        if (fixture.duplicatedTarget === "ambiguous") {
+          expect(afterRestore.status).toBe("not_found");
+          return;
+        }
+        expect(afterRestore.status).toBe("ok");
+        if (afterRestore.status !== "ok") throw new Error("expected PHP to bind the first declaring file");
+        expect(fileIdentityKey(afterRestore.definition.file)).toBe(fileIdentityKey(first));
+      });
+    },
+  );
+});
+
 describe("restored declaration import navigation", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "navigates to the restored $languageId declaration, not a decoy",

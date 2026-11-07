@@ -2,8 +2,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { fileIdentityKey, isAbsoluteFilePath, normalizePath } from "../util/paths.js";
+import { isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
-import type { ModuleIndex } from "./types.js";
+import type { ImportBinding, ModuleIndex } from "./types.js";
 import { PHP_INCOMPLETE_DECLARATION_IDENTITY } from "./php-namespace-symbols.js";
 import {
   foldPhpIdentifierCase,
@@ -104,7 +106,48 @@ export function publicSurfaceSignature(
   return computeApiSurface(mod, projectRoot);
 }
 
-const NO_NEW_DECLARATION_NAMES: ReadonlySet<string> = new Set<string>();
+/**
+ * Declaration-import names that changed in one language group of a build. Java and Kotlin share a group:
+ * either can import the other's declarations. A PHP name is a declared class, function, constant, or namespace
+ * (and each of its prefixes) with its role dropped; `PHP_INCOMPLETE_DECLARATION_IDENTITY` stands for a file whose
+ * declarations became, or stopped being, uncertain.
+ */
+export type DeclarationNameChanges = {
+  /** Declared by a changed file now and not before: a cached binding that names one has another declarer. */
+  added: Set<string>;
+  /** Declared before by a changed or deleted file and not now: an unresolved binding that names one can resolve. */
+  removed: Set<string>;
+  /**
+   * JVM packages with a file that started or stopped being read in full, or moved into or out of the package while
+   * incomplete. An incomplete file may declare any name of its package, so every binding that names a name in the
+   * package (or the package itself, for a wildcard) can move, whatever names the file declares.
+   */
+  uncertainPackages: Set<string>;
+  /** A JVM file whose package is unknown changed certainty: it may belong to any package, so any binding can move. */
+  uncertainAnyPackage: boolean;
+  /** A deleted file had no cached module, so what it declared is unknown: any unresolved binding can resolve. */
+  unknownRemoval: boolean;
+};
+
+function emptyDeclarationNameChanges(): DeclarationNameChanges {
+  return {
+    added: new Set<string>(),
+    removed: new Set<string>(),
+    uncertainPackages: new Set<string>(),
+    uncertainAnyPackage: false,
+    unknownRemoval: false,
+  };
+}
+
+/** The language group whose declarations a declaration import can name. */
+export function declarationLanguageGroup(languageId: string): string {
+  return isJvmLanguage(languageId) ? "jvm" : languageId;
+}
+
+/** The separator between the segments of a name that a declaration import can spell. */
+function declarationNameSeparator(support: LanguageSupport): string {
+  return support.id === "php" ? "\\" : ".";
+}
 
 function sameNames(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
   if (left === right) return true;
@@ -142,15 +185,52 @@ export function normalizeDeclarationImportName(name: string, support: LanguageSu
   return normalized;
 }
 
+/**
+ * Where a JVM module may declare names it did not list: its package when that is known, `null` when the package is
+ * unknown (the file was not read in full and its clause was lost), and `undefined` when every declaration is known. A
+ * module without facts was not read in full either, so its package is unknown.
+ */
+function jvmUncertainPackage(mod: ModuleIndex | undefined, support: LanguageSupport): string | null | undefined {
+  if (!mod) return undefined;
+  const facts = mod.jvmFacts;
+  if (facts && !facts.incomplete) return undefined;
+  if (!facts?.packageName) return null;
+  return normalizeDeclarationImportName(facts.packageName, support);
+}
+
+/**
+ * Records the packages whose declarations became, or stopped being, uncertain: each uncertain side of a file that
+ * changed certainty, or that moved packages while incomplete. A file that stays incomplete in one package changes
+ * nothing by its certainty; its names are compared like any other file's.
+ */
+function jvmCertaintyChanges(
+  previous: ModuleIndex | undefined,
+  current: ModuleIndex | undefined,
+  support: LanguageSupport,
+  changes: DeclarationNameChanges,
+): boolean {
+  if (!isJvmLanguage(support.id)) return false;
+  const before = jvmUncertainPackage(previous, support);
+  const after = jvmUncertainPackage(current, support);
+  if (before === after) return false;
+  for (const uncertain of [before, after]) {
+    if (uncertain === undefined) continue;
+    if (uncertain === null) changes.uncertainAnyPackage = true;
+    else changes.uncertainPackages.add(uncertain);
+  }
+  return true;
+}
+
 function declarationImportNames(mod: ModuleIndex, support: LanguageSupport): Set<string> {
+  if (support.id === "php" && mod.phpDeclarationNames)
+    return phpDeclarationImportNamesOf(phpDeclarationIdentities(mod));
   const names = new Set<string>();
   const add = (name: string): void => {
     const normalized = normalizeDeclarationImportName(name, support);
     if (!normalized) return;
     names.add(normalized);
     if (support.id === "cpp") return;
-    const separator = support.id === "php" ? "\\" : ".";
-    names.add(normalized.slice(normalized.lastIndexOf(separator) + 1));
+    names.add(normalized.slice(normalized.lastIndexOf(declarationNameSeparator(support)) + 1));
   };
   if (mod.jvmFacts) {
     const packageName = mod.jvmFacts.packageName;
@@ -172,49 +252,232 @@ function declarationImportNames(mod: ModuleIndex, support: LanguageSupport): Set
   return names;
 }
 
-function newlyDeclaredPhpImportNames(previous: ModuleIndex | undefined, currentNames: readonly string[]): Set<string> {
-  const previousNames = new Set(previous?.phpDeclarationNames);
-  const addedNames = new Set<string>();
-  let previouslyIncomplete = previousNames.has(PHP_INCOMPLETE_DECLARATION_IDENTITY);
-  if (!previouslyIncomplete) {
-    previouslyIncomplete = !!(previous?.parserDegraded || previous?.parseErrorRanges?.length);
-  }
-  for (const identity of currentNames) {
-    if (identity === PHP_INCOMPLETE_DECLARATION_IDENTITY) {
-      if (!previouslyIncomplete) addedNames.add(identity);
-      continue;
-    }
-    if (previousNames.has(identity)) continue;
-    const qualifiedName = identity.slice(identity.indexOf(":") + 1);
-    addedNames.add(foldPhpIdentifierCase(qualifiedName));
-  }
-  return addedNames;
+/** A PHP declaration identity without its role (`class:`, `function:`, `const:`, `namespace:`), folded like a specifier. */
+function phpIdentityName(identity: string): string {
+  if (identity === PHP_INCOMPLETE_DECLARATION_IDENTITY) return identity;
+  return foldPhpIdentifierCase(identity.slice(identity.indexOf(":") + 1));
 }
 
 /**
- * New declaration-import names only. A body edit compares the same API surface used by the
- * extraction waves plus stored package/namespace facts, without inspecting any importers.
+ * A PHP module's own-file declaration identities, including the incomplete marker. A row that recorded its parse
+ * state only as diagnostics still counts as incomplete.
  */
-export function newlyDeclaredImportNames(
+function phpDeclarationIdentities(mod: ModuleIndex | undefined): Set<string> {
+  const identities = new Set(mod?.phpDeclarationNames);
+  if (mod?.parserDegraded || mod?.parseErrorRanges?.length) identities.add(PHP_INCOMPLETE_DECLARATION_IDENTITY);
+  return identities;
+}
+
+/**
+ * The namespaces that directly hold a class, function, or constant of a PHP module. `use Lib;` binds a file whose
+ * package is exactly `Lib`, which no namespace identity records on its own: each stands for every prefix of a deeper
+ * namespace too, so moving a file from `Lib\Sub` to `Lib` adds no identity for `Lib`.
+ */
+function phpDeclaredPackages(identities: ReadonlySet<string>): Set<string> {
+  const packages = new Set<string>();
+  for (const identity of identities) {
+    if (identity === PHP_INCOMPLETE_DECLARATION_IDENTITY || identity.startsWith("namespace:")) continue;
+    const qualified = identity.slice(identity.indexOf(":") + 1);
+    const separator = qualified.lastIndexOf("\\");
+    if (separator > 0) packages.add(foldPhpIdentifierCase(qualified.slice(0, separator)));
+  }
+  return packages;
+}
+
+/** Every name a PHP module declares for import matching: identities without their roles, and its declared packages. */
+function phpDeclarationImportNamesOf(identities: ReadonlySet<string>): Set<string> {
+  const names = new Set(Array.from(identities, phpIdentityName));
+  for (const name of phpDeclaredPackages(identities)) names.add(name);
+  return names;
+}
+
+/**
+ * The PHP names a file started or stopped declaring. Identities are compared with their roles, so a class that
+ * becomes a function of the same name changes both roles. Namespaces and their prefixes are identities too, and so
+ * are the packages that hold declarations, so moving a file into another namespace changes names even when every
+ * class keeps its spelling.
+ */
+function phpDeclarationNameChanges(
+  previous: ModuleIndex | undefined,
+  current: ModuleIndex,
+): DeclarationNameChanges | undefined {
+  const before = phpDeclarationIdentities(previous);
+  const after = phpDeclarationIdentities(current);
+  const changes = emptyDeclarationNameChanges();
+  const { added, removed } = changes;
+  for (const identity of after) if (!before.has(identity)) added.add(phpIdentityName(identity));
+  for (const identity of before) if (!after.has(identity)) removed.add(phpIdentityName(identity));
+  const packagesBefore = phpDeclaredPackages(before);
+  const packagesAfter = phpDeclaredPackages(after);
+  for (const name of packagesAfter) if (!packagesBefore.has(name)) added.add(name);
+  for (const name of packagesBefore) if (!packagesAfter.has(name)) removed.add(name);
+  if (!added.size && !removed.size) return undefined;
+  return changes;
+}
+
+/**
+ * The declaration-import names a changed file started or stopped declaring, or `undefined` when none changed.
+ * A body edit compares the same API surface used by the extraction waves plus stored package/namespace
+ * facts, without inspecting any importers. Without a previous module every current name counts as new and
+ * no removal is known.
+ */
+export function declarationNameChanges(
   previous: ModuleIndex | undefined,
   current: ModuleIndex,
   support: LanguageSupport,
   projectRoot: string,
-): ReadonlySet<string> {
-  if (support.id === "php" && current.phpDeclarationNames) {
-    return newlyDeclaredPhpImportNames(previous, current.phpDeclarationNames);
-  }
+): DeclarationNameChanges | undefined {
+  // PHP records qualified declarations and namespaces by role, so a namespace-only move or a role change is a name
+  // change even when every exported spelling is unchanged.
+  if (support.id === "php" && current.phpDeclarationNames) return phpDeclarationNameChanges(previous, current);
+  const changes = emptyDeclarationNameChanges();
+  const certaintyChanged = jvmCertaintyChanges(previous, current, support, changes);
   if (
     previous &&
+    !certaintyChanged &&
     sameDeclarationFacts(previous, current) &&
     computeApiSurface(previous, projectRoot) === computeApiSurface(current, projectRoot)
   ) {
-    return NO_NEW_DECLARATION_NAMES;
+    return undefined;
   }
   const currentNames = declarationImportNames(current, support);
-  if (!previous) return currentNames;
-  for (const name of declarationImportNames(previous, support)) currentNames.delete(name);
-  return currentNames;
+  const previousNames = previous ? declarationImportNames(previous, support) : new Set<string>();
+  for (const name of currentNames) if (!previousNames.has(name)) changes.added.add(name);
+  for (const name of previousNames) if (!currentNames.has(name)) changes.removed.add(name);
+  if (!changes.added.size && !changes.removed.size && !certaintyChanged) return undefined;
+  return changes;
+}
+
+/**
+ * The names a deleted declaration file stopped declaring, and the JVM certainty it stopped holding back. Without its
+ * previous module what it declared is unknown, so any unresolved binding of its language group can resolve.
+ */
+export function deletedDeclarationNameChanges(
+  previous: ModuleIndex | undefined,
+  support: LanguageSupport,
+): DeclarationNameChanges {
+  const changes = emptyDeclarationNameChanges();
+  if (!previous) {
+    changes.unknownRemoval = true;
+    return changes;
+  }
+  for (const name of declarationImportNames(previous, support)) changes.removed.add(name);
+  jvmCertaintyChanges(previous, undefined, support, changes);
+  return changes;
+}
+
+/** Folds one file's changes into the group of its language. */
+export function recordDeclarationNameChanges(
+  byLanguageGroup: Map<string, DeclarationNameChanges>,
+  support: LanguageSupport,
+  changes: DeclarationNameChanges,
+): void {
+  const group = declarationLanguageGroup(support.id);
+  let merged = byLanguageGroup.get(group);
+  if (!merged) {
+    merged = emptyDeclarationNameChanges();
+    byLanguageGroup.set(group, merged);
+  }
+  for (const name of changes.added) merged.added.add(name);
+  for (const name of changes.removed) merged.removed.add(name);
+  for (const name of changes.uncertainPackages) merged.uncertainPackages.add(name);
+  if (changes.uncertainAnyPackage) merged.uncertainAnyPackage = true;
+  if (changes.unknownRemoval) merged.unknownRemoval = true;
+}
+
+/**
+ * Whether `specifier` can name one of `names`: exactly, by the name it imports from its container, or, for a
+ * PHP `use` of a namespace, by that namespace. C++ module names are matched exactly.
+ */
+function specifierNamesDeclaration(specifier: string, support: LanguageSupport, names: ReadonlySet<string>): boolean {
+  if (names.has(specifier)) return true;
+  if (support.id === "cpp") return false;
+  const lastSeparator = specifier.lastIndexOf(declarationNameSeparator(support));
+  if (names.has(specifier.slice(lastSeparator + 1))) return true;
+  return support.id === "php" && lastSeparator >= 0 && names.has(specifier.slice(0, lastSeparator));
+}
+
+/**
+ * Whether a resolved binding spells the qualified name of a newly declared type, package, namespace, or module.
+ * PHP declarations are qualified too. A PHP module without qualified facts records only unqualified names, so
+ * its binding also matches by the name it imports. A named binding also depends on the member it imports from
+ * `from`: a C# alias keeps the namespace of the type it found as `from`.
+ */
+function resolvedBindingNamesAddedDeclaration(
+  binding: ImportBinding,
+  specifier: string,
+  support: LanguageSupport,
+  added: ReadonlySet<string>,
+): boolean {
+  if (added.has(specifier)) return true;
+  const separator = declarationNameSeparator(support);
+  if (support.id === "php") return added.has(specifier.slice(specifier.lastIndexOf(separator) + 1));
+  if (binding.kind !== "named" || support.id === "cpp") return false;
+  return added.has(`${specifier}${separator}${normalizeDeclarationImportName(binding.imported, support)}`);
+}
+
+/**
+ * A PHP file that cannot be read in full proves any import, so a file whose parse state changed (an error appeared
+ * or was fixed, or the file was deleted with one) can move any unresolved PHP binding, whatever names it declares.
+ */
+function phpDeclarationCertaintyChanged(support: LanguageSupport, changes: DeclarationNameChanges): boolean {
+  if (support.id !== "php") return false;
+  return (
+    changes.added.has(PHP_INCOMPLETE_DECLARATION_IDENTITY) || changes.removed.has(PHP_INCOMPLETE_DECLARATION_IDENTITY)
+  );
+}
+
+/**
+ * A JVM file that was not read in full may declare any name of its package, so a binding that names the package, or a
+ * name inside it, resolves differently (or is marked incomplete) once such a file appears, disappears, or is read in
+ * full. Resolved bindings count too: another incomplete declarer makes a proven import incomplete.
+ */
+function jvmCertaintyAffectsBinding(
+  binding: ImportBinding,
+  support: LanguageSupport,
+  changes: DeclarationNameChanges,
+): boolean {
+  if (!isJvmLanguage(support.id)) return false;
+  if (changes.uncertainAnyPackage) return true;
+  if (!changes.uncertainPackages.size) return false;
+  const specifier = normalizeDeclarationImportName(binding.from, support);
+  for (const packageName of changes.uncertainPackages) {
+    if (specifier === packageName || specifier.startsWith(`${packageName}.`)) return true;
+  }
+  return false;
+}
+
+/**
+ * What a cached import binding of an unchanged file needs after declarations changed:
+ * - `resolve`: unresolved, and it names a changed name, a PHP file's declarations changed certainty, or a deleted
+ *   file left no record of its declarations. Resolve it again; the file extracts again only when it now resolves.
+ * - `reextract`: resolved, and it names an added name (another declarer can make it ambiguous or move its target), or
+ *   a JVM file in its package changed certainty, whatever its binding state.
+ * - `none`: otherwise. Removing a declaration never moves a resolved binding: the manifest edge to its target
+ *   already extracts the files that import a deleted or changed file.
+ */
+export type DeclarationImportRecheck = "none" | "resolve" | "reextract";
+
+export function declarationImportRecheck(
+  binding: ImportBinding,
+  support: LanguageSupport,
+  changes: DeclarationNameChanges,
+): DeclarationImportRecheck {
+  if (jvmCertaintyAffectsBinding(binding, support, changes)) return "reextract";
+  const resolved = typeof binding.resolved === "string";
+  if (resolved && !changes.added.size) return "none";
+  // Includes name files, not module declarations. An existing header's body cannot make its missing path
+  // appear, so never re-resolve includes here.
+  if (support.id === "cpp" && "includeForm" in binding && binding.includeForm) return "none";
+  const specifier = normalizeDeclarationImportName(binding.from, support);
+  if (support.id === "cpp" && !isCppNamedModuleSpecifier(specifier)) return "none";
+  if (resolved) {
+    return resolvedBindingNamesAddedDeclaration(binding, specifier, support, changes.added) ? "reextract" : "none";
+  }
+  if (phpDeclarationCertaintyChanged(support, changes) || changes.unknownRemoval) return "resolve";
+  if (specifierNamesDeclaration(specifier, support, changes.added)) return "resolve";
+  if (specifierNamesDeclaration(specifier, support, changes.removed)) return "resolve";
+  return "none";
 }
 
 /** Resolved project files that `mod` re-exports from (`export * from`, `export { x } from`, `export * as ns from`). */

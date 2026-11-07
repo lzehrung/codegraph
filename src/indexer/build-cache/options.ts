@@ -115,8 +115,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * extension headers as type declarations. It also rebuilds Swift base-clause edges that follow typealiases and keep
  * protocol inheritance as `extends`.
  * Epoch 127 rebuilds detailed graphs where a member of an enclosing C# type, or an unresolved base, binds a using alias's name.
+ * Epoch 128 rebuilds imports and symbol bindings that incremental builds left stale when a deleted, renamed, or
+ * newly duplicated declaration changed which files declare an imported name.
  */
-export const CORE_ALGORITHM_EPOCH = 127;
+export const CORE_ALGORITHM_EPOCH = 128;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

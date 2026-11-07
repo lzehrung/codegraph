@@ -31,6 +31,11 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  expectDuplicateRemovalMatchesColdBuilds,
+  withDuplicateDeclarations,
+} from "../helpers/duplicate-declaration-import-fixture.js";
 import { lookupJvmImport } from "../../src/util/resolution/jvm.js";
 import {
   JAVA_QUALIFIED_TYPE_SOURCES,
@@ -2118,6 +2123,17 @@ describe("Java inherited member lookup", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Java removed duplicate declarations", () => {
+  it.each(DUPLICATE_DECLARATION_CASES.filter((candidate) => candidate.languageId === "java"))(
+    "binds the survivor after the $declarer duplicate is removed by $mutation, then returns to ambiguous",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        expectDuplicateRemovalMatchesColdBuilds(fixture, project);
+      });
+    },
+  );
 });
 
 describe("Java restored declaration imports", () => {

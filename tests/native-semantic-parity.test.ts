@@ -76,6 +76,10 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  withDuplicateDeclarations,
+} from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
   PHP_PATH_IMPORT_FORMS,
@@ -4049,6 +4053,46 @@ nativeDescribe("native semantic coverage", () => {
     },
   );
 });
+nativeDescribe("removed duplicate declarations retain native semantic parity", () => {
+  it.each(DUPLICATE_DECLARATION_CASES)(
+    "matches cold $languageId graphs after the $declarer duplicate is removed by $mutation and restored",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        const { removed, removedCold, restored, restoredCold, consumer, decoy, survivor, query, declaration } = project;
+        const graphEdges = async (index: ProjectIndex): Promise<string[]> =>
+          (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+        expect(await graphEdges(removed)).toEqual(await graphEdges(removedCold));
+        expect(await graphEdges(restored)).toEqual(await graphEdges(restoredCold));
+        const graph = await buildSymbolGraphDetailed(removed);
+        const target = [...graph.nodes.values()].find(
+          (node) => fileIdentityKey(node.file) === fileIdentityKey(survivor) && node.name === "Gadget",
+        );
+        expect(target).toBeDefined();
+        expect(
+          graph.edges.some(
+            (edge) =>
+              edge.to === target!.id && fileIdentityKey(graph.nodes.get(edge.from)!.file) === fileIdentityKey(consumer),
+          ),
+        ).toBe(true);
+        expect(
+          graph.edges.some(
+            (edge) =>
+              fileIdentityKey(graph.nodes.get(edge.from)!.file) === fileIdentityKey(consumer) &&
+              fileIdentityKey(graph.nodes.get(edge.to)!.file) === fileIdentityKey(decoy),
+          ),
+        ).toBe(false);
+        for (const [actual, expected] of [
+          [removed, removedCold],
+          [restored, restoredCold],
+        ] as const) {
+          expect(await goToDefinition(actual, query)).toEqual(await goToDefinition(expected, query));
+          expect(await findReferences(actual, declaration)).toEqual(await findReferences(expected, declaration));
+        }
+      });
+    },
+  );
+});
+
 nativeDescribe("restored declaration imports retain native semantic parity", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "restores $languageId symbol edges across incremental and disk snapshot builds",

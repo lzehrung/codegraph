@@ -57,6 +57,11 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import {
+  DUPLICATE_DECLARATION_CASES,
+  expectDuplicateRemovalMatchesColdBuilds,
+  withDuplicateDeclarations,
+} from "../helpers/duplicate-declaration-import-fixture.js";
 import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 import { CSHARP_SCOPE_READ_FILES, CSHARP_SCOPE_READ_LINES } from "../helpers/scope-binding-read-fixtures.js";
 
@@ -5328,6 +5333,17 @@ describe("C# verbatim alias review boundaries", () => {
     }
   });
 });
+describe("C# removed duplicate declarations", () => {
+  it.each(DUPLICATE_DECLARATION_CASES.filter((candidate) => candidate.languageId === "csharp"))(
+    "binds the alias survivor after the $declarer duplicate is removed by $mutation, then returns to ambiguous",
+    async ({ fixture, mutation, declarer }) => {
+      await withDuplicateDeclarations(fixture, { cache: "disk", mutation, declarer }, async (project) => {
+        expectDuplicateRemovalMatchesColdBuilds(fixture, project);
+      });
+    },
+  );
+});
+
 describe("C# restored declaration imports", () => {
   it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "csharp"))(
     "restores an alias when its type returns in an existing declaration file",
