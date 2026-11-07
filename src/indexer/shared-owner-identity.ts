@@ -179,7 +179,10 @@ function appendSwiftConstraintTokens(node: SyntaxNodeLike, source: string, token
   if (node.type === "comment" || node.type === "line_comment" || node.type === "multiline_comment") return;
   const first = node.child(0);
   if (!first) {
-    tokens.push(sliceText(node, source));
+    const text = sliceText(node, source);
+    const identifier =
+      node.type === "simple_identifier" || node.type === "type_identifier" || node.type === "identifier";
+    tokens.push(identifier ? normalizeSwiftIdentifier(text) : text);
     return;
   }
   appendSwiftConstraintTokens(first, source, tokens);

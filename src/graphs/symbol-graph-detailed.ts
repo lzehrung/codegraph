@@ -11,7 +11,7 @@ import {
 import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
-import { supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import { detectSFCFramework } from "../languages/sfc.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -318,6 +318,14 @@ export async function buildSymbolGraphDetailed(
   const nodeAliases = new Map<string, string>();
   const pythonMemberAccessResolvers = new Map<string, (node: SyntaxNodeLike) => Promise<SymbolDef | null>>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
+  const fileSupports = new Map<string, LanguageSupport | undefined>();
+  const supportForIndexedFile = (file: string): LanguageSupport | undefined => {
+    const key = fileIdentityKey(file);
+    if (fileSupports.has(key)) return fileSupports.get(key);
+    const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+    fileSupports.set(key, support);
+    return support;
+  };
   let pythonReceiverResolutionCache: ReturnType<typeof createPythonReceiverResolutionCache> | undefined;
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
     const fileKey = fileIdentityKey(file);
@@ -337,7 +345,7 @@ export async function buildSymbolGraphDetailed(
     if (!callableNames) {
       callableNames = { exact: new Set(), phpFolded: new Set() };
       for (const entry of index.byFile.values()) {
-        const support = supportForFileWithoutHeaderSample(entry.file, index.languageExtensions);
+        const support = supportForIndexedFile(entry.file);
         for (const local of entry.locals) {
           if (local.kind !== SymbolKind.Function) continue;
           callableNames.exact.add(local.localName);
@@ -354,11 +362,9 @@ export async function buildSymbolGraphDetailed(
     const names = ensureCallableNames();
     if (candidate.caseInsensitiveMemberName) return names.phpFolded.has(foldPhpIdentifierCase(candidate.memberName));
     if (names.exact.has(candidate.memberName)) return true;
-    const support = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions);
-    return (
-      support?.id === "swift" &&
-      (names.swiftNormalized?.has(support.normalizeIdentifier(candidate.memberName)) ?? false)
-    );
+    if (!names.swiftNormalized?.size) return false;
+    const support = supportForIndexedFile(candidate.site.file);
+    return support?.id === "swift" && names.swiftNormalized.has(support.normalizeIdentifier(candidate.memberName));
   };
   // Function-valued bindings (`const helper = () => 1`) index as variables, so the
   // kind scan above cannot see them; the detailed pass mirrors each name it proves
@@ -505,8 +511,11 @@ export async function buildSymbolGraphDetailed(
       // that navigation resolves has no node, so it gets no edge.
       const indexedOrNull = (definition: SymbolDef | null): SymbolDef | null =>
         definition ? indexedSymbolFor(index, definition) : null;
-      const resolveName = (name: string, node: SyntaxNodeLike): NameResolution | null =>
-        resolveBareName(bareNameUse(name, node));
+      const resolveName = (
+        name: string,
+        node: SyntaxNodeLike,
+        skipKotlinQualifiedExpression = false,
+      ): NameResolution | null => resolveBareName(bareNameUse(name, node), false, skipKotlinQualifiedExpression);
       const resolveIdentifier = (name: string, node: SyntaxNodeLike): SymbolDef | null =>
         indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
       const settleName = async (
@@ -525,11 +534,16 @@ export async function buildSymbolGraphDetailed(
       const hasIncompleteJvmPackage =
         sup.id === "kotlin" &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
-      // A Kotlin import alias is valid only where the positioned name lookup still selects it, so a
-      // shadowing local or an unread wildcard package never proves the alias target.
       const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
         moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name));
-      const aliasTableAnswers = (name: string, node: SyntaxNodeLike): boolean => {
+      // Kotlin values shadow aliases only in expressions. Deferred member lookup must settle
+      // before its import fallback can prove a use; a type-position alias keeps its type namespace,
+      // so only a type binding (a type parameter or a same-named type) can hide it there.
+      const aliasTableAnswers = (
+        name: string,
+        node: SyntaxNodeLike,
+        positionedResolution?: NameResolution | null,
+      ): boolean => {
         if (isQualifiedTypeSuffix(sup, node)) return false;
         if (sup.id === "csharp") {
           return csharpAliasTableAnswers(moduleEntry, name, node) && unshadowedModuleAlias(name, node);
@@ -537,8 +551,10 @@ export async function buildSymbolGraphDetailed(
         if (sup.id !== "kotlin") return true;
         const target = aliasToTargetDef.get(aliasKey(name));
         if (!target) return !hasIncompleteJvmPackage;
-        const resolved = resolveIdentifier(name, node);
-        return !!resolved && defNodeId(target) === defNodeId(resolved);
+        const resolved = positionedResolution === undefined ? resolveName(name, node) : positionedResolution;
+        const resolvesToTarget = resolved?.status === "ok" && defNodeId(target) === defNodeId(resolved.definition);
+        if (node.parent?.type === "user_type") return resolved?.status !== "ok" || resolvesToTarget;
+        return resolvesToTarget;
       };
 
       const edgePassContext = {
@@ -654,7 +670,7 @@ export async function buildSymbolGraphDetailed(
   let typeScriptReceiverNames: Set<string> | undefined;
   for (const candidate of callableReceiverCalls) {
     if (candidate.argumentCount === null) continue;
-    const languageId = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions)?.id;
+    const languageId = supportForIndexedFile(candidate.site.file)?.id;
     if (languageId !== "ts" && languageId !== "tsx") continue;
     (typeScriptReceiverFiles ??= new Set()).add(fileIdentityKey(candidate.site.file));
     (typeScriptReceiverNames ??= new Set()).add(candidate.memberName);
@@ -665,7 +681,7 @@ export async function buildSymbolGraphDetailed(
   if (typeScriptReceiverTargets && typeScriptReceiverNames) {
     for (const node of nodes.values()) {
       if (!typeScriptReceiverNames.has(node.name)) continue;
-      const targetLanguageId = supportForFileWithoutHeaderSample(node.file, index.languageExtensions)?.id;
+      const targetLanguageId = supportForIndexedFile(node.file)?.id;
       if (targetLanguageId !== "ts" && targetLanguageId !== "tsx") continue;
       const module = index.byFile.get(fileIdentityKey(node.file));
       const def = module?.locals.find((candidate) => defNodeId(candidate) === node.id);
@@ -687,21 +703,24 @@ export async function buildSymbolGraphDetailed(
 
   const memberIdentities = new Map<string, CallableIdentity>();
   const hasHierarchyReceiver = callableReceiverCalls.some((candidate) =>
-    inheritsMemberOverloads(supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions)?.id ?? ""),
+    inheritsMemberOverloads(supportForIndexedFile(candidate.site.file)?.id ?? ""),
   );
   const receiverMemberDefinitions = hasHierarchyReceiver ? new Map<string, SymbolDef>() : undefined;
   if (callableReceiverCalls.length) {
     const names = new Set<string>();
     let swiftNames: Set<string> | undefined;
+    // Without indexed Swift callables, no receiver can need Swift spelling equivalence.
+    const hasSwiftCallableNames = !!callableNames?.swiftNormalized?.size;
     for (const candidate of callableReceiverCalls) {
       names.add(candidate.memberName);
-      const support = supportForFileWithoutHeaderSample(candidate.site.file, index.languageExtensions);
+      if (!hasSwiftCallableNames) continue;
+      const support = supportForIndexedFile(candidate.site.file);
       if (support?.id === "swift") {
         (swiftNames ??= new Set()).add(support.normalizeIdentifier(candidate.memberName));
       }
     }
     for (const mod of index.byFile.values()) {
-      const support = swiftNames ? supportForFileWithoutHeaderSample(mod.file, index.languageExtensions) : undefined;
+      const support = swiftNames ? supportForIndexedFile(mod.file) : undefined;
       const normalizeSwiftName = support?.id === "swift" ? support.normalizeIdentifier : undefined;
       for (const def of mod.locals) {
         if (!def.callable) continue;

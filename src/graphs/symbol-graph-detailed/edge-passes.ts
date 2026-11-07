@@ -12,7 +12,7 @@ import { resolveCppQualifiedMemberContainer } from "../../indexer/navigation-cpp
 import {
   cppQualifiedOwnerHasImplicitThis,
   csharpAliasAt,
-  csharpQualifiedReceiverName,
+  resolveCsharpQualifiedReceiverType,
   findTypeScriptNamespaceMemberCandidates,
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
@@ -29,7 +29,6 @@ import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../
 import {
   cjsRequireValueBinding,
   resolveImportTypeMember,
-  resolveCsharpQualifiedName,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
 import { selectMember } from "../../indexer/member-selection.js";
@@ -45,8 +44,10 @@ import { getCallArgumentCount, memberLookupBinding } from "../../languages/calla
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import {
+  collectMemberAccessChain,
   getMemberAccessParts,
   isMemberAccessNode,
+  isReceiverNameNode,
   isQualifiedTypeSuffix,
   kotlinQualifiedExpression,
   rustTokenTreeHoldsExpressions,
@@ -109,10 +110,10 @@ type EdgePassContext = {
   /** The key both alias tables above are stored under; a use-site spelling must go through it. */
   aliasKey: (name: string) => string;
   /** Whether the two alias tables above, built for the whole file, answer for `name` at `node`. */
-  aliasTableAnswers: (name: string, node: SyntaxNodeLike) => boolean;
+  aliasTableAnswers: (name: string, node: SyntaxNodeLike, positionedResolution?: NameResolution | null) => boolean;
   resolveIdentifier: (name: string, node: SyntaxNodeLike) => SymbolDef | null;
   /** The shared lookup's raw answer, including steps deferred to async member lookup. */
-  resolveName: (name: string, node: SyntaxNodeLike) => NameResolution | null;
+  resolveName: (name: string, node: SyntaxNodeLike, skipKotlinQualifiedExpression?: boolean) => NameResolution | null;
   /** Runs deferred steps with the graph's rules; returns an indexed target or null. */
   settleName: (name: string, node: SyntaxNodeLike, resolution: NameResolution | null) => Promise<SymbolDef | null>;
   /** Whether a text-indexed import alias remains visible after lexical scope lookup. */
@@ -678,10 +679,13 @@ function resolveNamedType(
   rubyConstructed = false,
 ): SymbolDef | null {
   if (context.sup.id === "csharp" && csharpQualifiedNameNode(node)) {
-    const qualifiedName = csharpQualifiedReceiverName(context.index, context.moduleEntry, node, context.source);
-    if (!qualifiedName) return null;
-    const qualified = resolveCsharpQualifiedName(context.index, context.moduleEntry, qualifiedName, node.startIndex);
-    if (qualified?.kind === "resolved" && declaresMembers(qualified.def)) return qualified.def;
+    return resolveCsharpQualifiedReceiverType(
+      context.index,
+      context.moduleEntry,
+      node,
+      context.source,
+      context.scopeIndex,
+    );
   }
   // A Go composite literal or Zig struct initializer can name a qualified cross-file type
   // (`pkg.Type{}` / `ns.Type{}`); the receiver's typeName is then dotted text, not one
@@ -1153,6 +1157,12 @@ export async function emitFunctionBodyEdges(
     // Calls whose target needs an async member lookup (C++ out-of-line owner members, included
     // C/C++ declarations of one callable); settled after the walk.
     const deferredCalls: Array<{ callee: SyntaxNodeLike; name: string; resolution: NameResolution }> = [];
+    const deferredAliasUses: Array<{
+      node: SyntaxNodeLike;
+      name: string;
+      resolution: NameResolution;
+      target: SymbolDef;
+    }> = [];
     const qualifiedCppCalls: Array<{
       node: SyntaxNodeLike;
       access: ReceiverCallAccess;
@@ -1197,11 +1207,31 @@ export async function emitFunctionBodyEdges(
       const jvmLanguage = context.sup.id === "java" || context.sup.id === "kotlin";
       const qualifiedType = isQualifiedTypeSuffix(context.sup, node);
       let qualifiedExpression = false;
+      let valueReceiver = false;
       if (context.sup.id === "kotlin" && node.parent?.type === "navigation_expression") {
         const first = name[0];
         const capitalized = !!first && first === first.toUpperCase() && first !== first.toLowerCase();
         const importedName = !!tableDef || context.aliasToTargetModule.has(nameKey);
-        if (importedName || capitalized) qualifiedExpression = !!kotlinQualifiedExpression(context.sup, node);
+        const expression = importedName || capitalized ? kotlinQualifiedExpression(context.sup, node) : null;
+        if (expression) {
+          const chain = collectMemberAccessChain({ sup: context.sup, source: context.source, chainNode: expression });
+          if (chain) {
+            const base = chain.base;
+            if (!isReceiverNameNode(context.sup, base.type) || sliceText(base, context.source) === "this") {
+              valueReceiver = true;
+            } else {
+              const binding = findClosestScopeBinding(
+                context.scopeIndex,
+                sliceText(base, context.source),
+                base,
+                context.sup,
+              );
+              valueReceiver = binding?.kind === "local" || binding?.kind === "param" || binding?.kind === "function";
+            }
+          }
+          valueReceiver &&= tableDef?.kind === SymbolKind.Function;
+          qualifiedExpression = !valueReceiver;
+        }
       }
       const resolvableQualifiedType = qualifiedType && (jvmLanguage || !!tableDef);
       if (resolvableQualifiedType || qualifiedExpression) {
@@ -1211,7 +1241,17 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (seenAliases.has(nameKey)) return;
-      let target: SymbolDef | null = tableDef && context.aliasTableAnswers(name, node) ? tableDef : null;
+      let positionedResolution: NameResolution | null | undefined;
+      const kotlinExpression = context.sup.id === "kotlin" && node.parent?.type !== "user_type";
+      if (tableDef && kotlinExpression) {
+        positionedResolution = context.resolveName(name, node, valueReceiver);
+        if (positionedResolution?.status === "deferred") {
+          deferredAliasUses.push({ node, name, resolution: positionedResolution, target: tableDef });
+          return;
+        }
+      }
+      let target: SymbolDef | null =
+        tableDef && context.aliasTableAnswers(name, node, positionedResolution) ? tableDef : null;
       if (!target) {
         const modFile = context.aliasToTargetModule.get(nameKey);
         if (modFile && context.aliasTableAnswers(name, node) && context.moduleAliasIsUnshadowed(name, node)) {
@@ -1584,6 +1624,14 @@ export async function emitFunctionBodyEdges(
       // Swift `Foo()` whose deferred lookup settles on a type is construction.
       const label = context.sup.id === "swift" && target && declaresMembers(target) ? "instantiates" : "calls";
       if (target) recordDefEdge(context, fromId, target, label, call.callee);
+    }
+    for (const use of deferredAliasUses) {
+      const nameKey = context.aliasKey(use.name);
+      if (seenAliases.has(nameKey)) continue;
+      const target = await context.settleName(use.name, use.node, use.resolution);
+      if (!target || defNodeId(target) !== defNodeId(use.target)) continue;
+      seenAliases.add(nameKey);
+      recordDefEdge(context, fromId, target, "uses");
     }
     for (const call of qualifiedCppCalls) {
       const owner = call.ownerPath.length

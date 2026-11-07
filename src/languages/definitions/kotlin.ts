@@ -106,6 +106,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
     object_declaration: "class",
     function_declaration: "function",
     type_alias: "type",
+    type_parameter: "type",
   }),
   // The Kotlin grammar exposes no `name` field on these declarations, so the declared
   // name is identified by parent type with a plain `identifier` child.

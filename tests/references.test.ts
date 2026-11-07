@@ -44,11 +44,18 @@ import {
   KOTLIN_QUOTED_FILES,
   KOTLIN_QUOTED_LINES,
   KOTLIN_QUOTED_SOURCES,
+  KOTLIN_QUOTED_SCOPE_FILES,
+  KOTLIN_QUOTED_SCOPE_LINES,
+  KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
-import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
+import {
+  JVM_QUALIFIED_REVIEW_CASES,
+  JVM_VALUE_SHADOW_CASES,
+  QUALIFIED_TYPE_CASES,
+} from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
@@ -60,15 +67,138 @@ import {
   csharpAliasTypeFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpAliasCallFixture,
+  csharpGenericAliasReceiverFixture,
+} from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
+import {
+  CSHARP_SCOPE_READ_FILES,
+  CSHARP_SCOPE_READ_LINES,
+  KOTLIN_TYPE_PARAMETER_FILES,
+  KOTLIN_TYPE_VALUE_FILES,
+  KOTLIN_TYPE_VALUE_TYPE_LINES,
+} from "./helpers/scope-binding-read-fixtures.js";
+
+describe("declaration header reference namespaces", () => {
+  it("includes C# default and constant-pattern reads without expired scope or alias matches", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-header-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const index = await indexer.buildProjectIndex(root, { cache: "off" });
+      for (const [target, declaration, token, expected] of [
+        ["Second.cs", 1, "Ping", [8, 12]],
+        ["Second.cs", 1, "Run", [18, 22, 26]],
+        ["Use.cs", 3, "K", [3, 14, 14]],
+        ["Use.cs", 4, "Match", [4, 15]],
+      ] as const) {
+        const source = CSHARP_SCOPE_READ_FILES[target].split("\n")[declaration - 1]!;
+        const result = await indexer.findReferences(index, {
+          file: files[target]!,
+          line: declaration,
+          column: source.indexOf(token) + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          if (token === "Run") {
+            expect(result.referenceCoverage).toEqual({
+              scope: "indexed_candidates",
+              state: "partial",
+              reasons: ["strategy_unavailable"],
+              affectedFiles: [files["Use.cs"]],
+            });
+          } else {
+            expect(result.referenceCoverage.state).toBe("complete");
+          }
+          expect(
+            result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+          ).toEqual(expected);
+          expect(result.references.some((site) => site.file === files["Decoy.cs"])).toBe(false);
+        }
+      }
+      const catchReferences = await indexer.findReferences(index, {
+        file: files["Use.cs"]!,
+        line: 7,
+        column: columnInLines(CSHARP_SCOPE_READ_LINES, 7, "B"),
+      });
+      expect(catchReferences.status).toBe("ok");
+      if (catchReferences.status === "ok") {
+        expect(catchReferences.referenceCoverage.state).toBe("complete");
+        expect(catchReferences.references.map((site) => site.range.start.line)).toEqual([7, 7, 7]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes Kotlin user types but excludes same-named parameter and local expression uses", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-value-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_VALUE_FILES);
+      const index = await indexer.buildProjectIndex(root, { cache: "off" });
+      const result = await indexer.findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") {
+        expect(result.referenceCoverage.state).toBe("complete");
+        expect(
+          result.references.filter((site) => site.file === files["Use.kt"]).map((site) => site.range.start.line),
+        ).toEqual([2, ...KOTLIN_TYPE_VALUE_TYPE_LINES]);
+        expect(result.references.some((site) => site.file === files["Decoy.kt"])).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Kotlin type-parameter uses out of a same-named import alias and attaches them to the parameter", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-parameter-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_PARAMETER_FILES);
+      const index = await indexer.buildProjectIndex(root, { cache: "off" });
+      const widget = await indexer.findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+      expect(widget.status).toBe("ok");
+      if (widget.status === "ok") {
+        expect(widget.referenceCoverage.state).toBe("complete");
+        const linesIn = (file: string): number[] =>
+          widget.references.filter((site) => site.file === files[file]).map((site) => site.range.start.line);
+        expect(linesIn("Use.kt")).toEqual([2, 2]);
+        expect(linesIn("Alias.kt")).toEqual([2, 2, 3, 3]);
+      }
+      for (const [file, line, expectedLines] of [
+        ["Use.kt", 3, [3, 3, 3]],
+        ["Use.kt", 4, [4, 4, 5]],
+        ["Use.kt", 6, [6, 6, 6]],
+        ["Plain.kt", 2, [2, 2, 2]],
+        ["Plain.kt", 3, [3, 3, 4]],
+      ] as const) {
+        const source = KOTLIN_TYPE_PARAMETER_FILES[file].split("\n")[line - 1]!;
+        const result = await indexer.findReferences(index, {
+          file: files[file]!,
+          line,
+          column: source.search(/\bT\b/) + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.map((site) => site.range.start.line).sort((a, b) => a - b)).toEqual(expectedLines);
+          expect(result.references.every((site) => site.file === files[file])).toBe(true);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -3927,6 +4057,43 @@ describe("Find References", () => {
         await assertExact(site("Other.swift", 5, "`default`"), [
           site("Other.swift", 5, "`default`"),
           site("Other.swift", 4, "`default`"),
+        ]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps Kotlin quoted receiver and inherited-member references separate from companion and alias decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-scope-refs-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_SCOPE_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const { value, gadget, receivers, api, aliases } = KOTLIN_QUOTED_SCOPE_FILES;
+        const site = (file: string, line: number, token: string): ReferenceLocation => ({
+          file: paths[file]!,
+          line,
+          column: columnInLines(KOTLIN_QUOTED_SCOPE_LINES[file]!, line, token),
+        });
+        const expectExactly = async (declaration: ReferenceLocation, uses: readonly ReferenceLocation[]) => {
+          const result = await testFindReferences(index, declaration.file, declaration.line, declaration.column, [
+            declaration,
+            ...uses,
+          ]);
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          }
+        };
+        await expectExactly(
+          site(value, 2, "work"),
+          [2, 3, 6, 10, 13, 14].map((line) => site(receivers, line, "work")),
+        );
+        await expectExactly(site(gadget, 2, "work"), [site(gadget, 3, "work")]);
+        await expectExactly(site(aliases, 4, "mark"), [site(aliases, 5, "mark()")]);
+        await expectExactly(site(api, 3, "go"), [
+          site(aliases, 3, "go"),
+          site(aliases, 3, "mark"),
+          site(aliases, 6, "mark()"),
         ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -8532,7 +8699,6 @@ describe("Find References: Python module-level use before a later local declarat
     }
   });
 });
-
 describe("restored declaration import references", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "finds the restored $languageId importer's uses and excludes decoys",
@@ -8567,7 +8733,6 @@ describe("restored declaration import references", () => {
     },
   );
 });
-
 describe("Find References: Kotlin default-package imports", () => {
   it("includes class and aliased function uses and excludes named-package decoys", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-refs-"));
@@ -8604,7 +8769,6 @@ describe("Find References: Kotlin default-package imports", () => {
     }
   });
 });
-
 describe("Find References: qualified types beside imports", () => {
   it.each(QUALIFIED_TYPE_CASES)("separates $language qualified uses from the imported decoy", async (row) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-refs-`));
@@ -8761,6 +8925,31 @@ describe("Find References: JVM package and nested type identities", () => {
     }
   });
 });
+
+it.each(JVM_VALUE_SHADOW_CASES)("finds $language qualified type references past value bindings", async (row) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-value-shadow-refs-"));
+  try {
+    const files = await writeFixtureFiles(root, row.sources);
+    const index = await createTestIndexFromFiles(root, Object.values(files));
+    for (const [target, count] of [
+      [row.target, row.language === "java" ? 2 : 1],
+      [row.decoy, 0],
+    ] as const) {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const lines = sources[target]!.split("\n");
+      const result = await findReferences(index, {
+        file: files[target]!,
+        line: 2,
+        column: columnInLines(lines, 2, "Widget"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected type references");
+      expect(result.references.filter((ref) => ref.file === files[row.consumer])).toHaveLength(count);
+    }
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
 describe("Find References: C# qualified receiver types", () => {
   it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("keeps %s calls separate from the namespace decoy", async (type) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-receiver-refs-"));
@@ -8786,6 +8975,31 @@ describe("Find References: C# qualified receiver types", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_NEARER_RECEIVER_CASES)(
+    "excludes $scope-rooted $root calls from the global decoy",
+    async ({ root, scope }) => {
+      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-nearer-receiver-refs-"));
+      try {
+        const fixture = csharpNearerReceiverFixture(root, scope);
+        const files = await writeFixtureFiles(dir, fixture.files);
+        const index = await createTestIndexFromFiles(dir, Object.values(files));
+        const result = await findReferences(index, {
+          file: files["Global.cs"]!,
+          line: 1,
+          column: fixture.files["Global.cs"].indexOf("Run") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected nearer receiver decoy references");
+        expect(result.referenceCoverage.state).toBe(fixture.target ? "complete" : "partial");
+        expect(
+          result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([fixture.globalCall]);
+      } finally {
+        await fsp.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 describe("Find References: C# lowercase and keyword-verbatim aliases", () => {
   it.each(CSHARP_ALIAS_CALL_SPELLINGS)("keeps %s alias references separate from value receivers", async (alias) => {
@@ -8811,4 +9025,31 @@ describe("Find References: C# lowercase and keyword-verbatim aliases", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "keeps alias $alias references partial beside $scope parameter $parameter",
+    async ({ alias, parameter, scope }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-refs-"));
+      try {
+        const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        for (const file of ["Target.cs", "Decoy.cs"] as const) {
+          const result = await findReferences(index, {
+            file: files[file]!,
+            line: 1,
+            column: fixture.files[file].indexOf("Run") + 1,
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected generic alias references");
+          expect(result.referenceCoverage.state).toBe("partial");
+          expect(
+            result.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+          ).toEqual(file === "Target.cs" ? [fixture.restoredCall] : []);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

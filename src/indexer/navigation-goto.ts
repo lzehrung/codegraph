@@ -661,13 +661,20 @@ export function csharpAliasQualifiedLookupName(
   return imported ? `${imported.from}.${lead.names.toReversed().join(".")}` : raw;
 }
 
-/** The proven namespace path of a C# receiver type, retaining alias and namespace shadowing. */
-export function csharpQualifiedReceiverName(
+/** A C# dotted path can fall back to a namespace only when no nearer lexical name binds its root. */
+function csharpNameUnshadowed(scopeIndex: ScopeIndex, node: SyntaxNodeLike, name: string): boolean {
+  const closest = findClosestScopeBinding(scopeIndex, name, node, CSHARP_SUPPORT);
+  return fileBindingIsUnshadowed(scopeIndex, closest);
+}
+
+/** A C# receiver type proven through its lexical owner or its unshadowed namespace path. */
+export function resolveCsharpQualifiedReceiverType(
   index: ProjectIndex,
   mod: ModuleIndex,
   typeNode: SyntaxNodeLike,
   source: string,
-): string | null {
+  scopeIndex: ScopeIndex,
+): SymbolDef | null {
   const qualified = csharpQualifiedNameNode(typeNode);
   if (!qualified || csharpQualifiedThroughGenericOwner(qualified)) return null;
   const lead = csharpChainQualifier(qualified, source);
@@ -676,16 +683,32 @@ export function csharpQualifiedReceiverName(
     csharpAliasUnprovenReason(index, mod, lead.qualifier, source) ??
     csharpShadowedUsingReason(index, mod, lead.qualifier, source);
   if (unproven) return null;
-  const rootName = sliceText(lead.qualifier, source);
+  const rootName = CSHARP_SUPPORT.normalizeIdentifier(sliceText(lead.qualifier, source));
+  const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
+  if (!aliasQualified && !csharpNameUnshadowed(scopeIndex, lead.qualifier, rootName)) {
+    const root = findClosestScopeBinding(scopeIndex, rootName, lead.qualifier, CSHARP_SUPPORT);
+    const declaration = root?.node?.parent;
+    if (!declaration) return null;
+    // An enclosing type's members precede namespaces, but a namespace-level type can be shadowed by a nearer namespace.
+    if (!nearestMemberContainer(declaration)) {
+      const regions = mod.csharpNamespaceFacts?.regions;
+      const useNamespace = regions ? csharpNamespaceAtIndex(regions, typeNode.startIndex) : "";
+      const declarationNamespace = regions ? csharpNamespaceAtIndex(regions, declaration.startIndex) : "";
+      if (csharpNamespaceChainDeclares(index, mod, useNamespace, rootName, declarationNamespace)) return null;
+    }
+    // Reuse dotted lexical lookup for nested types; a missing member never falls back to a global namespace.
+    const name = csharpLookupName(typeNode, source, sliceText(qualified, source));
+    const nested = findClosestScopeBinding(scopeIndex, name, typeNode, CSHARP_SUPPORT);
+    const def = nested?.def && mod.locals.find((local) => local.range.start.index === nested.def?.start.index);
+    return def && declaresMembers(def) ? def : null;
+  }
   const alias = csharpAliasAt(mod, rootName, lead.qualifier);
   if (alias && alias.kind !== "namespace") return null;
   const name = csharpAliasQualifiedLookupName(typeNode, source, sliceText(qualified, source), mod.imports);
-  if (!alias && lead.qualifier.parent?.type !== "alias_qualified_name") {
-    const root = resolveExport(index, mod.file, rootName, { referenceIndex: typeNode.startIndex });
-    const rootIsType = root?.kind === "resolved" && declaresMembers(root.def);
+  if (!alias && !aliasQualified) {
     const regions = mod.csharpNamespaceFacts?.regions;
     let namespace = regions ? csharpNamespaceAtIndex(regions, typeNode.startIndex) : "";
-    while (namespace && !rootIsType) {
+    while (namespace) {
       const separator = namespace.lastIndexOf(".");
       const parent = separator < 0 ? "" : namespace.slice(0, separator);
       if (csharpNamespaceChainDeclares(index, mod, namespace, rootName, parent)) {
@@ -693,12 +716,16 @@ export function csharpQualifiedReceiverName(
         const relative = `global::${namespace}.${name}`;
         const resolved = resolveCsharpQualifiedName(index, mod, relative, typeNode.startIndex);
         // A nearer binding that has no such type must not fall back to a global namesake.
-        return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? relative : null;
+        return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
       }
       namespace = parent;
     }
+    const root = resolveExport(index, mod.file, rootName, { referenceIndex: typeNode.startIndex });
+    // A type from another file requires nested-member lookup, not namespace export lookup.
+    if (root?.kind === "resolved") return null;
   }
-  return name;
+  const resolved = resolveCsharpQualifiedName(index, mod, name, typeNode.startIndex);
+  return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
 }
 
 /**
@@ -992,12 +1019,6 @@ export async function resolveMemberAccessDefinition(params: {
       ? (getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined)
       : undefined;
 
-  const csharpNameUnshadowed = (expr: SyntaxNodeLike, exprName: string): boolean => {
-    const scopeIndex = ensureScopeIndex();
-    const closest = findClosestScopeBinding(scopeIndex, exprName, expr, sup);
-    return fileBindingIsUnshadowed(scopeIndex, closest);
-  };
-
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     if (sup.id === "kotlin" && expr.type === "user_type") {
       const resolution = await resolveJvmTypeName(index, mod, { source, tree, sup }, ensureScopeIndex(), expr);
@@ -1011,7 +1032,7 @@ export async function resolveMemberAccessDefinition(params: {
       if (!aliasQualifier) {
         const lexicalBinding = resolveLexicalBinding?.(expr);
         if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
-        if (sup.id === "csharp" && !csharpNameUnshadowed(expr, exprName)) return null;
+        if (sup.id === "csharp" && !csharpNameUnshadowed(ensureScopeIndex(), expr, exprName)) return null;
       }
       let imp: ImportBinding | undefined;
       if (sup.id === "php") {
@@ -1159,7 +1180,7 @@ export async function resolveMemberAccessDefinition(params: {
           const rootName = sliceText(dottedRoot, source);
           const unshadowedNamespaceRoot =
             !resolveLexicalBinding?.(dottedRoot) &&
-            csharpNameUnshadowed(dottedRoot, rootName) &&
+            csharpNameUnshadowed(ensureScopeIndex(), dottedRoot, rootName) &&
             !csharpAliasAt(mod, rootName, dottedRoot) &&
             !csharpShadowedUsingReason(index, mod, dottedRoot, source);
           if (unshadowedNamespaceRoot) {
@@ -1184,6 +1205,7 @@ export async function resolveMemberAccessDefinition(params: {
               sup,
               resolveExpression,
               mod,
+              ensureScopeIndex,
               undefined,
               base,
             );
@@ -1432,6 +1454,7 @@ export async function resolveMemberAccessDefinition(params: {
       sup,
       resolveExpression,
       mod,
+      ensureScopeIndex,
       receiverProof,
       resolvedReceiver,
     );
@@ -2759,6 +2782,7 @@ async function resolveReceiverDefinition(
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
   mod: ModuleIndex,
+  getScopeIndex: () => ScopeIndex,
   proof?: ReceiverBinding | null,
   resolvedDirect?: ResolvedExport | null,
 ): Promise<ResolvedReceiverDefinition | null> {
@@ -2776,7 +2800,7 @@ async function resolveReceiverDefinition(
     if (!directType) {
       const { object, property } = getMemberAccessParts(sup, obj);
       if (!object || !property) return null;
-      const owner = await resolveReceiverDefinition(index, object, source, sup, resolveExpression, mod);
+      const owner = await resolveReceiverDefinition(index, object, source, sup, resolveExpression, mod, getScopeIndex);
       if (!owner || owner.runtimeTypeOnly) return null;
       const field = await resolveKeywordReceiverMember(
         index,
@@ -2815,11 +2839,7 @@ async function resolveReceiverDefinition(
     if (sup.id === "csharp") {
       const qualified = csharpQualifiedNameNode(constructor);
       if (qualified) {
-        const name = csharpQualifiedReceiverName(index, mod, constructor, source);
-        if (!name) return null;
-        const resolved =
-          resolveCsharpQualifiedName(index, mod, name, constructor.startIndex) ?? (await resolveExpression(qualified));
-        const def = resolved?.kind === "resolved" ? asMemberContainer(index, resolved.def) : undefined;
+        const def = resolveCsharpQualifiedReceiverType(index, mod, constructor, source, getScopeIndex());
         return def ? { def, memberScope: "instance" } : null;
       }
     }

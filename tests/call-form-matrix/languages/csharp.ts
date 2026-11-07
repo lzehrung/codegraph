@@ -7,15 +7,52 @@ import {
   CSHARP_ALIAS_TYPE_FORMS,
 } from "../../helpers/csharp-alias-shadow-fixture.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "../../helpers/csharp-qualified-receiver-fixture.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "../../helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpAliasCallFixture,
+  csharpGenericAliasReceiverFixture,
+} from "../../helpers/csharp-alias-call-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_GENERIC_ALIAS_CASES.map(({ alias, parameter, scope }): MatrixCell => {
+    const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+    return {
+      id: `csharp/generic-alias-${alias}-${parameter}-${scope}`,
+      language: "csharp",
+      callForm: "imported-alias",
+      files: fixture.files,
+      use: { file: "Use.cs", line: fixture.shadowedCalls[0]!, token: "Run" },
+      expected: "not_found",
+      decoy: { file: "Target.cs", line: 1, token: "Run" },
+      decoyKind: "callable",
+      decoyAmbiguous: true,
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "Shadowed" },
+    };
+  }),
+  ...CSHARP_NEARER_RECEIVER_CASES.map(({ root, scope }): MatrixCell => {
+    const fixture = csharpNearerReceiverFixture(root, scope);
+    return {
+      id: `csharp/nearer-receiver-${root}-${scope}`,
+      language: "csharp",
+      callForm: "typed-local-receiver",
+      files: fixture.files,
+      use: { file: "Use.cs", line: fixture.calls[0]!, token: "Run" },
+      expected: fixture.target ? { ...fixture.declaration, token: "Run" } : "not_found",
+      decoy: { file: "Global.cs", line: 1, token: "Run" },
+      decoyKind: "callable",
+      decoyAmbiguous: !fixture.target,
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "Parameter" },
+    };
+  }),
   ...CSHARP_ALIAS_CALL_SPELLINGS.flatMap((alias, aliasIndex) => {
     const fixture = csharpAliasCallFixture(alias);
     // The matrix's absent-edge assertion is caller-wide; Restored legitimately calls both types.

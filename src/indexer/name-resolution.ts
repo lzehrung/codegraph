@@ -208,10 +208,11 @@ function resolveQualifiedJvmName(
   const { index, file, parsed, scopeIndex } = use;
   const languageId = parsed.sup.id === "java" ? "java" : "kotlin";
   const rootName = parts[0]!;
-  let rootResult = resolveBareName({ ...use, node: root, name: rootName });
+  let rootResult = resolveBareName({ ...use, node: root, name: rootName }, typeOnly);
   while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
-  const rootDefinition = rootResult?.status === "ok" ? rootResult.definition : null;
-  const rootBinding = findClosestScopeBinding(scopeIndex, rootName, root, parsed.sup);
+  const definition = rootResult?.status === "ok" ? rootResult.definition : null;
+  const rootDefinition = typeOnly && definition && !declaresMembers(definition) ? null : definition;
+  const rootBinding = findClosestScopeBinding(scopeIndex, rootName, root, parsed.sup, typeOnly);
   if (rootDefinition || rootBinding) {
     if (!rootDefinition || !declaresMembers(rootDefinition)) return null;
     return jvmNestedPath(use, rootDefinition, parts, 1);
@@ -248,7 +249,11 @@ function resolveQualifiedJvmName(
  * overloads chosen by arity), a local declared later in the same scope, then cross-module
  * lookup (imports, compilation-unit peers, star imports) through {@link resolveNamedDefinition}.
  */
-export function resolveBareName(use: BareNameUse): NameResolution | null {
+export function resolveBareName(
+  use: BareNameUse,
+  jvmTypeOnly = false,
+  skipKotlinQualifiedExpression = false,
+): NameResolution | null {
   const { index, mod, file, parsed, scopeIndex, node } = use;
   const { sup, source, tree } = parsed;
   if (sup.id === "java" || sup.id === "kotlin") {
@@ -265,7 +270,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
     if (qualifiedSuffix) {
       return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     }
-    const expression = kotlinQualifiedExpression(sup, node);
+    const expression = skipKotlinQualifiedExpression ? null : kotlinQualifiedExpression(sup, node);
     if (expression) {
       const chain = collectMemberAccessChain({ sup, source, chainNode: expression });
       if (!chain || !isReceiverNameNode(sup, chain.base.type)) {
@@ -282,7 +287,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
   const lookupName = policy.lookupName?.(use) ?? use.name;
   const early = policy.beforeLexical?.(use, lookupName);
   if (early !== undefined) return early;
-  const found = findClosestScopeBinding(scopeIndex, lookupName, node, sup);
+  const found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
   const state: NameLookupState = {
     use,
     lookupName,
@@ -302,7 +307,7 @@ export function resolveBareName(use: BareNameUse): NameResolution | null {
     }
     const unbound = policy.onUnboundLocal?.(state);
     if (unbound !== undefined) return unbound;
-    if (laterLocalShadowsUse(scopeIndex, lookupName, node, sup)) {
+    if (!jvmTypeOnly && laterLocalShadowsUse(scopeIndex, lookupName, node, sup)) {
       return { status: "not_found", reason: "Local is not in scope before its declaration" };
     }
     const beforeCrossModule = policy.beforeCrossModule?.(state);

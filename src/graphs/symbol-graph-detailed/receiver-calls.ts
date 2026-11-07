@@ -484,10 +484,11 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
   return identifiers[identifiers.length - 1]!;
 }
 
-/** C# verbatim spelling does not change the value binding that proves a receiver's type. */
+/** Identifier quoting does not change the value binding that proves a receiver's type. */
 function sameReceiverBindingName(sup: LanguageSupport, binding: string, receiver: string): boolean {
   if (binding === receiver) return true;
-  return sup.id === "csharp" && sup.normalizeIdentifier(binding) === sup.normalizeIdentifier(receiver);
+  if (sup.id !== "csharp" && sup.id !== "kotlin") return false;
+  return sup.normalizeIdentifier(binding) === sup.normalizeIdentifier(receiver);
 }
 
 /**
@@ -503,7 +504,8 @@ function bindsLocalValue(
 ): boolean {
   const declaresName = (node: SyntaxNodeLike): boolean => {
     if (node.startIndex >= receiver.startIndex) return false;
-    if (node !== receiver && BINDING_SCOPE_TYPES[node.type] && !containsIndex(node, receiver.startIndex)) return false;
+    const nestedScope = BINDING_SCOPE_TYPES[node.type] || sup.createsBlockScope(node) || sup.createsFunctionScope(node);
+    if (node !== receiver && nestedScope && !containsIndex(node, receiver.startIndex)) return false;
     if (PARAMETER_LIST_NODE_TYPES[node.type]) {
       for (const child of node.namedChildren) {
         if (child.startIndex >= receiver.startIndex) continue;
@@ -528,7 +530,9 @@ function bindsLocalValue(
   };
 
   for (let current: SyntaxNodeLike | null = receiver.parent; current; current = current.parent) {
-    if (BINDING_SCOPE_TYPES[current.type] && current.namedChildren.some(declaresName)) return true;
+    const bindingScope =
+      BINDING_SCOPE_TYPES[current.type] || sup.createsBlockScope(current) || sup.createsFunctionScope(current);
+    if (bindingScope && current.namedChildren.some(declaresName)) return true;
   }
   return false;
 }
@@ -949,8 +953,10 @@ function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string
   return { status: "unproven" };
 }
 
-function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike): boolean {
-  return BINDING_CONTAINER_TYPES.has(node.type) && !containsIndex(node, receiver.startIndex);
+function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike, sup: LanguageSupport): boolean {
+  const bindingScope =
+    BINDING_CONTAINER_TYPES.has(node.type) || sup.createsBlockScope(node) || sup.createsFunctionScope(node);
+  return bindingScope && !containsIndex(node, receiver.startIndex);
 }
 
 function findPriorConstructorInContainer(
@@ -965,7 +971,7 @@ function findPriorConstructorInContainer(
   let declared = false;
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return true;
-    if (current !== node && isSkippableBindingContainer(current, receiver)) return true;
+    if (current !== node && isSkippableBindingContainer(current, receiver, sup)) return true;
     const proof = bindingProof(current, receiverName, source, sup);
     if (proof.status === "declared") {
       typeEvidence = { typeNode: proof.node, origin: "declared-type" };
@@ -1012,7 +1018,7 @@ function bindingContainerDeclaresNameBefore(
 ): boolean {
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return false;
-    if (current !== node && isSkippableBindingContainer(current, receiver)) return false;
+    if (current !== node && isSkippableBindingContainer(current, receiver, sup)) return false;
     // A JavaScript/TypeScript assignment updates an existing binding; it declares nothing.
     const declaresNewBinding = !(isJsTsLanguage(sup.id) && current.type === "assignment_expression");
     if (
@@ -1038,7 +1044,11 @@ function findVisiblePriorConstructor(
 ): ReceiverTypeEvidence | null {
   let current: SyntaxNodeLike | null = receiver;
   while (current) {
-    if (BINDING_CONTAINER_TYPES.has(current.type)) {
+    if (
+      BINDING_CONTAINER_TYPES.has(current.type) ||
+      sup.createsBlockScope(current) ||
+      sup.createsFunctionScope(current)
+    ) {
       const constructor = findPriorConstructorInContainer(current, receiver, receiverName, source, sup);
       if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
         return constructor;

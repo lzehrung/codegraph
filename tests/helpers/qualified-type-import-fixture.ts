@@ -141,3 +141,28 @@ export const JVM_QUALIFIED_REVIEW_CASES = [
     },
   },
 ] as const;
+
+export const JVM_VALUE_SHADOW_CASES = [
+  {
+    language: "java",
+    consumer: "app/Use.java",
+    target: "p/Widget.java",
+    decoy: "other/Widget.java",
+    sources: {
+      "p/Widget.java": "package p;\npublic class Widget {}\n",
+      "other/Widget.java": "package other;\npublic class Widget {}\n",
+      "app/Use.java": "package app;\nclass Use { void shadow(int p) { p.Widget x = new p.Widget(); } }\n",
+    },
+  },
+  {
+    language: "kotlin",
+    consumer: "app/Use.kt",
+    target: "p/Widget.kt",
+    decoy: "other/Widget.kt",
+    sources: {
+      "p/Widget.kt": "package p\nclass Widget\n",
+      "other/Widget.kt": "package other\nclass Widget\n",
+      "app/Use.kt": "package app\nfun shadow(p: Int) { val value: p.Widget? = null }\n",
+    },
+  },
+] as const;

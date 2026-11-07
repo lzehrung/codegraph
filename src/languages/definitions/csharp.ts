@@ -1,4 +1,4 @@
-import type { LanguageDefinition } from "../types.js";
+import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
@@ -19,10 +19,19 @@ const DECLARATION_NAME_PARENTS = [
   "property_declaration",
   "variable_declarator",
   "parameter",
+  "type_parameter",
   "declaration_pattern",
   "declaration_expression",
   "catch_declaration",
 ];
+
+/** Untyped foreach deconstruction names sit under nested tuple patterns in the loop's left field. */
+function isForeachDesignation(node: SyntaxNodeLike): boolean {
+  let designation = node;
+  while (designation.parent?.type === "tuple_pattern") designation = designation.parent;
+  const loop = designation.parent;
+  return loop?.type === "foreach_statement" && loop.childForFieldName("left")?.id === designation.id;
+}
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
@@ -135,6 +144,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     interface_declaration: "interface",
     enum_declaration: "type",
     delegate_declaration: "type",
+    type_parameter: "type",
   }),
   createsFunctionScope: nodeTypeIn([
     "method_declaration",
@@ -143,12 +153,11 @@ export const CSHARP_DEF: LanguageDefinition = {
     "local_function_statement",
     "lambda_expression",
   ]),
-  createsBlockScope: nodeTypeIn(["block", "declaration_list", "foreach_statement"]),
-  scopeDeclarationNames: (node) =>
-    isNameFieldOnParent(node, SCOPED_DECLARATION_PARENTS) || node.parent?.type === "foreach_statement",
+  createsBlockScope: nodeTypeIn(["block", "declaration_list", "foreach_statement", "catch_clause", "for_statement"]),
+  scopeDeclarationNames: (node) => isNameFieldOnParent(node, SCOPED_DECLARATION_PARENTS) || isForeachDesignation(node),
   isDeclarationName: (node) =>
     node.type === "implicit_parameter" ||
-    (node.parent?.type === "foreach_statement" && node.parent.childForFieldName("left")?.id === node.id) ||
+    isForeachDesignation(node) ||
     isNameFieldOnParent(node, DECLARATION_NAME_PARENTS),
   normalizeIdentifier: normalizeCsharpIdentifier,
 };

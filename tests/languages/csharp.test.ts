@@ -31,16 +31,24 @@ import {
 } from "../helpers/csharp-alias-shadow-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "../helpers/csharp-qualified-receiver-fixture.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "../helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpAliasCallFixture,
+  csharpGenericAliasReceiverFixture,
+} from "../helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
 import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
+import { CSHARP_SCOPE_READ_FILES, CSHARP_SCOPE_READ_LINES } from "../helpers/scope-binding-read-fixtures.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -2872,6 +2880,44 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  it("keeps catch, for, and deconstructed foreach declarations in their own scopes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-header-scopes-"));
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [line, token, target, declaration] of [
+        [8, "Ping", "Second.cs", 1],
+        [12, "Ping", "Second.cs", 1],
+        [14, "K", "Use.cs", 3],
+        [15, "Match", "Use.cs", 4],
+        [18, "Run", "Second.cs", 1],
+        [21, "Rows", "Second.cs", 1],
+        [28, "B item", "Second.cs", 1],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(CSHARP_SCOPE_READ_LINES, line, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files[target]);
+          expect(result.definition.range.start.line).toBe(declaration);
+        }
+      }
+      for (const line of [17, 21, 25]) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(CSHARP_SCOPE_READ_LINES, line, "Run"),
+        });
+        expect(result.status).toBe("not_found");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(CSHARP_ALIAS_BOUNDARIES)("keeps a $name from falling back to a using alias", async (boundary) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-alias-boundary-language-"));
     try {
@@ -5239,7 +5285,6 @@ describe("C# verbatim alias review boundaries", () => {
     }
   });
 });
-
 describe("C# restored declaration imports", () => {
   it.each(RESTORED_DECLARATION_FIXTURES.filter((fixture) => fixture.languageId === "csharp"))(
     "restores an alias when its type returns in an existing declaration file",
@@ -5252,7 +5297,6 @@ describe("C# restored declaration imports", () => {
     },
   );
 });
-
 describe("C# qualified type imports", () => {
   it("does not attribute a qualified parameter type to a same-named import", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-type-"));
@@ -5332,6 +5376,29 @@ describe("C# qualified declared and constructed receivers", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_NEARER_RECEIVER_CASES)(
+    "binds $root to its $scope root before a global namesake",
+    async ({ root, scope }) => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-nearer-receiver-"));
+      try {
+        const fixture = csharpNearerReceiverFixture(root, scope);
+        const files = await writeFixtureFiles(dir, fixture.files);
+        const index = await buildProjectIndex(dir, { cache: "off" });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        const line = fixture.calls[0]!;
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(fixture.lines, line, "Run"),
+        });
+        expect(result.status).toBe(fixture.target ? "ok" : "not_found");
+        if (fixture.target && result.status === "ok") expect(result.definition.file).toBe(files[fixture.target]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 describe("C# lowercase and keyword-verbatim type alias calls", () => {
   it.each(CSHARP_ALIAS_CALL_SPELLINGS)("proves %s static calls without stealing value receivers", async (alias) => {
@@ -5363,4 +5430,32 @@ describe("C# lowercase and keyword-verbatim type alias calls", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "excludes $scope parameter $parameter from alias $alias calls",
+    async ({ alias, parameter, scope }) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-"));
+      try {
+        const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls");
+        expect(calls.map((edge) => [edge.site?.range.start.line, graph.nodes.get(edge.to)?.file])).toEqual([
+          [fixture.restoredCall, files["Target.cs"]],
+        ]);
+        for (const line of fixture.shadowedCalls) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe("not_found");
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

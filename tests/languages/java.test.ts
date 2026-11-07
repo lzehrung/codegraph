@@ -32,7 +32,11 @@ import {
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
 import { lookupJvmImport } from "../../src/util/resolution/jvm.js";
-import { JAVA_QUALIFIED_TYPE_SOURCES, JVM_QUALIFIED_REVIEW_CASES } from "../helpers/qualified-type-import-fixture.js";
+import {
+  JAVA_QUALIFIED_TYPE_SOURCES,
+  JVM_QUALIFIED_REVIEW_CASES,
+  JVM_VALUE_SHADOW_CASES,
+} from "../helpers/qualified-type-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "java",
@@ -2209,4 +2213,20 @@ describe("Java qualified package and nested type identities", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("resolves a package-qualified Java type despite a value parameter", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-value-shadow-type-"));
+  try {
+    const row = JVM_VALUE_SHADOW_CASES[0];
+    const files = await writeFixtureFiles(root, row.sources);
+    const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+    const targets = graph.edges
+      .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "shadow")
+      .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+    expect(targets).toContain(`${files[row.target]}::Widget`);
+    expect(targets).not.toContain(`${files[row.decoy]}::Widget`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

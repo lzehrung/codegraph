@@ -18,13 +18,25 @@ import {
   KOTLIN_QUOTED_BOUNDARY_SOURCES,
   KOTLIN_QUOTED_FILES,
   KOTLIN_QUOTED_SOURCES,
+  KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "../helpers/kotlin-quoted-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
-import { JVM_QUALIFIED_REVIEW_CASES, KOTLIN_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
+import {
+  JVM_QUALIFIED_REVIEW_CASES,
+  JVM_VALUE_SHADOW_CASES,
+  KOTLIN_QUALIFIED_TYPE_SOURCES,
+} from "../helpers/qualified-type-import-fixture.js";
+import {
+  KOTLIN_TYPE_VALUE_FILES,
+  KOTLIN_TYPE_VALUE_LINES,
+  KOTLIN_TYPE_PARAMETER_FILES,
+  KOTLIN_TYPE_VALUE_TYPE_LINES,
+  kotlinTypeParameterSites,
+} from "../helpers/scope-binding-read-fixtures.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -113,7 +125,7 @@ const definition: LanguageTestDefinition = {
             { name: "UserId", kind: "type" },
             { name: "topLevelValue", kind: "variable" },
             { name: "Service", kind: "class" },
-            { name: "T", kind: "variable" },
+            { name: "T", kind: "type" },
             { name: "value", kind: "variable" },
           ],
         },
@@ -773,6 +785,61 @@ describe("Kotlin declarations in one-line class bodies", () => {
 });
 
 describe("Kotlin backtick-quoted top-level names", () => {
+  it("uses quoted/plain value bindings instead of a same-named companion receiver", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-receiver-"));
+    try {
+      await writeFixtureFiles(root, KOTLIN_QUOTED_SCOPE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const callsToWork = graph.edges.flatMap((edge) => {
+        if (edge.label !== "calls") return [];
+        const target = graph.nodes.get(edge.to);
+        if (target?.name !== "work") return [];
+        return [`${graph.nodes.get(edge.from)?.name}->${path.basename(target.file)}`];
+      });
+      expect(callsToWork.sort()).toEqual([
+        "companionControl->Gadget.kt",
+        "plainControl->Value.kt",
+        "plainLocal->Value.kt",
+        "plainParameter->Value.kt",
+        "quotedControl->Value.kt",
+        "quotedLocal->Value.kt",
+        "quotedParameter->Value.kt",
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps type aliases beside value bindings and settles inherited members before alias uses", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-positioned-alias-"));
+    try {
+      await writeFixtureFiles(root, KOTLIN_QUOTED_SCOPE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const graph = await buildSymbolGraphDetailed(index);
+      const uses = graph.edges.flatMap((edge) => {
+        if (edge.label !== "uses") return [];
+        const target = graph.nodes.get(edge.to);
+        return target ? [`${graph.nodes.get(edge.from)?.name}->${path.basename(target.file)}::${target.name}`] : [];
+      });
+      expect(uses.sort()).toEqual([
+        "imported->Api.kt::go",
+        "localType->Api.kt::Widget",
+        "parameterType->Api.kt::Widget",
+      ]);
+      const aliasCalls = graph.edges.flatMap((edge) => {
+        if (edge.label !== "calls") return [];
+        const caller = graph.nodes.get(edge.from)?.name;
+        if (caller !== "inherited" && caller !== "imported") return [];
+        const target = graph.nodes.get(edge.to);
+        return target ? [`${caller}->${path.basename(target.file)}::${target.name}`] : [];
+      });
+      expect(aliasCalls.sort()).toEqual(["imported->Api.kt::go", "inherited->Use.kt::mark"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   // A declaration is read from the syntax tree with its backticks, as an import spells it.
   it("resolves named imports of backtick-quoted declarations and leaves a missing name external", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-backtick-imports-"));
@@ -804,6 +871,149 @@ describe("Kotlin backtick-quoted top-level names", () => {
         "com.acme.lib.`quoted function`": paths["lib/Quoted.kt"],
         "com.acme.lib.`Missing Type`": "external",
       });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves imported user types independently of same-named values", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-namespace-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_VALUE_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const line of KOTLIN_TYPE_VALUE_TYPE_LINES) {
+        const result = await goToDefinition(index, {
+          file: files["Use.kt"]!,
+          line,
+          column: KOTLIN_TYPE_VALUE_LINES[line - 1]!.lastIndexOf("Widget") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Api.kt"]);
+      }
+      for (const [line, declaration] of [
+        [6, 3],
+        [11, 9],
+        [16, 15],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.kt"]!,
+          line,
+          column: columnInLines(KOTLIN_TYPE_VALUE_LINES, line, "Widget"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files["Use.kt"]);
+          expect(result.definition.range.start.line).toBe(declaration);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves class and function type parameters to their declaration, with and without a same-named import alias", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-parameters-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_PARAMETER_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const site of kotlinTypeParameterSites()) {
+        const result = await goToDefinition(index, { file: files[site.file]!, line: site.line, column: site.column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files[site.file]);
+          expect(result.definition.range.start.line).toBe(site.declaration.line);
+          expect(result.definition.range.start.column).toBe(site.declaration.column);
+        }
+      }
+      for (const column of [14, 18]) {
+        const alias = await goToDefinition(index, { file: files["Alias.kt"]!, line: 3, column });
+        expect(alias.status).toBe("ok");
+        if (alias.status === "ok") expect(alias.definition.file).toBe(files["Api.kt"]);
+      }
+      const references = await findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage.state).toBe("complete");
+        const linesIn = (file: string): number[] =>
+          references.references.filter((site) => site.file === files[file]).map((site) => site.range.start.line);
+        // The import line holds the `Widget` name and the `T` alias name.
+        expect(linesIn("Alias.kt")).toEqual([2, 2, 3, 3]);
+        expect(linesIn("Use.kt")).toEqual([2, 2]);
+        expect(linesIn("Plain.kt")).toEqual([]);
+        expect(linesIn("Decoy.kt")).toEqual([]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes class type parameters to their own declaration so same-named types elsewhere in the file keep resolving", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-parameter-leak-"));
+    try {
+      const lines = [
+        "package app",
+        "import lib.Widget as W",
+        "class A { fun hello() = 1 }",
+        "class Box<A>(val a: A)",
+        "class Other { fun take(a: A): Int = a.hello() }",
+        "class Widgets<W>(val w: W)",
+        "fun use(x: W): W = x",
+        "class Outer {",
+        "    class Inner<A>(val a: A)",
+        "    fun inside(a: A): Int = a.hello()",
+        "}",
+        "typealias Pair2<A> = Pair<A, A>",
+        "fun after(a: A): Int = a.hello()",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "Main.kt": lines.join("\n"),
+        "Lib.kt": "package lib\nclass Widget\n",
+      });
+      const main = files["Main.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const gotoLine = async (line: number, token: string, occurrence = 0): Promise<[string, number] | null> => {
+        let column = columnInLines(lines, line, token);
+        for (let skipped = 0; skipped < occurrence; skipped += 1) {
+          column = lines[line - 1]!.indexOf(token, column) + 1;
+        }
+        const result = await goToDefinition(index, { file: main, line, column });
+        if (result.status !== "ok") return null;
+        return [path.basename(result.definition.file), result.definition.range.start.line];
+      };
+
+      // Type uses outside a class's own declaration reach the peer class and the imported alias.
+      expect(await gotoLine(5, "A")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(5, "hello")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(7, "W")).toEqual(["Lib.kt", 2]);
+      expect(await gotoLine(7, "W", 1)).toEqual(["Lib.kt", 2]);
+      expect(await gotoLine(10, "A")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(10, "hello")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(13, "A")).toEqual(["Main.kt", 3]);
+      // Inside the declaring class the type parameter still wins.
+      expect(await gotoLine(4, "A", 1)).toEqual(["Main.kt", 4]);
+      expect(await gotoLine(6, "W", 2)).toEqual(["Main.kt", 6]);
+      expect(await gotoLine(9, "A", 1)).toEqual(["Main.kt", 9]);
+      expect(await gotoLine(12, "A", 1)).toEqual(["Main.kt", 12]);
+
+      const classA = await findReferences(index, { file: main, line: 3, column: columnInLines(lines, 3, "A") });
+      expect(classA.status).toBe("ok");
+      if (classA.status === "ok") {
+        const refLines = classA.references.map((site) => site.range.start.line);
+        expect(refLines).toEqual([3, 5, 10, 13]);
+      }
+      const hello = await findReferences(index, { file: main, line: 3, column: columnInLines(lines, 3, "hello") });
+      expect(hello.status).toBe("ok");
+      if (hello.status === "ok") {
+        expect(hello.references.map((site) => site.range.start.line)).toEqual([3, 5, 10, 13]);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.flatMap((edge) => {
+        if (edge.label !== "calls") return [];
+        return [`${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`];
+      });
+      expect(calls.sort()).toEqual(["after->hello", "inside->hello", "take->hello"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -1945,4 +2155,57 @@ describe("Kotlin qualified package and nested type identities", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("retains extension alias uses on value receivers beside qualified constructors", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-alias-use-"));
+  try {
+    const files = await writeFixtureFiles(root, {
+      "lib/Widget.kt": "package lib\nclass Widget\n",
+      "other/Widget.kt": "package other\nclass Widget\n",
+      "model/Record.kt": "package model\nclass Record\nfun Record.compact(value: String) = value\n",
+      "app/Use.kt": [
+        "package app",
+        "import lib.Widget",
+        "import model.Record",
+        "import model.compact as renderCompact",
+        "class Use(val field: Record) {",
+        '  fun parameter(value: Record) = value.renderCompact("*")',
+        '  fun local() { val value = Record(); value.renderCompact("*") }',
+        '  fun property() = field.renderCompact("*")',
+        '  fun result() = Record().renderCompact("*")',
+        "  fun constructor() = other.Widget()",
+        "}",
+        'fun Record.receiver() = this.renderCompact("*")',
+      ].join("\n"),
+    });
+    const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+    const targets = (caller: string) =>
+      graph.edges
+        .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === caller)
+        .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+    for (const caller of ["parameter", "local", "property", "result", "receiver"]) {
+      expect(targets(caller), caller).toContain(`${files["model/Record.kt"]}::compact`);
+    }
+    expect(targets("constructor")).toContain(`${files["other/Widget.kt"]}::Widget`);
+    expect(targets("constructor")).not.toContain(`${files["lib/Widget.kt"]}::Widget`);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("resolves a package-qualified Kotlin type despite a value parameter", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-value-shadow-type-"));
+  try {
+    const row = JVM_VALUE_SHADOW_CASES[1];
+    const files = await writeFixtureFiles(root, row.sources);
+    const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+    const targets = graph.edges
+      .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "shadow")
+      .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+    expect(targets).toContain(`${files[row.target]}::Widget`);
+    expect(targets).not.toContain(`${files[row.decoy]}::Widget`);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

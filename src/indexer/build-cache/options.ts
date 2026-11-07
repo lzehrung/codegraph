@@ -108,8 +108,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 121 rebuilds Swift quoted-name resolutions, shared-owner identities, and detailed call edges.
  * Epoch 122 resolves qualified C# declared and constructed receiver types through namespace-aware lookup.
  * Epoch 123 rebuilds detailed calls through lowercase and keyword-verbatim C# type aliases.
+ * Epoch 124 rebuilds receiver proofs, alias uses, and qualified owners after the alias and identity review fixes.
  */
-export const CORE_ALGORITHM_EPOCH = 123;
+export const CORE_ALGORITHM_EPOCH = 124;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -121,8 +122,9 @@ export const CORE_ALGORITHM_EPOCH = 123;
  * Epoch 13 scopes C# lambda parameters, foreach variables, properties, and `out`/catch declarations,
  * and reads implicit lambda parameters as declarations.
  * Epoch 14 gives Swift quoted and plain identifiers one case-sensitive identity.
+ * Epoch 15 scopes C# catch and for declarations and classifies Kotlin type parameters as types.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 14;
+export const LANGUAGE_BEHAVIOR_EPOCH = 15;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
