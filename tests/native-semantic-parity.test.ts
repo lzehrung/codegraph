@@ -2382,8 +2382,52 @@ nativeDescribe("native semantic coverage", () => {
           token: "Run",
           expectedSites: ["verbatim/Api.cs:2", "verbatim/Use.cs:3"],
           decoyFile: "verbatim/decoy/B.cs",
+          decoyDeclaration: {
+            file: "verbatim/decoy/B.cs",
+            line: 2,
+            token: "Run",
+            absentSites: ["verbatim/Use.cs:3"],
+          },
         },
-        edge: { caller: "M", callerFile: "verbatim/Use.cs", expectedTarget: "verbatim/Api.cs::Run" },
+        edge: {
+          caller: "M",
+          callerFile: "verbatim/Use.cs",
+          expectedTarget: "verbatim/Api.cs::Run",
+          absentTargets: ["verbatim/decoy/B.cs::Run"],
+        },
+      },
+      {
+        name: "C# plain type alias with a verbatim use after a file-scoped namespace",
+        files: {
+          "reverse/Api.cs": ["namespace ReverseApi;", "public class Target { public static void Run() {} }"],
+          "reverse/Use.cs": [
+            "namespace ReverseUse;",
+            "using B = global::ReverseApi.Target;",
+            "using ReverseOther;",
+            "class UseReverse { void M() { @B.Run(); } }",
+          ],
+          "reverse/decoy/B.cs": ["namespace ReverseOther;", "public class B { public static void Run() {} }"],
+        },
+        goto: { file: "reverse/Use.cs", line: 4, token: "Run", expectedFile: "reverse/Api.cs", expectedLine: 2 },
+        references: {
+          file: "reverse/Api.cs",
+          line: 2,
+          token: "Run",
+          expectedSites: ["reverse/Api.cs:2", "reverse/Use.cs:4"],
+          decoyFile: "reverse/decoy/B.cs",
+          decoyDeclaration: {
+            file: "reverse/decoy/B.cs",
+            line: 2,
+            token: "Run",
+            absentSites: ["reverse/Use.cs:4"],
+          },
+        },
+        edge: {
+          caller: "M",
+          callerFile: "reverse/Use.cs",
+          expectedTarget: "reverse/Api.cs::Run",
+          absentTargets: ["reverse/decoy/B.cs::Run"],
+        },
       },
       {
         name: "Swift extension member over a base type in another file",

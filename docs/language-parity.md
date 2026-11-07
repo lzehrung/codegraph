@@ -218,7 +218,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A bare `using Foo` binds a same-named project file before an npm workspace package.
 - A `using` never binds another language's file (`using System;` beside `system.ts`).
 - `using X = Y;` adds an edge to `Y`; `extern alias` adds none.
-- Type aliases compare `B` and `@B` as one name across navigation, references, and detailed graphs, preserving source spelling and ranges.
+- Declared and constructed receiver proofs compare `value` and `@value` as one binding name; verbatim spelling does not make a value a static type receiver.
 - An alias for a namespace split across files stays unresolved; one with no first-party declaration stays external.
 - `X::Target` and `global::Ns.Target` resolve against same-directory declarations; `X.Type.Member` needs a single-file alias binding.
 - `X::Type` and `X.Type` stay unresolved while a project C# file has no readable syntax tree.
@@ -228,6 +228,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - An alias name follows C# identifier equality: `using @B = N.Second;` and `using B = N.Second;` both bind `B`, so a use spelled `B.Nested.Run()` or `@B.Nested.Run()` reaches the same target, with the same references and call edges. An unresolved alias still hides a same-named type that `using N;` imports, whichever spelling each side uses.
 - An alias whose target is unresolved (external or generic) still hides a same-named type that `using N;` imports where the alias is in scope: its namespace block, or the file for an alias before every namespace. An alias in a sibling or reopened namespace block does not, and a `using N;` in a nested block that C# reaches first still leaves the use unresolved. Of several aliases of one name in scope, the one in the nearest namespace block binds, whether it names a type or a namespace, and an unresolved alias in scope never falls back to a namespace of its name (`B.Nested.Run()` beside a namespace `B`). Go-to-definition, references, and member-call graph edges follow this; the detailed graph reads its type-use edges from a table of the file's aliases, so it records none for a name that two aliases share or whose alias sits in another block.
 - A name qualified through a generic type (`N.Outer<int>.Inner`) is unresolved.
+- Direct calls through lowercase type aliases, including keyword-verbatim aliases such as `@class` and `@this`, resolve in `goToDefinition` and `findReferences` but may have no `calls` edge in `buildSymbolGraphDetailed`. Same-named decoys remain excluded.
 - `using static N.T;` binds one file and imports accessible static members, constants, and nested types, not instance or extension members; a name two directives provide stays unresolved.
 - `using static` does not bind a type split across files (`partial`), `global using static`, or nested types.
 - A namespace alias declared under `#if`, `#elif`, or `#else` is not visible after `#endif`; preprocessor expansion is out of scope, so those uses stay `not_found` or `partial`.

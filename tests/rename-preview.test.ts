@@ -93,6 +93,37 @@ describe("rename preview", () => {
     expect(await fsp.readFile(serviceFile, "utf8")).toBe(beforeService);
     expect(await fsp.readFile(consumerFile, "utf8")).toBe(beforeConsumer);
   });
+
+  it.each([
+    { alias: "@B", use: "B" },
+    { alias: "B", use: "@B" },
+    { alias: "@B", use: "@B" },
+  ])("preserves C# alias $alias and use $use when renaming their target", async ({ alias, use }) => {
+    const root = await mkTmpDir("cg-rename-csharp-verbatim-alias-");
+    try {
+      const consumer = `using ${alias} = N.Target;\nclass Use { ${use} value; }\n`;
+      const paths = await writeFixtureFiles(root, {
+        "Target.cs": "namespace N;\npublic class Target {}\n",
+        "Decoy.cs": "namespace Other;\npublic class Target {}\n",
+        "Use.cs": consumer,
+      });
+      const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+      const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "Target" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "Target.cs");
+      if (!target) throw new Error("Expected the alias target symbol");
+      const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "Renamed" });
+      expect(result.safe).toBe(true);
+      expect(result.unsafeSites).toEqual([]);
+      expect(result.edits.map((edit) => [edit.file, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        ["Target.cs", 2, "Target", "Renamed"],
+        ["Use.cs", 1, "Target", "Renamed"],
+      ]);
+      expect(await fsp.readFile(paths["Use.cs"]!, "utf8")).toBe(consumer);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks renaming a Python property getter unsafe when accessor references are partial", async () => {
     const root = await mkTmpDir("cg-rename-python-property-");
     const file = path.join(root, "models.py");
