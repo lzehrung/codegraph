@@ -1,4 +1,10 @@
-import { CSHARP_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import {
+  CSHARP_SUPPORT,
+  JAVA_SUPPORT,
+  KOTLIN_SUPPORT,
+  supportForFileWithoutHeaderSample,
+  type LanguageSupport,
+} from "../languages.js";
 import { pythonPropertyDecorator, type PythonPropertyDecorator } from "./python-property-decorator.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
@@ -16,6 +22,7 @@ import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
   isMemberAccessNode,
+  isQualifiedTypeSuffix,
   isReceiverNameNode,
   memberAccessTraversalTypes,
 } from "../util/member-access.js";
@@ -78,6 +85,8 @@ import {
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
+import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
+import { UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
 import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
@@ -776,38 +785,73 @@ function resolveRubyQualifiedConstantDefinition(
   });
 }
 
-/** A fully qualified JVM package symbol, never a same-spelled type from another package. */
-function resolveJvmPackageSymbol(
+type JvmPackageSymbolIndex = {
+  byFile: ProjectIndex["byFile"];
+  size: number;
+  languageExtensions: ProjectIndex["languageExtensions"];
+  names: Map<string, SymbolDef[]>;
+};
+
+const jvmPackageSymbolIndexes = new WeakMap<ProjectIndex, JvmPackageSymbolIndex>();
+const JVM_PACKAGE_SUPPORTS = [JAVA_SUPPORT, KOTLIN_SUPPORT] as const;
+
+/** Builds the package/name lookup once per index instead of rescanning the project per qualified use. */
+function jvmPackageSymbolIndex(index: ProjectIndex): Map<string, SymbolDef[]> {
+  const cached = jvmPackageSymbolIndexes.get(index);
+  if (
+    cached &&
+    cached.byFile === index.byFile &&
+    cached.size === index.byFile.size &&
+    cached.languageExtensions === index.languageExtensions
+  ) {
+    return cached.names;
+  }
+  const names = new Map<string, SymbolDef[]>();
+  for (const candidate of index.byFile.values()) {
+    const support = supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions);
+    if (support?.id !== "java" && support?.id !== "kotlin") continue;
+    const packageName = getPackageDeclarationName(index, candidate.file, support.id);
+    if (!packageName) continue;
+    for (const entry of candidate.exports) {
+      if (entry.type !== "local" || entry.target.isMember) continue;
+      const key = `${support.id}\0${packageName}\0${support.normalizeIdentifier(entry.exportedAs)}`;
+      const declarations = names.get(key);
+      if (declarations) declarations.push(entry.target);
+      else names.set(key, [entry.target]);
+    }
+  }
+  jvmPackageSymbolIndexes.set(index, {
+    byFile: index.byFile,
+    size: index.byFile.size,
+    languageExtensions: index.languageExtensions,
+    names,
+  });
+  return names;
+}
+
+/** A qualified JVM package symbol; null is an ambiguity, while undefined is an absent candidate. */
+export function resolveJvmPackageSymbol(
   index: ProjectIndex,
   packageName: string,
   symbolName: string,
   languageId: "java" | "kotlin",
   useFile: string,
-): SymbolDef | undefined {
+  typeOnly = false,
+): SymbolDef | null | undefined {
   const samePackage = getPackageDeclarationName(index, useFile, languageId) === packageName;
+  const names = jvmPackageSymbolIndex(index);
+  const unquoted = normalizeKotlinIdentifier(symbolName);
   let target: SymbolDef | undefined;
-  for (const candidate of index.byFile.values()) {
-    const targetLanguage = supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.id;
-    if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
-    if (getPackageDeclarationName(index, candidate.file, targetLanguage) !== packageName) continue;
-    const targetNormalize =
-      supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.normalizeIdentifier ??
-      ((name: string) => name);
-    for (const entry of candidate.exports) {
-      if (
-        entry.type !== "local" ||
-        targetNormalize(entry.exportedAs) !== targetNormalize(normalizeKotlinIdentifier(symbolName)) ||
-        entry.target.isMember ||
-        !isJvmPackageSymbolVisible(entry.target, targetLanguage, languageId, samePackage)
-      )
-        continue;
-      if (
-        target &&
-        (target.file !== entry.target.file || target.range.start.index !== entry.target.range.start.index)
-      ) {
-        return undefined;
+  for (const support of JVM_PACKAGE_SUPPORTS) {
+    const targetLanguage = support.id === "java" ? "java" : "kotlin";
+    const key = `${targetLanguage}\0${packageName}\0${support.normalizeIdentifier(unquoted)}`;
+    for (const candidate of names.get(key) ?? []) {
+      if (typeOnly && !declaresMembers(candidate)) continue;
+      if (!isJvmPackageSymbolVisible(candidate, targetLanguage, languageId, samePackage)) continue;
+      if (target && (target.file !== candidate.file || target.range.start.index !== candidate.range.start.index)) {
+        return null;
       }
-      target = entry.target;
+      target = candidate;
     }
   }
   return target;
@@ -847,6 +891,7 @@ export async function resolveMemberAccessDefinition(params: {
   sup: LanguageSupport;
   scopeIndex?: ScopeIndex;
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
+  resolveJvmTypeName: JvmTypeNameResolver;
   loadParsedFile?: PythonParsedFileLoader;
   pythonReceiverResolutionCache?: PythonReceiverResolutionCache;
 }): Promise<GoToResult | null> {
@@ -859,6 +904,7 @@ export async function resolveMemberAccessDefinition(params: {
     sup,
     scopeIndex: ownedScopeIndex,
     resolveLexicalBinding,
+    resolveJvmTypeName,
     loadParsedFile,
     pythonReceiverResolutionCache,
   } = params;
@@ -871,6 +917,11 @@ export async function resolveMemberAccessDefinition(params: {
   const parent = node.parent;
   if (!parent || !sup.supportsCrossModuleSymbols) {
     return null;
+  }
+  if (sup.id === "java" && isQualifiedTypeSuffix(sup, node)) {
+    const resolution = await resolveJvmTypeName(index, mod, { source, tree, sup }, ensureScopeIndex(), node);
+    if (resolution && resolution.status !== "deferred") return resolution;
+    return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
   }
   let memberNode: SyntaxNodeLike | null = null;
   if (isMemberAccessNode(sup, parent)) {
@@ -907,6 +958,11 @@ export async function resolveMemberAccessDefinition(params: {
   };
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
+    if (sup.id === "kotlin" && expr.type === "user_type") {
+      const resolution = await resolveJvmTypeName(index, mod, { source, tree, sup }, ensureScopeIndex(), expr);
+      const definition = definitionWithoutDeferredSteps(resolution);
+      return definition ? { kind: "resolved", def: definition } : null;
+    }
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
       const aliasQualifier = isCsharpAliasQualifier(expr, sup);
@@ -985,14 +1041,18 @@ export async function resolveMemberAccessDefinition(params: {
         // unresolved. An alias in another namespace block is not selected above and leaves the imported type to answer.
         if (imp) return null;
       } else {
-        const local = mod.locals.find((candidate) => {
-          if (candidate.localName === exprName) return true;
-          return (
-            sup.id === "php" &&
-            declaresMembers(candidate) &&
-            foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
-          );
-        });
+        // JVM locals must come from the positioned scope lookup above, not an unrelated method's parameter.
+        const positionedJvmLookup = !!resolveLexicalBinding && (sup.id === "java" || sup.id === "kotlin");
+        const local = positionedJvmLookup
+          ? undefined
+          : mod.locals.find((candidate) => {
+              if (candidate.localName === exprName) return true;
+              return (
+                sup.id === "php" &&
+                declaresMembers(candidate) &&
+                foldPhpIdentifierCase(candidate.localName) === foldPhpIdentifierCase(exprName)
+              );
+            });
         if (local) return { kind: "resolved", def: local };
         if (sup.id === "java" || sup.id === "kotlin" || sup.id === "swift") {
           const peer = resolveExport(index, mod.file, exprName);

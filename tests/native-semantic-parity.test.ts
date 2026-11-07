@@ -29,6 +29,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
+import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -3255,6 +3256,145 @@ nativeDescribe("native semantic coverage", () => {
       ).toBe(false);
     }
   });
+  it.each(QUALIFIED_TYPE_CASES)("keeps $language qualified-type answers across disk reloads", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-`));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-cache-`));
+    tempDirs.push(root, cacheDir);
+    const sources: Readonly<Record<string, string>> = row.sources;
+    const files = await writeFixtureFiles(root, sources);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const lines = sources[row.consumer]!.split("\n");
+    for (const index of [cold, warm]) {
+      const qualified = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: row.qualifiedLine,
+        column: columnOf(lines, row.qualifiedLine, "Widget"),
+      });
+      expect(qualified.status).toBe(row.qualifiedStatus);
+      if (qualified.status === "ok") expect(qualified.definition.file).toBe(files[row.qualified]);
+      const bare = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: row.bareLine,
+        column: columnOf(lines, row.bareLine, "Widget"),
+      });
+      expect(bare.status).toBe("ok");
+      if (bare.status !== "ok") throw new Error("Expected bare imported type");
+      expect(bare.definition.file).toBe(files[row.imported]);
+      const declaration = sources[row.imported]!.split("\n");
+      const references = await findReferences(index, {
+        file: files[row.imported]!,
+        line: row.declarationLine,
+        column: columnOf(declaration, row.declarationLine, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected imported-type references");
+      expect(references.referenceCoverage.state).toBe(row.coverage);
+      const linesUsed = references.references
+        .filter((reference) => reference.file === files[row.consumer])
+        .map((reference) => reference.range.start.line);
+      expect(linesUsed).toContain(row.bareLine);
+      expect(linesUsed).not.toContain(row.qualifiedLine);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = (caller: string) =>
+        graph.edges
+          .filter((edge) => graph.nodes.get(edge.from)?.name === caller && edge.label === "uses")
+          .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targets("qualified")).not.toContain(files[row.imported]);
+      if (row.qualifiedStatus === "ok") expect(targets("qualified")).toContain(files[row.qualified]);
+      expect(targets("bare")).toContain(files[row.imported]);
+    }
+  });
+  it.each(JVM_QUALIFIED_REVIEW_CASES)("keeps $language qualified package identities on disk reload", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-review-`));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-review-cache-`));
+    tempDirs.push(root, cacheDir);
+    const sources: Readonly<Record<string, string>> = row.sources;
+    const files = await writeFixtureFiles(root, sources);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const lines = sources[row.consumer]!.split("\n");
+    for (const index of [cold, warm]) {
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [caller, line, name, target] of [
+        ["a", 5, "Widget", row.other],
+        ["b", 6, "Widget", row.imported],
+        ["c", 7, "Inner", row.nested],
+        ["d", 8, "Inner", row.nested],
+        ["e", 9, "Widget", row.other],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files[row.consumer]!,
+          line,
+          column: columnOf(lines, line, name),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected qualified JVM declaration");
+        expect(result.definition.file).toBe(files[target]);
+        const uses = graph.edges
+          .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${graph.nodes.get(edge.to)?.file}::${graph.nodes.get(edge.to)?.name}`);
+        expect(uses).toContain(`${files[target]}::${name}`);
+        if (caller === "a" || caller === "e") expect(uses).not.toContain(`${files[row.imported]}::Widget`);
+      }
+      const declaration = sources[row.other]!.split("\n");
+      const references = await findReferences(index, {
+        file: files[row.other]!,
+        line: 2,
+        column: columnOf(declaration, 2, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected qualified JVM references");
+      expect(references.referenceCoverage.state).toBe("complete");
+      const sites = references.references
+        .filter((reference) => reference.file === files[row.consumer])
+        .map((reference) => reference.range.start.line);
+      expect(sites).toContain(5);
+      expect(sites).toContain(9);
+      expect(sites).not.toContain(6);
+    }
+  });
+  it.each(JVM_QUALIFIED_REVIEW_CASES)(
+    "refreshes $language qualified targets after an incremental edit",
+    async (row) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-edit-`));
+      const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-edit-cache-`));
+      tempDirs.push(root, cacheDir);
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const files = await writeFixtureFiles(root, sources);
+      const options = { cache: "disk", cacheDir, threads: 1 } as const;
+      const cold = await buildProjectIndex(root, options);
+      await buildSymbolGraphDetailed(cold);
+      await fsp.writeFile(files[row.other]!, sources[row.other]!.replace("class Widget", "class Removed"));
+      const changed = await buildProjectIndexIncremental(root, options);
+      const lines = sources[row.consumer]!.split("\n");
+      const request = { file: files[row.consumer]!, line: 5, column: columnOf(lines, 5, "Widget") };
+      const missing = await goToDefinition(changed, request);
+      expect(missing.status).toBe("not_found");
+      const changedGraph = await buildSymbolGraphDetailed(changed);
+      expect(
+        changedGraph.edges.some(
+          (edge) =>
+            changedGraph.nodes.get(edge.from)?.name === "a" &&
+            changedGraph.nodes.get(edge.to)?.file === files[row.imported],
+        ),
+      ).toBe(false);
+      await fsp.writeFile(files[row.other]!, sources[row.other]!);
+      const restored = await buildProjectIndexIncremental(root, options);
+      const result = await goToDefinition(restored, request);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected the restored qualified type");
+      expect(result.definition.file).toBe(files[row.other]);
+      const graph = await buildSymbolGraphDetailed(restored);
+      expect(
+        graph.edges.some(
+          (edge) => graph.nodes.get(edge.from)?.name === "a" && graph.nodes.get(edge.to)?.file === files[row.other],
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 nativeDescribe("restored declaration imports retain native semantic parity", () => {

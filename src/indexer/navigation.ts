@@ -140,6 +140,7 @@ import {
   createLoadingParsedFileProvider,
   phpImportTypeAtPosition,
   resolveBareName,
+  resolveJvmTypeName,
   settleNameResolution,
   withParsedFiles,
   type BareNameUse,
@@ -299,6 +300,7 @@ export async function goToDefinition(
         source,
         tree,
         sup,
+        resolveJvmTypeName,
         ...(scopeIndex
           ? {
               scopeIndex,

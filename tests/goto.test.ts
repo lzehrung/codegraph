@@ -36,6 +36,7 @@ import {
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
+import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -6787,4 +6788,88 @@ describe("Go to Definition: Kotlin default-package imports", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Go to Definition: qualified types beside imports", () => {
+  it.each(QUALIFIED_TYPE_CASES)("keeps $language qualified types apart from bare imports", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-goto-`));
+    try {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const files = await writeFixtureFiles(root, sources);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const lines = sources[row.consumer]!.split("\n");
+      const qualified = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: row.qualifiedLine,
+        column: columnInLines(lines, row.qualifiedLine, "Widget"),
+      });
+      expect(qualified.status).toBe(row.qualifiedStatus);
+      if (qualified.status === "ok") expect(qualified.definition.file).toBe(files[row.qualified]);
+      const bare = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: row.bareLine,
+        column: columnInLines(lines, row.bareLine, "Widget"),
+      });
+      expect(bare.status).toBe("ok");
+      if (bare.status !== "ok") throw new Error("Expected bare imported type");
+      expect(bare.definition.file).toBe(files[row.imported]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Go to Definition: JVM package and nested type identities", () => {
+  it.each(JVM_QUALIFIED_REVIEW_CASES)(
+    "resolves $language qualified targets instead of same-name decoys",
+    async (row) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-review-goto-`));
+      try {
+        const sources: Readonly<Record<string, string>> = row.sources;
+        const files = await writeFixtureFiles(root, sources);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        const lines = sources[row.consumer]!.split("\n");
+        for (const [line, token, target, expected] of [
+          [5, "Widget", row.other, "Widget"],
+          [6, "Widget", row.imported, "Widget"],
+          [7, "Inner", row.nested, "Inner"],
+          [8, "Inner", row.nested, "Inner"],
+          [9, "Widget", row.other, "Widget"],
+          [10, "Widget", row.imported, "Widget"],
+        ] as const) {
+          const result = await goToDefinition(index, {
+            file: files[row.consumer]!,
+            line,
+            column: columnInLines(lines, line, token),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected qualified JVM declaration");
+          expect(result.definition.file).toBe(files[target]);
+          expect(result.definition.localName).toBe(expected);
+        }
+        if (row.language === "java") {
+          const result = await goToDefinition(index, {
+            file: files[row.consumer]!,
+            line: 9,
+            column: lines[8]!.lastIndexOf("Widget") + 1,
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files[row.other]);
+        }
+        if (row.language === "kotlin") {
+          const result = await goToDefinition(index, {
+            file: files[row.consumer]!,
+            line: 11,
+            column: columnInLines(lines, 11, "Widget"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected the receiver's method");
+          expect(result.definition.file).toBe(files[row.consumer]);
+          expect(result.definition.range.start.line).toBe(13);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

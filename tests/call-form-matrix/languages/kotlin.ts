@@ -1,5 +1,9 @@
 /** Kotlin call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import {
+  JVM_QUALIFIED_REVIEW_CASES,
+  KOTLIN_QUALIFIED_TYPE_SOURCES,
+} from "../../helpers/qualified-type-import-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const kotlinOmissions: readonly CallFormOmission[] = [];
@@ -58,6 +62,28 @@ export const kotlinCells: MatrixCell[] = [
     decoy: { file: "Decoy.kt", line: 2, token: "Widget" },
     decoyKind: "type",
     edge: { label: "calls", fromFile: "Use.kt", fromName: "make" },
+  },
+  {
+    id: "kotlin/qualified-type-receiver",
+    language: "kotlin",
+    callForm: "typed-local-receiver",
+    files: KOTLIN_QUALIFIED_TYPE_SOURCES,
+    use: { file: "app/U.kt", line: 4, token: "act" },
+    expected: { file: "other/Widget.kt", line: 2, token: "act" },
+    decoy: { file: "lib/Widget.kt", line: 2, token: "act" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "app/U.kt", fromName: "qualified" },
+  },
+  {
+    id: "kotlin/qualified-package-construction",
+    language: "kotlin",
+    callForm: "construction",
+    files: JVM_QUALIFIED_REVIEW_CASES[0].sources,
+    use: { file: "app/Use.kt", line: 9, token: "Widget" },
+    expected: { file: "other/Widget.kt", line: 2, token: "Widget" },
+    decoy: { file: "lib/Widget.kt", line: 2, token: "Widget" },
+    decoyKind: "type",
+    edge: { label: "calls", fromFile: "app/Use.kt", fromName: "e" },
   },
   {
     id: "kotlin/incomplete-wildcard-call",

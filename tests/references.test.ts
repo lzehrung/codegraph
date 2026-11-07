@@ -48,6 +48,7 @@ import {
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
+import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
@@ -8502,6 +8503,163 @@ describe("Find References: Kotlin default-package imports", () => {
           ).toEqual([...expected]);
         }
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: qualified types beside imports", () => {
+  it.each(QUALIFIED_TYPE_CASES)("separates $language qualified uses from the imported decoy", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-refs-`));
+    try {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const files = await writeFixtureFiles(root, sources);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const importedLines = row.language === "csharp" ? [row.bareLine] : [2, row.bareLine];
+      if (row.language === "kotlin") importedLines.push(6);
+      if (row.language === "csharp") importedLines.push(5);
+      const qualifiedLines: number[] = row.qualifiedStatus === "ok" ? [row.qualifiedLine] : [];
+      if (row.language === "kotlin") qualifiedLines.push(7);
+      for (const [target, expectedLines] of [
+        [row.imported, importedLines],
+        [row.qualified, qualifiedLines],
+      ] as const) {
+        const lines = sources[target]!.split("\n");
+        const result = await findReferences(index, {
+          file: files[target]!,
+          line: row.declarationLine,
+          column: columnInLines(lines, row.declarationLine, "Widget"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected qualified-type reference result");
+        expect(result.referenceCoverage.state).toBe(row.coverage);
+        expect(
+          result.references
+            .filter((ref) => ref.file === files[row.consumer])
+            .map((ref) => ref.range.start.line)
+            .sort(),
+        ).toEqual(expectedLines);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Find References: JVM package and nested type identities", () => {
+  it.each(JVM_QUALIFIED_REVIEW_CASES)("keeps $language qualified targets and same-name imports apart", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-review-refs-`));
+    try {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const files = await writeFixtureFiles(root, sources);
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const otherSites = row.language === "java" ? [5, 9, 9] : [5, 9];
+      for (const [target, line, name, expected] of [
+        [row.imported, 2, "Widget", [2, 6, 10]],
+        [row.other, 2, "Widget", otherSites],
+        [row.nested, row.nestedLine, "Inner", [7, 8]],
+        [row.otherNested, row.otherNestedLine, "Inner", []],
+      ] as const) {
+        const lines = sources[target]!.split("\n");
+        const result = await findReferences(index, {
+          file: files[target]!,
+          line,
+          column: columnInLines(lines, line, name),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected qualified JVM references");
+        expect(result.referenceCoverage.state).toBe("complete");
+        expect(
+          result.references
+            .filter((ref) => ref.file === files[row.consumer])
+            .map((ref) => ref.range.start.line)
+            .sort((left, right) => left - right),
+        ).toEqual(expected);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each(JVM_QUALIFIED_REVIEW_CASES)("marks unproven $language type qualifiers partial", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-unknown-qualified-`));
+    try {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const consumer =
+        row.language === "kotlin"
+          ? "package app\nimport lib.Widget\nfun uncertain(value: unknown.Widget) {}\n"
+          : "package app;\nimport lib.Widget;\nclass Use { void uncertain(unknown.Widget value) {} }\n";
+      const files = await writeFixtureFiles(root, { [row.imported]: sources[row.imported]!, [row.consumer]: consumer });
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const result = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: 3,
+        column: consumer.split("\n")[2]!.indexOf("Widget") + 1,
+      });
+      expect(result.status).toBe("not_found");
+      const targetLines = sources[row.imported]!.split("\n");
+      const references = await findReferences(index, {
+        file: files[row.imported]!,
+        line: 2,
+        column: columnInLines(targetLines, 2, "Widget"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected imported declaration references");
+      expect(references.referenceCoverage.state).toBe("partial");
+      expect(references.references.some((ref) => ref.file === files[row.consumer] && ref.range.start.line === 3)).toBe(
+        false,
+      );
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            graph.nodes.get(edge.from)?.name === "uncertain" && graph.nodes.get(edge.to)?.file === files[row.imported],
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each(JVM_QUALIFIED_REVIEW_CASES)("leaves ambiguous $language package paths unresolved", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-ambiguous-qualified-`));
+    try {
+      const sources: Readonly<Record<string, string>> = row.sources;
+      const extension = row.language === "java" ? "java" : "kt";
+      const conflict =
+        row.language === "java" ? "package lib.Outer;\npublic class Inner {}\n" : "package lib.Outer\nclass Inner\n";
+      const files = await writeFixtureFiles(root, {
+        ...sources,
+        [`conflict/one/Inner.${extension}`]: conflict,
+        [`conflict/two/Inner.${extension}`]: conflict,
+      });
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      const consumerLines = sources[row.consumer]!.split("\n");
+      const result = await goToDefinition(index, {
+        file: files[row.consumer]!,
+        line: 8,
+        column: columnInLines(consumerLines, 8, "Inner"),
+      });
+      expect(result.status).toBe("not_found");
+      const declarationLines = sources[row.nested]!.split("\n");
+      const references = await findReferences(index, {
+        file: files[row.nested]!,
+        line: row.nestedLine,
+        column: columnInLines(declarationLines, row.nestedLine, "Inner"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected nested declaration references");
+      expect(references.referenceCoverage.state).toBe("partial");
+      const sites = references.references
+        .filter((ref) => ref.file === files[row.consumer])
+        .map((ref) => ref.range.start.line);
+      expect(sites).toContain(7);
+      expect(sites).not.toContain(8);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some(
+          (edge) => graph.nodes.get(edge.from)?.name === "d" && graph.nodes.get(edge.to)?.name === "Inner",
+        ),
+      ).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

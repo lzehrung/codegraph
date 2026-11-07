@@ -35,6 +35,7 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -5245,4 +5246,62 @@ describe("C# restored declaration imports", () => {
       });
     },
   );
+});
+
+describe("C# qualified type imports", () => {
+  it("does not attribute a qualified parameter type to a same-named import", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-type-"));
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_QUALIFIED_TYPE_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = (caller: string) =>
+        graph.edges
+          .filter((edge) => graph.nodes.get(edge.from)?.name === caller)
+          .map((edge) => `${edge.label}:${graph.nodes.get(edge.to)?.file}:${graph.nodes.get(edge.to)?.name}`);
+      expect(targets("qualified")).not.toContain(`uses:${files["Lib/Widget.cs"]}:Widget`);
+      expect(targets("bare")).toContain(`uses:${files["Lib/Widget.cs"]}:Widget`);
+      expect(targets("bare")).toContain(`calls:${files["Lib/Widget.cs"]}:act`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("retains proven qualified type uses when both namespaces share a directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-type-proven-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "Lib.cs": CSHARP_QUALIFIED_TYPE_SOURCES["Lib/Widget.cs"],
+        "Other.cs": CSHARP_QUALIFIED_TYPE_SOURCES["Other/Widget.cs"],
+        "Use.cs": CSHARP_QUALIFIED_TYPE_SOURCES["app/U.cs"],
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = CSHARP_QUALIFIED_TYPE_SOURCES["app/U.cs"].split("\n");
+      for (const [line, name, target] of [
+        [3, "Widget", "Other.cs"],
+        [4, "Widget", "Lib.cs"],
+        [4, "act", "Lib.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(lines, line, name),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected proven qualified type");
+        expect(result.definition.file).toBe(files[target]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const qualifiedUses = graph.edges
+        .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "qualified")
+        .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(qualifiedUses).toContain(files["Other.cs"]);
+      expect(qualifiedUses).not.toContain(files["Lib.cs"]);
+      const bothUses = graph.edges
+        .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "both")
+        .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(new Set(bothUses)).toEqual(new Set([files["Other.cs"], files["Lib.cs"]]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

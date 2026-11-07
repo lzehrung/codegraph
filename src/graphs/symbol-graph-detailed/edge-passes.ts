@@ -44,6 +44,8 @@ import { sliceText, toRange } from "../../util/ast.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,
+  isQualifiedTypeSuffix,
+  kotlinQualifiedExpression,
   rustTokenTreeHoldsExpressions,
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
@@ -1174,8 +1176,24 @@ export async function emitFunctionBodyEdges(
         return;
       }
       const nameKey = context.aliasKey(name);
-      if (seenAliases.has(nameKey)) return;
       const tableDef = context.aliasToTargetDef.get(nameKey);
+      const jvmLanguage = context.sup.id === "java" || context.sup.id === "kotlin";
+      const qualifiedType = isQualifiedTypeSuffix(context.sup, node);
+      let qualifiedExpression = false;
+      if (context.sup.id === "kotlin" && node.parent?.type === "navigation_expression") {
+        const first = name[0];
+        const capitalized = !!first && first === first.toUpperCase() && first !== first.toLowerCase();
+        const importedName = !!tableDef || context.aliasToTargetModule.has(nameKey);
+        if (importedName || capitalized) qualifiedExpression = !!kotlinQualifiedExpression(context.sup, node);
+      }
+      const resolvableQualifiedType = qualifiedType && (jvmLanguage || !!tableDef);
+      if (resolvableQualifiedType || qualifiedExpression) {
+        // The shared lookup may prove the qualified target, but the bare alias cannot.
+        const qualified = context.resolveIdentifier(name, node);
+        if (qualified) recordDefEdge(context, fromId, qualified, "uses");
+        return;
+      }
+      if (seenAliases.has(nameKey)) return;
       let target: SymbolDef | null = tableDef && context.aliasTableAnswers(name, node) ? tableDef : null;
       if (!target) {
         const modFile = context.aliasToTargetModule.get(nameKey);
