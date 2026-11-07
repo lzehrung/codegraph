@@ -18,11 +18,61 @@ import {
   csharpAliasCallFixture,
   csharpGenericAliasReceiverFixture,
 } from "../../helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_INHERITED_ALIAS_CALL_CASES,
+  csharpInheritedAliasCase,
+} from "../../helpers/csharp-inherited-alias-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
+const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "member" | "unresolved"): MatrixCell => {
+  const testCase = csharpInheritedAliasCase(caseName);
+  const base = {
+    id: `csharp/alias-${id}`,
+    language: "csharp" as const,
+    callForm: "imported-alias" as const,
+    files: testCase.files,
+    use: { file: "Use.cs", line: testCase.line, token: "Run" },
+    decoyKind: "callable" as const,
+    edge: { label: "calls" as const, fromFile: "Use.cs", fromName: "F" },
+  };
+  if (outcome === "alias") {
+    return {
+      ...base,
+      expected: { file: "N.cs", line: 1, token: "Run" },
+      decoy: { file: "Decoy.cs", line: 1, token: "Run" },
+    };
+  }
+  const decoy = { file: "N.cs", line: 1, token: "Run" };
+  if (outcome === "member") {
+    return { ...base, expected: { file: "Decoy.cs", line: 1, token: "Run" }, decoy };
+  }
+  return { ...base, expected: "not_found", decoy, decoyAmbiguous: true };
+};
+
 export const csharpCells: MatrixCell[] = [
+  // Enclosing project members precede aliases; external members are outside the index.
+  inheritedAliasCell("inherited field", "yields-to-inherited-field", "member"),
+  inheritedAliasCell("inherited field declared in another file", "yields-to-inherited-field-in-another-file", "member"),
+  inheritedAliasCell("external base class", "kept-beside-external-base", "alias"),
+  inheritedAliasCell("qualified project base", "kept-beside-empty-qualified-base", "alias"),
+  inheritedAliasCell("qualified project base field", "yields-to-qualified-base-field", "member"),
+  ...CSHARP_INHERITED_ALIAS_CALL_CASES.map(
+    (testCase): MatrixCell => ({
+      id: `csharp/alias-${testCase.name.replaceAll(" ", "-")}`,
+      language: "csharp",
+      callForm: "overload-arity",
+      files: testCase.files,
+      use: { file: "Use.cs", line: 2, token: "A" },
+      expected: testCase.outcome === "base" ? { file: "Base.cs", line: 2, token: "A" } : "not_found",
+      decoy: { file: "Mid.cs", line: 2, token: "A" },
+      decoyKind: "callable",
+      decoyAmbiguous: testCase.outcome === "unresolved",
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "F" },
+    }),
+  ),
+  inheritedAliasCell("private field of a base", "kept-beside-private-base-field", "alias"),
   ...CSHARP_GENERIC_ALIAS_CASES.map(({ alias, parameter, scope }): MatrixCell => {
     const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
     return {

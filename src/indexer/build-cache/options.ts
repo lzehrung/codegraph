@@ -114,8 +114,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 126 rebuilds Swift extension owner symbols, marked as owners instead of type declarations, and excludes
  * extension headers as type declarations. It also rebuilds Swift base-clause edges that follow typealiases and keep
  * protocol inheritance as `extends`.
+ * Epoch 127 rebuilds detailed graphs where a member of an enclosing C# type, or an unresolved base, binds a using alias's name.
  */
-export const CORE_ALGORITHM_EPOCH = 126;
+export const CORE_ALGORITHM_EPOCH = 127;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

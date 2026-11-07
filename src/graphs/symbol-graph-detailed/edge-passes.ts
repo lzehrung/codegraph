@@ -27,6 +27,7 @@ import {
 } from "../../indexer/navigation-goto.js";
 import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/navigation-local.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
+import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
@@ -1243,6 +1244,14 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (seenAliases.has(nameKey)) return;
+      if (tableDef && context.sup.id === "csharp" && csharpTypeOnlyName(node, true)) {
+        const target = context.resolveIdentifier(name, node);
+        if (target && declaresMembers(target)) {
+          seenAliases.add(nameKey);
+          recordDefEdge(context, fromId, target, "uses");
+        }
+        return;
+      }
       let positionedResolution: NameResolution | null | undefined;
       const kotlinExpression = context.sup.id === "kotlin" && node.parent?.type !== "user_type";
       if (tableDef && kotlinExpression) {

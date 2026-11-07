@@ -26,6 +26,7 @@ import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { csharpInheritedAliasCase } from "./helpers/csharp-inherited-alias-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   declarationImportTargets,
@@ -986,6 +987,43 @@ describe("warm module-cache builds never reuse import bindings resolved against 
       await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
+
+  for (const cache of ["disk", "memory"] as const) {
+    it(`re-answers a C# alias use when its base class gains or loses the member that hides the alias (${cache} cache)`, async () => {
+      const root = await mkTmpDir(`cg-module-cache-inherited-alias-${cache}-`);
+      try {
+        const testCase = csharpInheritedAliasCase("inherited field declared in another file");
+        const baseWithMember = testCase.files["Base.cs"]!;
+        for (const [name, source] of Object.entries(testCase.files)) {
+          await fsp.writeFile(path.join(root, name), name === "Base.cs" ? "class Base { }\n" : source, "utf8");
+        }
+        const use = path.join(root, "Use.cs");
+        const column = columnOf(testCase.lines, testCase.line, "Run");
+        const answer = async (index: ProjectIndex): Promise<string> => {
+          const result = await goToDefinition(index, { file: use, line: testCase.line, column });
+          return result.status === "ok" ? path.basename(result.definition.file) : result.status;
+        };
+        expect(await answer(await buildProjectIndex(root, { cache }))).toBe("N.cs");
+        // Use.cs does not change; its base class now declares a field named like the alias.
+        await fsp.writeFile(path.join(root, "Base.cs"), baseWithMember, "utf8");
+        const hidden = await buildProjectIndex(root, { cache });
+        expect(await answer(hidden)).toBe("Decoy.cs");
+        expect(await answer(await buildProjectIndex(root, { cache: "off" }))).toBe("Decoy.cs");
+        const graph = await buildSymbolGraphDetailed(hidden);
+        const runCallFiles = graph.edges.flatMap((edge) => {
+          const to = graph.nodes.get(edge.to);
+          return edge.label === "calls" && to?.name === "Run" ? [path.basename(to.file)] : [];
+        });
+        expect(runCallFiles).toEqual(["Decoy.cs"]);
+        // Removing the field restores the alias, as a cold build agrees.
+        await fsp.writeFile(path.join(root, "Base.cs"), "class Base { }\n", "utf8");
+        expect(await answer(await buildProjectIndex(root, { cache }))).toBe("N.cs");
+        expect(await answer(await buildProjectIndex(root, { cache: "off" }))).toBe("N.cs");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("rebinds a C# using directive when the only declaring file is renamed (disk cache)", async () => {
     const root = await mkTmpDir("cg-module-cache-csharp-rename-");
