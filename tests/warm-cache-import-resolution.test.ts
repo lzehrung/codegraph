@@ -1859,3 +1859,162 @@ describe("removed duplicate declarations resolve cached ambiguous imports", () =
     },
   );
 });
+
+/** What an importer binds and whether its lookups were complete, with every path relative to the root. */
+function jvmImporterState(index: ProjectIndex, root: string, importer: string): unknown {
+  const mod = index.byFile.get(fileIdentityKey(path.join(root, importer)));
+  if (!mod) throw new Error(`missing module ${importer}`);
+  return {
+    targets: mod.imports.map((binding) =>
+      typeof binding.resolved === "string" ? normalizePath(path.relative(root, binding.resolved)) : binding.resolved,
+    ),
+    parserDegraded: !!mod.parserDegraded,
+    importLookupIncomplete: !!mod.importLookupIncomplete,
+    edges: edgeTargets(index, path.join(root, importer)).map((edge) => edge.replace(normalizePath(root), "")),
+  };
+}
+
+describe("Java and Kotlin declaration changes match a cold build after an incremental update", () => {
+  /** Applies each step (a null body deletes the file) and compares every importer with a cold build after it. */
+  async function expectStepsMatchColdBuilds(
+    cache: "disk" | "memory",
+    files: Record<string, string>,
+    steps: Array<Record<string, string | null>>,
+    importers: string[],
+    beforeStep?: (root: string, cacheDir: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await mkTmpDir("cg-jvm-declaration-parity-");
+    const cacheDir = await mkTmpDir("cg-jvm-declaration-parity-cache-");
+    const build = { cache, cacheDir, threads: 1 } as const;
+    try {
+      await writeFixtureFiles(root, files);
+      await buildProjectIndex(root, build);
+      for (const step of steps) {
+        await beforeStep?.(root, cacheDir);
+        for (const [name, text] of Object.entries(step)) {
+          if (text === null) await fsp.rm(path.join(root, name));
+          else await writeFixtureFiles(root, { [name]: text });
+        }
+        const incremental = await buildProjectIndexIncremental(root, build);
+        const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        for (const importer of importers) {
+          expect(jvmImporterState(incremental, root, importer)).toEqual(jvmImporterState(cold, root, importer));
+        }
+      }
+    } finally {
+      closeDiskCacheDatabase(root, build);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  }
+
+  const caches = ["disk", "memory"] as const;
+
+  // A top-level syntax error leaves a file incomplete: it may declare any name of its package. Its names do not
+  // change, so only its certainty tells an importer of that package to look again.
+  it.each(caches)(
+    "marks a Kotlin importer incomplete when a file of its package gains a syntax error, and complete when it is fixed (%s)",
+    async (cache) => {
+      await expectStepsMatchColdBuilds(
+        cache,
+        {
+          "a/A.kt": "package lib\nclass G\n",
+          "b/B.kt": "package lib\nclass H\n",
+          "u/Resolved.kt": "package app\nimport lib.G\nfun f() {}\n",
+          "u/Missing.kt": "package app\nimport lib.Missing\nfun g() {}\n",
+          "u/Wildcard.kt": "package app\nimport lib.*\nfun h() {}\n",
+          "u/Other.kt": "package app\nimport elsewhere.Thing\nfun i() {}\n",
+        },
+        [{ "b/B.kt": "package lib\nclass H\n}\n" }, { "b/B.kt": "package lib\nclass H\n" }],
+        ["u/Resolved.kt", "u/Missing.kt", "u/Wildcard.kt", "u/Other.kt"],
+      );
+    },
+  );
+
+  it.each(caches)(
+    "resolves a Java import through an incomplete file that is named for the type, and again when it is fixed (%s)",
+    async (cache) => {
+      await expectStepsMatchColdBuilds(
+        cache,
+        {
+          "b/B.java": "package lib;\n",
+          "u/U.java": "package app;\nimport lib.B;\nclass U {}\n",
+        },
+        [{ "b/B.java": "package lib;\n}\n" }, { "b/B.java": "package lib;\n" }],
+        ["u/U.java"],
+      );
+    },
+  );
+
+  it.each(caches)(
+    "moves importers when a file whose package cannot be read gains and loses a syntax error (%s)",
+    async (cache) => {
+      await expectStepsMatchColdBuilds(
+        cache,
+        {
+          "a/A.kt": "package lib\nclass G\n",
+          "b/B.kt": "class H\n",
+          "u/U.kt": "package app\nimport lib.G\nfun f() {}\n",
+        },
+        [{ "b/B.kt": "class H\n}\n" }, { "b/B.kt": "class H\n" }],
+        ["u/U.kt"],
+      );
+    },
+  );
+
+  it.each(caches)("marks importers incomplete when an incomplete file is added or deleted (%s)", async (cache) => {
+    await expectStepsMatchColdBuilds(
+      cache,
+      {
+        "a/A.kt": "package lib\nclass G\n",
+        "u/U.kt": "package app\nimport lib.G\nfun f() {}\n",
+      },
+      [{ "b/B.kt": "package lib\n}\n" }, { "b/B.kt": null }],
+      ["u/U.kt"],
+    );
+  });
+
+  // Java and Kotlin declarations are one group: deleting either duplicate lets an importer in either language bind
+  // the survivor.
+  it.each(caches)("binds the survivor of a Java and Kotlin duplicate deleted from either side (%s)", async (cache) => {
+    const files = {
+      "a/A.java": "package lib;\npublic class G {}\n",
+      "b/B.kt": "package lib\nclass G\n",
+      "u/FromKotlin.kt": "package app\nimport lib.G\nfun f() {}\n",
+      "u/FromJava.java": "package app;\nimport lib.G;\nclass U {}\n",
+    };
+    await expectStepsMatchColdBuilds(cache, files, [{ "a/A.java": null }], ["u/FromKotlin.kt", "u/FromJava.java"]);
+    await expectStepsMatchColdBuilds(cache, files, [{ "b/B.kt": null }], ["u/FromKotlin.kt", "u/FromJava.java"]);
+  });
+
+  // The cached module of a deleted file can be missing. Nothing then names what the file declared, so every
+  // unresolved import of its language re-resolves.
+  it.each(["java", "kotlin"] as const)(
+    "binds the survivor of a %s duplicate that is deleted without a cached module",
+    async (language) => {
+      const ext = language === "java" ? "java" : "kt";
+      const declarer = language === "java" ? "package lib;\npublic class G {}\n" : "package lib\nclass G\n";
+      const importer =
+        language === "java" ? "package app;\nimport lib.G;\nclass U {}\n" : "package app\nimport lib.G\nfun f() {}\n";
+      await expectStepsMatchColdBuilds(
+        "disk",
+        { [`a/A.${ext}`]: declarer, [`b/B.${ext}`]: declarer, [`u/U.${ext}`]: importer },
+        [{ [`b/B.${ext}`]: null }],
+        [`u/U.${ext}`],
+        async (root, cacheDir) => {
+          const opts = { cache: "disk" as const, cacheDir };
+          closeDiskCacheDatabase(root, opts);
+          const db = new DatabaseSync(cacheDatabasePath(root, opts, "index-cache.sqlite"));
+          try {
+            const removed = db
+              .prepare("DELETE FROM module_cache WHERE file = ?")
+              .run(cacheRelativePath(root, path.join(root, `b/B.${ext}`)));
+            expect(Number(removed.changes)).toBe(1);
+          } finally {
+            db.close();
+          }
+        },
+      );
+    },
+  );
+});

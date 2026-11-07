@@ -655,6 +655,25 @@ describe("declaration import rechecks are bounded by changed declaration names",
     await expectSameAsColdBuild(root, index);
   });
 
+  it("does no importer recheck after a body-only Kotlin edit of a declarer", async () => {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 40; index += 1) {
+      files[`units/U${index}.kt`] = `package units\nimport kotlin.collections.List\nclass U${index}\n`;
+    }
+    const root = await indexedProject({
+      ...files,
+      "lib/Gadget.kt": "package lib\nclass Gadget { fun run() = 1 }\n",
+      "app/Use.kt": "package app\nimport missing.Gadget\nfun use(value: Gadget): Gadget = value\n",
+    });
+    const recheck = vi.spyOn(publicSurface, "declarationImportRecheck");
+    await fsp.writeFile(path.join(root, "lib/Gadget.kt"), "package lib\nclass Gadget { fun run() = 2 }\n", "utf8");
+    const { index, extracted } = await update(root);
+    expect(extracted).toEqual(["lib/Gadget.kt"]);
+    expect(recheck).not.toHaveBeenCalled();
+    recheck.mockRestore();
+    await expectSameAsColdBuild(root, index);
+  });
+
   describe("PHP", () => {
     const phpExternalImportFiles = (): Record<string, string> => {
       const files: Record<string, string> = {};
@@ -779,9 +798,17 @@ describe("declaration name changes and import recheck decisions", () => {
     if (!found) throw new Error(`missing ${languageId} support`);
     return found;
   };
-  const changes = (added: string[] = [], removed: string[] = []): DeclarationNameChanges => ({
+  const changes = (
+    added: string[] = [],
+    removed: string[] = [],
+    extra: Partial<DeclarationNameChanges> = {},
+  ): DeclarationNameChanges => ({
     added: new Set(added),
     removed: new Set(removed),
+    uncertainPackages: new Set(),
+    uncertainAnyPackage: false,
+    unknownRemoval: false,
+    ...extra,
   });
   const named = (from: string, imported: string, resolved?: string): ImportBinding => ({
     kind: "named",
@@ -795,12 +822,17 @@ describe("declaration name changes and import recheck decisions", () => {
     from,
     ...(resolved ? { resolved } : {}),
   });
-  const kotlinModule = (file: string, symbols: string[], packageName = "lib"): ModuleIndex => ({
+  const kotlinModule = (
+    file: string,
+    symbols: string[],
+    packageName: string | null = "lib",
+    incomplete = false,
+  ): ModuleIndex => ({
     file,
     exports: [],
     imports: [],
     locals: [],
-    jvmFacts: { packageName, symbols },
+    jvmFacts: { packageName, symbols, ...(incomplete ? { incomplete: true as const } : {}) },
   });
   const phpModule = (identities: string[], flags: Partial<ModuleIndex> = {}): ModuleIndex => ({
     file: "/p/decl/Thing.php",
@@ -816,24 +848,20 @@ describe("declaration name changes and import recheck decisions", () => {
     const before = kotlinModule("/p/Second.kt", ["Gadget"]);
     expect(declarationNameChanges(before, kotlinModule("/p/Second.kt", ["Gadget"]), kotlin, "/p")).toBeUndefined();
     const renamed = declarationNameChanges(before, kotlinModule("/p/Second.kt", ["Different"]), kotlin, "/p");
-    expect(renamed).toEqual({
-      added: new Set(["Different", "lib.Different"]),
-      removed: new Set(["Gadget", "lib.Gadget"]),
-    });
+    expect(renamed).toEqual(changes(["Different", "lib.Different"], ["Gadget", "lib.Gadget"]));
     // Without the previous module every current name is new and no removal is known.
-    expect(declarationNameChanges(undefined, kotlinModule("/p/Second.kt", ["Gadget"]), kotlin, "/p")).toEqual({
-      added: new Set(["lib", "Gadget", "lib.Gadget"]),
-      removed: new Set(),
-    });
+    expect(declarationNameChanges(undefined, kotlinModule("/p/Second.kt", ["Gadget"]), kotlin, "/p")).toEqual(
+      changes(["lib", "Gadget", "lib.Gadget"]),
+    );
   });
 
   it("names everything a deleted declaration file declared, and nothing without its module", () => {
     const kotlin = support("kotlin");
-    expect(deletedDeclarationNameChanges(kotlinModule("/p/Second.kt", ["Gadget"]), kotlin)).toEqual({
-      added: new Set(),
-      removed: new Set(["lib", "Gadget", "lib.Gadget"]),
-    });
-    expect(deletedDeclarationNameChanges(undefined, kotlin)).toEqual({ added: new Set(), removed: new Set() });
+    expect(deletedDeclarationNameChanges(kotlinModule("/p/Second.kt", ["Gadget"]), kotlin)).toEqual(
+      changes([], ["lib", "Gadget", "lib.Gadget"]),
+    );
+    // Without its module nothing it declared is known, so any unresolved binding of the language can resolve.
+    expect(deletedDeclarationNameChanges(undefined, kotlin)).toEqual(changes([], [], { unknownRemoval: true }));
   });
 
   it("resolves an unresolved binding again only when a changed name can be its own", () => {
@@ -843,6 +871,77 @@ describe("declaration name changes and import recheck decisions", () => {
     expect(declarationImportRecheck(unresolved, kotlin, changes(["lib.Gadget"]))).toBe("resolve");
     expect(declarationImportRecheck(unresolved, kotlin, changes([], ["lib.Widget", "Widget"]))).toBe("none");
     expect(declarationImportRecheck(unresolved, kotlin, changes())).toBe("none");
+  });
+
+  it("tracks whether JVM declarations are certain in both directions, per package", () => {
+    const kotlin = support("kotlin");
+    const known = kotlinModule("/p/B.kt", ["H"]);
+    const broken = kotlinModule("/p/B.kt", ["H"], "lib", true);
+    // The names never change, so the certainty alone reports the package.
+    expect(declarationNameChanges(known, broken, kotlin, "/p")).toEqual(
+      changes([], [], { uncertainPackages: new Set(["lib"]) }),
+    );
+    expect(declarationNameChanges(broken, known, kotlin, "/p")).toEqual(
+      changes([], [], { uncertainPackages: new Set(["lib"]) }),
+    );
+    // A file that stays incomplete in one package changes no certainty.
+    expect(declarationNameChanges(broken, kotlinModule("/p/B.kt", ["H"], "lib", true), kotlin, "/p")).toBeUndefined();
+    // Moving while incomplete names both packages.
+    expect(declarationNameChanges(broken, kotlinModule("/p/B.kt", ["H"], "lib2", true), kotlin, "/p")).toMatchObject({
+      uncertainPackages: new Set(["lib", "lib2"]),
+    });
+    // An added or deleted incomplete file names its package; a complete one adds no certainty.
+    expect(declarationNameChanges(undefined, broken, kotlin, "/p")).toMatchObject({
+      uncertainPackages: new Set(["lib"]),
+    });
+    expect(deletedDeclarationNameChanges(broken, kotlin)).toMatchObject({ uncertainPackages: new Set(["lib"]) });
+    expect(deletedDeclarationNameChanges(known, kotlin).uncertainPackages.size).toBe(0);
+    // An incomplete file whose package clause was lost may belong to any package.
+    expect(declarationNameChanges(known, kotlinModule("/p/B.kt", ["H"], null, true), kotlin, "/p")).toMatchObject({
+      uncertainAnyPackage: true,
+    });
+    // Other languages never record JVM certainty.
+    expect(declarationNameChanges(known, broken, support("csharp"), "/p")?.uncertainPackages.size ?? 0).toBe(0);
+  });
+
+  it("extracts a JVM binding again, resolved or not, only when it names the package that changed certainty", () => {
+    const kotlin = support("kotlin");
+    const uncertain = changes([], [], { uncertainPackages: new Set(["lib"]) });
+    for (const binding of [
+      named("lib.Gadget", "Gadget"),
+      named("lib.Gadget", "Gadget", "/p/First.kt"),
+      named("lib.Outer.Inner", "Inner", "/p/First.kt"),
+      star("lib"),
+      star("lib", "/p/First.kt"),
+    ]) {
+      expect(declarationImportRecheck(binding, kotlin, uncertain)).toBe("reextract");
+      expect(declarationImportRecheck(binding, support("java"), uncertain)).toBe("reextract");
+    }
+    for (const binding of [
+      named("lib2.Gadget", "Gadget", "/p/First.kt"),
+      named("library.Gadget", "Gadget"),
+      named("other.lib.Gadget", "Gadget"),
+    ]) {
+      expect(declarationImportRecheck(binding, kotlin, uncertain)).toBe("none");
+    }
+    // A file of unknown package may be in any package.
+    const anywhere = changes([], [], { uncertainAnyPackage: true });
+    expect(declarationImportRecheck(named("elsewhere.Thing", "Thing", "/p/First.kt"), kotlin, anywhere)).toBe(
+      "reextract",
+    );
+    expect(declarationImportRecheck(named("elsewhere.Thing", "Thing"), kotlin, anywhere)).toBe("reextract");
+    // C# never reads JVM certainty.
+    expect(declarationImportRecheck(named("lib.Gadget", "Gadget"), support("csharp"), uncertain)).toBe("none");
+  });
+
+  it("re-resolves every unresolved binding, and no resolved one, when a deleted file left no record of its names", () => {
+    const unknown = changes([], [], { unknownRemoval: true });
+    for (const languageId of ["kotlin", "java", "csharp"]) {
+      expect(declarationImportRecheck(named("missing.Gadget", "Gadget"), support(languageId), unknown)).toBe("resolve");
+      expect(declarationImportRecheck(named("lib.Gadget", "Gadget", "/p/First"), support(languageId), unknown)).toBe(
+        "none",
+      );
+    }
   });
 
   it("extracts a resolved binding again only for an added declaration of its exact name", () => {
@@ -879,10 +978,7 @@ describe("declaration name changes and import recheck decisions", () => {
     // A namespace-only move changes qualified names, prefixes, and packages while the class keeps its spelling.
     expect(
       declarationNameChanges(phpModule(["class:lib2\\gadget", "namespace:lib2"]), phpModule(gadget), php, "/p"),
-    ).toEqual({
-      added: new Set(["lib\\gadget", "lib"]),
-      removed: new Set(["lib2\\gadget", "lib2"]),
-    });
+    ).toEqual(changes(["lib\\gadget", "lib"], ["lib2\\gadget", "lib2"]));
     // `Lib\Sub` to `Lib` adds no namespace identity for `Lib`, because it was already a prefix. `Lib` now holds the
     // class, so it is added as a package.
     expect(
@@ -892,44 +988,28 @@ describe("declaration name changes and import recheck decisions", () => {
         php,
         "/p",
       ),
-    ).toEqual({
-      added: new Set(["lib\\gadget", "lib"]),
-      removed: new Set(["lib\\sub\\gadget", "lib\\sub"]),
-    });
+    ).toEqual(changes(["lib\\gadget", "lib"], ["lib\\sub\\gadget", "lib\\sub"]));
     // A class that becomes a function of the same name changes both roles.
     expect(
       declarationNameChanges(phpModule(gadget), phpModule(["function:lib\\gadget", "namespace:lib"]), php, "/p"),
-    ).toEqual({ added: new Set(["lib\\gadget"]), removed: new Set(["lib\\gadget"]) });
+    ).toEqual(changes(["lib\\gadget"], ["lib\\gadget"]));
     // A new file adds every name and removes none.
-    expect(declarationNameChanges(undefined, phpModule(gadget), php, "/p")).toEqual({
-      added: new Set(["lib\\gadget", "lib"]),
-      removed: new Set(),
-    });
+    expect(declarationNameChanges(undefined, phpModule(gadget), php, "/p")).toEqual(changes(["lib\\gadget", "lib"]));
   });
 
   it("tracks whether PHP declarations are certain in both directions, including legacy rows", () => {
     const php = support("php");
     const gadget = ["class:lib\\gadget", "namespace:lib"];
     const broken = phpModule([...gadget, "incomplete:"]);
-    expect(declarationNameChanges(phpModule(gadget), broken, php, "/p")).toEqual({
-      added: new Set(["incomplete:"]),
-      removed: new Set(),
-    });
-    expect(declarationNameChanges(broken, phpModule(gadget), php, "/p")).toEqual({
-      added: new Set(),
-      removed: new Set(["incomplete:"]),
-    });
+    expect(declarationNameChanges(phpModule(gadget), broken, php, "/p")).toEqual(changes(["incomplete:"]));
+    expect(declarationNameChanges(broken, phpModule(gadget), php, "/p")).toEqual(changes([], ["incomplete:"]));
     // A row cached without the marker still counts as incomplete through its parse diagnostics.
     expect(declarationNameChanges(phpModule(gadget, { parserDegraded: true }), broken, php, "/p")).toBeUndefined();
-    expect(declarationNameChanges(phpModule(gadget, { parseErrorRanges: [] }), broken, php, "/p")).toEqual({
-      added: new Set(["incomplete:"]),
-      removed: new Set(),
-    });
+    expect(declarationNameChanges(phpModule(gadget, { parseErrorRanges: [] }), broken, php, "/p")).toEqual(
+      changes(["incomplete:"]),
+    );
     // A deleted file stops declaring every name it declared, its uncertainty included.
-    expect(deletedDeclarationNameChanges(broken, php)).toEqual({
-      added: new Set(),
-      removed: new Set(["lib\\gadget", "lib", "incomplete:"]),
-    });
+    expect(deletedDeclarationNameChanges(broken, php)).toEqual(changes([], ["lib\\gadget", "lib", "incomplete:"]));
   });
 
   it("rechecks PHP bindings by qualified name and package, and re-resolves every unresolved one on a certainty change", () => {

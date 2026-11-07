@@ -1554,7 +1554,7 @@ async function collectStaleCachedModules(args: {
       if (deleted.languageId === "cpp" && deleted.mod && deleted.mod.declaredContainers) {
         mergeDeclaredContainers(cppPrevious, deleted.file, deleted.mod.declaredContainers);
       } else {
-        unknownDeclarationLanguages.add(deleted.languageId);
+        unknownDeclarationLanguages.add(declarationLanguageGroup(deleted.languageId));
       }
     }
     // Some previous declarations are unknown when a payload was evicted,
@@ -1563,20 +1563,22 @@ async function collectStaleCachedModules(args: {
     // This is rare: eviction starts past the cache limit, where builds miss the cache anyway.
     const unknownDeclarationHistory = new Set<string>();
     if ((args.opts?.cache ?? "off") === "memory" && memoryCacheLostPayloads(args.projectRoot)) {
-      for (const languageId of DECLARATION_RESOLVED_IMPORT_LANGUAGES) unknownDeclarationHistory.add(languageId);
+      for (const languageId of DECLARATION_RESOLVED_IMPORT_LANGUAGES) {
+        unknownDeclarationHistory.add(declarationLanguageGroup(languageId));
+      }
     }
     // An unmapped `.h` file is C or C++ by its content, so classify with `supportForFile`.
     for (const file of args.previousUnavailable) {
       const languageId = supportForFile(file, args.opts?.languageExtensions)?.id;
       if (languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId)) {
-        unknownDeclarationHistory.add(languageId);
+        unknownDeclarationHistory.add(declarationLanguageGroup(languageId));
       }
     }
     if (unknownDeclarationHistory.size) {
       for (const [file, { mod }] of cachedModules) {
         if (stale.has(file) || !mod.imports.length) continue;
         const languageId = supportForFile(file, args.opts?.languageExtensions)?.id ?? "";
-        if (unknownDeclarationHistory.has(languageId)) stale.add(file);
+        if (unknownDeclarationHistory.has(declarationLanguageGroup(languageId))) stale.add(file);
       }
     }
     const cppAdded = added.filter(
@@ -1604,7 +1606,8 @@ async function collectStaleCachedModules(args: {
         }
         if (unknownDeclarationLanguages.size) {
           const languageId = supportForFile(file, args.opts?.languageExtensions)?.id ?? "default";
-          if (unknownDeclarationLanguages.has(languageId) && cachedModuleHasExternalImport(mod)) stale.add(file);
+          const group = declarationLanguageGroup(languageId);
+          if (unknownDeclarationLanguages.has(group) && cachedModuleHasExternalImport(mod)) stale.add(file);
         }
       }
     }
