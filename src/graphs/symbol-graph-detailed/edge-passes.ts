@@ -1172,8 +1172,8 @@ export async function emitFunctionBodyEdges(
         if (resolved?.kind === "resolved") recordDefEdge(context, fromId, resolved.def, "uses");
         return;
       }
-      if (seenAliases.has(name)) return;
       const nameKey = context.aliasKey(name);
+      if (seenAliases.has(nameKey)) return;
       const tableDef = context.aliasToTargetDef.get(nameKey);
       let target: SymbolDef | null = tableDef && context.aliasTableAnswers(name, node) ? tableDef : null;
       if (!target) {
@@ -1200,7 +1200,7 @@ export async function emitFunctionBodyEdges(
         }
       }
       if (!target) return;
-      seenAliases.add(name);
+      seenAliases.add(nameKey);
       recordDefEdge(context, fromId, target, "uses");
     };
 

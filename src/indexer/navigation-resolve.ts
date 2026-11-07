@@ -4,7 +4,12 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
-import { foldPhpIdentifierCase, normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../util/identifiers.js";
+import {
+  foldPhpIdentifierCase,
+  normalizeCsharpIdentifier,
+  normalizeCsharpQualifiedName,
+  normalizeKotlinIdentifier,
+} from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
   csharpNamespaceAt,
@@ -1153,7 +1158,9 @@ export function resolveImported(
   // The alias names one namespace, and that qualified name is what every consumer resolves.
   const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
   if (support?.id === "csharp" && csharpShadowedImports(index).has(imp)) return null;
-  const lookupName = support?.id === "csharp" ? csharpImportLookupName(imp, exportedName) : exportedName;
+  let lookupName = exportedName;
+  if (support?.id === "csharp") lookupName = csharpImportLookupName(imp, exportedName);
+  else if (support?.id === "java" || support?.id === "kotlin") lookupName = normalizeKotlinIdentifier(exportedName);
   if (support?.id === "csharp" && imp.kind === "star" && !imp.staticMembersOf) {
     return resolveCsharpNamespaceImport(index, imp, targetFile, lookupName, {
       ...opts,
@@ -1180,7 +1187,7 @@ export function resolveImported(
 
   // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
   if (support?.id === "java" || support?.id === "kotlin") {
-    const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName);
+    const siblingHit = resolveSiblingPackageExport(index, targetFile, lookupName);
     if (siblingHit?.kind === "resolved") {
       if (imp.kind === "named" && siblingHit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
       return siblingHit.def;

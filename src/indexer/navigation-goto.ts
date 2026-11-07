@@ -4,7 +4,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
-import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import {
   csharpNamespaceAtIndex,
   csharpNamespaceRegionAtIndex,
@@ -781,10 +781,13 @@ function resolveJvmPackageSymbol(
     const targetLanguage = supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.id;
     if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
     if (getPackageDeclarationName(index, candidate.file, targetLanguage) !== packageName) continue;
+    const targetNormalize =
+      supportForFileWithoutHeaderSample(candidate.file, index.languageExtensions)?.normalizeIdentifier ??
+      ((name: string) => name);
     for (const entry of candidate.exports) {
       if (
         entry.type !== "local" ||
-        entry.exportedAs !== symbolName ||
+        targetNormalize(entry.exportedAs) !== targetNormalize(normalizeKotlinIdentifier(symbolName)) ||
         entry.target.isMember ||
         !isJvmPackageSymbolVisible(entry.target, targetLanguage, languageId, samePackage)
       )
@@ -815,7 +818,13 @@ function resolveJvmPackageExpression(
   if (!chain || !isReceiverNameNode(sup, chain.base.type) || resolveLexicalBinding?.(chain.base)) return null;
   const parts = [sliceText(chain.base, source), ...chain.names.toReversed()];
   const member = parts.pop();
-  if (!member || !parts.every((part) => /^[\p{L}_][\p{L}\p{N}_]*$/u.test(part))) return null;
+  if (!member) return null;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
+    const quoted = sup.id === "kotlin" && part.length >= 2 && part.startsWith("`") && part.endsWith("`");
+    if (!quoted && !/^[\p{L}_][\p{L}\p{N}_]*$/u.test(part)) return null;
+    if (quoted) parts[index] = normalizeKotlinIdentifier(part);
+  }
   const target = resolveJvmPackageSymbol(index, parts.join("."), member, sup.id, useFile);
   return target ? { kind: "resolved", def: target } : null;
 }
