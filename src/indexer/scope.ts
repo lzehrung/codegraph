@@ -22,6 +22,7 @@ import {
   scopeAllowsUse,
   scopeIdentifierKey,
   scopeNodesFor,
+  typeOnlyName,
   type ScopeNodeRow,
 } from "./scope-nodes.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -499,6 +500,7 @@ export function buildScopeIndexFromSource(
     const canonicalName =
       support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     const methodCall = !!node && isExplicitMethodCall(row, node);
+    const typeOnly = !!node && typeOnlyName(support.id, node);
     for (let index = stack.length - 1; index >= 0; index--) {
       const scope = stack[index]!;
       if (node && !scopeAllowsUse(row, scope, node)) continue;
@@ -508,10 +510,17 @@ export function buildScopeIndexFromSource(
           hit = hit.earlierSameScope;
         }
       }
-      while (methodCall && hit?.kind === "local") hit = hit.earlierSameScope;
+      while (hit) {
+        const wrongNamespace =
+          (methodCall && hit.kind === "local") ||
+          (typeOnly && (hit.kind === "local" || hit.kind === "param" || hit.kind === "function"));
+        if (!wrongNamespace) break;
+        hit = hit.earlierSameScope;
+      }
       if (hit) return hit;
       if (
         node &&
+        !typeOnly &&
         row.moduleBindingsAtFunctionRuntime &&
         laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, node)
       ) {
@@ -524,7 +533,13 @@ export function buildScopeIndexFromSource(
         root = root.earlierSameScope;
       }
     }
-    while (methodCall && root?.kind === "local") root = root.earlierSameScope;
+    while (root) {
+      const wrongNamespace =
+        (methodCall && root.kind === "local") ||
+        (typeOnly && (root.kind === "local" || root.kind === "param" || root.kind === "function"));
+      if (!wrongNamespace) break;
+      root = root.earlierSameScope;
+    }
     return root;
   };
 
@@ -594,6 +609,17 @@ export function buildScopeIndexFromSource(
     }
     // Parameter type and default-value fields are reads, not additional bound names.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
+      const nameNode = pattern.childForFieldName("name");
+      if (support.id === "csharp" && nameNode) {
+        addPatternDecls(nameNode, kind, addBindingToScope);
+        // C# defaults have no value field: every named child other than the name is a read.
+        const functionScope = kind === "param" ? stack.pop() : undefined;
+        for (const child of pattern.namedChildren) {
+          if (child.id !== nameNode.id) walk(child);
+        }
+        if (functionScope) stack.push(functionScope);
+        return;
+      }
       const typeNode = pattern.childForFieldName("type");
       const readsEagerDefault = kind === "param" && !!row.moduleBindingsAtFunctionRuntime;
       const valueNode = readsEagerDefault ? pattern.childForFieldName("value") : null;
@@ -1154,11 +1180,8 @@ export function buildScopeIndexFromSource(
         }
       }
     } else if (row.typeScopeTypes?.has(node.type)) {
-      // Go generic type declarations idiomatically reuse `T` as the type-parameter
-      // name across sibling `type` declarations in the same file. Give each
-      // `type_spec` its own scope so its type parameter doesn't collide with a
-      // sibling's; `addDeclSkippingTypeScope` below keeps field names out of
-      // it so they stay visible file-wide, as before.
+      // A generic type's parameters belong to its own declaration, not a sibling declaration.
+      // Fields retain their existing scope through `addDeclSkippingTypeScope` below.
       const scope: Scope = {
         kind: "type",
         map: new Map(),
@@ -1207,10 +1230,8 @@ export function buildScopeIndexFromSource(
     }
 
     if (row.typeParameterTypes?.has(node.type)) {
-      // Go and C++ generic type parameter, e.g. the `T` in `Box[T any]` / `func F[T any]`. Targets
-      // the current scope directly (the `type_spec` scope pushed above, or the enclosing
-      // function's own scope for a generic function) rather than skipping past it like field
-      // declarations do.
+      // Generic type parameters bind in the current type or function scope rather than
+      // skipping past it like field declarations do.
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
     }

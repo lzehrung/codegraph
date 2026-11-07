@@ -4,11 +4,39 @@ import {
   JVM_QUALIFIED_REVIEW_CASES,
   KOTLIN_QUALIFIED_TYPE_SOURCES,
 } from "../../helpers/qualified-type-import-fixture.js";
+import { KOTLIN_QUOTED_SCOPE_FILES, KOTLIN_QUOTED_SCOPE_SOURCES } from "../../helpers/kotlin-quoted-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const kotlinOmissions: readonly CallFormOmission[] = [];
 
 export const kotlinCells: MatrixCell[] = [
+  ...[
+    { spelling: "quoted-binding", caller: "quotedParameter", line: 2 },
+    { spelling: "quoted-receiver", caller: "plainParameter", line: 3 },
+  ].map(
+    ({ spelling, caller, line }): MatrixCell => ({
+      id: `kotlin/typed-receiver-${spelling}`,
+      language: "kotlin",
+      callForm: "typed-local-receiver",
+      files: KOTLIN_QUOTED_SCOPE_SOURCES,
+      use: { file: KOTLIN_QUOTED_SCOPE_FILES.receivers, line, token: "work" },
+      expected: { file: KOTLIN_QUOTED_SCOPE_FILES.value, line: 2, token: "work" },
+      decoy: { file: KOTLIN_QUOTED_SCOPE_FILES.gadget, line: 2, token: "work" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: KOTLIN_QUOTED_SCOPE_FILES.receivers, fromName: caller },
+    }),
+  ),
+  {
+    id: "kotlin/inherited-member-before-alias",
+    language: "kotlin",
+    callForm: "imported-alias",
+    files: KOTLIN_QUOTED_SCOPE_SOURCES,
+    use: { file: KOTLIN_QUOTED_SCOPE_FILES.aliases, line: 5, token: "mark()" },
+    expected: { file: KOTLIN_QUOTED_SCOPE_FILES.aliases, line: 4, token: "mark" },
+    decoy: { file: KOTLIN_QUOTED_SCOPE_FILES.api, line: 3, token: "go" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: KOTLIN_QUOTED_SCOPE_FILES.aliases, fromName: "inherited" },
+  },
   {
     id: "kotlin/bare-call",
     language: "kotlin",

@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import {
+  buildProjectIndex,
   buildProjectIndexFromFiles,
   buildSymbolGraphDetailed,
   goToDefinition,
@@ -32,11 +33,18 @@ import {
   KOTLIN_QUOTED_FILES,
   KOTLIN_QUOTED_LINES,
   KOTLIN_QUOTED_SOURCES,
+  KOTLIN_QUOTED_SCOPE_FILES,
+  KOTLIN_QUOTED_SCOPE_LINES,
+  KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
-import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
+import {
+  JVM_QUALIFIED_REVIEW_CASES,
+  JVM_VALUE_SHADOW_CASES,
+  QUALIFIED_TYPE_CASES,
+} from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -51,17 +59,93 @@ import {
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpAliasCallFixture,
+  csharpGenericAliasReceiverFixture,
+} from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
+import {
+  CSHARP_SCOPE_READ_FILES,
+  CSHARP_SCOPE_READ_LINES,
+  KOTLIN_TYPE_VALUE_FILES,
+  KOTLIN_TYPE_VALUE_LINES,
+  KOTLIN_TYPE_VALUE_TYPE_LINES,
+} from "./helpers/scope-binding-read-fixtures.js";
 
 describe("Go to Definition", () => {
+  it("separates C# declaration headers from default reads and restores aliases after loop and catch scopes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-header-goto-"));
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [line, token, target, declaration] of [
+        [8, "Ping", "Second.cs", 1],
+        [12, "Ping", "Second.cs", 1],
+        [14, "K", "Use.cs", 3],
+        [15, "Match", "Use.cs", 4],
+        [18, "Run", "Second.cs", 1],
+        [21, "Rows", "Second.cs", 1],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnInLines(CSHARP_SCOPE_READ_LINES, line, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files[target]);
+          expect(result.definition.range.start.line).toBe(declaration);
+        }
+      }
+      for (const line of [17, 21, 25]) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnInLines(CSHARP_SCOPE_READ_LINES, line, "Run"),
+        });
+        expect(result.status).toBe("not_found");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("looks through Kotlin value bindings only for user types", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-value-goto-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_VALUE_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const line of KOTLIN_TYPE_VALUE_TYPE_LINES) {
+        const result = await goToDefinition(index, {
+          file: files["Use.kt"]!,
+          line,
+          column: KOTLIN_TYPE_VALUE_LINES[line - 1]!.lastIndexOf("Widget") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Api.kt"]);
+      }
+      const value = await goToDefinition(index, { file: files["Use.kt"]!, line: 6, column: 10 });
+      expect(value.status).toBe("ok");
+      if (value.status === "ok") {
+        expect(value.definition.file).toBe(files["Use.kt"]);
+        expect(value.definition.range.start.line).toBe(3);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   describe("SQL", () => {
     it("resolves SQL object references to SQL definitions", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
@@ -2570,6 +2654,36 @@ describe("Go to Definition", () => {
         const namedImports = imported?.imports.filter((binding) => binding.kind === "named");
         expect(namedImports?.map((binding) => binding.local)).toEqual(["`Widget`", "`top`"]);
         expect(namedImports?.map((binding) => binding.resolved)).toEqual([paths["Api.swift"], paths["Api.swift"]]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves Kotlin quoted receiver bindings and keeps inherited members ahead of import aliases", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-scope-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, KOTLIN_QUOTED_SCOPE_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const { value, gadget, receivers, api, aliases } = KOTLIN_QUOTED_SCOPE_FILES;
+        const cases: Array<[string, number, string, string, number]> = [
+          ...[2, 3, 6, 10, 13, 14].map((line): [string, number, string, string, number] => [
+            receivers,
+            line,
+            "work",
+            value,
+            2,
+          ]),
+          [gadget, 3, "work", gadget, 2],
+          [aliases, 5, "mark()", aliases, 4],
+          [aliases, 6, "mark()", api, 3],
+          [aliases, 10, "Widget", aliases, 8],
+          [aliases, 12, "Widget }", aliases, 12],
+          [aliases, 13, "mark }", aliases, 13],
+        ];
+        for (const [file, line, token, target, targetLine] of cases) {
+          const column = columnInLines(KOTLIN_QUOTED_SCOPE_LINES[file]!, line, token);
+          await testGoToDefinition(index, paths[file]!, line, column, paths[target]!, targetLine);
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -6786,7 +6900,6 @@ describe("Go to Definition: SCSS Sass modules", () => {
     }
   });
 });
-
 describe("restored declaration import navigation", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "navigates to the restored $languageId declaration, not a decoy",
@@ -6810,7 +6923,6 @@ describe("restored declaration import navigation", () => {
     },
   );
 });
-
 describe("Go to Definition: Kotlin default-package imports", () => {
   it("follows class and aliased function imports, never the same-named package decoy", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-goto-"));
@@ -6837,7 +6949,6 @@ describe("Go to Definition: Kotlin default-package imports", () => {
     }
   });
 });
-
 describe("Go to Definition: qualified types beside imports", () => {
   it.each(QUALIFIED_TYPE_CASES)("keeps $language qualified types apart from bare imports", async (row) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${row.language}-qualified-goto-`));
@@ -6921,6 +7032,92 @@ describe("Go to Definition: JVM package and nested type identities", () => {
     },
   );
 });
+
+it.each(JVM_VALUE_SHADOW_CASES)("resolves $language qualified types past value bindings", async (row) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-value-shadow-goto-"));
+  try {
+    const files = await writeFixtureFiles(root, row.sources);
+    const index = await createTestIndexFromFiles(root, Object.values(files));
+    const sources: Readonly<Record<string, string>> = row.sources;
+    const line = sources[row.consumer]!.split("\n")[1]!;
+    const columns = [line.indexOf("Widget") + 1];
+    if (row.language === "java") columns.push(line.lastIndexOf("Widget") + 1);
+    for (const column of columns) {
+      const result = await goToDefinition(index, { file: files[row.consumer]!, line: 2, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected qualified type");
+      expect(result.definition.file).toBe(files[row.target]);
+      expect(result.definition.file).not.toBe(files[row.decoy]);
+    }
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(JVM_VALUE_SHADOW_CASES)("resolves $language qualified types past local values", async (row) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-local-shadow-goto-"));
+  try {
+    const consumer =
+      row.language === "java"
+        ? "package app;\nclass Use { void f() { int p = 0; p.Widget x = new p.Widget(); } }\n"
+        : "package app\nfun f() { val p = 0; val x: p.Widget? = null }\n";
+    const files = await writeFixtureFiles(root, { ...row.sources, [row.consumer]: consumer });
+    const index = await createTestIndexFromFiles(root, Object.values(files));
+    const line = consumer.split("\n")[1]!;
+    const columns = [line.indexOf("Widget") + 1];
+    if (row.language === "java") columns.push(line.lastIndexOf("Widget") + 1);
+    for (const column of columns) {
+      const result = await goToDefinition(index, { file: files[row.consumer]!, line: 2, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected qualified type");
+      expect(result.definition.file).toBe(files[row.target]);
+      expect(result.definition.file).not.toBe(files[row.decoy]);
+    }
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  {
+    language: "java",
+    owner: "lib/Owner.java",
+    consumer: "app/Use.java",
+    sources: {
+      "lib/Owner.java": "package lib;\npublic class Owner { public static class Inner {} }\n",
+      "Owner/Inner.java": "package Owner;\npublic class Inner {}\n",
+      "app/Use.java": "package app;\nimport lib.Owner;\nclass Use { void f(int Owner) { Owner.Inner x = null; } }\n",
+    },
+  },
+  {
+    language: "kotlin",
+    owner: "lib/Owner.kt",
+    consumer: "app/Use.kt",
+    sources: {
+      "lib/Owner.kt": "package lib\nclass Owner { class Inner }\n",
+      "Owner/Inner.kt": "package Owner\nclass Inner\n",
+      "app/Use.kt": "package app\nimport lib.Owner\nfun f(Owner: Int) { val x: Owner.Inner? = null }\n",
+    },
+  },
+])("prefers an imported $language type owner over a value and package", async (row) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-jvm-type-owner-shadow-"));
+  try {
+    const files = await writeFixtureFiles(root, row.sources);
+    const index = await createTestIndexFromFiles(root, Object.values(files));
+    const sources: Readonly<Record<string, string>> = row.sources;
+    const line = sources[row.consumer]!.split("\n")[2]!;
+    const result = await goToDefinition(index, {
+      file: files[row.consumer]!,
+      line: 3,
+      column: line.indexOf("Inner") + 1,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("Expected nested type");
+    expect(result.definition.file).toBe(files[row.owner]);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
 describe("Go to Definition: C# qualified receiver types", () => {
   it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("resolves %s receiver types without decoys", async (type) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-receiver-goto-"));
@@ -6940,6 +7137,27 @@ describe("Go to Definition: C# qualified receiver types", () => {
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_NEARER_RECEIVER_CASES)("retains the $scope root of $root receivers", async ({ root, scope }) => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-nearer-receiver-goto-"));
+    try {
+      const fixture = csharpNearerReceiverFixture(root, scope);
+      const files = await writeFixtureFiles(dir, fixture.files);
+      const index = await createTestIndexFromFiles(dir, Object.values(files));
+      for (const line of [...fixture.calls, fixture.globalCall]) {
+        const target = line === fixture.globalCall ? "Global.cs" : fixture.target;
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnInLines(fixture.lines, line, "Run"),
+        });
+        expect(result.status).toBe(target ? "ok" : "not_found");
+        if (target && result.status === "ok") expect(result.definition.file).toBe(files[target]);
+      }
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
     }
   });
 });
@@ -6964,4 +7182,27 @@ describe("Go to Definition: C# lowercase and keyword-verbatim aliases", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "does not bind $scope parameter $parameter to alias $alias",
+    async ({ alias, parameter, scope }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-generic-alias-goto-"));
+      try {
+        const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        for (const line of [...fixture.shadowedCalls, fixture.restoredCall]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnInLines(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe(line === fixture.restoredCall ? "ok" : "not_found");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Target.cs"]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

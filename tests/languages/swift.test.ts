@@ -789,6 +789,59 @@ describe("Swift same-module and shared-owner visibility", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("shares constrained extension members across plain and quoted identifier tokens", async () => {
+    const api = ["struct Box<T> {}", "extension Box where T == Int { func helper() {} }"];
+    const use = ["extension `Box` where T == `Int` { func caller() { self.helper() } }"];
+    const decoy = ["extension Box where T == String { func helper() {} }"];
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-constraint-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Api.swift": `${api.join("\n")}\n`,
+        "Use.swift": `${use.join("\n")}\n`,
+        "Decoy.swift": `${decoy.join("\n")}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const apiPath = paths["Api.swift"]!;
+      const usePath = paths["Use.swift"]!;
+      const decoyPath = paths["Decoy.swift"]!;
+      const result = await goToDefinition(index, {
+        file: usePath,
+        line: 1,
+        column: columnOf(use, 1, "helper"),
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected the plain-constraint extension member");
+      expect(normalizePath(result.definition.file)).toBe(apiPath);
+      expect(result.definition.range.start.line).toBe(2);
+
+      const references = await findReferences(index, {
+        file: apiPath,
+        line: 2,
+        column: columnOf(api, 2, "helper"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected constrained extension references");
+      expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        references.references.map((reference) => `${normalizePath(reference.file)}:${reference.range.start.line}`),
+      ).toEqual([`${apiPath}:2`, `${usePath}:1`]);
+      expect(references.references.some((reference) => normalizePath(reference.file) === decoyPath)).toBe(false);
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find(
+        (node) => node.name === "caller" && normalizePath(node.file) === usePath,
+      );
+      expect(caller).toBeDefined();
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === caller!.id)
+        .map((edge) => graph.nodes.get(edge.to))
+        .filter((node) => node !== undefined);
+      expect(targets.map((node) => `${normalizePath(node.file)}:${node.name}`)).toEqual([`${apiPath}:helper`]);
+      expect(targets.some((node) => normalizePath(node.file) === decoyPath)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Swift inherited methods named like types", () => {

@@ -24,12 +24,18 @@ import {
   KOTLIN_QUOTED_BOUNDARY_LINES,
   KOTLIN_QUOTED_FILES,
   KOTLIN_QUOTED_LINES,
+  KOTLIN_QUOTED_SCOPE_FILES,
+  KOTLIN_QUOTED_SCOPE_LINES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
-import { JVM_QUALIFIED_REVIEW_CASES, QUALIFIED_TYPE_CASES } from "./helpers/qualified-type-import-fixture.js";
+import {
+  JVM_QUALIFIED_REVIEW_CASES,
+  JVM_VALUE_SHADOW_CASES,
+  QUALIFIED_TYPE_CASES,
+} from "./helpers/qualified-type-import-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -43,15 +49,31 @@ import {
 } from "./helpers/csharp-alias-shadow-fixture.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpAliasCallFixture } from "./helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpAliasCallFixture,
+  csharpGenericAliasReceiverFixture,
+} from "./helpers/csharp-alias-call-fixture.js";
 import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
+import {
+  CSHARP_SCOPE_READ_FILES,
+  CSHARP_SCOPE_READ_LINES,
+  KOTLIN_TYPE_PARAMETER_FILES,
+  KOTLIN_TYPE_VALUE_FILES,
+  KOTLIN_TYPE_VALUE_LINES,
+  KOTLIN_TYPE_VALUE_TYPE_LINES,
+  kotlinTypeParameterSites,
+} from "./helpers/scope-binding-read-fixtures.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -1485,6 +1507,156 @@ nativeDescribe("native semantic coverage", () => {
     expect(edges.filter((edge) => edge === "Local calls Second.cs::Run")).toHaveLength(1);
   });
 
+  it("keeps native C# scope-header reads and alias scope exits consistent after cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-header-reads-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      for (const [line, token, target] of [
+        [8, "Ping", "Second.cs"],
+        [12, "Ping", "Second.cs"],
+        [14, "K", "Use.cs"],
+        [15, "Match", "Use.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(CSHARP_SCOPE_READ_LINES, line, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files[target]);
+      }
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: CSHARP_SCOPE_READ_FILES["Second.cs"].indexOf("Run") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage).toEqual({
+          scope: "indexed_candidates",
+          state: "partial",
+          reasons: ["strategy_unavailable"],
+          affectedFiles: [files["Use.cs"]],
+        });
+        expect(
+          references.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([18, 22, 26]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run");
+      expect(calls.map((edge) => [graph.nodes.get(edge.to)?.file, edge.site?.range.start.line])).toEqual([
+        [files["Second.cs"], 18],
+        [files["Second.cs"], 22],
+        [files["Second.cs"], 26],
+      ]);
+      expect(
+        graph.edges.filter(
+          (edge) =>
+            graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+            graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps native Kotlin type and value namespaces separate after cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-type-values-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, KOTLIN_TYPE_VALUE_FILES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      for (const line of KOTLIN_TYPE_VALUE_TYPE_LINES) {
+        const result = await goToDefinition(index, {
+          file: files["Use.kt"]!,
+          line,
+          column: KOTLIN_TYPE_VALUE_LINES[line - 1]!.lastIndexOf("Widget") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files["Api.kt"]);
+      }
+      const references = await findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage.state).toBe("complete");
+        expect(
+          references.references.filter((site) => site.file === files["Use.kt"]).map((site) => site.range.start.line),
+        ).toEqual([2, ...KOTLIN_TYPE_VALUE_TYPE_LINES]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const caller of ["use", "local", "later"]) {
+        expect(
+          graph.edges.some(
+            (edge) =>
+              edge.label === "uses" &&
+              graph.nodes.get(edge.from)?.name === caller &&
+              graph.nodes.get(edge.to)?.file === files["Api.kt"],
+          ),
+        ).toBe(true);
+      }
+      expect(
+        graph.edges.filter(
+          (edge) =>
+            graph.nodes.get(edge.from)?.file === files["Use.kt"] &&
+            graph.nodes.get(edge.to)?.file === files["Decoy.kt"],
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps native Kotlin type parameters ahead of a same-named import alias after cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-type-parameters-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, KOTLIN_TYPE_PARAMETER_FILES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      for (const site of kotlinTypeParameterSites()) {
+        const result = await goToDefinition(index, { file: files[site.file]!, line: site.line, column: site.column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files[site.file]);
+          expect(result.definition.range.start.line).toBe(site.declaration.line);
+          expect(result.definition.range.start.column).toBe(site.declaration.column);
+        }
+      }
+      const references = await findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage.state).toBe("complete");
+        const referencedFiles = new Set(references.references.map((site) => site.file));
+        expect(referencedFiles).toEqual(new Set([files["Api.kt"], files["Use.kt"], files["Alias.kt"]]));
+        expect(
+          references.references.filter((site) => site.file === files["Use.kt"]).map((site) => site.range.start.line),
+        ).toEqual([2, 2]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const usesInto = (file: string) =>
+        graph.edges.filter(
+          (edge) =>
+            edge.label === "uses" &&
+            graph.nodes.get(edge.from)?.file === file &&
+            graph.nodes.get(edge.to)?.file === files["Api.kt"],
+        );
+      // The import itself still reaches Widget; only type-parameter uses must not.
+      expect(usesInto(files["Use.kt"]!)).toEqual([]);
+      expect(usesInto(files["Plain.kt"]!)).toEqual([]);
+      expect(usesInto(files["Alias.kt"]!)).toHaveLength(1);
+    }
+  });
+
   it.each(CSHARP_ALIAS_BOUNDARIES)("keeps native C# $name shadowing on disk reload", async (boundary) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-alias-boundary-"));
     tempDirs.push(root);
@@ -2376,6 +2548,71 @@ nativeDescribe("native semantic coverage", () => {
     const { cls, fn, astral } = KOTLIN_UNICODE_NAMES;
     const { defs, use, decoy } = KOTLIN_UNICODE_FILES;
     const peerCases: PeerCase[] = [
+      ...[2, 3].map(
+        (line): PeerCase => ({
+          name: `Kotlin quoted/plain receiver binding on line ${line}`,
+          files: KOTLIN_QUOTED_SCOPE_LINES,
+          goto: {
+            file: KOTLIN_QUOTED_SCOPE_FILES.receivers,
+            line,
+            token: "work",
+            expectedFile: KOTLIN_QUOTED_SCOPE_FILES.value,
+            expectedLine: 2,
+          },
+          references: {
+            file: KOTLIN_QUOTED_SCOPE_FILES.value,
+            line: 2,
+            token: "work",
+            expectedSites: [2, 3, 6, 10, 13, 14].map(
+              (siteLine) => `${KOTLIN_QUOTED_SCOPE_FILES.receivers}:${siteLine}`,
+            ),
+            decoyFile: KOTLIN_QUOTED_SCOPE_FILES.gadget,
+            decoyDeclaration: {
+              file: KOTLIN_QUOTED_SCOPE_FILES.gadget,
+              line: 2,
+              token: "work",
+              absentSites: [2, 3, 6, 10, 13, 14].map(
+                (siteLine) => `${KOTLIN_QUOTED_SCOPE_FILES.receivers}:${siteLine}`,
+              ),
+            },
+          },
+          edge: {
+            caller: line === 2 ? "quotedParameter" : "plainParameter",
+            callerFile: KOTLIN_QUOTED_SCOPE_FILES.receivers,
+            expectedTarget: `${KOTLIN_QUOTED_SCOPE_FILES.value}::work`,
+            absentTargets: [`${KOTLIN_QUOTED_SCOPE_FILES.gadget}::work`],
+          },
+        }),
+      ),
+      {
+        name: "Kotlin inherited member before an explicit function alias",
+        files: KOTLIN_QUOTED_SCOPE_LINES,
+        goto: {
+          file: KOTLIN_QUOTED_SCOPE_FILES.aliases,
+          line: 5,
+          token: "mark()",
+          expectedFile: KOTLIN_QUOTED_SCOPE_FILES.aliases,
+          expectedLine: 4,
+        },
+        references: {
+          file: KOTLIN_QUOTED_SCOPE_FILES.aliases,
+          line: 4,
+          token: "mark",
+          expectedSites: [`${KOTLIN_QUOTED_SCOPE_FILES.aliases}:5`],
+          decoyDeclaration: {
+            file: KOTLIN_QUOTED_SCOPE_FILES.api,
+            line: 3,
+            token: "go",
+            absentSites: [`${KOTLIN_QUOTED_SCOPE_FILES.aliases}:5`],
+          },
+        },
+        edge: {
+          caller: "inherited",
+          callerFile: KOTLIN_QUOTED_SCOPE_FILES.aliases,
+          expectedTarget: `${KOTLIN_QUOTED_SCOPE_FILES.aliases}::mark`,
+          absentTargets: [`${KOTLIN_QUOTED_SCOPE_FILES.api}::go`],
+        },
+      },
       {
         name: "Kotlin quoted keyword through a package wildcard",
         files: KOTLIN_QUOTED_BOUNDARY_LINES,
@@ -3039,6 +3276,20 @@ nativeDescribe("native semantic coverage", () => {
       expect(star?.kind).toBe("star");
       if (star?.kind !== "star") throw new Error("Expected the Python star import");
       expect(star.pythonStatementStartIndex).toBe("from other import helper\nprint(helper())\n".length);
+      const graph = await buildSymbolGraphDetailed(index);
+      const aliasFile = normalizeFile(path.join(root, KOTLIN_QUOTED_SCOPE_FILES.aliases));
+      const aliasUses = graph.edges.flatMap((edge) => {
+        if (edge.label !== "uses") return [];
+        const caller = graph.nodes.get(edge.from);
+        if (caller?.file !== aliasFile) return [];
+        const target = graph.nodes.get(edge.to);
+        return target ? [`${caller.name}->${relativeFile(root, target.file)}::${target.name}`] : [];
+      });
+      expect(aliasUses.sort()).toEqual([
+        `imported->${KOTLIN_QUOTED_SCOPE_FILES.api}::go`,
+        `localType->${KOTLIN_QUOTED_SCOPE_FILES.api}::Widget`,
+        `parameterType->${KOTLIN_QUOTED_SCOPE_FILES.api}::Widget`,
+      ]);
     }
 
     const columnAt = (lines: readonly string[], line: number, token: string): number => {
@@ -3479,6 +3730,24 @@ nativeDescribe("native semantic coverage", () => {
       expect(targets("bare")).toContain(files[row.imported]);
     }
   });
+  it.each(JVM_VALUE_SHADOW_CASES)("retains $language type lookup past values after disk reload", async (row) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-jvm-value-shadow-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-jvm-value-shadow-cache-"));
+    tempDirs.push(root, cacheDir);
+    const files = await writeFixtureFiles(root, row.sources);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const sources: Readonly<Record<string, string>> = row.sources;
+    const column = sources[row.consumer]!.split("\n")[1]!.indexOf("Widget") + 1;
+    for (const index of [cold, warm]) {
+      const result = await goToDefinition(index, { file: files[row.consumer]!, line: 2, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected qualified type");
+      expect(result.definition.file).toBe(files[row.target]);
+      expect(result.definition.file).not.toBe(files[row.decoy]);
+    }
+  });
   it.each(JVM_QUALIFIED_REVIEW_CASES)("keeps $language qualified package identities on disk reload", async (row) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-review-`));
     const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-${row.language}-qualified-review-cache-`));
@@ -3569,7 +3838,6 @@ nativeDescribe("native semantic coverage", () => {
     },
   );
 });
-
 nativeDescribe("restored declaration imports retain native semantic parity", () => {
   it.each(RESTORED_DECLARATION_FIXTURES)(
     "restores $languageId symbol edges across incremental and disk snapshot builds",
@@ -3653,6 +3921,42 @@ nativeDescribe("native C# qualified receiver cache parity", () => {
       }
     }
   });
+
+  it.each(CSHARP_NEARER_RECEIVER_CASES)("retains $root $scope-root proofs on disk reload", async ({ root, scope }) => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-nearer-receiver-"));
+    tempDirs.push(dir);
+    const fixture = csharpNearerReceiverFixture(root, scope);
+    const files = await writeFixtureFiles(dir, fixture.files);
+    for (let build = 0; build < 2; build += 1) {
+      clearMemoryCache();
+      const index = await buildProjectIndex(dir, { cache: "disk" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const line = fixture.calls[0]!;
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line,
+        column: columnOf(fixture.lines, line, "Run"),
+      });
+      expect(result.status).toBe(fixture.target ? "ok" : "not_found");
+      if (fixture.target && result.status === "ok") expect(result.definition.file).toBe(files[fixture.target]);
+      const refs = await findReferences(index, {
+        file: files["Global.cs"]!,
+        line: 1,
+        column: fixture.files["Global.cs"].indexOf("Run") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected cached nearer receiver references");
+      expect(refs.referenceCoverage.state).toBe(fixture.target ? "complete" : "partial");
+      expect(
+        refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+      ).toEqual([fixture.globalCall]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && edge.site?.range.start.line === line)
+        .map((edge) => graph.nodes.get(edge.to)?.file);
+      expect(targets).toEqual(fixture.target ? [files[fixture.target]] : []);
+    }
+  });
 });
 nativeDescribe("native C# lowercase alias call cache parity", () => {
   it.each(CSHARP_ALIAS_CALL_SPELLINGS)("retains %s static and value targets on disk reload", async (alias) => {
@@ -3691,4 +3995,43 @@ nativeDescribe("native C# lowercase alias call cache parity", () => {
       }
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "retains $scope parameter $parameter shadowing alias $alias on disk reload",
+    async ({ alias, parameter, scope }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-generic-alias-"));
+      tempDirs.push(root);
+      const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+      const files = await writeFixtureFiles(root, fixture.files);
+      for (let build = 0; build < 2; build += 1) {
+        clearMemoryCache();
+        const index = await buildProjectIndex(root, { cache: "disk" });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        for (const line of fixture.shadowedCalls) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe("not_found");
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls");
+        expect(calls.map((edge) => [edge.site?.range.start.line, graph.nodes.get(edge.to)?.file])).toEqual([
+          [fixture.restoredCall, files["Target.cs"]],
+        ]);
+        const refs = await findReferences(index, {
+          file: files["Target.cs"]!,
+          line: 1,
+          column: fixture.files["Target.cs"].indexOf("Run") + 1,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected cached generic alias references");
+        expect(refs.referenceCoverage.state).toBe("partial");
+        expect(
+          refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([fixture.restoredCall]);
+      }
+    },
+  );
 });

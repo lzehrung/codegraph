@@ -24,7 +24,6 @@ import {
   csharpLookupName,
   csharpQualifiedNameNode,
   csharpQualifiedThroughGenericOwner,
-  csharpTypeOnlyName,
   definitionForBinding,
 } from "../navigation-local.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
@@ -33,6 +32,7 @@ import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resol
 import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
+import { csharpTypeOnlyName } from "../scope-nodes.js";
 
 const implicitSelf = (state: NameLookupState, fallback: NameResolution | null): NameResolution => ({
   status: "deferred",

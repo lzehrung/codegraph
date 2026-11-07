@@ -179,6 +179,29 @@ export function pythonFunctionPendingInDefault(defStart: number | undefined, use
   return false;
 }
 
+/** C# type syntax does not bind a same-named value; a constant pattern can still be a value read. */
+export function csharpTypeOnlyName(node: SyntaxNodeLike): boolean {
+  for (let current = node; current.parent; current = current.parent) {
+    const parent = current.parent;
+    if (parent.childForFieldName("type")?.id === current.id) return true;
+    if (parent.type === "type_argument_list" || parent.type === "attribute") return true;
+    const nameWrapper =
+      parent.type === "qualified_name" ||
+      parent.type === "alias_qualified_name" ||
+      parent.type === "generic_name" ||
+      parent.type === "nullable_type" ||
+      parent.type === "array_type";
+    if (!nameWrapper) return false;
+  }
+  return false;
+}
+
+/** Kotlin user_type names occupy the type namespace, including qualified and nested type arguments. */
+export function typeOnlyName(languageId: string, node: SyntaxNodeLike): boolean {
+  if (languageId === "csharp") return csharpTypeOnlyName(node);
+  return languageId === "kotlin" && node.parent?.type === "user_type";
+}
+
 /**
  * Whether `binding` in a scope of `scopeKind` names a use at `useStartIndex`.
  * Whole-scope bindings name every use in the scope. Every other binding names only uses at
@@ -351,6 +374,14 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration", "lambda_expression"]),
     classNameTypes: new Set(["class_declaration", "struct_declaration", "record_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration", "delegate_declaration"]),
+    typeScopeTypes: new Set([
+      "class_declaration",
+      "struct_declaration",
+      "record_declaration",
+      "interface_declaration",
+      "delegate_declaration",
+    ]),
+    typeParameterTypes: new Set(["type_parameter"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
     declarationPatternTypes: new Set(["declaration_pattern"]),
     variableDeclarationTypes: new Set(["variable_declaration", "field_declaration"]),
@@ -541,6 +572,14 @@ export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeL
   if (scope.node.type === "foreach_statement") {
     const iterable = scope.node.childForFieldName("right");
     if (iterable && use.startIndex >= iterable.startIndex && use.endIndex <= iterable.endIndex) return false;
+  }
+  // A C# lambda's parameter defaults and types are evaluated outside its parameter bindings.
+  if (scope.node.type === "lambda_expression") {
+    const parameters = scope.node.childForFieldName("parameters");
+    const inParameters = parameters && use.startIndex >= parameters.startIndex && use.endIndex <= parameters.endIndex;
+    const parameterName = use.parent?.type === "parameter" && use.parent.childForFieldName("name")?.id === use.id;
+    const declaresParameter = use.type === "implicit_parameter" || parameterName;
+    if (inParameters && !declaresParameter) return false;
   }
   if (row.moduleBindingsAtFunctionRuntime && scope.kind === "function") {
     const body = scope.node.childForFieldName("body");

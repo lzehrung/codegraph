@@ -4,6 +4,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_GENERIC_RECEIVER_FILES,
   CSHARP_QUALIFIED_RECEIVER_BOUNDARY_FILES,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
@@ -803,5 +805,45 @@ describe("C# qualified receiver boundaries", () => {
     if (refs.status !== "ok") throw new Error("Expected generic receiver decoy references");
     expect(refs.referenceCoverage.state).toBe("partial");
     expect(refs.references.map((site) => site.file)).toEqual([p.f("Decoy.cs")]);
+  });
+});
+
+describe("C# nearer qualified receiver roots", () => {
+  it.each(CSHARP_NEARER_RECEIVER_CASES)("keeps $root bound to its $scope root", async ({ root, scope }) => {
+    const data = csharpNearerReceiverFixture(root, scope);
+    const p = await fixture("cg-csharp-nearer-receiver-", data.files);
+    const graph = await buildSymbolGraphDetailed(p.index);
+    for (const line of [...data.calls, data.globalCall]) {
+      const target = line === data.globalCall ? "Global.cs" : data.target;
+      const result = await goToDefinition(p.index, {
+        file: p.f("Use.cs"),
+        line,
+        column: data.lines[line - 1]!.indexOf("Run") + 1,
+      });
+      expect(result.status).toBe(target ? "ok" : "not_found");
+      if (target && result.status === "ok") expect(result.definition.file).toBe(p.f(target));
+    }
+    const calls = graph.edges
+      .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run")
+      .map((edge) => [edge.site?.range.start.line, path.basename(graph.nodes.get(edge.to)!.file)]);
+    const expected = data.target ? data.calls.map((line) => [line, data.target]) : [];
+    expect(calls).toEqual([...expected, [data.globalCall, "Global.cs"]]);
+    for (const declaration of [{ file: "Global.cs", line: 1 } as const, data.declaration]) {
+      const global = declaration.file === "Global.cs";
+      const refs = await findReferences(p.index, {
+        file: p.f(declaration.file),
+        line: declaration.line,
+        column: data.files[declaration.file].split("\n")[declaration.line - 1]!.indexOf("Run") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected nearer receiver references");
+      expect(refs.referenceCoverage.state).toBe(data.target ? "complete" : "partial");
+      let expectedLines = data.target ? data.calls : [];
+      if (global) expectedLines = [data.globalCall];
+      const useSites = refs.references.filter((site) => site.file === p.f("Use.cs"));
+      expect(
+        useSites.filter((site) => site.range.start.line !== declaration.line).map((site) => site.range.start.line),
+      ).toEqual(expectedLines);
+    }
   });
 });

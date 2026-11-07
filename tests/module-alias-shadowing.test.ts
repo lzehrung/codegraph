@@ -20,7 +20,19 @@ import {
   csharpAliasValueFixture,
 } from "./helpers/csharp-alias-only-shadow-fixture.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
-import { CSHARP_ALIAS_CALL_SPELLINGS, csharpUnknownAliasReceiverFixture } from "./helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpGenericAliasReceiverFixture,
+  csharpUnknownAliasReceiverFixture,
+} from "./helpers/csharp-alias-call-fixture.js";
+import {
+  CSHARP_SCOPE_READ_FILES,
+  CSHARP_SCOPE_READ_LINES,
+  KOTLIN_TYPE_VALUE_FILES,
+  KOTLIN_TYPE_VALUE_LINES,
+  KOTLIN_TYPE_VALUE_TYPE_LINES,
+} from "./helpers/scope-binding-read-fixtures.js";
 
 const fixtures = [
   {
@@ -933,8 +945,296 @@ describe("module import alias shadowing", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
-});
+  it("C# confines catch and for bindings while preserving their reads and subsequent alias calls", async () => {
+    const root = await mkTmpDir("cg-csharp-catch-for-scope-");
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const file = files["Use.cs"]!;
+      for (const line of [8, 12]) {
+        for (const token of ["B", "Ping"]) {
+          const result = await goToDefinition(index, {
+            file,
+            line,
+            column: columnOf(CSHARP_SCOPE_READ_LINES, line, token),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Second.cs"]);
+        }
+      }
+      for (const line of [7, 11]) {
+        const declarationColumn = columnOf(CSHARP_SCOPE_READ_LINES, line, "B");
+        const local = await goToDefinition(index, {
+          file,
+          line,
+          column: CSHARP_SCOPE_READ_LINES[line - 1]!.lastIndexOf("B") + 1,
+        });
+        expect(local.status).toBe("ok");
+        if (local.status === "ok") {
+          expect(local.definition.file).toBe(file);
+          expect(local.definition.range.start).toMatchObject({ line, column: declarationColumn });
+        }
+        const references = await findReferences(index, { file, line, column: declarationColumn });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(references.references.map((site) => site.range.start.line)).toEqual(
+            line === 7 ? [7, 7, 7] : [11, 11, 11, 11],
+          );
+        }
+      }
+      const references = await findReferences(index, {
+        file: files["Second.cs"]!,
+        line: 1,
+        column: CSHARP_SCOPE_READ_FILES["Second.cs"].indexOf("Ping") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage.state).toBe("complete");
+        expect(references.references.filter((site) => site.file === file).map((site) => site.range.start.line)).toEqual(
+          [8, 12],
+        );
+        expect(references.references.some((site) => site.file === files["Decoy.cs"])).toBe(false);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Ping");
+      expect(calls.map((edge) => [graph.nodes.get(edge.to)?.file, edge.site?.range.start.line])).toEqual([
+        [files["Second.cs"], 8],
+        [files["Second.cs"], 12],
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
+  it("C# lambda defaults and constant patterns remain reads of their enclosing constants", async () => {
+    const root = await mkTmpDir("cg-csharp-default-pattern-reads-");
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const index = await buildProjectIndex(root, { cache: "off", logLevel: "silent" });
+      const file = files["Use.cs"]!;
+      for (const [line, token, declaration] of [
+        [14, "K", 3],
+        [15, "Match", 4],
+      ] as const) {
+        const columns = [columnOf(CSHARP_SCOPE_READ_LINES, line, token)];
+        if (token === "K") columns.push(CSHARP_SCOPE_READ_LINES[line - 1]!.lastIndexOf(token) + 1);
+        for (const column of columns) {
+          const result = await goToDefinition(index, { file, line, column });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.definition.file).toBe(file);
+            expect(result.definition.range.start.line).toBe(declaration);
+          }
+        }
+        const references = await findReferences(index, {
+          file,
+          line: declaration,
+          column: columnOf(CSHARP_SCOPE_READ_LINES, declaration, token),
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(
+            references.references.map((site) => [site.file, site.range.start.line, site.range.start.column]),
+          ).toEqual([
+            [file, declaration, columnOf(CSHARP_SCOPE_READ_LINES, declaration, token)],
+            ...columns.map((column) => [file, line, column]),
+          ]);
+        }
+      }
+      const parameterColumn = columnOf(CSHARP_SCOPE_READ_LINES, 14, "x");
+      const parameterReferences = await findReferences(index, { file, line: 14, column: parameterColumn });
+      expect(parameterReferences.status).toBe("ok");
+      if (parameterReferences.status === "ok") {
+        expect(parameterReferences.referenceCoverage.state).toBe("complete");
+        expect(parameterReferences.references.map((site) => site.range.start.column)).toEqual([
+          parameterColumn,
+          CSHARP_SCOPE_READ_LINES[13].lastIndexOf("x") + 1,
+        ]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      // The graph records imported type uses, not bare reads of local constants.
+      for (const caller of ["Lambda", "Pattern"]) {
+        const importedUses = graph.edges.filter((edge) => {
+          if (edge.label !== "uses" || graph.nodes.get(edge.from)?.name !== caller) return false;
+          return graph.nodes.get(edge.to)?.file !== file;
+        });
+        expect(importedUses).toEqual([]);
+      }
+      expect(
+        graph.edges.some((edge) => {
+          if (edge.label !== "uses" || graph.nodes.get(edge.from)?.name !== "Declaration") return false;
+          return graph.nodes.get(edge.to)?.file === files["Second.cs"];
+        }),
+      ).toBe(true);
+      expect(
+        graph.edges.filter(
+          (edge) => graph.nodes.get(edge.from)?.file === file && graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
+        ),
+      ).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("C# foreach designations shadow only the loop body, including deconstruction and typed elements", async () => {
+    const root = await mkTmpDir("cg-csharp-foreach-designations-");
+    try {
+      const files = await writeFixtureFiles(root, CSHARP_SCOPE_READ_FILES);
+      const file = files["Use.cs"]!;
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        for (const line of [17, 21, 25]) {
+          const result = await goToDefinition(index, {
+            file,
+            line,
+            column: columnOf(CSHARP_SCOPE_READ_LINES, line, "Run"),
+          });
+          expect(result.status).toBe("not_found");
+          const receiver = await goToDefinition(index, {
+            file,
+            line,
+            column: CSHARP_SCOPE_READ_LINES[line - 1]!.lastIndexOf("B") + 1,
+          });
+          expect(receiver.status).toBe("ok");
+          if (receiver.status === "ok") {
+            expect(receiver.definition.file).toBe(file);
+            expect(receiver.definition.range.start).toMatchObject({
+              line,
+              column: columnOf(CSHARP_SCOPE_READ_LINES, line, "B"),
+            });
+          }
+          const references = await findReferences(index, {
+            file,
+            line,
+            column: columnOf(CSHARP_SCOPE_READ_LINES, line, "B"),
+          });
+          expect(references.status).toBe("ok");
+          if (references.status === "ok") {
+            expect(references.referenceCoverage.state).toBe("complete");
+            expect(references.references.map((site) => site.range.start.column)).toEqual([
+              columnOf(CSHARP_SCOPE_READ_LINES, line, "B"),
+              CSHARP_SCOPE_READ_LINES[line - 1]!.lastIndexOf("B") + 1,
+            ]);
+          }
+        }
+        for (const [line, token] of [
+          [18, "Run"],
+          [21, "Rows"],
+          [22, "Run"],
+          [26, "Run"],
+        ] as const) {
+          const result = await goToDefinition(index, {
+            file,
+            line,
+            column: columnOf(CSHARP_SCOPE_READ_LINES, line, token),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Second.cs"]);
+        }
+        const references = await findReferences(index, {
+          file: files["Second.cs"]!,
+          line: 1,
+          column: CSHARP_SCOPE_READ_FILES["Second.cs"].indexOf("Run") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          // Dynamic element receivers cannot prove every candidate, but must not become alias references.
+          expect(references.referenceCoverage).toEqual({
+            scope: "indexed_candidates",
+            state: "partial",
+            reasons: ["strategy_unavailable"],
+            affectedFiles: [file],
+          });
+          expect(
+            references.references.filter((site) => site.file === file).map((site) => site.range.start.line),
+          ).toEqual([18, 22, 26]);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run");
+        expect(calls.map((edge) => [graph.nodes.get(edge.to)?.file, edge.site?.range.start.line])).toEqual([
+          [files["Second.cs"], 18],
+          [files["Second.cs"], 22],
+          [files["Second.cs"], 26],
+        ]);
+        expect(
+          graph.edges.filter(
+            (edge) => graph.nodes.get(edge.from)?.file === file && graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
+          ),
+        ).toEqual([]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("Kotlin type names bypass value bindings without stealing their expression references", async () => {
+    const root = await mkTmpDir("cg-kotlin-type-value-names-");
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_TYPE_VALUE_FILES);
+      const file = files["Use.kt"]!;
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        for (const line of KOTLIN_TYPE_VALUE_TYPE_LINES) {
+          const column = KOTLIN_TYPE_VALUE_LINES[line - 1]!.lastIndexOf("Widget") + 1;
+          const result = await goToDefinition(index, { file, line, column });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Api.kt"]);
+        }
+        for (const [declaration, use] of [
+          [3, 6],
+          [9, 11],
+          [15, 16],
+        ] as const) {
+          const column = columnOf(KOTLIN_TYPE_VALUE_LINES, declaration, "Widget");
+          const result = await goToDefinition(index, {
+            file,
+            line: use,
+            column: columnOf(KOTLIN_TYPE_VALUE_LINES, use, "Widget"),
+          });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(result.definition.file).toBe(file);
+            expect(result.definition.range.start).toMatchObject({ line: declaration, column });
+          }
+          const references = await findReferences(index, { file, line: declaration, column });
+          expect(references.status).toBe("ok");
+          if (references.status === "ok") {
+            expect(references.referenceCoverage.state).toBe("complete");
+            expect(references.references.map((site) => site.range.start.line)).toEqual([declaration, use]);
+          }
+        }
+        const references = await findReferences(index, { file: files["Api.kt"]!, line: 2, column: 7 });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(
+            references.references.filter((site) => site.file === file).map((site) => site.range.start.line),
+          ).toEqual([2, ...KOTLIN_TYPE_VALUE_TYPE_LINES]);
+          expect(references.references.some((site) => site.file === files["Decoy.kt"])).toBe(false);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        for (const caller of ["use", "local", "later"]) {
+          const uses = graph.edges.filter(
+            (edge) =>
+              edge.label === "uses" &&
+              graph.nodes.get(edge.from)?.name === caller &&
+              graph.nodes.get(edge.to)?.file === files["Api.kt"],
+          );
+          expect(uses).toHaveLength(1);
+        }
+        expect(
+          graph.edges.filter(
+            (edge) => graph.nodes.get(edge.from)?.file === file && graph.nodes.get(edge.to)?.file === files["Decoy.kt"],
+          ),
+        ).toEqual([]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 describe("C# lowercase alias receiver proof", () => {
   it.each(CSHARP_ALIAS_CALL_SPELLINGS)("does not promote dynamic %s parameters or locals to types", async (alias) => {
     const root = await mkTmpDir("cg-csharp-lowercase-alias-shadow-");
@@ -972,4 +1272,52 @@ describe("C# lowercase alias receiver proof", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "keeps $scope parameter $parameter ahead of alias $alias",
+    async ({ alias, parameter, scope }) => {
+      const root = await mkTmpDir("cg-csharp-generic-alias-shadow-");
+      try {
+        const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const line of [...fixture.shadowedCalls, fixture.restoredCall]) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line,
+            column: columnOf(fixture.lines, line, "Run"),
+          });
+          expect(result.status).toBe(line === fixture.restoredCall ? "ok" : "not_found");
+          if (result.status === "ok") expect(result.definition.file).toBe(files["Target.cs"]);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter((edge) => edge.label === "calls");
+        expect(calls.map((edge) => [edge.site?.range.start.line, graph.nodes.get(edge.to)?.file])).toEqual([
+          [fixture.restoredCall, files["Target.cs"]],
+        ]);
+        const shadowedUses = graph.edges.filter((edge) => {
+          if (edge.label !== "uses" || graph.nodes.get(edge.to)?.file !== files["Target.cs"]) return false;
+          const caller = graph.nodes.get(edge.from)?.name;
+          return caller === "Shadowed" || caller === "Inner";
+        });
+        expect(shadowedUses).toEqual([]);
+        for (const file of ["Target.cs", "Decoy.cs"] as const) {
+          const refs = await findReferences(index, {
+            file: files[file]!,
+            line: 1,
+            column: fixture.files[file].indexOf("Run") + 1,
+          });
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error("Expected partial generic receiver references");
+          expect(refs.referenceCoverage.state).toBe("partial");
+          expect(refs.referenceCoverage.reasons).toContain("strategy_unavailable");
+          expect(
+            refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+          ).toEqual(file === "Target.cs" ? [fixture.restoredCall] : []);
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

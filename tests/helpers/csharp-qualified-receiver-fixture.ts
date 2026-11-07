@@ -65,3 +65,54 @@ export const CSHARP_GENERIC_RECEIVER_FILES = {
     "",
   ].join("\n"),
 };
+
+export const CSHARP_NEARER_RECEIVER_CASES = ["Values", "@Values", "@class"].flatMap((root) =>
+  (["nested", "peer", "namespace", "missing"] as const).map((scope) => ({ root, scope })),
+);
+
+export function csharpNearerReceiverFixture(root: string, scope: "nested" | "peer" | "namespace" | "missing") {
+  const nested = scope === "nested" || scope === "missing";
+  const lines = nested
+    ? [
+        "public class Client {",
+        `  public class ${root} {`,
+        scope === "missing" ? "" : "    public class Value { public void Run() {} }",
+        "  }",
+      ]
+    : ["namespace Client.Inner;", "public class Use {"];
+  const firstCall = lines.length + 1;
+  lines.push(
+    `  public void Parameter(${root}.Value p) { p.Run(); }`,
+    `  public void Constructed() { var p = new ${root}.Value(); p.Run(); }`,
+    `  public void Declared() { ${root}.Value p = new ${root}.Value(); p.Run(); }`,
+    `  public void Global(global::${root}.Value p) { p.Run(); }`,
+    "}",
+    "",
+  );
+  let declaration: { file: "Local.cs" | "Use.cs"; line: number } = { file: "Local.cs", line: 1 };
+  let target: string | null = null;
+  if (scope === "nested") {
+    declaration = { file: "Use.cs", line: 3 };
+    target = declaration.file;
+  } else if (scope === "namespace") {
+    target = declaration.file;
+  }
+  let local = "namespace Decoy { public class Value { public void Run() {} } }\n";
+  if (scope === "namespace") {
+    local = `namespace Client.${root} { public class Value { public void Run() {} } }\n`;
+  } else if (scope === "peer") {
+    local = `namespace Client { public class ${root} { public class Value { public void Run() {} } } }\n`;
+  }
+  return {
+    files: {
+      "Global.cs": `namespace ${root} { public class Value { public void Run() {} } }\n`,
+      "Local.cs": local,
+      "Use.cs": lines.join("\n"),
+    },
+    lines,
+    calls: [firstCall, firstCall + 1, firstCall + 2],
+    globalCall: firstCall + 3,
+    declaration,
+    target,
+  };
+}

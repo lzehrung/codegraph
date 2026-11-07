@@ -6,6 +6,7 @@ import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 import { getNativeTreeSitterSupportedLanguageIds } from "../src/native/runtime.js";
 import { LANGUAGE_SUPPORTS, supportById, type LanguageSupport } from "../src/languages.js";
 import type { SyntaxNodeLike } from "../src/languages/types.js";
+import { CSHARP_SCOPE_READ_FILES, KOTLIN_TYPE_PARAMETER_FILES } from "./helpers/scope-binding-read-fixtures.js";
 
 /**
  * `src/indexer/scope-nodes.ts` holds every node-name list the scope walker used to inline. These
@@ -343,6 +344,34 @@ describe("scope node tables", () => {
         );
       }
     }
+  });
+
+  it("keeps C# header bindings in their syntax scopes and excludes lambda-default reads", () => {
+    const support = supportById("csharp")!;
+    const scope = buildScopeIndexFromSource("Use.cs", CSHARP_SCOPE_READ_FILES["Use.cs"], support);
+    const catchScope = scope.allScopes.find((candidate) => candidate.node.type === "catch_clause");
+    const forScope = scope.allScopes.find((candidate) => candidate.node.type === "for_statement");
+    expect(catchScope?.map.get("B")?.kind).toBe("local");
+    expect(forScope?.map.get("B")?.kind).toBe("local");
+    for (const bindingScope of [catchScope, forScope]) {
+      expect(bindingScope?.parent?.map.has("B")).toBe(false);
+    }
+    const foreachScopes = scope.allScopes.filter((candidate) => candidate.node.type === "foreach_statement");
+    expect(foreachScopes).toHaveLength(3);
+    for (const bindingScope of foreachScopes) {
+      expect([...bindingScope.map.keys()].sort()).toEqual(["B", "other"]);
+    }
+    const lambda = scope.allScopes.find((candidate) => candidate.node.type === "lambda_expression");
+    expect([...lambda!.map.keys()]).toEqual(["x"]);
+    expect(lambda?.map.get("x")?.kind).toBe("param");
+  });
+
+  it("binds Kotlin class and function type parameters as type bindings", () => {
+    const support = supportById("kotlin")!;
+    const scope = buildScopeIndexFromSource("Plain.kt", KOTLIN_TYPE_PARAMETER_FILES["Plain.kt"], support);
+    const bindings = scope.allScopes.flatMap((candidate) => candidate.map.get("T") ?? []);
+    expect(bindings).toHaveLength(2);
+    expect(bindings.map((binding) => binding.kind)).toEqual(["type", "type"]);
   });
 
   it("keeps Zig container member function names out of the file scope", () => {

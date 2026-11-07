@@ -116,7 +116,7 @@ export const CSHARP_ALIAS_TYPE_FORMS = [
   { name: "typeof", body: "_ = typeof(B);", token: "B", aliasUse: true },
   { name: "nameof", body: "_ = nameof(B);", token: "B", aliasUse: false },
   { name: "cast", body: "_ = (B)value;", token: "B", aliasUse: true },
-  { name: "is type", body: "_ = value is B;", token: "B", aliasUse: true },
+  { name: "is declaration type", body: "_ = value is B item;", token: "B", aliasUse: true },
   { name: "catch type", body: "try {} catch (B error) {}", token: "B", aliasUse: true },
 ] as const;
 

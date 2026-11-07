@@ -194,3 +194,57 @@ export const KOTLIN_QUOTED_BOUNDARY_LINES: Record<string, string[]> = {
 export const KOTLIN_QUOTED_BOUNDARY_SOURCES: Record<string, string> = Object.fromEntries(
   Object.entries(KOTLIN_QUOTED_BOUNDARY_LINES).map(([file, lines]) => [file, `${lines.join("\n")}\n`]),
 );
+
+/** Receiver identity and the separate Kotlin type/value namespaces, with real competing members. */
+export const KOTLIN_QUOTED_SCOPE_FILES = {
+  value: "kscope/Value.kt",
+  gadget: "kscope/Gadget.kt",
+  receivers: "kscope/Receivers.kt",
+  api: "kscope/api/Api.kt",
+  aliases: "kscope/client/Use.kt",
+} as const;
+
+export const KOTLIN_QUOTED_SCOPE_LINES: Record<string, string[]> = {
+  [KOTLIN_QUOTED_SCOPE_FILES.value]: ["package kscope", "class Value { fun work(): Int = 1 }"],
+  [KOTLIN_QUOTED_SCOPE_FILES.gadget]: [
+    "package kscope",
+    "class Gadget { companion object { fun work(): Int = -1 } }",
+    "fun companionControl(): Int = Gadget.work()",
+  ],
+  [KOTLIN_QUOTED_SCOPE_FILES.receivers]: [
+    "package kscope",
+    "fun quotedParameter(`Gadget`: Value): Int = Gadget.work()",
+    "fun plainParameter(Gadget: Value): Int = `Gadget`.work()",
+    "fun quotedLocal(): Int {",
+    "  val `Gadget` = Value()",
+    "  return Gadget.work()",
+    "}",
+    "fun plainLocal(): Int {",
+    "  val Gadget = Value()",
+    "  return `Gadget`.work()",
+    "}",
+    "",
+    "fun plainControl(Gadget: Value): Int = Gadget.work()",
+    "fun quotedControl(`Gadget`: Value): Int = `Gadget`.work()",
+  ],
+  [KOTLIN_QUOTED_SCOPE_FILES.api]: ["package kscope.api", "class Widget", "fun go(): Int = 1"],
+  [KOTLIN_QUOTED_SCOPE_FILES.aliases]: [
+    "package kscope.client",
+    "import kscope.api.Widget",
+    "import kscope.api.go as mark",
+    "open class Base { fun mark(): Int = 2 }",
+    "class Child : Base() { fun inherited(): Int = mark() }",
+    "class Plain { fun imported(): Int = mark() }",
+    "fun parameterType(Widget: Int, item: Widget): Int = Widget",
+    "fun localType(Widget: Int): Int {",
+    "  val copy: Widget? = null",
+    "  return Widget",
+    "}",
+    "fun expressionShadow(): Int { val Widget = 3; return Widget }",
+    "fun aliasShadow(): Int { val mark = 4; return mark }",
+  ],
+};
+
+export const KOTLIN_QUOTED_SCOPE_SOURCES: Record<string, string> = Object.fromEntries(
+  Object.entries(KOTLIN_QUOTED_SCOPE_LINES).map(([file, lines]) => [file, `${lines.join("\n")}\n`]),
+);

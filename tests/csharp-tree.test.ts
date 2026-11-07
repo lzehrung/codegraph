@@ -33,11 +33,15 @@ import { captureCli } from "./helpers/cli.js";
 import { collectCsharpImportDirectives, collectCsharpNamespaceFacts, csharpNamePath } from "../src/util/csharp-tree.js";
 import { parseSyntaxTree } from "../src/util/syntax-tree.js";
 import {
+  CSHARP_NEARER_RECEIVER_CASES,
+  csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
   csharpQualifiedReceiverFixture,
 } from "./helpers/csharp-qualified-receiver-fixture.js";
 import {
   CSHARP_ALIAS_CALL_SPELLINGS,
+  CSHARP_GENERIC_ALIAS_CASES,
+  csharpGenericAliasReceiverFixture,
   csharpAliasCallFixture,
   csharpUnknownAliasReceiverFixture,
 } from "./helpers/csharp-alias-call-fixture.js";
@@ -1611,6 +1615,17 @@ describe("C# qualified receiver syntax", () => {
     }
     expect(names.length).toBeGreaterThanOrEqual(4);
   });
+
+  it.each(CSHARP_NEARER_RECEIVER_CASES)("parses $root under a $scope root without recovery", ({ root, scope }) => {
+    const fixture = csharpNearerReceiverFixture(root, scope);
+    for (const source of Object.values(fixture.files)) {
+      const { tree } = getNativeSyntaxTreeExecution(source, CSHARP_SUPPORT);
+      expect(tree).not.toBeNull();
+      if (!tree) throw new Error("Expected native C# qualified receiver syntax");
+      expect([...tree.kindIds].filter((id) => tree.kinds[id] === "ERROR")).toEqual([]);
+      expect([...tree.isMissing].filter(Boolean)).toEqual([]);
+    }
+  });
 });
 
 describe("C# lowercase alias call syntax", () => {
@@ -1625,4 +1640,18 @@ describe("C# lowercase alias call syntax", () => {
       }
     }
   });
+
+  it.each(CSHARP_GENERIC_ALIAS_CASES)(
+    "parses alias $alias beside $scope parameter $parameter without recovery",
+    ({ alias, parameter, scope }) => {
+      const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
+      for (const source of Object.values(fixture.files)) {
+        const { tree } = getNativeSyntaxTreeExecution(source, CSHARP_SUPPORT);
+        expect(tree).not.toBeNull();
+        if (!tree) throw new Error("Expected native C# generic alias syntax");
+        expect([...tree.kindIds].filter((id) => tree.kinds[id] === "ERROR")).toEqual([]);
+        expect([...tree.isMissing].filter(Boolean)).toEqual([]);
+      }
+    },
+  );
 });
