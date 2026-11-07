@@ -1231,9 +1231,13 @@ export function buildScopeIndexFromSource(
 
     if (row.typeParameterTypes?.has(node.type)) {
       // Generic type parameters bind in the current type or function scope rather than
-      // skipping past it like field declarations do.
-      const name = node.childForFieldName("name");
-      if (name) addDecl(name, "type");
+      // skipping past it like field declarations do. Grammars without a `name` field
+      // (Kotlin) declare the parameter with its first identifier child.
+      const name = node.childForFieldName("name") ?? node.namedChildren.find((child) => idSet.has(child.type));
+      if (name) {
+        addDecl(name, "type");
+        preRegisteredNameSpans.add(nameSpanKey(name));
+      }
     }
 
     let declarationName = idSet.has(node.type) && support.isDeclarationName(node);

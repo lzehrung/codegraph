@@ -947,6 +947,78 @@ describe("Kotlin backtick-quoted top-level names", () => {
     }
   });
 
+  it("scopes class type parameters to their own declaration so same-named types elsewhere in the file keep resolving", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-type-parameter-leak-"));
+    try {
+      const lines = [
+        "package app",
+        "import lib.Widget as W",
+        "class A { fun hello() = 1 }",
+        "class Box<A>(val a: A)",
+        "class Other { fun take(a: A): Int = a.hello() }",
+        "class Widgets<W>(val w: W)",
+        "fun use(x: W): W = x",
+        "class Outer {",
+        "    class Inner<A>(val a: A)",
+        "    fun inside(a: A): Int = a.hello()",
+        "}",
+        "typealias Pair2<A> = Pair<A, A>",
+        "fun after(a: A): Int = a.hello()",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "Main.kt": lines.join("\n"),
+        "Lib.kt": "package lib\nclass Widget\n",
+      });
+      const main = files["Main.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const gotoLine = async (line: number, token: string, occurrence = 0): Promise<[string, number] | null> => {
+        let column = columnInLines(lines, line, token);
+        for (let skipped = 0; skipped < occurrence; skipped += 1) {
+          column = lines[line - 1]!.indexOf(token, column) + 1;
+        }
+        const result = await goToDefinition(index, { file: main, line, column });
+        if (result.status !== "ok") return null;
+        return [path.basename(result.definition.file), result.definition.range.start.line];
+      };
+
+      // Type uses outside a class's own declaration reach the peer class and the imported alias.
+      expect(await gotoLine(5, "A")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(5, "hello")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(7, "W")).toEqual(["Lib.kt", 2]);
+      expect(await gotoLine(7, "W", 1)).toEqual(["Lib.kt", 2]);
+      expect(await gotoLine(10, "A")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(10, "hello")).toEqual(["Main.kt", 3]);
+      expect(await gotoLine(13, "A")).toEqual(["Main.kt", 3]);
+      // Inside the declaring class the type parameter still wins.
+      expect(await gotoLine(4, "A", 1)).toEqual(["Main.kt", 4]);
+      expect(await gotoLine(6, "W", 2)).toEqual(["Main.kt", 6]);
+      expect(await gotoLine(9, "A", 1)).toEqual(["Main.kt", 9]);
+      expect(await gotoLine(12, "A", 1)).toEqual(["Main.kt", 12]);
+
+      const classA = await findReferences(index, { file: main, line: 3, column: columnInLines(lines, 3, "A") });
+      expect(classA.status).toBe("ok");
+      if (classA.status === "ok") {
+        const refLines = classA.references.map((site) => site.range.start.line);
+        expect(refLines).toEqual([3, 5, 10, 13]);
+      }
+      const hello = await findReferences(index, { file: main, line: 3, column: columnInLines(lines, 3, "hello") });
+      expect(hello.status).toBe("ok");
+      if (hello.status === "ok") {
+        expect(hello.references.map((site) => site.range.start.line)).toEqual([3, 5, 10, 13]);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.flatMap((edge) => {
+        if (edge.label !== "calls") return [];
+        return [`${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`];
+      });
+      expect(calls.sort()).toEqual(["after->hello", "inside->hello", "take->hello"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("binds quoted and plain spellings of one declaration from Kotlin and Java and leaves a missing name external", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-quoted-bindings-"));
     try {

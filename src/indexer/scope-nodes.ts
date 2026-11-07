@@ -452,6 +452,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     functionNameTypes: new Set(["function_declaration"]),
     classNameTypes: new Set(["class_declaration"]),
     enumMemberTypes: new Set(["enum_entry"]),
+    typeScopeTypes: new Set(["class_declaration", "type_alias"]),
+    typeParameterTypes: new Set(["type_parameter"]),
     unnamedFunctionScopeTypes: new Set(["lambda_literal"]),
     variableDeclarationTypes: new Set(["variable_declaration"]),
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
