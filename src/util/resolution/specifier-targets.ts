@@ -103,6 +103,7 @@ async function resolveLanguageImport(
     ...(metadata.pathAttribute ? { pathAttribute: metadata.pathAttribute } : {}),
     ...(metadata.statementStartIndex !== undefined ? { statementStartIndex: metadata.statementStartIndex } : {}),
     ...(metadata.includeForm ? { includeForm: metadata.includeForm } : {}),
+    ...(metadata.parsedFiles ? { parsedFiles: metadata.parsedFiles } : {}),
   });
 }
 

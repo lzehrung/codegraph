@@ -442,6 +442,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     file?: unknown;
     csharpNamespaceFacts?: unknown;
     jvmFacts?: unknown;
+    phpDeclarationNames?: unknown;
     importLookupIncomplete?: unknown;
     docstringsChecked?: unknown;
     exports?: unknown;
@@ -464,6 +465,9 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     mod.locals.every(hasValidCallableSymbol) &&
     (mod.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(mod.csharpNamespaceFacts)) &&
     (mod.jvmFacts === undefined || isJvmFileFacts(mod.jvmFacts)) &&
+    (mod.phpDeclarationNames === undefined ||
+      (Array.isArray(mod.phpDeclarationNames) &&
+        mod.phpDeclarationNames.every((name: unknown) => typeof name === "string"))) &&
     (mod.parseErrorRanges === undefined ||
       (Array.isArray(mod.parseErrorRanges) && mod.parseErrorRanges.every(isParseErrorRange))) &&
     mod.exports.every((entry: unknown) => {

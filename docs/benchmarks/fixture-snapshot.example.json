@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-07T19:56:26.419Z",
+  "generatedAt": "2026-11-07T20:20:33.606Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1123,
+  "numTotalTests": 1188,
   "numFailedTests": 0,
   "languages": [
     {
@@ -176,8 +176,8 @@
       "files": [
         "tests/languages/php.test.ts"
       ],
-      "tests": 61,
-      "passed": 61,
+      "tests": 126,
+      "passed": 126,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

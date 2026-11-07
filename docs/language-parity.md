@@ -172,6 +172,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Namespace names and ordinary variable uses are not symbols; a function declared inside another function is file-local.
 - Class, function, and method names match ASCII-case-insensitively; variables, properties, enum cases, and constants are case-sensitive.
 - Composer PSR-0, PSR-4, classmap, and `autoload.files` drive first-party resolution; autoload machinery is never a dependency edge.
+- `use`, `use function`, and `use const` path candidates must declare the qualified name in the matching symbol namespace when their source can be read and fully parsed. Plain paths and Composer PSR-0/PSR-4 mappings stay external after a declaration is renamed away; cold, disk, and memory builds agree. Declaration checks reuse native extraction or cached own-file facts; namespace ownership uses a linear tree pass, including semicolon and braced namespaces. Namespace-prefix file bindings such as `use App\Models;` followed by `Models\User` and fallback paths for unreadable, unparsed, or syntactically incomplete files remain unchanged across cache reloads ([PHP import rules](https://www.php.net/manual/en/language.namespaces.importing.php), [PSR-4](https://www.php-fig.org/psr/psr-4/)).
 
 ## Go
 

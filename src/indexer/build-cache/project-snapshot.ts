@@ -792,6 +792,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
+    ...(mod.phpDeclarationNames ? { phpDeclarationNames: [...mod.phpDeclarationNames] } : {}),
     ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
     ...(mod.parserDegraded ? { parserDegraded: true } : {}),
     ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
@@ -1254,6 +1255,9 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     moduleIndex.exports.every(isExportEntry) &&
     (moduleIndex.csharpNamespaceFacts === undefined || isCsharpNamespaceFacts(moduleIndex.csharpNamespaceFacts)) &&
     (moduleIndex.jvmFacts === undefined || isJvmFileFacts(moduleIndex.jvmFacts)) &&
+    (moduleIndex.phpDeclarationNames === undefined ||
+      (Array.isArray(moduleIndex.phpDeclarationNames) &&
+        moduleIndex.phpDeclarationNames.every((name) => typeof name === "string"))) &&
     (moduleIndex.parseErrorRanges === undefined ||
       (Array.isArray(moduleIndex.parseErrorRanges) && moduleIndex.parseErrorRanges.every(isParseErrorRange)))
   );

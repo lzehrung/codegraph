@@ -15,9 +15,17 @@ import {
   type LanguageProjectSymbolIndex,
 } from "./project-symbols.js";
 import { getImportableLanguageExtensions, getImportableLanguageGlobs } from "../resolution-candidates.js";
-import { confineResolvedPath, readUtf8WithoutBom } from "../paths.js";
+import { confineResolvedPath, fileIdentityKey, readUtf8WithoutBom } from "../paths.js";
 import { foldPhpIdentifierCase, PHP_IDENTIFIER_SOURCE } from "../identifiers.js";
 import { PHP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
+import { ensureParsedContext, type ParsedFileContext } from "../../indexer/parse-context.js";
+import { collectLocalsAndExportsFromSource } from "../../indexer/locals-and-exports.js";
+import {
+  collectPhpModuleImportNames,
+  phpModuleDeclaresImport,
+  type PhpModuleImportNames,
+} from "../../indexer/php-namespace-symbols.js";
+import { getNativeQueryExecution, isNativeRequiredUnavailableError } from "../../native/tree-sitter-native.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
 
@@ -67,6 +75,57 @@ type PhpSymbolIndexEntry = {
 const phpImportResolutionCache = new Map<string, string | null>();
 const phpSymbolIndexCache = new Map<string, PhpSymbolIndexEntry>();
 const phpProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
+const phpParsedModuleCache = new Map<string, PhpModuleImportNames | null | Promise<PhpModuleImportNames | null>>();
+let phpModuleNamesReader: ((file: string) => Promise<PhpModuleImportNames | null | undefined>) | undefined;
+
+/** Indexed candidates borrow the active build's memoized extraction instead of parsing for proof. */
+export function setPhpModuleImportNamesReader(reader: typeof phpModuleNamesReader): void {
+  phpModuleNamesReader = reader;
+}
+
+/** The active build supplies declarations from its single native extraction or an unchanged module row. */
+export function primePhpModuleImportNames(file: string, names: PhpModuleImportNames | null): void {
+  phpParsedModuleCache.set(fileIdentityKey(file), names);
+}
+
+function phpCandidateDeclaresImport(
+  file: string,
+  spec: string,
+  preferredKind: PhpSymbolKind | undefined,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): boolean | Promise<boolean> {
+  // Includes name files, not declarations. Their paths can contain no PHP namespace separator.
+  if (!preferredKind && !spec.includes("\\")) return true;
+  const fileKey = fileIdentityKey(file);
+  const cached = phpParsedModuleCache.get(fileKey);
+  if (cached !== undefined && !(cached instanceof Promise)) {
+    return !cached || phpModuleDeclaresImport(cached, spec, preferredKind ?? "class");
+  }
+  let pending = cached;
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const indexed = await phpModuleNamesReader?.(file);
+        if (indexed !== undefined) return indexed;
+        const parsed = await ensureParsedContext(file, parsedFiles?.get(fileKey));
+        if (parsed.sup.id !== "php") return null;
+        const nativeQueries = parsed.nativeQueries ?? getNativeQueryExecution(parsed.source, parsed.sup).results;
+        if (!nativeQueries) return null;
+        const module = collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, [], {
+          tree: parsed.tree,
+          nativeQueries,
+        });
+        return collectPhpModuleImportNames(module, parsed);
+      } catch (error) {
+        if (isNativeRequiredUnavailableError(error)) throw error;
+        // Without a readable syntax tree, the path remains the only available evidence.
+        return null;
+      }
+    })();
+    phpParsedModuleCache.set(fileKey, pending);
+  }
+  return pending.then((candidate) => !candidate || phpModuleDeclaresImport(candidate, spec, preferredKind ?? "class"));
+}
 
 async function getPhpProjectSymbolIndex(indexRoot: string): Promise<LanguageProjectSymbolIndex> {
   return await getOrCreateProjectSymbolIndex(phpProjectSymbolIndexCache, indexRoot, async () =>
@@ -445,6 +504,7 @@ async function resolvePhpSymbolImportPath(
   preferredKind?: "class" | "function" | "const",
   allowedFiles?: Set<string>,
   indexRoot?: string,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const projectIndex = await getPhpProjectSymbolIndex(indexRoot ?? projectRoot);
@@ -472,6 +532,9 @@ async function resolvePhpSymbolImportPath(
       if (allowedFiles && !allowedFiles.has(resolvedCandidate) && !allowedFiles.has(path.resolve(candidate))) {
         continue;
       }
+      const proof = phpCandidateDeclaresImport(resolvedCandidate, normalizedSpec, preferredKind, parsedFiles);
+      const matchesDeclaration = typeof proof === "boolean" ? proof : await proof;
+      if (!matchesDeclaration) continue;
       if (!symbolName || !preferredKind) {
         return resolvedCandidate;
       }
@@ -526,6 +589,7 @@ export async function resolvePhpImportPath(
   fromFile: string,
   spec: string,
   preferredKind?: "class" | "function" | "const",
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): Promise<string | null> {
   const cacheKey = `${projectRoot}::${fromFile}::${spec}::${preferredKind ?? "any"}`;
   const cached = phpImportResolutionCache.get(cacheKey);
@@ -544,6 +608,18 @@ export async function resolvePhpImportPath(
   const indexRoot = composerPath
     ? path.dirname(path.resolve(composerPath))
     : await resolveNearestManifestRoot(projectRoot, fromFile, PHP_PACKAGE_MANIFEST_NAMES);
+  // Named imports depend on their manifest scope, not on which file in that scope imports them.
+  const scopedCacheKey = `named::${projectRoot}::${indexRoot}::${normalizedSpec}::${preferredKind ?? "any"}`;
+  const scoped = phpImportResolutionCache.get(scopedCacheKey);
+  if (scoped !== undefined) {
+    phpImportResolutionCache.set(cacheKey, scoped);
+    return scoped;
+  }
+  const rememberResolution = (resolved: string | null): string | null => {
+    phpImportResolutionCache.set(cacheKey, resolved);
+    phpImportResolutionCache.set(scopedCacheKey, resolved);
+    return resolved;
+  };
   if (composerPath) {
     const composerConfig = await loadPhpComposerConfig(composerPath);
     if (composerConfig) {
@@ -553,16 +629,22 @@ export async function resolvePhpImportPath(
           await resolvePhpPsr4MappedPath(normalizedSpec, composerConfig.psr4),
         );
         if (psr4Resolved) {
-          phpImportResolutionCache.set(cacheKey, psr4Resolved);
-          return psr4Resolved;
+          const proof = phpCandidateDeclaresImport(psr4Resolved, normalizedSpec, preferredKind, parsedFiles);
+          const matchesDeclaration = typeof proof === "boolean" ? proof : await proof;
+          if (matchesDeclaration) {
+            return rememberResolution(psr4Resolved);
+          }
         }
         const psr0Resolved = await confineResolvedPath(
           projectRoot,
           await resolvePhpPsr0MappedPath(normalizedSpec, composerConfig.psr0),
         );
         if (psr0Resolved) {
-          phpImportResolutionCache.set(cacheKey, psr0Resolved);
-          return psr0Resolved;
+          const proof = phpCandidateDeclaresImport(psr0Resolved, normalizedSpec, preferredKind, parsedFiles);
+          const matchesDeclaration = typeof proof === "boolean" ? proof : await proof;
+          if (matchesDeclaration) {
+            return rememberResolution(psr0Resolved);
+          }
         }
       }
 
@@ -573,14 +655,13 @@ export async function resolvePhpImportPath(
         preferredKind,
         autoloadFiles,
         indexRoot,
+        parsedFiles,
       );
       if (symbolResolved) {
-        phpImportResolutionCache.set(cacheKey, symbolResolved);
-        return symbolResolved;
+        return rememberResolution(symbolResolved);
       }
 
-      phpImportResolutionCache.set(cacheKey, null);
-      return null;
+      return rememberResolution(null);
     }
   }
 
@@ -590,23 +671,30 @@ export async function resolvePhpImportPath(
     preferredKind,
     undefined,
     indexRoot,
+    parsedFiles,
   );
   if (symbolResolved) {
-    phpImportResolutionCache.set(cacheKey, symbolResolved);
-    return symbolResolved;
+    return rememberResolution(symbolResolved);
   }
 
-  const pathLikeResolved = await confineResolvedPath(
+  const pathLikeCandidate = await confineResolvedPath(
     projectRoot,
     await resolvePathLikePhpModule(projectRoot, normalizedSpec.replace(/\\/g, "/")),
   );
-  phpImportResolutionCache.set(cacheKey, pathLikeResolved);
-  return pathLikeResolved;
+  let pathLikeResolved: string | null = null;
+  if (pathLikeCandidate) {
+    const proof = phpCandidateDeclaresImport(pathLikeCandidate, normalizedSpec, preferredKind, parsedFiles);
+    const matchesDeclaration = typeof proof === "boolean" ? proof : await proof;
+    if (matchesDeclaration) pathLikeResolved = pathLikeCandidate;
+  }
+  return rememberResolution(pathLikeResolved);
 }
 
 export function clearPhpResolutionCaches(): void {
   phpImportResolutionCache.clear();
   phpSymbolIndexCache.clear();
   phpProjectSymbolIndexCache.clear();
+  phpParsedModuleCache.clear();
+  phpModuleNamesReader = undefined;
   clearPhpComposerResolutionCaches();
 }

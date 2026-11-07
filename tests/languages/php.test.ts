@@ -1,10 +1,18 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { buildSymbolGraph, defNodeId } from "../../src/graphs/symbol-graph.js";
-import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import {
+  type BuildReport,
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  collectLocalsAndExportsFromSource,
+  findReferences,
+  goToDefinition,
+  parseFile,
+} from "../../src/index.js";
 import { findCallHierarchy } from "../../src/indexer/call-hierarchy.js";
 import { findReferencesById, goToDefinitionById, listSymbols } from "../../src/indexer/symbols.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
@@ -19,6 +27,19 @@ import {
   declarationImportTargets,
   withRestoredDeclarationImport,
 } from "../helpers/restored-declaration-import-fixture.js";
+import {
+  PHP_PATH_IMPORT_FORMS,
+  PHP_PATH_MAPPINGS,
+  phpPathFallbackFixture,
+  PHP_INCOMPLETE_DECLARATION_SOURCES,
+} from "../helpers/php-path-fallback-fixture.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+} from "../../src/native/tree-sitter-native.js";
+import { loadBinding } from "../../src/native/runtime.js";
+import { collectPhpModuleImportNames } from "../../src/indexer/php-namespace-symbols.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",
@@ -1243,6 +1264,316 @@ describe("PHP restored declaration imports", () => {
         expect(declarationImportTargets(restored, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
         expect(declarationImportTargets(restored, consumer)).not.toContain(`file:${fileIdentityKey(decoy)}`);
       });
+    },
+  );
+});
+
+describe("PHP path-fallback declaration proof", () => {
+  for (const mapping of PHP_PATH_MAPPINGS) {
+    it.each(PHP_PATH_IMPORT_FORMS)(
+      `checks the qualified $name declaration before binding a ${mapping} path`,
+      async (form) => {
+        const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-path-proof-"));
+        try {
+          const fixture = phpPathFallbackFixture(mapping, form, true);
+          const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: fixture.missingSource });
+          const consumer = files["Use.php"]!;
+          const missing = await buildProjectIndex(root, { cache: "off", threads: 1 });
+          expect(declarationImportTargets(missing, consumer)).toEqual(["external:App\\Gadget"]);
+          expect(missing.byFile.get(fileIdentityKey(consumer))?.imports[0]?.resolved).toEqual({
+            external: "App\\Gadget",
+          });
+
+          await writeFile(files[fixture.owner]!, fixture.ownerSource, "utf8");
+          const present = await buildProjectIndex(root, { cache: "off", threads: 1 });
+          expect(declarationImportTargets(present, consumer)).toEqual([
+            `file:${fileIdentityKey(files[fixture.owner]!)}`,
+          ]);
+          expect(declarationImportTargets(present, consumer)).not.toContain(
+            `file:${fileIdentityKey(files["Decoy.php"]!)}`,
+          );
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it(`preserves namespace-prefix aliases beside a misleading ${mapping} filename`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-prefix-proof-"));
+      try {
+        const fixture = phpPathFallbackFixture(mapping);
+        const prefixOwner = mapping === "plain" ? "App/Models.php" : "src/Models.php";
+        const userOwner = mapping === "plain" ? "App/Models/User.php" : "src/Models/User.php";
+        const lines = [
+          "<?php",
+          "namespace Client;",
+          "use App\\Models;",
+          "function consume() { return new Models\\User(); }",
+        ];
+        const files = await writeFixtureFiles(root, {
+          ...fixture.files,
+          [prefixOwner]: "<?php namespace Wrong; class Models {}",
+          [userOwner]: "<?php namespace App\\Models; class User {}",
+          "Other.php": "<?php namespace Other; class User {}",
+          "Use.php": lines.join("\n"),
+          "Function.php": "<?php\nuse function App\\Models;\n",
+        });
+        const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        expect(declarationImportTargets(index, files["Use.php"]!)).toContain(
+          `file:${fileIdentityKey(files[userOwner]!)}`,
+        );
+        expect(declarationImportTargets(index, files["Use.php"]!)).not.toContain(
+          `file:${fileIdentityKey(files[prefixOwner]!)}`,
+        );
+        expect(declarationImportTargets(index, files["Function.php"]!)).toEqual(["external:App\\Models"]);
+        const binding = index.byFile.get(fileIdentityKey(files["Use.php"]!))?.imports[0];
+        expect(binding?.from).toBe("App\\Models");
+        expect(typeof binding?.resolved === "string" && fileIdentityKey(binding.resolved)).toBe(
+          fileIdentityKey(files[userOwner]!),
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it(`retains the ${mapping} path when the candidate cannot be parsed`, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-unparsed-proof-"));
+      try {
+        const fixture = phpPathFallbackFixture(mapping);
+        const files = await writeFixtureFiles(root, {
+          ...fixture.files,
+          [fixture.owner]: `<?php\n/*${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}*/\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        expect(declarationImportTargets(index, files["Use.php"]!)).toEqual([
+          `file:${fileIdentityKey(files[fixture.owner]!)}`,
+        ]);
+        expect(index.byFile.get(fileIdentityKey(files[fixture.owner]!))?.locals).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("keeps file includes independent of the declarations they contain", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-include-proof-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "App/Gadget.php": "<?php namespace App; class Different {}",
+        "Use.php": "<?php\nrequire_once 'App/Gadget.php';\n",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(declarationImportTargets(index, files["Use.php"]!)).toEqual([
+        `file:${fileIdentityKey(files["App/Gadget.php"]!)}`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP path-proof native extraction reuse", () => {
+  it("extracts each indexed file once and refreshes memory-cached proofs after a declaration changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-proof-extraction-"));
+    try {
+      const fixture = phpPathFallbackFixture("psr4");
+      const files = await writeFixtureFiles(root, fixture.files);
+      const state = loadBinding();
+      if (!state.loaded || !state.binding.extractLanguage) throw new Error("Native addon required for PHP extraction");
+      const extractLanguage = state.binding.extractLanguage;
+      const extractedSources: string[] = [];
+      __setNativeTreeSitterBindingForTests({
+        ...state,
+        binding: {
+          ...state.binding,
+          extractLanguage: (source, querySetId) => {
+            extractedSources.push(source);
+            return extractLanguage(source, querySetId);
+          },
+        },
+      });
+      const options = { cache: "memory" as const, useNativeWorkers: false, threads: 1 };
+      const initial = await buildProjectIndex(root, options);
+      const owner = files[fixture.owner]!;
+      const consumer = files["Use.php"]!;
+      expect(declarationImportTargets(initial, consumer)).toEqual([`file:${fileIdentityKey(owner)}`]);
+      const expectedSources = Object.entries(fixture.files)
+        .filter(([name]) => name.endsWith(".php"))
+        .map(([, source]) => source);
+      expect(extractedSources.sort()).toEqual(expectedSources.sort());
+
+      for (const [source, expected] of [
+        [fixture.missingSource, ["external:App\\Gadget"]],
+        [fixture.ownerSource, [`file:${fileIdentityKey(owner)}`]],
+      ] as const) {
+        extractedSources.length = 0;
+        await writeFile(owner, source, "utf8");
+        const updated = await buildProjectIndexIncremental(root, options);
+        expect(declarationImportTargets(updated, consumer)).toEqual(expected);
+        expect(extractedSources.sort()).toEqual([source, fixture.files["Use.php"]!].sort());
+      }
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts each indexed PHP file once through native workers with the serial import results", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-worker-extraction-"));
+    try {
+      const fixture = phpPathFallbackFixture("psr4");
+      const files = await writeFixtureFiles(root, fixture.files);
+      const serial = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false, threads: 1 });
+      const report: BuildReport = { timings: {} };
+      const workers = await buildProjectIndex(root, {
+        cache: "off",
+        useNativeWorkers: true,
+        nativeThreads: 1,
+        threads: 1,
+        report,
+      });
+      const phpFileCount = Object.keys(fixture.files).filter((name) => name.endsWith(".php")).length;
+      expect(report.workerPool?.enabled).toBe(true);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+      expect(report.workerPool?.tasksSubmitted).toBe(phpFileCount);
+      expect(declarationImportTargets(workers, files["Use.php"]!)).toEqual([
+        `file:${fileIdentityKey(files[fixture.owner]!)}`,
+      ]);
+      for (const file of Object.values(files)) {
+        expect(declarationImportTargets(workers, file)).toEqual(declarationImportTargets(serial, file));
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PHP incomplete path-candidate proof", () => {
+  for (const mapping of PHP_PATH_MAPPINGS) {
+    for (const form of PHP_PATH_IMPORT_FORMS.filter((entry) => entry.name === entry.role)) {
+      it.each(PHP_INCOMPLETE_DECLARATION_SOURCES)(
+        `preserves ${mapping} ${form.role} resolution for $name`,
+        async ({ source }) => {
+          const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-incomplete-proof-"));
+          try {
+            const fixture = phpPathFallbackFixture(mapping, form);
+            const files = await writeFixtureFiles(root, { ...fixture.files, [fixture.owner]: source });
+            const owner = files[fixture.owner]!;
+            const consumer = files["Use.php"]!;
+            // Composer filename mappings are class-only; plain paths also serve function and const imports.
+            const hasPathFallback = mapping === "plain" || form.role === "class";
+            const expectedTargets = hasPathFallback ? [`file:${fileIdentityKey(owner)}`] : ["external:App\\Gadget"];
+            const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+            expect(index.byFile.get(fileIdentityKey(owner))?.parseErrorRanges?.length).toBeGreaterThan(0);
+            expect(declarationImportTargets(index, consumer)).toEqual(expectedTargets);
+            expect(declarationImportTargets(index, consumer)).not.toContain(
+              `file:${fileIdentityKey(files["Decoy.php"]!)}`,
+            );
+            const result = await goToDefinition(index, {
+              file: consumer,
+              line: 4,
+              column: columnOf(fixture.lines, 4, "Gadget"),
+            });
+            expect(result.status).toBe("not_found");
+            const graph = await buildSymbolGraphDetailed(index);
+            expect(graph.edges.filter((edge) => graph.nodes.get(edge.from)?.name === "consume")).toEqual([]);
+          } finally {
+            await rm(root, { recursive: true, force: true });
+          }
+        },
+      );
+    }
+  }
+});
+
+describe("PHP namespace region collection", () => {
+  it.each(["semicolon", "braced"] as const)(
+    "maps %s namespaces in one root pass, including reversed declaration order",
+    async (style) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-namespace-regions-"));
+      try {
+        const lines = ["<?php"];
+        if (style === "braced") lines.push("namespace { function globalFn() { return -1; } }");
+        const decoyLines: number[] = [];
+        for (let namespace = 0; namespace < 4; namespace += 1) {
+          lines.push(`namespace N${namespace}${style === "braced" ? " {" : ";"}`);
+          lines.push("class Box {}", `const TOKEN = ${namespace};`);
+          for (let fn = 0; fn < 64; fn += 1) {
+            lines.push(`function f${fn}() { return ${namespace * 1000 + fn}; }`);
+            if (fn === 63) decoyLines.push(lines.length);
+          }
+          if (style === "braced") lines.push("}");
+        }
+        const useLines = [
+          "<?php",
+          "namespace Client;",
+          "use function N3\\f63;",
+          "function consume() { return f63(); }",
+        ];
+        const files = await writeFixtureFiles(root, {
+          "Functions.php": lines.join("\n"),
+          "Use.php": useLines.join("\n"),
+        });
+        const parsed = await parseFile(files["Functions.php"]!);
+        if (!parsed.nativeQueries) throw new Error("Expected native PHP extraction queries");
+        const module = collectLocalsAndExportsFromSource(files["Functions.php"]!, parsed.source, parsed.sup, [], {
+          tree: parsed.tree,
+          nativeQueries: parsed.nativeQueries,
+        });
+        const rootChildren = parsed.tree.rootNode.namedChildren.length;
+        const childReads = vi.spyOn(parsed.tree.rootNode, "child");
+        const positionLookups = vi.spyOn(parsed.tree.rootNode, "descendantForPosition");
+        const names = collectPhpModuleImportNames({ ...module, locals: [...module.locals].reverse() }, parsed);
+        expect(names.incomplete).toBe(false);
+        expect(names.functions.size).toBe(style === "braced" ? 257 : 256);
+        expect(names.functions.has("globalfn")).toBe(style === "braced");
+        expect(names.classes.size).toBe(4);
+        expect(names.consts.size).toBe(4);
+        for (let namespace = 0; namespace < 4; namespace += 1) {
+          expect(names.functions.has(`n${namespace}\\f0`)).toBe(true);
+          expect(names.functions.has(`n${namespace}\\f63`)).toBe(true);
+          expect(names.classes.has(`n${namespace}\\box`)).toBe(true);
+          expect(names.consts.has(`n${namespace}\\TOKEN`)).toBe(true);
+          expect(names.consts.has(`n${namespace}\\token`)).toBe(false);
+        }
+        expect(childReads.mock.calls.length).toBeLessThanOrEqual(rootChildren + 1);
+        expect(positionLookups).not.toHaveBeenCalled();
+        childReads.mockRestore();
+        positionLookups.mockRestore();
+
+        const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+        const result = await goToDefinition(index, {
+          file: files["Use.php"]!,
+          line: 4,
+          column: columnOf(useLines, 4, "f63"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected exact PHP namespace function");
+        expect(result.definition.range.start.line).toBe(decoyLines[3]);
+        const references = await findReferences(index, {
+          file: result.definition.file,
+          line: result.definition.range.start.line,
+          column: result.definition.range.start.column,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected namespaced PHP function references");
+        expect(
+          references.references.some((site) => site.file === files["Use.php"] && site.range.start.line === 4),
+        ).toBe(true);
+        expect(
+          references.references.some(
+            (site) => site.file === files["Functions.php"] && decoyLines.slice(0, 3).includes(site.range.start.line),
+          ),
+        ).toBe(false);
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges.filter(
+          (edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "consume",
+        );
+        expect(calls.map((edge) => edge.to)).toEqual([defNodeId(result.definition)]);
+      } finally {
+        vi.restoreAllMocks();
+        await rm(root, { recursive: true, force: true });
+      }
     },
   );
 });

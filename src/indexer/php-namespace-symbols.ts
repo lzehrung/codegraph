@@ -12,6 +12,7 @@ import {
   canonicalPhpReferenceNames,
   findPhpImportAlias,
   inferPhpQualifiedReferenceImportType,
+  readPhpNamespaceName,
   readPhpNamespaceFromRange,
 } from "./navigation-php.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
@@ -21,6 +22,8 @@ import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { definitionIdentityKey } from "./reference-context.js";
 import type { Binding } from "./scope-types.js";
+import { ProjectedSyntaxTree } from "../native/projected-tree.js";
+import { collectParseErrorRanges } from "./parse-errors.js";
 
 /**
  * Absolute PHP class/trait/interface spellings for `name` at `node`, in PHP lookup order.
@@ -116,6 +119,169 @@ export const PHP_CLASS_LIKE_KINDS: ReadonlySet<SymbolKind> = new Set([
 function phpConstantQualifiedKey(name: string): string {
   const separator = name.lastIndexOf("\\");
   return separator < 0 ? name : foldPhpIdentifierCase(name.slice(0, separator)) + name.slice(separator);
+}
+
+type PhpNamespaceRegion = { start: number; end: number; name: string | null };
+type PhpNamespaceLookup = { regions: PhpNamespaceRegion[]; cursor: number };
+
+function collectPhpNamespaceRegions(parsed: ParsedFileContext): PhpNamespaceLookup {
+  const root = parsed.tree.rootNode;
+  const regions: PhpNamespaceRegion[] = [];
+  let openRegion: PhpNamespaceRegion | undefined;
+  for (let index = 0; ; index += 1) {
+    const child = root.child(index);
+    if (!child) break;
+    if (child.type !== "namespace_definition") continue;
+    if (openRegion) openRegion.end = child.startIndex;
+    const body = child.childForFieldName("body");
+    const region = {
+      start: child.startIndex,
+      end: body ? child.endIndex : root.endIndex,
+      name: readPhpNamespaceName(child, parsed.source),
+    };
+    regions.push(region);
+    openRegion = body ? undefined : region;
+  }
+  return { regions, cursor: -1 };
+}
+
+function phpNamespaceAtOffset(lookup: PhpNamespaceLookup, offset: number): string | null {
+  const regions = lookup.regions;
+  let cursor = lookup.cursor;
+  if (cursor >= 0 && offset < regions[cursor]!.start) {
+    // Captures need not be source-ordered. Seek backward without scanning the tree again.
+    let low = 0;
+    let high = cursor;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (regions[middle]!.start <= offset) low = middle + 1;
+      else high = middle;
+    }
+    cursor = low - 1;
+  } else {
+    while (cursor + 1 < regions.length && regions[cursor + 1]!.start <= offset) cursor += 1;
+  }
+  lookup.cursor = cursor;
+  const region = regions[cursor];
+  return region && offset < region.end ? region.name : null;
+}
+
+function phpCanonicalDeclarationName(
+  local: SymbolDef,
+  parsed: ParsedFileContext,
+  namespaces: PhpNamespaceLookup,
+): string {
+  const offset = local.range.start.index;
+  const namespace =
+    offset === undefined
+      ? readPhpNamespaceFromRange(parsed.tree, parsed.source, local.range)
+      : phpNamespaceAtOffset(namespaces, offset);
+  return (namespace ? `${namespace}\\${local.localName}` : local.localName).replace(/^\\+/, "");
+}
+
+function phpDeclarationsIncomplete(moduleEntry: ModuleIndex, parsed: ParsedFileContext): boolean {
+  if (moduleEntry.parserDegraded) return true;
+  if (moduleEntry.parseErrorRanges) return !!moduleEntry.parseErrorRanges.length;
+  if (!(parsed.tree instanceof ProjectedSyntaxTree)) return true;
+  return !!collectParseErrorRanges(parsed.tree).length;
+}
+
+export const PHP_INCOMPLETE_DECLARATION_IDENTITY = "incomplete:";
+
+export type PhpModuleImportNames = {
+  classes: Set<string>;
+  functions: Set<string>;
+  consts: Set<string>;
+  namespaces: Set<string>;
+  incomplete: boolean;
+};
+
+/** Compact declaration facts using the same qualified names and roles as PHP navigation. */
+export function collectPhpModuleImportNames(moduleEntry: ModuleIndex, parsed: ParsedFileContext): PhpModuleImportNames {
+  const names: PhpModuleImportNames = {
+    classes: new Set(),
+    functions: new Set(),
+    consts: new Set(),
+    namespaces: new Set(),
+    incomplete: phpDeclarationsIncomplete(moduleEntry, parsed),
+  };
+  const namespaces = collectPhpNamespaceRegions(parsed);
+  for (const local of moduleEntry.locals) {
+    if (local.isMember) continue;
+    const canonical = phpCanonicalDeclarationName(local, parsed, namespaces);
+    if (PHP_CLASS_LIKE_KINDS.has(local.kind)) names.classes.add(foldPhpIdentifierCase(canonical));
+    else if (local.kind === SymbolKind.Function) names.functions.add(foldPhpIdentifierCase(canonical));
+    else if (local.kind === SymbolKind.Variable) names.consts.add(phpConstantQualifiedKey(canonical));
+  }
+  for (const region of namespaces.regions) {
+    if (region.name) names.namespaces.add(foldPhpIdentifierCase(region.name));
+  }
+  return names;
+}
+
+/** Own-file declaration identities for incremental import invalidation, including each PHP symbol namespace. */
+export function phpDeclarationImportNames(names: PhpModuleImportNames): string[] {
+  const result: string[] = [];
+  if (names.incomplete) result.push(PHP_INCOMPLETE_DECLARATION_IDENTITY);
+  for (const name of names.classes) result.push(`class:${name}`);
+  for (const name of names.functions) result.push(`function:${name}`);
+  for (const name of names.consts) result.push(`const:${name}`);
+  for (const namespace of names.namespaces) {
+    let name = namespace;
+    while (name) {
+      result.push(`namespace:${name}`);
+      const separator = name.lastIndexOf("\\");
+      if (separator < 0) break;
+      name = name.slice(0, separator);
+    }
+  }
+  return result;
+}
+
+/** Rehydrate own-file facts without reading or parsing an unchanged cached PHP file. */
+export function phpModuleImportNamesFromDeclarations(
+  identities: readonly string[],
+  moduleEntry?: Pick<ModuleIndex, "parserDegraded" | "parseErrorRanges">,
+): PhpModuleImportNames {
+  const names: PhpModuleImportNames = {
+    classes: new Set(),
+    functions: new Set(),
+    consts: new Set(),
+    namespaces: new Set(),
+    incomplete: !!(moduleEntry?.parserDegraded || moduleEntry?.parseErrorRanges?.length),
+  };
+  for (const identity of identities) {
+    if (identity === PHP_INCOMPLETE_DECLARATION_IDENTITY) {
+      names.incomplete = true;
+      continue;
+    }
+    const separator = identity.indexOf(":");
+    const role = identity.slice(0, separator);
+    const name = identity.slice(separator + 1);
+    if (role === "class") names.classes.add(name);
+    else if (role === "function") names.functions.add(name);
+    else if (role === "const") names.consts.add(name);
+    else if (role === "namespace") names.namespaces.add(name);
+  }
+  return names;
+}
+
+/** A parsed file must declare the imported name and role; class imports can also alias namespace prefixes. */
+export function phpModuleDeclaresImport(
+  names: PhpModuleImportNames,
+  from: string,
+  role: "class" | "function" | "const",
+): boolean {
+  if (names.incomplete) return true;
+  const name = from.trim().replace(/^\\+/, "");
+  if (role === "const") return names.consts.has(phpConstantQualifiedKey(name));
+  const key = foldPhpIdentifierCase(name);
+  if (role === "function") return names.functions.has(key);
+  if (names.classes.has(key)) return true;
+  for (const namespace of names.namespaces) {
+    if (namespace === key || namespace.startsWith(`${key}\\`)) return true;
+  }
+  return false;
 }
 
 /** A PHP use binds a qualified symbol name, even without a Composer file mapping. */
@@ -378,11 +544,11 @@ async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNam
 
   for (const moduleEntry of phpModules) {
     const parsed = parsedByFile.get(fileIdentityKey(moduleEntry.file)) ?? null;
+    if (!parsed) continue;
+    const namespaces = collectPhpNamespaceRegions(parsed);
     for (const local of moduleEntry.locals) {
       if (local.isMember) continue;
-      if (!parsed) continue;
-      const phpNamespace = readPhpNamespaceFromRange(parsed.tree, parsed.source, local.range);
-      const canonical = (phpNamespace ? `${phpNamespace}\\${local.localName}` : local.localName).replace(/^\\+/, "");
+      const canonical = phpCanonicalDeclarationName(local, parsed, namespaces);
       const cacheKey = definitionIdentityKey(local);
       if (!canonical) continue;
       canonicalByDefinition.set(cacheKey, canonical);

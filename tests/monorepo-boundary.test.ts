@@ -254,12 +254,16 @@ describe("monorepo resolution boundaries", () => {
     const serviceA = path.join(pkgA, "src", "Service.php");
     const serviceB = path.join(pkgB, "src", "Service.php");
     const consumerA = path.join(pkgA, "consumer.php");
+    const consumerB = path.join(pkgB, "consumer.php");
+    const secondConsumerA = path.join(pkgA, "second.php");
 
     await writeFile(path.join(pkgA, "composer.json"), JSON.stringify({ autoload: { "psr-4": { "App\\": "src/" } } }));
     await writeFile(path.join(pkgB, "composer.json"), JSON.stringify({ autoload: { "psr-4": { "App\\": "src/" } } }));
     await writeFile(serviceA, "<?php\nnamespace App;\nclass Service {}\n");
     await writeFile(serviceB, "<?php\nnamespace App;\nclass Service {}\n");
     await writeFile(consumerA, "<?php\nuse App\\Service;\n");
+    await writeFile(consumerB, "<?php\nuse App\\Service;\n");
+    await writeFile(secondConsumerA, "<?php\nuse App\\Service;\n");
 
     const local = await resolvePhpImportPath(root, consumerA, "App\\Service");
     expect(posix(local ?? "")).toBe(posix(serviceA));
@@ -267,6 +271,12 @@ describe("monorepo resolution boundaries", () => {
 
     const viaSpecifier = await resolveImportSpecifier(root, consumerA, "App\\Service", "php");
     expect(posix(String(viaSpecifier))).toBe(posix(serviceA));
+
+    const sibling = await resolvePhpImportPath(root, consumerB, "App\\Service");
+    expect(posix(sibling ?? "")).toBe(posix(serviceB));
+    const sameScope = await resolvePhpImportPath(root, secondConsumerA, "App\\Service");
+    expect(posix(sameScope ?? "")).toBe(posix(serviceA));
+    expect(posix(sameScope ?? "")).not.toBe(posix(serviceB));
   });
 
   it("binds a Python module to the nearest pyproject, not a same-named root or sibling", async () => {
