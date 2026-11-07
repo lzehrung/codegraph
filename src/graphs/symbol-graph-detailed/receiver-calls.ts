@@ -1883,7 +1883,8 @@ export function emitReceiverCallEdges(
     // coalesced type identity so lookup starts on the whole member set.
     const owner = ownerAnchors.get(rawOwner) ?? rawOwner;
     const memberScope = candidate.memberScope ?? inferCallMemberScope(candidate.site, sourceCache);
-    const languageId = supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions)?.id ?? "";
+    const support = supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions);
+    const languageId = support?.id ?? "";
     activeCandidate = candidate;
     const lookup = selectMember([owner], model, {
       name: candidate.memberName,
@@ -1891,6 +1892,7 @@ export function emitReceiverCallEdges(
       scope: memberScope,
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+      normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
       separateMemberScopes: hasSeparateMemberScopes(languageId),
       startAtAncestor: candidate.viaSupertypes,
       inheritOverloads: inheritsMemberOverloads(languageId),

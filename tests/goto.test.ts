@@ -54,6 +54,7 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
@@ -2522,6 +2523,48 @@ describe("Go to Definition", () => {
           expect(callersOf(defs, name), `callers of ${name} in app`).toEqual(["useNames"]);
           expect(callersOf(decoy, name), `callers of ${name} in the decoy package`).toEqual(["useDecoys"]);
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves Swift quoted and plain names across imports and receiver calls without choosing a same-named owner", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-goto-"));
+      try {
+        const paths = await writeFixtureFiles(root, SWIFT_QUOTED_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const site = (name: string, line: number, token: string, occurrence = 0) =>
+          swiftQuotedSite(paths, name, line, token, occurrence);
+        for (const [use, target, line] of [
+          [site("Api.swift", 5, "helper"), "Api.swift", 4],
+          [site("Api.swift", 5, "helper", 1), "Api.swift", 4],
+          [site("Use.swift", 4, "top"), "Api.swift", 1],
+          [site("Use.swift", 5, "`top`"), "Api.swift", 1],
+          [site("Use.swift", 6, "regular"), "Api.swift", 2],
+          [site("Use.swift", 7, "`regular`"), "Api.swift", 2],
+          [site("Use.swift", 10, "Widget"), "Api.swift", 3],
+          [site("Use.swift", 13, "`Widget`"), "Api.swift", 3],
+          [site("Use.swift", 11, "helper"), "Api.swift", 4],
+          [site("Use.swift", 12, "`helper`"), "Api.swift", 4],
+          [site("Use.swift", 16, "`helper`"), "Api.swift", 8],
+          [site("Imports.swift", 1, "`Widget`"), "Api.swift", 3],
+          [site("Imports.swift", 2, "`top`"), "Api.swift", 1],
+          [site("Extension.swift", 2, "`helper`"), "Api.swift", 4],
+          [site("Extension.swift", 5, "helper"), "Api.swift", 8],
+          [site("Api.swift", 13, "`class`"), "Api.swift", 12],
+          [site("Api.swift", 16, "`default`"), "Api.swift", 15],
+          [site("Other.swift", 4, "helper"), "Other.swift", 2],
+          [site("Other.swift", 4, "`default`"), "Other.swift", 5],
+          [site("Api.swift", 19, "`plainOnly`"), "Api.swift", 18],
+          [site("Use.swift", 18, "`plainOnly`"), "Api.swift", 18],
+          [site("Other.swift", 6, "plainOnly"), "Other.swift", 6],
+        ] as const) {
+          await testGoToDefinition(index, use.file, use.line, use.column, paths[target]!, line);
+        }
+        const imported = index.byFile.get(fileIdentityKey(paths["Imports.swift"]!));
+        const namedImports = imported?.imports.filter((binding) => binding.kind === "named");
+        expect(namedImports?.map((binding) => binding.local)).toEqual(["`Widget`", "`top`"]);
+        expect(namedImports?.map((binding) => binding.resolved)).toEqual([paths["Api.swift"], paths["Api.swift"]]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

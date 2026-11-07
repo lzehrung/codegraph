@@ -63,6 +63,7 @@ import {
   RESTORED_DECLARATION_FIXTURES,
   withRestoredDeclarationImport,
 } from "./helpers/restored-declaration-import-fixture.js";
+import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
@@ -3832,6 +3833,96 @@ describe("Find References", () => {
         await expectExactly(site(decoy, decoyLines, 3, cls), [site(decoy, decoyLines, 9, cls)]);
         await expectExactly(site(decoy, decoyLines, 5, fn), [site(decoy, decoyLines, 9, fn)]);
         await expectExactly(site(decoy, decoyLines, 7, astral), [site(decoy, decoyLines, 9, astral)]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reports complete Swift references for both spellings without including same-named decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-quoted-references-"));
+      try {
+        const paths = await writeFixtureFiles(root, SWIFT_QUOTED_SOURCES);
+        const index = await createTestIndexFromFiles(root, Object.values(paths));
+        const site = (name: string, line: number, token: string, occurrence = 0) =>
+          swiftQuotedSite(paths, name, line, token, occurrence);
+        const assertExact = async (
+          declaration: ReferenceLocation,
+          expected: readonly ReferenceLocation[],
+        ): Promise<void> => {
+          const result = await findReferences(index, declaration);
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") return;
+          expect(result.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+          const locations = result.references
+            .map((reference) => `${reference.file}:${reference.range.start.line}:${reference.range.start.column}`)
+            .sort();
+          const expectedLocations = expected
+            .map((location) => `${location.file}:${location.line}:${location.column}`)
+            .sort();
+          expect(locations).toEqual(expectedLocations);
+        };
+        await assertExact(site("Api.swift", 1, "`top`"), [
+          site("Api.swift", 1, "`top`"),
+          site("Use.swift", 2, "top"),
+          site("Use.swift", 4, "top"),
+          site("Use.swift", 5, "`top`"),
+          site("Imports.swift", 2, "`top`"),
+          site("Imports.swift", 3, "top"),
+        ]);
+        await assertExact(site("Api.swift", 2, "regular"), [
+          site("Api.swift", 2, "regular"),
+          site("Use.swift", 6, "regular"),
+          site("Use.swift", 7, "`regular`"),
+        ]);
+        await assertExact(site("Api.swift", 4, "`helper`"), [
+          site("Api.swift", 4, "`helper`"),
+          site("Api.swift", 5, "helper"),
+          site("Api.swift", 5, "helper", 1),
+          site("Api.swift", 5, "`helper`"),
+          site("Use.swift", 11, "helper"),
+          site("Use.swift", 12, "`helper`"),
+          site("Use.swift", 14, "helper"),
+          site("Imports.swift", 3, "helper"),
+          site("Extension.swift", 2, "`helper`"),
+        ]);
+        await assertExact(site("Api.swift", 8, "helper"), [
+          site("Api.swift", 8, "helper"),
+          site("Api.swift", 9, "`helper`"),
+          site("Use.swift", 16, "`helper`"),
+          site("Extension.swift", 5, "helper"),
+        ]);
+        await assertExact(site("Api.swift", 18, "plainOnly"), [
+          site("Api.swift", 18, "plainOnly"),
+          site("Api.swift", 19, "`plainOnly`"),
+          site("Use.swift", 18, "`plainOnly`"),
+        ]);
+        await assertExact(site("Other.swift", 6, "plainOnly"), [site("Other.swift", 6, "plainOnly")]);
+        await assertExact(site("Api.swift", 3, "`Widget`"), [
+          site("Api.swift", 3, "`Widget`"),
+          site("Use.swift", 1, "Widget"),
+          site("Use.swift", 10, "Widget"),
+          site("Use.swift", 10, "Widget", 1),
+          site("Use.swift", 13, "`Widget`"),
+          site("Use.swift", 13, "`Widget`", 1),
+          site("Imports.swift", 1, "`Widget`"),
+          site("Imports.swift", 3, "`Widget`"),
+        ]);
+        await assertExact(site("Api.swift", 12, "`class`"), [
+          site("Api.swift", 12, "`class`"),
+          site("Api.swift", 13, "`class`"),
+        ]);
+        await assertExact(site("Api.swift", 15, "`default`"), [
+          site("Api.swift", 15, "`default`"),
+          site("Api.swift", 16, "`default`"),
+        ]);
+        await assertExact(site("Other.swift", 2, "`helper`"), [
+          site("Other.swift", 2, "`helper`"),
+          site("Other.swift", 4, "helper"),
+        ]);
+        await assertExact(site("Other.swift", 5, "`default`"), [
+          site("Other.swift", 5, "`default`"),
+          site("Other.swift", 4, "`default`"),
+        ]);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

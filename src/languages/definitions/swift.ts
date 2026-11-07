@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { isNameFieldOnParent, nodeTypeIn } from "./shared.js";
+import { normalizeSwiftIdentifier } from "../../util/identifiers.js";
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
@@ -242,5 +243,6 @@ export const SWIFT_DEF: LanguageDefinition = {
   supportsCrossModuleSymbols: true,
   membersAreImplicitlyInScope: true,
   exportScopeBlockers: ["function_body", "lambda_literal"],
+  normalizeIdentifier: normalizeSwiftIdentifier,
 };
 registerLanguage(SWIFT_DEF);

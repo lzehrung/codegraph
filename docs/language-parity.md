@@ -139,7 +139,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ### Identifiers and file extensions
 
 - Extra extensions: `.pyw` (Python), `.rbw`/`.rake`/`.gemspec` (Ruby), `.ktm` (Kotlin), `.csx` (C#), `.phtml`/`.php4`/`.php8` (PHP), `.xhtml` (HTML), `.ddl`/`.pgsql`/`.mysql` (SQL).
-- Identifier equality: Python NFKC, Rust NFC, Java and C# ignore formatting characters; Kotlin removes identifier backticks but preserves case. Kotlin, Go, and JS/TS otherwise compare code points.
+- Identifier equality: Python NFKC, Rust NFC, Java and C# ignore formatting characters; Kotlin and Swift remove identifier backticks but preserve case. Kotlin, Go, and JS/TS otherwise compare code points.
 - Explicit links and includes resolve to aliases (`href="page.xhtml"`, `include 'partial.phtml'`); extensionless imports do not (`import util` is not `util.pyw`).
 - Unsupported, with no grammar pinned: `.sass`, Objective-C, Stylus (`.styl`), Go templates (`.templ`), Zig manifests (`.zon`).
 
@@ -273,7 +273,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - `private` and `fileprivate` extension members stay out of owners in other files.
 - A `where` extension shares members only with extensions of the same type whose constraint tokens match; logically equivalent constraints are not inferred.
 - An unproven nominal receiver does not gain constrained extension members.
-- References include same-spelled backtick-quoted member uses such as ``self.`class`()``. Mixed quoted and plain spellings of an ordinary member are not yet equivalent and can be omitted even when reference coverage says complete.
+- Quoted and plain spellings of a Swift identifier share case-sensitive identity in imports, same-directory peers, receiver members, references, and detailed call graphs. Backticks on keyword names such as `` `class` `` and `` `default` `` remain required by Swift syntax; symbol spelling and source ranges are unchanged.
 
 ## Zig
 

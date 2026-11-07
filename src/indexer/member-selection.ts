@@ -35,6 +35,8 @@ export type MemberSelectionOptions = {
   inheritOverloads?: boolean;
   /** Ruby reopening uses the first indexed declaration for a method name. */
   firstDeclarationWins?: boolean;
+  /** Language-specific identifier equality; source names remain unchanged. */
+  normalizeIdentifier?: ((name: string) => string) | undefined;
 };
 
 /** Static and instance members have independent lookup chains in these languages. */
@@ -93,7 +95,10 @@ function memberNameMatches<Owner, Member>(
   queryName: string,
 ): boolean {
   const name = model.name(member);
-  if (!options.phpCaseInsensitive) return name === queryName;
+  if (!options.phpCaseInsensitive) {
+    if (name === queryName) return true;
+    return options.normalizeIdentifier ? options.normalizeIdentifier(name) === queryName : false;
+  }
   if (model.callable(member)) return foldPhpIdentifierCase(name) === queryName;
   if (name === options.name) return true;
   return name.startsWith("$") && !options.name.startsWith("$") && name.slice(1) === options.name;
@@ -142,7 +147,9 @@ export function selectMember<Owner, Member>(
   } | null = options.inheritOverloads ? { subclasses: new Map(), declarations: [], accepted: [] } : null;
   let lenient: Member | undefined;
   let named = false;
-  const queryName = options.phpCaseInsensitive ? foldPhpIdentifierCase(options.name) : options.name;
+  const queryName = options.phpCaseInsensitive
+    ? foldPhpIdentifierCase(options.name)
+    : (options.normalizeIdentifier?.(options.name) ?? options.name);
   for (let depth = 0; depth < MAX_DEPTH && level.length; depth += 1) {
     const candidates: Member[] = [];
     const owners = overloadState ? new Map<Member, string>() : undefined;
