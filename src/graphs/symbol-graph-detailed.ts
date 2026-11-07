@@ -31,6 +31,7 @@ import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 import {
   createPythonReceiverResolutionCache,
   csharpAliasTableAnswers,
+  csharpAliasUsesHiddenByMembers,
   innermostNamespaceImport,
   resolveMemberAccessDefinition,
   sameParameterTypes,
@@ -414,6 +415,10 @@ export async function buildSymbolGraphDetailed(
         resolveExportFrom,
         scopeIndex,
       );
+      // C# binds a member of an enclosing type (own, partial, or inherited) before an alias of its name. The member
+      // lookup is asynchronous and the walks below read alias facts synchronously, so it runs once per module here.
+      const hiddenAliasUses =
+        sup.id === "csharp" ? await csharpAliasUsesHiddenByMembers(index, moduleEntry, parsed, scopeIndex) : undefined;
       const aliasToSpecifier = new Map<string, string>();
       if (isJsTsLanguage(sup.id)) {
         for (const imp of moduleEntry.imports) {
@@ -452,6 +457,7 @@ export async function buildSymbolGraphDetailed(
             sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
               ? innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier)
               : undefined;
+          if (hiddenAliasUses?.has(useNode.startIndex)) return undefined;
           if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode), imported?.from ?? aliasToSpecifier.get(alias))) {
             return undefined;
           }
@@ -535,6 +541,7 @@ export async function buildSymbolGraphDetailed(
         sup.id === "kotlin" &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
       const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
+        !hiddenAliasUses?.has(node.startIndex) &&
         moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name));
       // Kotlin values shadow aliases only in expressions. Deferred member lookup must settle
       // before its import fallback can prove a use; a type-position alias keeps its type namespace,

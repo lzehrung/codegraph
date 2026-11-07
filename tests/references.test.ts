@@ -66,6 +66,8 @@ import {
   CSHARP_ALIAS_TYPE_FORMS,
   csharpAliasTypeFixture,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import { CSHARP_INHERITED_ALIAS_CASES } from "./helpers/csharp-inherited-alias-fixture.js";
+import { expectInheritedAliasReferences } from "./helpers/csharp-inherited-alias-assertions.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
   csharpNearerReceiverFixture,
@@ -4534,6 +4536,20 @@ describe("Find References", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it.each(CSHARP_INHERITED_ALIAS_CASES)(
+      "keeps C# $name references on the binding member's target ($outcome)",
+      async (testCase) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-alias-refs-"));
+        try {
+          const files = await writeFixtureFiles(root, testCase.files);
+          const index = await createTestIndexFromFiles(root, Object.values(files));
+          await expectInheritedAliasReferences(index, files, testCase);
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("keeps a local function's references scoped to its own method, not a same-named local function in another method", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-localfn-references-"));

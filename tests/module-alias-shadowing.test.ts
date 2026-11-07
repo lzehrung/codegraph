@@ -21,6 +21,12 @@ import {
 } from "./helpers/csharp-alias-only-shadow-fixture.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import {
+  CSHARP_INHERITED_ALIAS_CASES,
+  CSHARP_INHERITED_NESTED_TYPE_CASE,
+  CSHARP_INHERITED_TYPE_POSITION_CASE,
+} from "./helpers/csharp-inherited-alias-fixture.js";
+import { expectInheritedAliasConsumers, inheritedAliasRunColumn } from "./helpers/csharp-inherited-alias-assertions.js";
+import {
   CSHARP_ALIAS_CALL_SPELLINGS,
   CSHARP_GENERIC_ALIAS_CASES,
   csharpGenericAliasReceiverFixture,
@@ -1320,4 +1326,90 @@ describe("C# lowercase alias receiver proof", () => {
       }
     },
   );
+});
+describe("C# members bind before using aliases", () => {
+  it.each(CSHARP_INHERITED_ALIAS_CASES)("$outcome: $name", async (testCase) => {
+    const root = await mkTmpDir("cg-csharp-inherited-alias-");
+    try {
+      const files = await writeFixtureFiles(root, testCase.files);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        await expectInheritedAliasConsumers(index, files, testCase);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds an inherited nested type as a type receiver, not the alias", async () => {
+    const root = await mkTmpDir("cg-csharp-inherited-nested-alias-");
+    try {
+      const testCase = CSHARP_INHERITED_NESTED_TYPE_CASE;
+      const files = await writeFixtureFiles(root, testCase.files);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: testCase.line,
+          column: inheritedAliasRunColumn(testCase),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files["Use.cs"]);
+          expect(result.definition.range.start.line).toBe(2);
+        }
+        const references = await findReferences(index, {
+          file: files["N.cs"]!,
+          line: 1,
+          column: testCase.files["N.cs"]!.indexOf("Run") + 1,
+        });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.references.filter((site) => site.file === files["Use.cs"])).toEqual([]);
+          expect(references.referenceCoverage.state).toBe("complete");
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const targets = graph.edges.flatMap((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          if (edge.label !== "calls" || from?.name !== "F" || !to) return [];
+          return [`${path.basename(to.file)}::${to.name}`];
+        });
+        expect(targets).toEqual(["Use.cs::Run"]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the alias in type positions beside an inherited field", async () => {
+    const root = await mkTmpDir("cg-csharp-inherited-type-position-");
+    try {
+      const testCase = CSHARP_INHERITED_TYPE_POSITION_CASE;
+      const files = await writeFixtureFiles(root, testCase.files);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, logLevel: "silent" });
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: testCase.line,
+          column: columnOf(testCase.lines, testCase.line, "a()"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files["N.cs"]);
+          expect(result.definition.localName).toBe("Target");
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const constructed = graph.edges.flatMap((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          if (edge.label !== "instantiates" || from?.name !== "F" || !to) return [];
+          return [`${path.basename(to.file)}::${to.name}`];
+        });
+        expect(constructed).toEqual(["N.cs::Target"]);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

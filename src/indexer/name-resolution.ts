@@ -22,13 +22,18 @@ import {
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
 import { fileIdentityKey } from "../util/paths.js";
-import { isAmbiguousResolutionReason, UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
+import {
+  isAmbiguousResolutionReason,
+  UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
+  UNRESOLVED_QUALIFIED_TYPE_REASON,
+} from "./ambiguous-resolution.js";
 import { getPackageDeclarationName } from "./compilation-units.js";
 import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
 import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
+  csharpAliasMemberLookup,
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
@@ -338,6 +343,20 @@ export type SettleNameOptions = {
   recoverIncludedStar?: (lookupName: string, cNamespace: "tag" | "ordinary" | undefined) => Promise<GoToResult | null>;
 };
 
+/**
+ * A C# expression name that a using alias also names: a member of an enclosing type, own or inherited, binds it
+ * first, so the alias answers only where that lookup proves no such member. A base the project cannot resolve may
+ * declare one, which leaves the use unproven.
+ */
+async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Promise<GoToResult | undefined> {
+  const { index, mod, node } = use;
+  const lookup = await csharpAliasMemberLookup(index, mod, node, lookupName);
+  if (lookup.status === "none") return undefined;
+  if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+  if (!lookup.member) return { status: "not_found", reason: "No unique member through the implicit receiver" };
+  return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
+}
+
 /** Runs the async member steps a {@link resolveBareName} result deferred. */
 export async function settleNameResolution(
   use: BareNameUse,
@@ -380,6 +399,9 @@ export async function settleNameResolution(
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
       // A member hides the name but none is a unique, reachable target (static context, ambiguity).
       if (member === null) return { status: "not_found", reason: "No unique member through the implicit receiver" };
+    } else if (request.kind === "csharp-alias-member") {
+      const settled = await settleCsharpAliasMember(use, request.lookupName);
+      if (settled) return settled;
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;

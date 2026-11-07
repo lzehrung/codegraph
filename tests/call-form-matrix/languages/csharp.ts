@@ -18,11 +18,46 @@ import {
   csharpAliasCallFixture,
   csharpGenericAliasReceiverFixture,
 } from "../../helpers/csharp-alias-call-fixture.js";
+import { csharpInheritedAliasCase } from "../../helpers/csharp-inherited-alias-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
+const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "member" | "unresolved"): MatrixCell => {
+  const testCase = csharpInheritedAliasCase(caseName);
+  const base = {
+    id: `csharp/alias-${id}`,
+    language: "csharp" as const,
+    callForm: "imported-alias" as const,
+    files: testCase.files,
+    use: { file: "Use.cs", line: testCase.line, token: "Run" },
+    decoyKind: "callable" as const,
+    edge: { label: "calls" as const, fromFile: "Use.cs", fromName: "F" },
+  };
+  if (outcome === "alias") {
+    return {
+      ...base,
+      expected: { file: "N.cs", line: 1, token: "Run" },
+      decoy: { file: "Decoy.cs", line: 1, token: "Run" },
+    };
+  }
+  const decoy = { file: "N.cs", line: 1, token: "Run" };
+  if (outcome === "member") {
+    return { ...base, expected: { file: "Decoy.cs", line: 1, token: "Run" }, decoy };
+  }
+  return { ...base, expected: "not_found", decoy, decoyAmbiguous: true };
+};
+
 export const csharpCells: MatrixCell[] = [
+  // A member of an enclosing type binds an alias's name first (dotnet); an unproven member or base is not the alias.
+  inheritedAliasCell("inherited field", "yields-to-inherited-field", "member"),
+  inheritedAliasCell(
+    "inherited field declared in another file",
+    "yields-to-inherited-field-in-another-file",
+    "unresolved",
+  ),
+  inheritedAliasCell("external base class", "unproven-external-base", "unresolved"),
+  inheritedAliasCell("private field of a base", "kept-beside-private-base-field", "alias"),
   ...CSHARP_GENERIC_ALIAS_CASES.map(({ alias, parameter, scope }): MatrixCell => {
     const fixture = csharpGenericAliasReceiverFixture(alias, parameter, scope);
     return {

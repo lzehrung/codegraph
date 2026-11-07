@@ -9,7 +9,7 @@ import { pythonPropertyDecorator, type PythonPropertyDecorator } from "./python-
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { sliceText } from "../util/ast.js";
+import { sliceText, toRange } from "../util/ast.js";
 import { foldPhpIdentifierCase, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import {
   csharpNamespaceAtIndex,
@@ -87,7 +87,8 @@ import {
   resolveNamedDefinition,
 } from "./navigation-local.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
-import { UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
+import { csharpTypeOnlyName } from "./scope-nodes.js";
+import { UNPROVEN_CSHARP_ALIAS_MEMBER_REASON, UNRESOLVED_QUALIFIED_TYPE_REASON } from "./ambiguous-resolution.js";
 import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
@@ -998,15 +999,20 @@ export async function resolveMemberAccessDefinition(params: {
     memberNode = parent.parent;
   }
   if (!memberNode) return null;
-  if (sup.id === "csharp") {
-    const lead = csharpChainQualifier(memberNode, source);
-    const reason = lead ? csharpAliasUnprovenReason(index, mod, lead.qualifier, source) : null;
-    if (lead && reason) {
+  const csharpLead = sup.id === "csharp" ? csharpChainQualifier(memberNode, source) : null;
+  if (csharpLead) {
+    const reason = csharpAliasUnprovenReason(index, mod, csharpLead.qualifier, source);
+    if (reason) {
       // A parameter, local, or member named like the alias is a value that C# binds before any alias,
       // except after `::`, which reaches aliases only.
       const scopeIndex = ensureScopeIndex();
-      const closest = findClosestScopeBinding(scopeIndex, sliceText(lead.qualifier, source), lead.qualifier, sup);
-      const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
+      const closest = findClosestScopeBinding(
+        scopeIndex,
+        sliceText(csharpLead.qualifier, source),
+        csharpLead.qualifier,
+        sup,
+      );
+      const aliasQualified = csharpLead.qualifier.parent?.type === "alias_qualified_name";
       if (aliasQualified || !closest || closest.import) return { status: "not_found", reason };
     }
   }
@@ -1018,6 +1024,31 @@ export async function resolveMemberAccessDefinition(params: {
     expr.id === memberNode.id
       ? (getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined)
       : undefined;
+
+  // C# binds a member of an enclosing type, own or inherited, before a using alias of its name, and a base the
+  // project cannot resolve may declare one. Navigation, references, and the graph share this lookup.
+  const aliasMemberLookups = new Map<number, Promise<CsharpAliasMemberLookup>>();
+  const aliasMemberLookup = (expr: SyntaxNodeLike, exprName: string): Promise<CsharpAliasMemberLookup> => {
+    let lookup = aliasMemberLookups.get(expr.startIndex);
+    if (!lookup) {
+      lookup = csharpAliasMemberLookup(index, mod, expr, exprName);
+      aliasMemberLookups.set(expr.startIndex, lookup);
+    }
+    return lookup;
+  };
+  /** An alias that no value, `::`, or type position keeps from naming the expression's leading name. */
+  const aliasBindsExpressionName = (expr: SyntaxNodeLike, exprName: string): boolean => {
+    if (csharpTypeOnlyName(expr) || isCsharpAliasQualifier(expr, sup)) return false;
+    if (resolveLexicalBinding?.(expr) || !csharpNameUnshadowed(ensureScopeIndex(), expr, exprName)) return false;
+    return !!csharpAliasAt(mod, exprName, expr);
+  };
+  if (csharpLead) {
+    const leadName = sliceText(csharpLead.qualifier, source);
+    if (aliasBindsExpressionName(csharpLead.qualifier, leadName)) {
+      const lookup = await aliasMemberLookup(csharpLead.qualifier, leadName);
+      if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+    }
+  }
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     if (sup.id === "kotlin" && expr.type === "user_type") {
@@ -1051,6 +1082,14 @@ export async function resolveMemberAccessDefinition(params: {
           if (!imp) return null;
         } else {
           imp = csharpAliasAt(mod, exprName, expr);
+          if (imp && !csharpTypeOnlyName(expr)) {
+            const lookup = await aliasMemberLookup(expr, exprName);
+            // An inherited nested type binds the name as a type receiver; any other member is a value of unknown type.
+            if (lookup.status === "member" && lookup.member && declaresMembers(lookup.member)) {
+              return { kind: "resolved", def: lookup.member };
+            }
+            if (lookup.status !== "none") return null;
+          }
         }
       } else {
         imp = effectiveExplicitBinding(
@@ -2521,6 +2560,222 @@ export async function resolveImplicitSelfMember(
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;
+}
+
+/**
+ * What C# simple-name lookup finds for the name of a using alias before it reaches the alias: a member of an
+ * enclosing type (its own, a `partial` part's, or a non-private one inherited from a base class), or nothing. `member`
+ * carries the one member found, `null` when several are. `unproven` means a base the project cannot resolve, or a
+ * `partial` part it cannot enumerate, may declare such a member.
+ */
+export type CsharpAliasMemberLookup =
+  | { status: "member"; member: SymbolDef | null }
+  | { status: "unproven" }
+  | { status: "none" };
+
+/** One C# type: its own declaration and its other `partial` parts, and whether the peer scan proves them all. */
+async function csharpTypeParts(
+  index: ProjectIndex,
+  ref: KeywordClassRef,
+): Promise<{ parts: KeywordClassRef[]; complete: boolean }> {
+  const identity = getSharedOwnerIdentity(ref.container, ref.context.source, "csharp", ref.file);
+  if (!identity) return { parts: [ref], complete: true };
+  const peers = await resolveSharedOwnerContainers({
+    index,
+    ownerFile: ref.file,
+    ownerContainer: ref.container,
+    ownerSource: ref.context.source,
+    languageId: "csharp",
+  });
+  const complete = !!identity.fileLocalTo || getCompilationUnitPeers(index, ref.file).complete;
+  return { parts: [ref, ...peers], complete };
+}
+
+/**
+ * The primary-constructor parameters of one C# type part named `name`. A record's become properties that derived
+ * records inherit; a class's or struct's are in scope only in that type's own body.
+ */
+function csharpPrimaryParametersNamed(part: KeywordClassRef, name: string, inherited: boolean): SymbolDef[] {
+  const { container, context, module, file } = part;
+  if (inherited && container.type !== "record_declaration") return [];
+  const list = container.namedChildren.find((child) => child.type === "parameter_list");
+  const normalize = context.sup.normalizeIdentifier;
+  const wanted = normalize(name);
+  const matches: SymbolDef[] = [];
+  for (const parameter of list?.namedChildren ?? []) {
+    const nameNode = parameter.childForFieldName("name");
+    if (!nameNode || normalize(sliceText(nameNode, context.source)) !== wanted) continue;
+    const declared = module.locals.find((local) => local.range.start.index === nameNode.startIndex);
+    const kind = SymbolKind.Variable;
+    matches.push(declared ?? { file, localName: sliceText(nameNode, context.source), kind, range: toRange(nameNode) });
+  }
+  return matches;
+}
+
+/**
+ * The members named `name` that the parts of one type declare, nested types and primary-constructor parameters
+ * included; a derived type reaches only the non-private ones.
+ */
+function csharpPartMembersNamed(parts: readonly KeywordClassRef[], name: string, inherited: boolean): SymbolDef[] {
+  const members: SymbolDef[] = [];
+  for (const part of parts) {
+    const { container, context, module } = part;
+    const normalize = context.sup.normalizeIdentifier;
+    for (const member of findDirectLocalsWithinNode(module.locals, name, container, context, normalize)) {
+      const nameNode = nameNodeForDef(context, member);
+      if (inherited && nameNode && isPrivateDeclaration(context.sup.id, nameNode)) continue;
+      members.push(member);
+    }
+    members.push(...csharpPrimaryParametersNamed(part, name, inherited));
+  }
+  return members;
+}
+
+/** The class or interface a declared C# base names, or `null` when the project cannot resolve or read it. */
+async function csharpDeclaredBaseRef(
+  index: ProjectIndex,
+  part: KeywordClassRef,
+  declared: DeclaredBaseType,
+): Promise<KeywordClassRef | null> {
+  try {
+    const def = await resolveDeclaredBase(index, part.module, part.context.sup, declared);
+    if (!def || (def.kind !== SymbolKind.Class && def.kind !== SymbolKind.Interface)) return null;
+    return await keywordClassRefFromDef(index, def);
+  } catch (error) {
+    rethrowStaleQuerySource(error);
+    return null;
+  }
+}
+
+/**
+ * The class a C# type derives from, `null` when it derives from none (a struct or enum, or a first base that is an
+ * interface), or `"unproven"` when its base list names a type the project cannot resolve: that type may be a class
+ * that declares the member. A class lists its base class first, so only the first entry can be one.
+ */
+async function csharpBaseClassRef(
+  index: ProjectIndex,
+  parts: readonly KeywordClassRef[],
+): Promise<KeywordClassRef | null | "unproven"> {
+  let baseClass: KeywordClassRef | null = null;
+  for (const part of parts) {
+    const { container, context } = part;
+    // A struct or enum has no base class: its base list names interfaces or an underlying type.
+    if (container.type === "struct_declaration" || container.type === "enum_declaration") continue;
+    const baseList = container.namedChildren.find((child) => child.type === "base_list");
+    if (!baseList?.namedChildren.length) continue;
+    // An interface inherits the members of its base interfaces; that walk is not modeled.
+    if (container.type === "interface_declaration") return "unproven";
+    if (containerHeritageIsUnproven(container, context.source, context.sup)) return "unproven";
+    const declared = collectDeclaredBaseTypes(container, context.source, context.sup, true)[0];
+    const base = declared ? await csharpDeclaredBaseRef(index, part, declared) : null;
+    if (!base) return "unproven";
+    if (base.container.type === "interface_declaration") continue;
+    if (baseClass) {
+      const sameClass =
+        keywordContainerKey(base.file, base.container) === keywordContainerKey(baseClass.file, baseClass.container);
+      if (!sameClass) return "unproven";
+    }
+    baseClass = base;
+  }
+  return baseClass;
+}
+
+/**
+ * The non-private members named `name` of a C# type and its base classes, nearest type first: the first type that
+ * declares any ends the walk, as in C# member lookup. `"unproven"` when a part or a base class cannot be read.
+ */
+async function csharpTypeChainMembersNamed(
+  index: ProjectIndex,
+  start: KeywordClassRef,
+  name: string,
+): Promise<SymbolDef[] | "unproven"> {
+  const seen = new Set<string>();
+  let current: KeywordClassRef | null = start;
+  for (let depth = 0; current; depth += 1) {
+    const key = keywordContainerKey(current.file, current.container);
+    if (depth >= RECEIVER_HIERARCHY_DEPTH || seen.has(key)) return "unproven";
+    seen.add(key);
+    const { parts, complete } = await csharpTypeParts(index, current);
+    const members = csharpPartMembersNamed(parts, name, depth > 0);
+    if (members.length) return members;
+    if (!complete) return "unproven";
+    const baseClass = await csharpBaseClassRef(index, parts);
+    if (baseClass === "unproven") return "unproven";
+    current = baseClass;
+  }
+  return [];
+}
+
+/**
+ * C# simple-name lookup for an expression name that a using alias also names. C# searches the enclosing types,
+ * innermost first, each with its base classes, before any namespace or alias, so a member found there binds the name.
+ */
+export async function csharpAliasMemberLookup(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+): Promise<CsharpAliasMemberLookup> {
+  let ref = await keywordClassRefFromNode(index, mod, node);
+  while (ref) {
+    const members = await csharpTypeChainMembersNamed(index, ref, name);
+    if (members === "unproven") return { status: "unproven" };
+    const [first] = members;
+    if (first) return { status: "member", member: members.length === 1 ? first : null };
+    const outer = nearestMemberContainer(ref.container);
+    ref = outer ? { ...ref, container: outer } : null;
+  }
+  return { status: "none" };
+}
+
+/** Whether `node` can be the simple name of an expression: not a declaration, type position, `::` alias, or member. */
+function isCsharpExpressionName(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  if (sup.isDeclarationName(node) || csharpTypeOnlyName(node) || isCsharpAliasQualifier(node, sup)) return false;
+  const access = node.parent && isMemberAccessNode(sup, node.parent) ? node.parent : null;
+  return !access || getMemberAccessParts(sup, access).property?.id !== node.id;
+}
+
+/**
+ * The start indexes of the identifiers in `mod` that name a using alias in an expression where a member of an
+ * enclosing type binds the name first, or may because a base is unresolved. The detailed graph reads its alias facts
+ * synchronously, so it asks the member lookup navigation uses once per module, before it walks function bodies.
+ */
+export async function csharpAliasUsesHiddenByMembers(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  parsed: ParsedFileContext,
+  scopeIndex: ScopeIndex,
+): Promise<ReadonlySet<number>> {
+  const hidden = new Set<number>();
+  const aliasTable = csharpAliasTable(mod);
+  if (!aliasTable.types.size && !aliasTable.namespaces.size) return hidden;
+  const { sup, source, tree } = parsed;
+  const namesAlias = (node: SyntaxNodeLike): boolean => {
+    if (node.type !== "identifier") return false;
+    const normalized = sup.normalizeIdentifier(sliceText(node, source));
+    return aliasTable.types.has(normalized) || aliasTable.namespaces.has(normalized);
+  };
+  const uses: SyntaxNodeLike[] = [];
+  const collect = (node: SyntaxNodeLike): void => {
+    if (namesAlias(node) && isCsharpExpressionName(sup, node)) uses.push(node);
+    for (const child of node.namedChildren) collect(child);
+  };
+  collect(tree.rootNode);
+  const lookups = new Map<string, CsharpAliasMemberLookup>();
+  for (const node of uses) {
+    const name = sliceText(node, source);
+    // A closer binding hides the alias on its own, and an alias that is not in scope here is not hidden by a member.
+    const closest = findClosestScopeBinding(scopeIndex, name, node, sup);
+    if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) continue;
+    const key = `${nearestMemberContainer(node)?.startIndex ?? -1}\0${sup.normalizeIdentifier(name)}`;
+    let lookup = lookups.get(key);
+    if (!lookup) {
+      lookup = await csharpAliasMemberLookup(index, mod, node, name);
+      lookups.set(key, lookup);
+    }
+    if (lookup.status !== "none") hidden.add(node.startIndex);
+  }
+  return hidden;
 }
 
 /** Whether an inherited JVM member is inaccessible through this receiver. */

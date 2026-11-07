@@ -58,6 +58,8 @@ import {
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "./helpers/csharp-alias-shadow-fixture.js";
+import { CSHARP_INHERITED_ALIAS_CASES } from "./helpers/csharp-inherited-alias-fixture.js";
+import { expectInheritedAliasGoto, expectInheritedAliasName } from "./helpers/csharp-inherited-alias-assertions.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
   csharpNearerReceiverFixture,
@@ -3205,6 +3207,18 @@ describe("Go to Definition", () => {
           expect(result.definition.file).toBe(form.aliasUse ? files["Second.cs"] : files["Use.cs"]);
           expect(result.definition.localName).toBe(form.aliasUse ? "Second" : "B");
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_INHERITED_ALIAS_CASES)("binds C# $name before a using alias ($outcome)", async (testCase) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-alias-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, testCase.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectInheritedAliasGoto(index, files, testCase);
+        await expectInheritedAliasName(index, files, testCase);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

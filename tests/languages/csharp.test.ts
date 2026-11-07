@@ -29,6 +29,8 @@ import {
   CSHARP_ALIAS_SHADOW_LINES,
   CSHARP_ALIAS_SHADOW_SITES,
 } from "../helpers/csharp-alias-shadow-fixture.js";
+import { CSHARP_INHERITED_ALIAS_CASES } from "../helpers/csharp-inherited-alias-fixture.js";
+import { expectInheritedAliasConsumers } from "../helpers/csharp-inherited-alias-assertions.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -2913,6 +2915,17 @@ describe("C# partial class members across files", () => {
         });
         expect(result.status).toBe("not_found");
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_INHERITED_ALIAS_CASES)("binds C# $name before a using alias ($outcome)", async (testCase) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-alias-language-"));
+    try {
+      const files = await writeFixtureFiles(root, testCase.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectInheritedAliasConsumers(index, files, testCase);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

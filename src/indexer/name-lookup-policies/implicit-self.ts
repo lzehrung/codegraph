@@ -18,6 +18,7 @@ import {
   csharpChainQualifier,
   csharpShadowedUsingReason,
   implicitSelfCallee,
+  isCsharpAliasQualifier,
   isDirectKeywordMemberDeclaration,
 } from "../navigation-goto.js";
 import {
@@ -129,6 +130,16 @@ function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoTo
     : null;
 }
 
+/**
+ * The use is an expression name that a using alias also names. Type positions never reach a member, and `X::` reaches
+ * aliases only, so a member of an enclosing type can hide the alias only for the names left.
+ */
+function namesAliasInExpression({ use, closestBinding }: NameLookupState): boolean {
+  if (!closestBinding?.import) return false;
+  if (csharpTypeOnlyName(use.node) || isCsharpAliasQualifier(use.node, use.parsed.sup)) return false;
+  return !!csharpAliasAt(use.mod, use.name, use.node);
+}
+
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
   fromClosestBinding: ownOverloadDeclaration,
@@ -156,6 +167,16 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   moduleAliasIsUnshadowed({ use, closestBinding }) {
     if (!csharpAliasAt(use.mod, use.name, use.node)) return true;
     return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
+  },
+  // A member of an enclosing type binds an alias's name before the alias does. Finding one reads other files, so the
+  // alias stays the fallback of a deferred member lookup.
+  wrapRest(state, rest) {
+    if (!namesAliasInExpression(state)) return rest();
+    return {
+      status: "deferred",
+      request: { kind: "csharp-alias-member", lookupName: state.use.name },
+      fallback: rest(),
+    };
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
     if (!closestBinding?.import || !csharpTypeOnlyName(use.node)) return undefined;

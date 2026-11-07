@@ -26,6 +26,8 @@ export type DeferredNameRequest =
   | { kind: "cpp-out-of-line-member" }
   /** A member of the enclosing type, found through `this`/`self`. */
   | { kind: "implicit-self-member"; lookupName: string }
+  /** A member of an enclosing C# type, own or inherited, binds an expression name before a using alias of that name. */
+  | { kind: "csharp-alias-member"; lookupName: string }
   /** Several included C/C++ declarations that may be one callable. */
   | { kind: "c-included-star"; lookupName: string; cNamespace: "tag" | "ordinary" | undefined };
 
