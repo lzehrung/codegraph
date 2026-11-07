@@ -31,6 +31,10 @@ import {
 } from "../helpers/csharp-alias-shadow-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "../helpers/csharp-qualified-receiver-fixture.js";
+import {
   RESTORED_DECLARATION_FIXTURES,
   declarationImportTargets,
   withRestoredDeclarationImport,
@@ -5300,6 +5304,29 @@ describe("C# qualified type imports", () => {
         .filter((edge) => edge.label === "uses" && graph.nodes.get(edge.from)?.name === "both")
         .map((edge) => graph.nodes.get(edge.to)?.file);
       expect(new Set(bothUses)).toEqual(new Set([files["Other.cs"], files["Lib.cs"]]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("C# qualified declared and constructed receivers", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("resolves %s receivers without namespace decoys", async (type) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-qualified-receiver-"));
+    try {
+      const fixture = csharpQualifiedReceiverFixture(type);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      for (const line of [...fixture.calls, fixture.decoyCall]) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: columnOf(fixture.lines, line, "Run"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Unresolved qualified receiver at ${line}`);
+        expect(result.definition.file).toBe(files[line === fixture.decoyCall ? "Other.cs" : "Value.cs"]);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

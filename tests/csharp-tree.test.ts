@@ -16,7 +16,7 @@ import { collectImportsForFile } from "../src/indexer/imports.js";
 import { clearCsharpResolutionCaches, resolveCsharpNamespaceTypePath } from "../src/util/resolution/csharp.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs/specifiers.js";
 import { CSHARP_SUPPORT } from "../src/languages.js";
-import type { SyntaxTreeLike } from "../src/languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../src/languages/types.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
@@ -29,8 +29,12 @@ import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { captureCli } from "./helpers/cli.js";
-import { collectCsharpImportDirectives, collectCsharpNamespaceFacts } from "../src/util/csharp-tree.js";
+import { collectCsharpImportDirectives, collectCsharpNamespaceFacts, csharpNamePath } from "../src/util/csharp-tree.js";
 import { parseSyntaxTree } from "../src/util/syntax-tree.js";
+import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "./helpers/csharp-qualified-receiver-fixture.js";
 
 function setNativeTreeParseFailure(message: string): () => number {
   const state = loadBinding();
@@ -1579,4 +1583,26 @@ describe("C# namespace scan after a touched-file build", () => {
       }
     });
   }
+});
+
+describe("C# qualified receiver syntax", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("parses %s receiver types without recovery", (type) => {
+    const fixture = csharpQualifiedReceiverFixture(type);
+    const tree = treeForSource(fixture.files["Use.cs"]);
+    const stack: SyntaxNodeLike[] = [tree.rootNode];
+    const names: string[] = [];
+    while (stack.length) {
+      const node = stack.pop()!;
+      expect(node.type).not.toBe("ERROR");
+      expect(node.endIndex).toBeGreaterThan(node.startIndex);
+      const name = csharpNamePath(node);
+      if (name?.value === type) names.push(name.value);
+      for (let index = 0; ; index += 1) {
+        const child = node.child(index);
+        if (!child) break;
+        stack.push(child);
+      }
+    }
+    expect(names.length).toBeGreaterThanOrEqual(4);
+  });
 });

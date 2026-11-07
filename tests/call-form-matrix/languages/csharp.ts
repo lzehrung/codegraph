@@ -6,11 +6,31 @@ import {
   csharpAliasTypeFixture,
   CSHARP_ALIAS_TYPE_FORMS,
 } from "../../helpers/csharp-alias-shadow-fixture.js";
+import {
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "../../helpers/csharp-qualified-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
 
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_QUALIFIED_RECEIVER_TYPES.flatMap((type, typeIndex) => {
+    const fixture = csharpQualifiedReceiverFixture(type);
+    return fixture.calls.map(
+      (line, proofIndex): MatrixCell => ({
+        id: `csharp/qualified-receiver-${typeIndex}-${proofIndex}`,
+        language: "csharp",
+        callForm: "typed-local-receiver",
+        files: fixture.files,
+        use: { file: "Use.cs", line, token: "Run" },
+        expected: { file: "Value.cs", line: 1, token: "Run" },
+        decoy: { file: "Other.cs", line: 1, token: "Run" },
+        decoyKind: "callable",
+        edge: { label: "calls", fromFile: "Use.cs", fromName: ["Declared", "Constructed", "Parameter"][proofIndex]! },
+      }),
+    );
+  }),
   ...CSHARP_ALIAS_BOUNDARIES.map((boundary): MatrixCell => {
     const fixture = csharpAliasBoundaryFixture(boundary);
     const nestedType = boundary.name === "nested type";

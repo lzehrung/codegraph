@@ -3,6 +3,12 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
+import {
+  CSHARP_GENERIC_RECEIVER_FILES,
+  CSHARP_QUALIFIED_RECEIVER_BOUNDARY_FILES,
+  CSHARP_QUALIFIED_RECEIVER_TYPES,
+  csharpQualifiedReceiverFixture,
+} from "./helpers/csharp-qualified-receiver-fixture.js";
 
 /**
  * Declared-type receiver proof: Kotlin companion-object factories and extension functions, C#
@@ -692,5 +698,110 @@ describe("declared-type receiver proof", () => {
         expect(decoyCalls).toEqual([]);
       });
     }
+  });
+});
+
+describe("C# qualified receiver consumer agreement", () => {
+  it.each(CSHARP_QUALIFIED_RECEIVER_TYPES)("agrees on %s receiver proofs and the namespace decoy", async (type) => {
+    const data = csharpQualifiedReceiverFixture(type);
+    const p = await fixture("cg-csharp-qualified-agreement-", data.files);
+    const graph = await buildSymbolGraphDetailed(p.index);
+    for (const file of ["Value.cs", "Other.cs"] as const) {
+      const expected = file === "Value.cs" ? data.calls : [data.decoyCall];
+      const calls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.to)?.file === p.f(file) &&
+          graph.nodes.get(edge.to)?.name === "Run",
+      );
+      expect(calls.map((edge) => edge.site?.range.start.line)).toEqual(expected);
+      for (const line of expected) {
+        const result = await goToDefinition(p.index, {
+          file: p.f("Use.cs"),
+          line,
+          column: data.lines[line - 1]!.indexOf("Run") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(p.f(file));
+      }
+      const refs = await findReferences(p.index, {
+        file: p.f(file),
+        line: 1,
+        column: data.files[file].indexOf("Run") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected qualified receiver references");
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(
+        refs.references.filter((site) => site.file === p.f("Use.cs")).map((site) => site.range.start.line),
+      ).toEqual(expected);
+    }
+  });
+});
+
+describe("C# qualified receiver boundaries", () => {
+  it("respects nearer namespaces while explicit aliases and global qualifiers bypass them", async () => {
+    const p = await fixture("cg-csharp-qualified-shadow-", CSHARP_QUALIFIED_RECEIVER_BOUNDARY_FILES);
+    const lines = CSHARP_QUALIFIED_RECEIVER_BOUNDARY_FILES["Use.cs"].split("\n");
+    for (const [line, target] of [
+      [4, "Shadow.cs"],
+      [5, "Value.cs"],
+      [6, "Value.cs"],
+      [7, null],
+    ] as const) {
+      const result = await goToDefinition(p.index, {
+        file: p.f("Use.cs"),
+        line,
+        column: lines[line - 1]!.indexOf("Run") + 1,
+      });
+      expect(result.status).toBe(target ? "ok" : "not_found");
+      if (target && result.status === "ok") expect(result.definition.file).toBe(p.f(target));
+    }
+    const graph = await buildSymbolGraphDetailed(p.index);
+    const calls = graph.edges
+      .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run")
+      .map((edge) => [edge.site?.range.start.line, path.basename(graph.nodes.get(edge.to)!.file)]);
+    expect(calls).toEqual([
+      [4, "Shadow.cs"],
+      [5, "Value.cs"],
+      [6, "Value.cs"],
+    ]);
+    const refs = await findReferences(p.index, {
+      file: p.f("Value.cs"),
+      line: 1,
+      column: CSHARP_QUALIFIED_RECEIVER_BOUNDARY_FILES["Value.cs"].indexOf("Run") + 1,
+    });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") throw new Error("Expected qualified boundary references");
+    expect(refs.referenceCoverage.state).toBe("partial");
+    expect(refs.references.filter((site) => site.file === p.f("Use.cs")).map((site) => site.range.start.line)).toEqual([
+      5, 6,
+    ]);
+  });
+
+  it("keeps generic-qualified receiver types unresolved instead of selecting a namespace decoy", async () => {
+    const p = await fixture("cg-csharp-generic-receiver-", CSHARP_GENERIC_RECEIVER_FILES);
+    const lines = CSHARP_GENERIC_RECEIVER_FILES["Use.cs"].split("\n");
+    for (const line of [2, 3, 4]) {
+      const result = await goToDefinition(p.index, {
+        file: p.f("Use.cs"),
+        line,
+        column: lines[line - 1]!.indexOf("Run") + 1,
+      });
+      expect(result.status).toBe("not_found");
+    }
+    const graph = await buildSymbolGraphDetailed(p.index);
+    expect(graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Run")).toEqual(
+      [],
+    );
+    const refs = await findReferences(p.index, {
+      file: p.f("Decoy.cs"),
+      line: 1,
+      column: CSHARP_GENERIC_RECEIVER_FILES["Decoy.cs"].indexOf("Run") + 1,
+    });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") throw new Error("Expected generic receiver decoy references");
+    expect(refs.referenceCoverage.state).toBe("partial");
+    expect(refs.references.map((site) => site.file)).toEqual([p.f("Decoy.cs")]);
   });
 });
