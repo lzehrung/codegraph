@@ -430,15 +430,17 @@ export async function filterIncrementalDiscoveryCandidates(
 }
 
 /**
- * Git diffs compare with a commit, not the last indexed worktree. Reconcile the manifest with the index's
- * reusable blob ids too: a deleted file restored to HEAD and an indexed edit reverted to HEAD leave no diff.
- * Entries without a reusable blob still need ordinary signature validation; this listing hashes no file.
+ * Previously dirty tracked paths stay candidates after restoration or reversion makes Git's diff empty.
+ * New manifests record those paths, so a clean indexed state needs no blob listing. Older or invalid metadata
+ * falls back to comparing reusable index blob ids; entries without one still need signature validation.
  */
 export async function collectGitManifestChangeCandidates(
   projectRoot: string,
   trackedEntries: Record<string, ManifestFileEntry>,
   discoveryContext: ProjectDiscoveryContext,
+  gitDirtyFiles?: string[],
 ): Promise<string[]> {
+  if (gitDirtyFiles !== undefined) return gitDirtyFiles;
   const indexed = await listGitIndexedBlobs(projectRoot, discoveryContext.git);
   const candidates: string[] = [];
   for (const { rel, blob } of indexed) {
@@ -539,9 +541,16 @@ export async function resolveIncrementalFilePlan(
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
     const [diffFiles, untrackedFiles, manifestCandidates] = await Promise.all([
-      manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
+      manifest.lastCommit
+        ? listChangedFiles(projectRoot, {
+            base: manifest.lastCommit,
+            head: "WORKTREE",
+            includeRenameSources: true,
+            discoveryCache: context.git,
+          })
+        : [],
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
-      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context),
+      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context, manifest.gitDirtyFiles),
     ]);
     const workingTreeDiffFiles = await filterIncrementalDiscoveryCandidates(
       projectRoot,

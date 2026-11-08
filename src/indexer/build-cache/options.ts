@@ -122,6 +122,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * clause from its own declaration instead of a nested type's.
  * Epoch 131 rebuilds symbols that mark a generic type parameter and the detailed graphs whose receiver calls resolved a
  * type-parameter receiver to a same-named class.
+ * Epoch 129 records dirty tracked paths against each manifest's commit. Older manifests rebuild before using
+ * the clean-state shortcut; missing or invalid dirty-path metadata falls back to tracked blob reconciliation.
  */
 export const CORE_ALGORITHM_EPOCH = 131;
 /**

@@ -103,6 +103,11 @@ export type IndexManifest = {
   projectRoot: string;
   updatedAt: number;
   lastCommit?: string;
+  /**
+   * Tracked paths whose indexed worktree differed from `lastCommit`, stored project-relative.
+   * Empty proves no earlier dirty tracked state needs reconciliation; absent or invalid requires a blob scan.
+   */
+  gitDirtyFiles?: string[];
   configHash?: string;
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
@@ -389,20 +394,30 @@ export async function loadManifest(
       parsed.projectRoot,
       parsed.symlinkDirectories,
     );
-    const { declaredContainers: storedDeclaredContainers, ...parsedWithoutDeclaredContainers } = parsed;
+    const {
+      declaredContainers: storedDeclaredContainers,
+      gitDirtyFiles: storedGitDirtyFiles,
+      ...parsedWithoutDerivedPaths
+    } = parsed;
+    let gitDirtyFiles: string[] | undefined;
+    if (Array.isArray(storedGitDirtyFiles)) {
+      const sanitized = sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, storedGitDirtyFiles);
+      if (sanitized.length === storedGitDirtyFiles.length) gitDirtyFiles = sanitized;
+    }
     const declaredContainers = resolveManifestDeclaredContainers(
       projectRoot,
       parsed.projectRoot,
       storedDeclaredContainers,
     );
     const migrated: IndexManifest = {
-      ...parsedWithoutDeclaredContainers,
+      ...parsedWithoutDerivedPaths,
       version: MANIFEST_VERSION,
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
       ...(declaredContainers !== undefined ? { declaredContainers } : {}),
+      ...(gitDirtyFiles !== undefined ? { gitDirtyFiles } : {}),
     };
     return migrated;
   } catch (error) {

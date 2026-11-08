@@ -2771,6 +2771,8 @@ async function buildProjectIndexIncrementalInProbeCache(
             listChangedFiles(projectRoot, {
               base: manifest.lastCommit,
               head: "WORKTREE",
+              includeRenameSources: true,
+              discoveryCache: discoveryContext.git,
             }),
           );
         }
@@ -2874,7 +2876,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
         if (!canReuseReconciliation || opts?.reconciledWorkingTreeDiffFiles === undefined) {
           gitManifestCandidates = await measureSourceDiscovery(() =>
-            collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext),
+            collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest.gitDirtyFiles),
           );
         }
       } catch (error) {

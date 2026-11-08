@@ -1,7 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { getGitHead } from "../util/git.js";
+import { getGitHead, listChangedFiles } from "../util/git.js";
+import { logWithLevel } from "../logging.js";
 import {
   computeConfigHash,
   MANIFEST_VERSION,
@@ -74,6 +75,24 @@ export async function writeIndexManifestSnapshot(args: {
   const gitHeadStartedAt = performance.now();
   const lastCommit = await getGitHead(args.projectRoot);
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
+  let gitDirtyFiles: string[] | undefined;
+  if (lastCommit) {
+    try {
+      gitDirtyFiles = await listChangedFiles(args.projectRoot, {
+        base: lastCommit,
+        head: "WORKTREE",
+        includeRenameSources: true,
+        ...(args.discoveryContext ? { discoveryCache: args.discoveryContext.git } : {}),
+      });
+    } catch (error) {
+      logWithLevel(
+        args.opts?.logLevel,
+        "warn",
+        "Warning: Failed to record Git worktree changes; incremental updates will reconcile tracked blob ids.",
+        error,
+      );
+    }
+  }
   const configHashStartedAt = performance.now();
   const configHashResult =
     args.configHash ?? (await computeConfigHash(args.projectRoot, args.opts?.logLevel, args.discoveryContext));
@@ -87,6 +106,9 @@ export async function writeIndexManifestSnapshot(args: {
     projectRoot: path.resolve(args.projectRoot).replace(/\\/g, "/"),
     updatedAt: Date.now(),
     ...(lastCommit ? { lastCommit } : {}),
+    ...(gitDirtyFiles !== undefined
+      ? { gitDirtyFiles: gitDirtyFiles.map((file) => cacheRelativePath(args.projectRoot, file)) }
+      : {}),
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),

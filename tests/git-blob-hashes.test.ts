@@ -108,6 +108,38 @@ describe("getGitBlobHashes", () => {
     expect(calls.filter((args) => args[0] === "ls-files")).toHaveLength(2);
   });
 
+  it("retains deleted rename sources until a tracked file is restored", async () => {
+    const root = await repoWithFiles({
+      ...FILES,
+      "main.ts": 'import { clean } from "./clean";\nexport const use = clean;\n',
+    });
+    const options = { cache: "disk" as const, threads: 1, logLevel: "silent" as const };
+    const clean = path.join(root, "clean.ts");
+    const renamed = path.join(root, "renamed.ts");
+    try {
+      await buildProjectIndex(root, options);
+      runGit(root, ["mv", "clean.ts", "renamed.ts"]);
+      await buildProjectIndexIncremental(root, options);
+      const stored = JSON.parse(
+        await fsp.readFile(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"), "utf8"),
+      ) as { gitDirtyFiles: string[] };
+      expect(stored.gitDirtyFiles.sort()).toEqual(["clean.ts", "renamed.ts"]);
+      runGit(root, ["reset", "-q", "HEAD", "--", "clean.ts", "renamed.ts"]);
+      runGit(root, ["checkout", "--", "clean.ts"]);
+      await fsp.unlink(renamed);
+      const restored = await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(restored.byFile.has(fileIdentityKey(clean))).toBe(true);
+      expect(restored.byFile.has(fileIdentityKey(renamed))).toBe(false);
+      expect(restored.byFile.get(fileIdentityKey(path.join(root, "main.ts")))?.imports).toEqual(
+        cold.byFile.get(fileIdentityKey(path.join(root, "main.ts")))?.imports,
+      );
+      expect(new Set(restored.graph.edges)).toEqual(new Set(cold.graph.edges));
+    } finally {
+      closeDiskCacheDatabase(root, options);
+    }
+  });
+
   it("reconciles restored and reverted files without hash-object for unchanged worktree bytes", async () => {
     const root = await repoWithFiles(FILES, { "core.autocrlf": "false" });
     const options = { cache: "disk" as const, threads: 1, logLevel: "silent" as const };
@@ -131,12 +163,23 @@ describe("getGitBlobHashes", () => {
       expect(report.files?.parsed).toBe(0);
       expect(report.files?.changed).toBe(0);
       expect((await gitCalls(log)).filter((args) => args[0] === "hash-object")).toEqual([]);
+      calls = await gitCalls(log);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toEqual([]);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toEqual([]);
+      expect(calls.filter((args) => args[0] === "diff")).toHaveLength(1);
 
       await fsp.writeFile(clean, "export const changed = 2;\n");
       await fsp.writeFile(log, "");
       await buildProjectIndexIncremental(root, options);
       calls = await gitCalls(log);
       expect(calls.filter((args) => args[0] === "hash-object").flatMap((args) => args.slice(2))).toEqual([clean]);
+      expect(calls.filter((args) => args[0] === "diff")).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toHaveLength(1);
+      const stored = JSON.parse(
+        await fsp.readFile(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"), "utf8"),
+      ) as { gitDirtyFiles: string[] };
+      expect(stored.gitDirtyFiles).toEqual(["clean.ts"]);
       runGit(root, ["checkout", "--", "clean.ts"]);
       await fsp.writeFile(log, "");
       const reverted = await buildProjectIndexIncremental(root, options);

@@ -23,6 +23,7 @@ export type GitDiscoveryCache = {
   excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
   untrackedFiles: Map<string, Promise<string[]>>;
   indexedBlobs: Map<string, Promise<IndexedBlob[]>>;
+  workingTreeDiffs: Map<string, Promise<string[]>>;
 };
 
 export function createGitDiscoveryCache(): GitDiscoveryCache {
@@ -32,6 +33,7 @@ export function createGitDiscoveryCache(): GitDiscoveryCache {
     excludeFiles: new Map(),
     untrackedFiles: new Map(),
     indexedBlobs: new Map(),
+    workingTreeDiffs: new Map(),
   };
 }
 
@@ -528,13 +530,12 @@ export async function getGitBlobHashes(
     // memory costs a little extra parsing but stays correct at any repo size.
     // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
     // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
+    const cachedListing = opts?.discoveryCache?.indexedBlobs.get(path.resolve(projectRoot));
     let indexed: IndexedBlob[];
     if (opts?.strict) {
       indexed = await listIndexedBlobs(projectRoot, relFileSet, false);
-    } else if (opts?.discoveryCache) {
-      indexed = (await listGitIndexedBlobs(projectRoot, opts.discoveryCache)).filter((entry) =>
-        relFileSet.has(entry.rel),
-      );
+    } else if (cachedListing) {
+      indexed = (await cachedListing).filter((entry) => relFileSet.has(entry.rel));
     } else {
       indexed = await listIndexedBlobs(projectRoot, relFileSet, true);
     }
@@ -610,22 +611,36 @@ async function hashGitPaths(projectRoot: string, trackedRel: string[]): Promise<
   return hashes;
 }
 
+type GitChangedFileOptions = {
+  changedSince?: string | undefined;
+  base?: string | undefined;
+  head?: string | undefined;
+  discoveryCache?: GitDiscoveryCache;
+  /** @internal Retain deleted rename sources when recording incremental worktree history. */
+  includeRenameSources?: boolean;
+};
+
 /**
  * List files changed in Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
  *   WORKTREE compares base to the working tree, and STAGED/INDEX compares base to the index.
  * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
  */
-export async function listChangedFiles(
-  projectRoot: string,
-  opts: {
-    changedSince?: string | undefined;
-    base?: string | undefined;
-    head?: string | undefined;
-  },
-): Promise<string[]> {
+export async function listChangedFiles(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
+  const cache = opts.discoveryCache?.workingTreeDiffs;
+  if (opts.head !== "WORKTREE" || !opts.base || !cache) return await listChangedFilesUncached(projectRoot, opts);
+  const key = `${path.resolve(projectRoot)}\0${opts.base}\0${opts.includeRenameSources ? 1 : 0}`;
+  const cached = cache.get(key);
+  if (cached) return await cached;
+  const diff = listChangedFilesUncached(projectRoot, opts);
+  cache.set(key, diff);
+  return await diff;
+}
+
+async function listChangedFilesUncached(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
   let args = [
     "diff",
+    "--relative",
     "--no-ext-diff",
     "--no-textconv",
     "--find-renames",
@@ -635,12 +650,14 @@ export async function listChangedFiles(
   ];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
+    args = gitDiffArgs(opts.base, head, ["--relative", "--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return [];
   }
+  // --name-only coalesces a rename into its destination; dirty history must also retain the deleted source.
+  if (opts.includeRenameSources) args[args.indexOf("--find-renames")] = "--no-renames";
   args.push("--");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);

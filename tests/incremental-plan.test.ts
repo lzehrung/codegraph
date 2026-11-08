@@ -323,6 +323,52 @@ describe("resolveIncrementalFileList", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it.each(["missing", "invalid", "older epoch"] as const)(
+    "restores tracked files from a manifest with %s dirty-path metadata",
+    async (metadata) => {
+      const root = await mkTmpDir("cg-incremental-restored-migration-");
+      const options: BuildOptions = { cache: "disk", threads: 1, logLevel: "silent" };
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        const target = path.join(root, "restored.ts");
+        await fs.writeFile(target, "export const restored = 1;\n");
+        await fs.writeFile(path.join(root, "main.ts"), 'import { restored } from "./restored";\n');
+        git(root, ["add", "."]);
+        git(root, ["commit", "-qm", "base"]);
+        await buildProjectIndex(root, options);
+        await fs.unlink(target);
+        await buildProjectIndexIncremental(root, options);
+        git(root, ["checkout", "--", "restored.ts"]);
+        const manifestPath = manifestPathFor(root);
+        const stored = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+          gitDirtyFiles?: unknown;
+          buildOptions: { coreAlgorithmEpoch: number };
+        };
+        if (metadata === "invalid") stored.gitDirtyFiles = ["../outside.ts"];
+        else delete stored.gitDirtyFiles;
+        if (metadata === "older epoch") stored.buildOptions.coreAlgorithmEpoch -= 1;
+        await fs.writeFile(manifestPath, JSON.stringify(stored));
+        const plan = await resolveIncrementalFilePlan(root, options);
+        if (metadata === "older epoch") {
+          expect(plan).toBeNull();
+        } else {
+          expect(plan?.files.some((file) => file.endsWith("/restored.ts"))).toBe(true);
+        }
+        const incremental = await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect([...incremental.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        expect(new Set(incremental.graph.edges)).toEqual(new Set(cold.graph.edges));
+        expect(incremental.byFile.size).toBe(2);
+        const upgraded = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { gitDirtyFiles?: string[] };
+        expect(upgraded.gitDirtyFiles).toEqual([]);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([
     { subdirectory: false, alias: false },
     { subdirectory: true, alias: false },
