@@ -441,11 +441,12 @@ function parseQuotedValues(value: string): string[] {
 /** Use native parameter patterns, never the annotation or default-expression text, as injected names. */
 function functionParameterNames(match: RegExpMatchArray, tree: SyntaxTreeLike | undefined): string[] {
   if (!tree || match.index === undefined) return [];
-  const functionStart = match.index + match[0].lastIndexOf("function");
-  const fn = tree.rootNode.descendantForIndex(functionStart, functionStart + "function".length);
-  if (fn.type !== "function_expression" || fn.startIndex !== functionStart) return [];
-  const parameters = fn.childForFieldName("parameters");
-  if (parameters?.type !== "formal_parameters") return [];
+  // Every injection pattern ends at the opening parenthesis. Searching for
+  // "function" in the matched text can land inside the function's identifier.
+  const openingParen = match.index + match[0].length - 1;
+  const parameters = tree.rootNode.descendantForIndex(openingParen, openingParen + 1);
+  if (parameters.type !== "formal_parameters" || parameters.startIndex !== openingParen) return [];
+  if (parameters.parent?.type !== "function_expression") return [];
   const names: string[] = [];
   for (const parameter of parameters.namedChildren) {
     let pattern: SyntaxNodeLike | null = parameter;

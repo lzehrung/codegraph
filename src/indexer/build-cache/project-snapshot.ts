@@ -791,6 +791,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     locals: [...mod.locals],
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
+    ...(mod.angularJsFacts ? { angularJsFacts: mod.angularJsFacts } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
     ...(mod.phpDeclarationNames ? { phpDeclarationNames: [...mod.phpDeclarationNames] } : {}),

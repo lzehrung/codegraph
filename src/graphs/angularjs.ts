@@ -7,6 +7,7 @@ import {
   type AngularJsFileFacts,
 } from "../frameworks/angularjs.js";
 import type { ModuleIndex } from "../indexer/types.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 import type { Edge } from "../types.js";
 import { uniqueEdgePusher } from "../util/graph-edges.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -50,7 +51,10 @@ export async function collectAngularJsFrameworkEdges(
         }
       }
       if (!looksLikeAngularJsSource(source)) continue;
-      const tree = parsedFile?.tree ?? parseSyntaxTree(source, support).tree ?? undefined;
+      const withinNativeParseLimit = Buffer.byteLength(source, "utf8") <= DEFAULT_NATIVE_SOURCE_MAX_BYTES;
+      const tree = withinNativeParseLimit
+        ? (parsedFile?.tree ?? parseSyntaxTree(source, support).tree ?? undefined)
+        : undefined;
       const facts = extractAngularJsFileFacts(source, tree);
       if (facts) contexts.push({ file, facts });
     }

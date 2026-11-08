@@ -10,6 +10,7 @@ import {
 } from "../src/index.js";
 import { extractAngularJsRegistrations } from "../src/frameworks/angularjs.js";
 import { clearMemoryCache } from "../src/indexer/build-cache/module-cache.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
 import type { BuildOptions, BuildReport, ProjectIndex } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
@@ -535,12 +536,27 @@ describe("AngularJS framework characterization", () => {
       `angular.module('admin').service('example', function example(${directParameters}) {});`,
       `angular.module('admin').component('card', { controller: function(${componentParameters}) {} });`,
       `angular.module('admin').factory('inline', ['$q', function inline(${inlineParameter}) {}]);`,
+      "angular.module('admin').controller('functionalCtrl', function functionalCtrl($functionalScope, functionalService) {});",
+      "angular.module('admin').service('special', function $scope_helper_function($helperHttp) {});",
       "function Named() {}",
       "Named.$inject = ['$timeout'];",
       "angular.module('admin').controller('Named', Named);",
       "",
     ].join("\n");
-    const names = ["$http", "opt", "fallback", "rest", "$scope", "selected", "defaulted", "$q", "$timeout"];
+    const names = [
+      "$http",
+      "opt",
+      "fallback",
+      "rest",
+      "$scope",
+      "selected",
+      "defaulted",
+      "$q",
+      "$timeout",
+      "$functionalScope",
+      "functionalService",
+      "$helperHttp",
+    ];
     const expected = names.map((name) => `injections.${extension} -> external:${name} raw=${name} confidence=0.7`);
     const options: BuildOptions = { cache: "disk", cacheDir, useNativeWorkers: workers, nativeThreads: 1, threads: 1 };
     try {
@@ -564,4 +580,54 @@ describe("AngularJS framework characterization", () => {
       await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { cache: "disk", workers: false },
+    { cache: "memory", workers: true },
+  ] as const)(
+    "keeps oversized AngularJS sources consistent with $cache cache and workers=$workers",
+    async ({ cache, workers }) => {
+      const root = await mkTmpDir("cg-angularjs-oversized-");
+      const cacheDir = `${root}-cache`;
+      const directive = path.join(root, "card.directive.js");
+      const controller = path.join(root, "user.controller.js");
+      const other = path.join(root, "other.js");
+      const source =
+        [
+          "angular.module('admin').directive('card', ['$kept', function card($oversized) {",
+          "  return { controller: 'UserCtrl', templateUrl: './card.html' };",
+          "}]);",
+          "",
+        ].join("\n") + " ".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES);
+      const expected = [
+        "card.directive.js -> external:$kept raw=$kept confidence=0.7",
+        "card.directive.js -> user.controller.js raw=UserCtrl confidence=0.9",
+        "card.directive.js -> card.html raw=./card.html confidence=0.9",
+      ];
+      const options: BuildOptions = {
+        cache,
+        cacheDir,
+        cacheStrict: true,
+        useNativeWorkers: workers,
+        nativeThreads: 1,
+        threads: 1,
+      };
+      try {
+        expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(DEFAULT_NATIVE_SOURCE_MAX_BYTES);
+        await fsp.writeFile(directive, source);
+        await fsp.writeFile(controller, "angular.module('admin').controller('UserCtrl', function UserCtrl() {});\n");
+        await fsp.writeFile(path.join(root, "card.html"), "<section>card</section>\n");
+        await fsp.writeFile(other, "export const unrelated = 1;\n");
+        const cold = await buildProjectIndex(root, options);
+        await expectAngularJsGraph(root, cold, expected);
+        if (cache === "disk") clearMemoryCache();
+        await fsp.writeFile(other, "export const unrelated = 2;\n");
+        await expectAngularJsGraph(root, await buildProjectIndexIncremental(root, options), expected);
+      } finally {
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+        await fsp.rm(cacheDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
