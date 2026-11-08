@@ -1387,6 +1387,8 @@ export async function resolveMemberAccessDefinition(params: {
       if (pythonImport === null) return null;
       const pythonBinding =
         sup.id === "python" ? findClosestScopeBinding(ensureScopeIndex(), exprName, expr, sup) : null;
+      // A name bound by star expansion has no explicit import to position; the last-star rule below picks its source.
+      const pythonStarBound = !!pythonBinding?.import && isExpandedStarBinding(pythonBinding.import, mod.imports);
       if (!aliasQualifier && !(pythonImport && pythonBinding?.import)) {
         const lexicalBinding = resolveLexicalBinding?.(expr);
         if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
@@ -1395,7 +1397,11 @@ export async function resolveMemberAccessDefinition(params: {
       let imp: ImportBinding | undefined;
       if (sup.id === "python") {
         imp = pythonImport;
-        if (!imp && (pythonBinding || laterLocalShadowsUse(ensureScopeIndex(), exprName, expr, sup))) return null;
+        if (!imp && !pythonStarBound) {
+          // No positioned import applies, so any other binding of the name, now or later, leaves it unresolved.
+          const bindsName = !!pythonBinding || laterLocalShadowsUse(ensureScopeIndex(), exprName, expr, sup);
+          if (bindsName) return null;
+        }
       } else if (sup.id === "php") {
         imp = findPhpImportAlias(mod.imports, exprName, "class") ?? undefined;
       } else if (sup.id === "zig") {
