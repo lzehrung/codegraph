@@ -92,6 +92,14 @@ function qualifiedCppIdentifierForName(nameNode: SyntaxNodeLike, boundary?: Synt
   return null;
 }
 
+/** A type argument in a qualified C++ declarator refers to a type, not a new declarator name. */
+function isCppTemplateArgumentName(node: SyntaxNodeLike): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "template_argument_list") return true;
+  }
+  return false;
+}
+
 export function buildScopeIndexFromSource(
   file: string,
   source: string,
@@ -1078,6 +1086,8 @@ export function buildScopeIndexFromSource(
           }
         } else if (row.hoistedFunctionTypes?.has(node.type)) {
           addHoistedDecl(name, "function");
+        } else if (support.id === "cpp" && node.parent?.type === "template_declaration") {
+          addDeclSkippingTypeScope(name, "function");
         } else {
           addDecl(name, "function");
         }
@@ -1244,6 +1254,7 @@ export function buildScopeIndexFromSource(
     }
 
     let declarationName = idSet.has(node.type) && support.isDeclarationName(node);
+    if (declarationName && support.id === "cpp" && isCppTemplateArgumentName(node)) declarationName = false;
     if (declarationName && row.shortVariableDeclarationTypes) {
       for (let current = node.parent; current; current = current.parent) {
         if (row.shortVariableDeclarationTypes.has(current.type)) {

@@ -2350,3 +2350,280 @@ describe("C++ qualified base calls", () => {
 });
 
 describeTypeParameterReceiverRows("cpp", "C++ template parameter beside a same-named class");
+
+describe("C++ template parameter scope", () => {
+  const widget = "struct Widget { int hello() { return 1; } };";
+  const cases = [
+    {
+      form: "function template after its class",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <typename Widget> void generic(Widget& w) { w.hello(); }",
+        "void use() { Widget w; generic(w); w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "generic",
+    },
+    {
+      form: "function template before its class",
+      fileName: "scope.cpp",
+      lines: [
+        "template <typename Widget> void generic(Widget& w) { w.hello(); }",
+        widget,
+        "void use() { Widget w; generic(w); w.hello(); }",
+      ],
+      classLine: 2,
+      parameterLine: 1,
+      insideLine: 1,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "generic",
+    },
+    {
+      form: "class template",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <typename Widget> struct Generic { Widget* member; void run(Widget& w) { w.hello(); } };",
+        "void use() { Widget w; Generic<Widget>* box = nullptr; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "Generic",
+    },
+    {
+      form: "alias template",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <typename Widget> using Generic = Widget*;",
+        "void use() { Widget w; Generic<Widget> pointer = &w; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "Generic",
+    },
+    {
+      form: "variable template",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <typename Widget> Widget generic = Widget();",
+        "void use() { Widget w; Widget copy = generic<Widget>; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "generic",
+    },
+    {
+      form: "template-template parameter",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <template <typename> class Widget> struct Generic { Widget<int>* member; };",
+        "void use() { Widget w; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+      templateName: "Generic",
+    },
+    {
+      form: "member template",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "struct Holder { template <typename Widget> void generic(Widget& w) { w.hello(); } };",
+        "void use() { Widget w; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Widget",
+      member: "hello",
+    },
+    {
+      form: "out-of-line member definition",
+      fileName: "scope.cpp",
+      lines: [
+        widget,
+        "template <typename Widget> struct Box { void f(Widget& w); };",
+        "template <typename Widget> void Box<Widget>::f(Widget& w) { w.hello(); }",
+        "void use() { Widget w; Box<Widget>* box = nullptr; w.hello(); }",
+      ],
+      classLine: 1,
+      parameterLine: 3,
+      insideLine: 3,
+      outsideLine: 4,
+      name: "Widget",
+      member: "hello",
+      templateName: "Box",
+    },
+    {
+      form: "C++ header class and class template",
+      fileName: "scope.h",
+      lines: [
+        "class Allocator { public: int alloc() { return 1; } };",
+        "template <typename Allocator> class Container { void call(Allocator& a) { a.alloc(); } };",
+        "void use() { Allocator a; Container<Allocator>* c = nullptr; a.alloc(); }",
+      ],
+      classLine: 1,
+      parameterLine: 2,
+      insideLine: 2,
+      outsideLine: 3,
+      name: "Allocator",
+      member: "alloc",
+      templateName: "Container",
+    },
+  ];
+
+  it.each(cases)("binds $form type uses only within the template", async (entry) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-template-scope-"));
+    const file = path.join(root, entry.fileName);
+    const column = (line: number, occurrence = 0): number => {
+      let start = -1;
+      for (let index = 0; index <= occurrence; index += 1) {
+        start = entry.lines[line - 1]!.indexOf(entry.name, start + 1);
+      }
+      if (start < 0) throw new Error(`Missing ${entry.name} in ${entry.form} line ${line}`);
+      return start + 1;
+    };
+    const nameColumns = (line: number): number[] => {
+      const columns: number[] = [];
+      const text = entry.lines[line - 1]!;
+      for (
+        let start = text.indexOf(entry.name);
+        start >= 0;
+        start = text.indexOf(entry.name, start + entry.name.length)
+      ) {
+        columns.push(start + 1);
+      }
+      return columns;
+    };
+    const inside = { file, line: entry.insideLine, column: column(entry.insideLine, 1) };
+    const outside = { file, line: entry.outsideLine, column: column(entry.outsideLine) };
+    try {
+      await fs.writeFile(file, entry.lines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const insideDefinition = await goToDefinition(index, inside);
+      expect(insideDefinition.status).toBe("ok");
+      if (insideDefinition.status !== "ok") throw new Error("Expected the template parameter");
+      expect(insideDefinition.definition.range.start.line).toBe(entry.parameterLine);
+      expect(insideDefinition.definition.range.start.column).toBe(column(entry.parameterLine));
+      for (const useColumn of nameColumns(entry.insideLine).slice(2)) {
+        const resolved = await goToDefinition(index, { file, line: entry.insideLine, column: useColumn });
+        expect(resolved.status).toBe("ok");
+        if (resolved.status !== "ok") throw new Error("Expected another template parameter use");
+        expect(resolved.definition.range.start.line).toBe(entry.parameterLine);
+        expect(resolved.definition.range.start.column).toBe(column(entry.parameterLine));
+      }
+
+      const outsideDefinition = await goToDefinition(index, outside);
+      expect(outsideDefinition.status).toBe("ok");
+      if (outsideDefinition.status !== "ok") throw new Error("Expected the class outside the template");
+      expect(outsideDefinition.definition.range.start.line).toBe(entry.classLine);
+      expect(outsideDefinition.definition.range.start.column).toBe(column(entry.classLine));
+      for (const useColumn of nameColumns(entry.outsideLine).slice(1)) {
+        const resolved = await goToDefinition(index, { file, line: entry.outsideLine, column: useColumn });
+        expect(resolved.status).toBe("ok");
+        if (resolved.status !== "ok") throw new Error("Expected another outside class use");
+        expect(resolved.definition.range.start.line).toBe(entry.classLine);
+        expect(resolved.definition.range.start.column).toBe(column(entry.classLine));
+      }
+
+      const classReferences = await findReferences(index, {
+        file,
+        line: entry.classLine,
+        column: column(entry.classLine),
+      });
+      expect(classReferences.status).toBe("ok");
+      if (classReferences.status !== "ok") throw new Error("Expected class references");
+      expect(classReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      const references = classReferences.references.map((ref) => ref.range.start);
+      for (const useColumn of nameColumns(entry.outsideLine)) {
+        expect(references).toContainEqual(expect.objectContaining({ line: entry.outsideLine, column: useColumn }));
+      }
+      for (const useColumn of nameColumns(entry.insideLine)) {
+        expect(references).not.toContainEqual(expect.objectContaining({ line: entry.insideLine, column: useColumn }));
+      }
+
+      const parameterReferences = await findReferences(index, {
+        file,
+        line: entry.parameterLine,
+        column: column(entry.parameterLine),
+      });
+      expect(parameterReferences.status).toBe("ok");
+      if (parameterReferences.status !== "ok") throw new Error("Expected template parameter references");
+      expect(parameterReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      const parameterSites = parameterReferences.references.map((ref) => ref.range.start);
+      for (const useColumn of nameColumns(entry.insideLine).slice(1)) {
+        expect(parameterSites).toContainEqual(expect.objectContaining({ line: entry.insideLine, column: useColumn }));
+      }
+      for (const useColumn of nameColumns(entry.outsideLine)) {
+        expect(parameterSites).not.toContainEqual(
+          expect.objectContaining({ line: entry.outsideLine, column: useColumn }),
+        );
+      }
+
+      const scope = buildScopeIndexFromSource(file, entry.lines.join("\n") + "\n", CPP_SUPPORT);
+      const templateName = entry.templateName;
+      if (templateName) {
+        const templateLine = entry.lines.findIndex((line) => line.includes(templateName)) + 1;
+        expect(scope.allScopes[0]?.map.get(templateName)?.def?.start.line).toBe(templateLine);
+        const useColumn = entry.lines[entry.outsideLine - 1]!.indexOf(templateName);
+        if (useColumn >= 0) {
+          const resolved = await goToDefinition(index, {
+            file,
+            line: entry.outsideLine,
+            column: useColumn + 1,
+          });
+          expect(resolved.status).toBe("ok");
+          if (resolved.status !== "ok") throw new Error("Expected the template's own name");
+          expect(resolved.definition.range.start.line).toBe(templateLine);
+        }
+      } else {
+        expect(
+          scope.allScopes.some(
+            (owner) => owner.kind === "member" && owner.map.get("generic")?.def?.start.line === entry.parameterLine,
+          ),
+        ).toBe(true);
+      }
+
+      const graph = await buildSymbolGraphDetailed(index);
+      const classMember = index.byFile
+        .get(fileIdentityKey(file))
+        ?.locals.find((local) => local.localName === entry.member && local.range.start.line === entry.classLine);
+      expect(classMember).toBeDefined();
+      const memberCalls = graph.edges.filter(
+        (edge) => edge.label === "calls" && edge.to === (classMember ? defNodeId(classMember) : null),
+      );
+      expect(memberCalls.some((edge) => graph.nodes.get(edge.from)?.name === "use")).toBe(true);
+      expect(memberCalls.every((edge) => graph.nodes.get(edge.from)?.name === "use")).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

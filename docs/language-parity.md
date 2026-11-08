@@ -210,6 +210,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A bare name that is not visible gives no result, reference, or edge.
 - Typedefs through pointer, array, and function declarators are indexed; pointer-to-member typedefs and macro-expanded typedef uses are not.
 - Declarations inside include guards, namespaces, and templates are exported; `static` and function-body declarations are not.
+- Template parameters in functions, classes, aliases, variables, member templates, and out-of-line member definitions bind bare type names only inside their `template_declaration`. A same-named class before or after that declaration still binds uses outside it, including in C++ `.h` headers; the template's own declared name stays visible in its enclosing scope.
 - A `.h` file parses as C++ when its first 8000 characters hold a C++ signal, else as C.
 - Signals: keyword `class`, `namespace`, `template`, `typename`, `constexpr`, `operator` (an identifier such as `int class;` does not count), `using namespace`, `using X = Y`, `concept`, `co_await`, `::`, `import`.
 - `export module foo;` is a class-kind symbol; a first-party `import foo;` resolves like `#include`; `import std;` stays external; a module declared twice is unresolved.

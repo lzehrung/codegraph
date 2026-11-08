@@ -458,6 +458,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   cpp: {
     ...C_SCOPE_NODES,
     memberScopeTypes: new Set(["field_declaration_list"]),
+    // The template's own name remains in its enclosing scope; only its parameters stay here.
+    typeScopeTypes: new Set(["template_declaration"]),
     wholeScopeKinds: CPP_MEMBER_SCOPE,
     typeParameterTypes: new Set(["type_parameter_declaration"]),
     destructuringTypeFieldTypes: new Set(["parameter_declaration", "variadic_parameter_declaration"]),

@@ -124,8 +124,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * type-parameter receiver to a same-named class.
  * Epoch 132 records dirty source paths against each manifest's commit or the empty tree before the first commit.
  * Older manifests rebuild before using the clean-state shortcut; missing or invalid metadata uses blob reconciliation.
+ * Epoch 133 scopes C++ template parameters to their declaration and rebuilds navigation, references, and edges.
  */
-export const CORE_ALGORITHM_EPOCH = 132;
+export const CORE_ALGORITHM_EPOCH = 133;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
