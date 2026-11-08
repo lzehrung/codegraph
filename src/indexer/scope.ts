@@ -1194,7 +1194,12 @@ export function buildScopeIndexFromSource(
           addPatternDecls(blockParams, "param");
         }
       }
-    } else if (row.typeScopeTypes?.has(node.type)) {
+    } else if (
+      row.typeScopeTypes?.has(node.type) ||
+      (support.id === "cpp" &&
+        node.type === "template_parameter_list" &&
+        node.parent?.type === "template_template_parameter_declaration")
+    ) {
       // A generic type's parameters belong to its own declaration, not a sibling declaration.
       // Fields retain their existing scope through `addDeclSkippingTypeScope` below.
       const scope: Scope = {
@@ -1244,11 +1249,14 @@ export function buildScopeIndexFromSource(
       if (name) addDecl(name, "local");
     }
 
-    if (row.typeParameterTypes?.has(node.type)) {
-      // Generic type parameters bind in the current type or function scope rather than
-      // skipping past it like field declarations do. One declaration can name several (Go `[K, V I]`).
+    const templateValueParameter =
+      node.parent?.type === "template_parameter_list" && row.templateValueParameterTypes?.has(node.type);
+    if (row.typeParameterTypes?.has(node.type) || templateValueParameter) {
+      // The inner parameter list of a C++ template-template parameter has its own scope.
+      // The outer template's non-type parameters bind here, not in the enclosing file.
+      const kind: BindingKind = templateValueParameter ? "param" : "type";
       for (const name of declaredNameNodes(node)) {
-        addDecl(name, "type");
+        addDecl(name, kind);
         preRegisteredNameSpans.add(nameSpanKey(name));
       }
     }

@@ -52,8 +52,10 @@ export type ScopeNodeRow = {
   enumBodyParentTypes?: ReadonlySet<string>;
   /** Pattern node types whose `name` field is a bound variable (C# `is` patterns). */
   declarationPatternTypes?: ReadonlySet<string>;
-  /** Node types whose `name` field is a type parameter. */
+  /** Node types that introduce type parameters (including defaulted and variadic forms). */
   typeParameterTypes?: ReadonlySet<string>;
+  /** Non-type parameter declarations in a C++ template list (not function parameters). */
+  templateValueParameterTypes?: ReadonlySet<string>;
   /** Node types the variable-declaration walker inspects. */
   variableDeclarationTypes?: ReadonlySet<string>;
   /** Child node types that carry the declared name inside a variable declaration. */
@@ -461,7 +463,16 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     // The template's own name remains in its enclosing scope; only its parameters stay here.
     typeScopeTypes: new Set(["template_declaration"]),
     wholeScopeKinds: CPP_MEMBER_SCOPE,
-    typeParameterTypes: new Set(["type_parameter_declaration"]),
+    typeParameterTypes: new Set([
+      "type_parameter_declaration",
+      "optional_type_parameter_declaration",
+      "variadic_type_parameter_declaration",
+    ]),
+    templateValueParameterTypes: new Set([
+      "parameter_declaration",
+      "optional_parameter_declaration",
+      "variadic_parameter_declaration",
+    ]),
     destructuringTypeFieldTypes: new Set(["parameter_declaration", "variadic_parameter_declaration"]),
     scopedEnum: {
       enumDeclarationTypes: new Set(["enum_specifier"]),

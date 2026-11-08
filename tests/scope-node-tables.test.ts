@@ -118,6 +118,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "shortVariableDeclarationTypes",
   "typeNameTypes",
   "typeParameterTypes",
+  "templateValueParameterTypes",
   "typeScopeTypes",
   "unnamedFunctionScopeTypes",
   "variableDeclarationTypes",

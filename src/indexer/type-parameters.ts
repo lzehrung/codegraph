@@ -18,7 +18,7 @@ function isNameNode(node: SyntaxNodeLike): boolean {
   return !!NAME_NODE_TYPES[node.type];
 }
 
-/** The names one type-parameter declaration introduces: Go `[K, V I]` declares two, every other form one. */
+/** Generic parameter names: Go `[K, V I]` declares two; C++ also has template value parameters. */
 export function declaredNameNodes(parameter: SyntaxNodeLike): SyntaxNodeLike[] {
   if (parameter.type === "template_template_parameter_declaration") {
     return parameter.namedChildren
@@ -26,6 +26,22 @@ export function declaredNameNodes(parameter: SyntaxNodeLike): SyntaxNodeLike[] {
       .flatMap((child) => declaredNameNodes(child));
   }
   if (parameter.type === "type_parameter_declaration") return parameter.namedChildren.filter(isNameNode);
+  const declarator = parameter.childForFieldName("declarator");
+  if (declarator) {
+    let current: SyntaxNodeLike | null = declarator;
+    while (current) {
+      if (isNameNode(current)) return [current];
+      current = current.childForFieldName("declarator") ?? current.namedChildren[0] ?? null;
+    }
+    return [];
+  }
+  if (
+    parameter.type === "parameter_declaration" ||
+    parameter.type === "optional_parameter_declaration" ||
+    parameter.type === "variadic_parameter_declaration"
+  ) {
+    return [];
+  }
   const name = parameter.namedChildren.find(isNameNode) ?? parameter.childForFieldName("name");
   return name ? [name] : [];
 }
