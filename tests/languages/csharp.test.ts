@@ -2999,6 +2999,85 @@ describe("C# partial class members across files", () => {
     }
   });
 
+  const receiverUse = (...rows: string[]): string => [...rows, ""].join("\n");
+  it.each([
+    {
+      name: "a using static method named like a namespace does not block that namespace",
+      source: {
+        "NB.cs": "namespace N; public class Outer { public static void B() {} }\n",
+        "Decoy.cs": "namespace B; public class Nested { public void Run() {} }\n",
+        "Use.cs": receiverUse(
+          "namespace A {",
+          "  using static N.Outer;",
+          "  class Use {",
+          "    void M(B.Nested x) { x.Run(); }",
+          "  }",
+          "}",
+        ),
+      },
+      target: "Decoy.cs",
+    },
+    {
+      name: "a nested type of another partial part binds the receiver type before a namespace",
+      source: {
+        "Part.cs":
+          "namespace A; partial class Use { public class B { public class Nested { public void Run() {} } } }\n",
+        "Decoy.cs": "namespace B; public class Nested { public void Run() {} }\n",
+        "Use.cs": receiverUse(
+          "namespace A {",
+          "  partial class Use {",
+          "    void M(B.Nested x) { x.Run(); }",
+          "  }",
+          "}",
+        ),
+      },
+      target: undefined,
+    },
+    {
+      name: "a value member of another partial part hides a namespace root",
+      source: {
+        "Part.cs": "namespace A; partial class Use { public int B; }\n",
+        "Decoy.cs": "namespace B; public class Nested { public static void Run() {} }\n",
+        "Use.cs": receiverUse("namespace A {", "  partial class Use {", "    void M() { B.Nested.Run(); }", "  }", "}"),
+      },
+      target: undefined,
+    },
+    {
+      name: "a property typed by its own name still lets the type answer",
+      source: {
+        "Color.cs": "namespace A; public class Color { public static void Red() {} }\n",
+        "Part.cs": "namespace A; partial class Use { public Color Color { get; } }\n",
+        "Use.cs": receiverUse("namespace A {", "  partial class Use {", "    void M() { Color.Red(); }", "  }", "}"),
+      },
+      target: "Color.cs",
+    },
+  ])("keeps C# receiver roots when $name", async ({ source, target }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-receiver-roots-"));
+    try {
+      const files = await writeFixtureFiles(root, source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source["Use.cs"].split("\n");
+      const line = lines.findIndex((text) => text.includes("void M")) + 1;
+      const token = /Run|Red/u.exec(lines[line - 1]!)![0];
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line,
+        column: columnOf(lines, line, token),
+      });
+      expect(result.status).toBe(target ? "ok" : "not_found");
+      if (result.status === "ok") expect(result.definition.file).toBe(files[target!]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = graph.edges.flatMap((edge) => {
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || graph.nodes.get(edge.from)?.name !== "M" || !to) return [];
+        return [path.basename(to.file)];
+      });
+      expect(callees).toEqual(target ? [target] : []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(CSHARP_INHERITED_ALIAS_CASES)("binds C# $name before a using alias ($outcome)", async (testCase) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-inherited-alias-language-"));
     try {

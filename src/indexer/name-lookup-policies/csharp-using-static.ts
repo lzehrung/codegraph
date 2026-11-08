@@ -106,10 +106,11 @@ function usingStaticCandidates(
 ): Candidate[] | null {
   const candidates: Candidate[] = [];
   let complete = true;
+  const normalized = normalizeCsharpIdentifier(name);
   for (const imp of usingStaticImports(use.mod)) {
     if (binding && imp.binding !== binding) continue;
     const target = use.index.byFile.get(fileIdentityKey(imp.file));
-    const matches = target?.locals.filter((local) => local.localName === name) ?? [];
+    const matches = target?.locals.filter((local) => normalizeCsharpIdentifier(local.localName) === normalized) ?? [];
     if (!matches.length) continue;
     const parsed = use.files?.get(imp.file);
     if (!parsed) {
@@ -118,7 +119,10 @@ function usingStaticCandidates(
     }
     for (const def of matches) {
       const declaration = declarationOf(parsed, def);
-      if (typesOnly && (!declaration || !NESTED_TYPE_DECLARATIONS.has(declaration.type))) continue;
+      if (typesOnly) {
+        if (!declaration || !NESTED_TYPE_DECLARATIONS.has(declaration.type)) continue;
+        if (declaration.namedChildren.some((child) => child.type === "type_parameter_list")) continue;
+      }
       if (declaration && importsMember(use, parsed, declaration, imp)) {
         candidates.push({ def, declaration, source: parsed.source });
       }

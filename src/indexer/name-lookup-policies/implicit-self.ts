@@ -20,13 +20,16 @@ import {
   csharpAliasAt,
   csharpAliasQualifiedLookupName,
   csharpAliasUnprovenReason,
+  csharpBindingWithinOwner,
   csharpChainQualifier,
+  csharpOuterMemberResolution,
+  csharpTypeRootName,
   resolveCsharpNameRoot,
   csharpNamespaceFallbackReason,
-  csharpPartialOwnerTypeRoot,
   implicitSelfCallee,
   isCsharpAliasQualifier,
   isDirectKeywordMemberDeclaration,
+  peekCsharpOuterMember,
 } from "../navigation-goto.js";
 import {
   CSHARP_GENERIC_OWNER_REASON,
@@ -145,12 +148,13 @@ function namesAliasRequiringMemberLookup({ use, closestBinding }: NameLookupStat
   return !!csharpAliasAt(use.mod, use.name, use.node);
 }
 
-/** Partial owner parts can supply a nested type before either namespace members or imports. */
-function namesPartialOwnerTypeRoot({ use, closestBinding }: NameLookupState): boolean {
-  const lexicalRoot =
-    closestBinding?.kind === "local" || closestBinding?.kind === "param" || closestBinding?.kind === "type";
-  if (lexicalRoot) return false;
-  return csharpPartialOwnerTypeRoot(use.node);
+/**
+ * A type or dotted-name root that the other parts or the project base classes of an enclosing type can bind before any
+ * namespace member or import does. A binding declared inside the innermost type already beats them.
+ */
+function namesOuterOwnerRoot({ use, closestBinding }: NameLookupState): boolean {
+  if (csharpBindingWithinOwner(closestBinding, use.node)) return false;
+  return csharpTypeRootName(use.node);
 }
 
 export const csharpLookupPolicy: NameLookupPolicy = {
@@ -178,9 +182,17 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     const lead = csharpChainQualifier(chainNode, use.parsed.source);
     if (!lead) return undefined;
     const { index, mod, parsed } = use;
-    const reason =
-      csharpAliasUnprovenReason(index, mod, lead.qualifier, parsed.source) ??
-      csharpNamespaceFallbackReason(index, mod, lead.qualifier, parsed.source, use.files);
+    const aliasReason = csharpAliasUnprovenReason(index, mod, lead.qualifier, parsed.source);
+    if (aliasReason) return { status: "not_found", reason: aliasReason };
+    // A member an enclosing type receives from another part or a base class binds the root first, and its own nested
+    // lookup is not modeled: no namespace or import may answer in its place.
+    const qualifierName = sliceText(lead.qualifier, parsed.source);
+    const boundByOwner =
+      csharpTypeRootName(lead.qualifier) &&
+      !csharpAliasAt(mod, qualifierName, lead.qualifier) &&
+      peekCsharpOuterMember(index, use.file, lead.qualifier, qualifierName)?.status === "member";
+    if (boundByOwner) return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    const reason = csharpNamespaceFallbackReason(index, mod, lead.qualifier, parsed.source, use.files);
     if (reason) return { status: "not_found", reason };
     const root = resolveCsharpNameRoot(index, mod, lead.qualifier, parsed.source, use.files);
     if (root.kind !== "namespace") return undefined;
@@ -196,15 +208,19 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     if (!csharpAliasAt(use.mod, use.name, use.node)) return true;
     return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
   },
-  // Enclosing members precede aliases and imports, including nested types in another partial part.
+  // Enclosing members precede aliases and imports, including nested types of another partial part or a base class.
   wrapRest(state, rest) {
-    const needsMemberLookup = namesAliasRequiringMemberLookup(state) || namesPartialOwnerTypeRoot(state);
-    if (!needsMemberLookup) return rest();
-    return {
+    const { use } = state;
+    const deferToMemberLookup = (): NameResolution => ({
       status: "deferred",
-      request: { kind: "csharp-alias-member", lookupName: state.use.name },
+      request: { kind: "csharp-alias-member", lookupName: use.name },
       fallback: rest(),
-    };
+    });
+    if (namesAliasRequiringMemberLookup(state)) return deferToMemberLookup();
+    if (!namesOuterOwnerRoot(state)) return rest();
+    const peeked = peekCsharpOuterMember(use.index, use.file, use.node, use.name);
+    if (!peeked) return deferToMemberLookup();
+    return csharpOuterMemberResolution(use.index, peeked) ?? rest();
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
     if (!closestBinding?.import || !csharpTypeOnlyName(use.node, true)) return undefined;

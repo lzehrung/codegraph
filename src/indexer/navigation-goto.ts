@@ -18,7 +18,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText, toRange } from "../util/ast.js";
-import { foldPhpIdentifierCase, normalizeKotlinIdentifier } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpQualifiedName, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import {
   csharpNamespaceAtIndex,
   csharpNamespaceRegionAtIndex,
@@ -119,6 +119,7 @@ import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-u
 import { csharpTypeOnlyName } from "./scope-nodes.js";
 import { bindsTypeParameter, typeParameterNamesInScope } from "./type-parameters.js";
 import {
+  AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
@@ -263,6 +264,18 @@ export type SharedOwnerContainer = {
   module: ModuleIndex;
 };
 
+const moduleDeclaredNames = new WeakMap<readonly SymbolDef[], { size: number; names: ReadonlySet<string> }>();
+
+/** Whether a module declares `normalizedName` anywhere, from a name set built once per locals list. */
+function moduleDeclaresName(mod: ModuleIndex, normalizedName: string, normalize: (name: string) => string): boolean {
+  let cached = moduleDeclaredNames.get(mod.locals);
+  if (cached?.size !== mod.locals.length) {
+    cached = { size: mod.locals.length, names: new Set(mod.locals.map((def) => normalize(def.localName))) };
+    moduleDeclaredNames.set(mod.locals, cached);
+  }
+  return cached.names.has(normalizedName);
+}
+
 export async function resolveSharedOwnerContainers(params: {
   index: ProjectIndex;
   ownerFile: string;
@@ -282,10 +295,15 @@ export async function resolveSharedOwnerContainers(params: {
   const seen = new Set<string>();
   const ownerIsExtension = languageId === "swift" ? isSwiftExtensionContainer(ownerContainer, ownerSource) : false;
   const ownerKey = fileIdentityKey(ownerFile);
+  // Every part of a C# type declares a type of its simple name, so a peer without one is never read.
+  const normalizeName = CSHARP_SUPPORT.normalizeIdentifier;
+  const ownerName = languageId === "csharp" ? normalizeName(ownerContainer.childForFieldName("name")?.text ?? "") : "";
   const units: ModuleIndex[] = [];
   for (const file of peers.files) {
     const peer = index.byFile.get(fileIdentityKey(file));
-    if (peer) units.push(peer);
+    if (!peer) continue;
+    if (ownerName && !moduleDeclaresName(peer, ownerName, normalizeName)) continue;
+    units.push(peer);
   }
   for (const peer of units) {
     let peerContext: ParsedFileContext;
@@ -546,6 +564,41 @@ export type CsharpNameRoot =
   | { kind: "namespace"; name: string }
   | { kind: "resolved"; definition: SymbolDef };
 
+type CsharpStarImport = {
+  binding: Extract<ImportBinding, { kind: "star" }>;
+  /** The namespace block holding the directive, absent for the compilation unit. */
+  region: CsharpNamespaceRegion | undefined;
+  /** The imported namespace as the project's declaration table spells it. */
+  imported: string;
+};
+
+const csharpStarImportTables = new WeakMap<
+  readonly ImportBinding[],
+  { size: number; byNamespace: Map<string, CsharpStarImport[]> }
+>();
+
+/** The `using N;` and `using static` directives that sit directly in `namespace`, read from the import list once. */
+function csharpStarImportsIn(mod: ModuleIndex, namespace: string): readonly CsharpStarImport[] {
+  let cached = csharpStarImportTables.get(mod.imports);
+  if (cached?.size !== mod.imports.length) {
+    const regions = mod.csharpNamespaceFacts?.regions;
+    const byNamespace = new Map<string, CsharpStarImport[]>();
+    for (const binding of mod.imports) {
+      if (binding.kind !== "star") continue;
+      const region = regions && csharpNamespaceRegionAtIndex(regions, binding.csharpDirectiveStartIndex);
+      const imported = normalizeCsharpQualifiedName(binding.from).replace(/^global::/u, "");
+      const key = region?.name ?? "";
+      const entry: CsharpStarImport = { binding, region: region || undefined, imported };
+      const bucket = byNamespace.get(key);
+      if (bucket) bucket.push(entry);
+      else byNamespace.set(key, [entry]);
+    }
+    cached = { size: mod.imports.length, byNamespace };
+    csharpStarImportTables.set(mod.imports, cached);
+  }
+  return cached.byNamespace.get(namespace) ?? [];
+}
+
 /**
  * C# searches each enclosing namespace's own members, then its directives, before moving
  * outward. Global members therefore precede compilation-unit directives. Explicit aliases
@@ -569,35 +622,32 @@ export function resolveCsharpNameRoot(
     const qualified = namespace ? `${namespace}.${normalized}` : normalized;
     if (member === "namespace") return { kind: "namespace", name: qualified };
     if (member === "type") {
-      const resolved =
-        resolveExport(index, mod.file, normalized, { referenceIndex: qualifier.startIndex }) ??
-        resolveCsharpQualifiedName(index, mod, `global::${qualified}`, qualifier.startIndex);
+      // Only this namespace's own declaration counts here: a bare lookup would also match an enclosing namespace's.
+      const resolved = resolveCsharpQualifiedName(index, mod, `global::${qualified}`, qualifier.startIndex);
       return resolved?.kind === "resolved" ? { kind: "resolved", definition: resolved.def } : { kind: "unavailable" };
     }
-    if (member) return { kind: "unavailable" };
-    if (!namespace) {
-      // Global-directory peers also include types whose file has no namespace regions.
-      const peer = resolveExport(index, mod.file, normalized, { referenceIndex: qualifier.startIndex });
-      if (peer?.kind === "resolved" && declaresMembers(peer.def)) return { kind: "resolved", definition: peer.def };
-    }
+    // A name that is both a namespace and a type there is a conflict. One that an incomplete table merely lacks is not:
+    // a project file without a syntax tree must not unbind every ordinary name, so the directives still answer for it.
+    if (member === "ambiguous") return { kind: "unavailable" };
     const candidates: StarImportCandidate[] = [];
     let unavailable = false;
-    for (const imp of mod.imports) {
-      if (imp.kind !== "star") continue;
-      const region = regions && csharpNamespaceRegionAtIndex(regions, imp.csharpDirectiveStartIndex);
-      if ((region?.name ?? "") !== namespace) continue;
+    for (const { binding: imp, region, imported } of csharpStarImportsIn(mod, namespace)) {
       if (region && (qualifier.startIndex < region.start || qualifier.startIndex >= region.end)) continue;
       if (imp.staticMembersOf) {
         const use = { index, mod, ...(files ? { files } : {}) };
         const types = csharpUsingStaticTypeCandidates(use, imp, name);
         if (!types) unavailable = true;
         for (const def of types ?? []) candidates.push({ imp, def });
-      } else {
-        const def = resolveStarImportedDefinition(index, imp, name, "csharp");
-        if (def) candidates.push({ imp, def });
-        const shadowedRoot = csharpShadowedImports(index).has(imp) && csharpShadowedStarsMayHold(index, mod, name);
-        if (shadowedRoot) unavailable = true;
+        continue;
       }
+      if (csharpShadowedImports(index).has(imp) && csharpShadowedStarsMayHold(index, mod, name)) {
+        unavailable = true;
+        continue;
+      }
+      // The declaration table lists only types a bare name binds, so a generic `B<T>` never stands for `B`.
+      if (csharpNamespaceMemberKind(index, mod, imported, normalized) !== "type") continue;
+      const def = resolveStarImportedDefinition(index, imp, name, "csharp");
+      if (def) candidates.push({ imp, def });
     }
     if (unavailable) return { kind: "unavailable" };
     const imported = decideStarImportCandidates(index, "csharp", candidates, mod.file);
@@ -697,9 +747,17 @@ function csharpAliasTable(mod: ModuleIndex): CsharpAliasTable {
  * block that contains the use. `undefined` when no alias is in scope there.
  */
 export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): ImportBinding | undefined {
+  const table = csharpAliasTable(mod);
+  const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
+  const typeAliases = table.types.get(normalized);
+  // Most names have no alias at all, which the table proves without reading the import list again.
+  if (!typeAliases && !table.namespaces.has(normalized)) return undefined;
   const namespaceAlias = innermostNamespaceImport(mod.imports, name, useNode, CSHARP_SUPPORT.normalizeIdentifier);
-  const typeAliases = csharpAliasTable(mod).types.get(CSHARP_SUPPORT.normalizeIdentifier(name)) ?? [];
-  return nearestCsharpAlias(mod, namespaceAlias ? [namespaceAlias, ...typeAliases] : typeAliases, useNode.startIndex);
+  return nearestCsharpAlias(
+    mod,
+    namespaceAlias ? [namespaceAlias, ...(typeAliases ?? [])] : (typeAliases ?? []),
+    useNode.startIndex,
+  );
 }
 
 /**
@@ -751,6 +809,7 @@ export function resolveCsharpQualifiedReceiverType(
   typeNode: SyntaxNodeLike,
   source: string,
   scopeIndex: ScopeIndex,
+  files?: ParsedFileProvider,
 ): SymbolDef | null {
   const qualified = csharpQualifiedNameNode(typeNode);
   if (!qualified || csharpQualifiedThroughGenericOwner(qualified)) return null;
@@ -780,7 +839,10 @@ export function resolveCsharpQualifiedReceiverType(
   if (alias && alias.kind !== "namespace") return null;
   const name = csharpAliasQualifiedLookupName(typeNode, source, sliceText(qualified, source), mod.imports);
   if (!alias && !aliasQualified) {
-    const root = resolveCsharpNameRoot(index, mod, lead.qualifier, source);
+    // The other parts and project base classes of an enclosing type bind the root before any namespace does. Their
+    // nested lookup is not modeled here, so a receiver type led by such a member stays unresolved.
+    if (peekCsharpOuterMember(index, mod.file, lead.qualifier, rootName)?.status === "member") return null;
+    const root = resolveCsharpNameRoot(index, mod, lead.qualifier, source, files);
     if (root.kind === "namespace") {
       const suffix = lead.names.toReversed().join(".");
       const resolved = resolveCsharpQualifiedName(index, mod, `global::${root.name}.${suffix}`, typeNode.startIndex);
@@ -1698,9 +1760,9 @@ export async function resolveMemberAccessDefinition(params: {
 
       if (sup.id === "csharp") {
         if (imp) return null;
-        if (csharpPartialOwnerTypeRoot(expr)) {
+        if (csharpTypeRootName(expr)) {
+          // A nested type or member an enclosing type receives from another part or a base class binds before any namespace.
           const enclosing = await aliasMemberLookup(expr, exprName);
-          if (enclosing.status === "unproven") return null;
           if (enclosing.status === "member") {
             return enclosing.member && declaresMembers(enclosing.member)
               ? { kind: "resolved", def: enclosing.member }
@@ -1791,6 +1853,9 @@ export async function resolveMemberAccessDefinition(params: {
           const lexicalRoot =
             !!resolveLexicalBinding?.(dottedRoot) || !csharpNameUnshadowed(ensureScopeIndex(), dottedRoot, rootName);
           if (!lexicalRoot && !csharpAliasAt(mod, rootName, dottedRoot)) {
+            // A member an enclosing type receives from another part or a base class binds the root: it is no namespace.
+            const enclosing = csharpTypeRootName(dottedRoot) ? await aliasMemberLookup(dottedRoot, rootName) : null;
+            if (enclosing?.status === "member") return null;
             const root = await csharpNameRoot(dottedRoot);
             if (root.kind === "namespace") {
               const suffix = source.slice(dottedRoot.endIndex, expr.endIndex).replace(/\s+/gu, "");
@@ -3383,25 +3448,32 @@ async function csharpTypeParts(
   return { parts: [ref, ...peers], complete };
 }
 
+/** Every primary-constructor parameter of one C# type part, as a variable definition. */
+function csharpPrimaryParameters(part: KeywordClassRef): SymbolDef[] {
+  const { container, context, module, file } = part;
+  const list = container.namedChildren.find((child) => child.type === "parameter_list");
+  const parameters: SymbolDef[] = [];
+  for (const parameter of list?.namedChildren ?? []) {
+    const nameNode = parameter.childForFieldName("name");
+    if (!nameNode) continue;
+    const declared = module.locals.find((local) => local.range.start.index === nameNode.startIndex);
+    const kind = SymbolKind.Variable;
+    parameters.push(
+      declared ?? { file, localName: sliceText(nameNode, context.source), kind, range: toRange(nameNode) },
+    );
+  }
+  return parameters;
+}
+
 /**
  * The primary-constructor parameters of one C# type part named `name`. A record's become properties that derived
  * records inherit; a class's or struct's are in scope only in that type's own body.
  */
 function csharpPrimaryParametersNamed(part: KeywordClassRef, name: string, inherited: boolean): SymbolDef[] {
-  const { container, context, module, file } = part;
-  if (inherited && container.type !== "record_declaration") return [];
-  const list = container.namedChildren.find((child) => child.type === "parameter_list");
-  const normalize = context.sup.normalizeIdentifier;
+  if (inherited && part.container.type !== "record_declaration") return [];
+  const normalize = part.context.sup.normalizeIdentifier;
   const wanted = normalize(name);
-  const matches: SymbolDef[] = [];
-  for (const parameter of list?.namedChildren ?? []) {
-    const nameNode = parameter.childForFieldName("name");
-    if (!nameNode || normalize(sliceText(nameNode, context.source)) !== wanted) continue;
-    const declared = module.locals.find((local) => local.range.start.index === nameNode.startIndex);
-    const kind = SymbolKind.Variable;
-    matches.push(declared ?? { file, localName: sliceText(nameNode, context.source), kind, range: toRange(nameNode) });
-  }
-  return matches;
+  return csharpPrimaryParameters(part).filter((parameter) => normalize(parameter.localName) === wanted);
 }
 
 /**
@@ -3421,6 +3493,10 @@ function csharpPartMembersNamed(
     for (const member of findDirectLocalsWithinNode(module.locals, name, container, context, normalize)) {
       if (typeOnly && !declaresMembers(member)) continue;
       const nameNode = nameNodeForDef(context, member);
+      if (declaresMembers(member)) {
+        const generic = nameNode?.parent?.namedChildren.some((child) => child.type === "type_parameter_list");
+        if (generic) continue;
+      }
       if (inherited && nameNode && isPrivateDeclaration(context.sup.id, nameNode)) continue;
       members.push(member);
     }
@@ -3444,7 +3520,10 @@ async function csharpDeclaredBaseRef(
     let def: SymbolDef | null = null;
     if (csharpQualifiedNameNode(typeNode)) {
       if (csharpQualifiedThroughGenericOwner(typeNode)) return "unproven";
-      def = resolveCsharpQualifiedReceiverType(index, module, typeNode, context.source, scopeIndex);
+      const files = createLoadingParsedFileProvider(index, { file, parsed: context });
+      def = await withParsedFiles(files, () =>
+        resolveCsharpQualifiedReceiverType(index, module, typeNode, context.source, scopeIndex, files),
+      );
     } else {
       const resolved = resolveNamedDefinition(
         index,
@@ -3559,8 +3638,266 @@ async function csharpTypeChainMembersNamed(
 }
 
 /**
+ * What an enclosing C# type receives from outside its own declaration: the members of its other `partial` parts and
+ * the non-private ones its project base classes declare. One chain per owner declaration is built once per index,
+ * from names only, so reading a root name costs map lookups instead of a peer scan and a base walk.
+ */
+type CsharpOwnerMember = {
+  def: SymbolDef;
+  /** A nested type a bare name can bind; a generic one cannot and is never listed. */
+  type: boolean;
+  /** A private member is not inherited by a derived type. */
+  inheritable: boolean;
+  /** A field or property typed by a type of its own name (`Color Color`), which C# lets name that type too. */
+  sameNamedType: boolean;
+};
+
+type CsharpOwnerPartMembers = ReadonlyMap<string, readonly CsharpOwnerMember[]>;
+
+/** The owner's own type, then each project base class; each level holds the members of every part of one type. */
+type CsharpOwnerChain = readonly (readonly CsharpOwnerPartMembers[])[];
+
+type CsharpOwnerCache = {
+  source: ProjectIndex["byFile"];
+  size: number;
+  /** `null` for an owner that nothing outside its own declaration can give a member. */
+  chains: Map<string, CsharpOwnerChain | null>;
+  pending: Map<string, Promise<CsharpOwnerChain | null>>;
+  parts: Map<string, CsharpOwnerPartMembers>;
+};
+
+const csharpOwnerCaches = new WeakMap<ProjectIndex, CsharpOwnerCache>();
+
+function csharpOwnerCache(index: ProjectIndex): CsharpOwnerCache {
+  const cached = csharpOwnerCaches.get(index);
+  if (cached && cached.source === index.byFile && cached.size === index.byFile.size) return cached;
+  const fresh: CsharpOwnerCache = {
+    source: index.byFile,
+    size: index.byFile.size,
+    chains: new Map(),
+    pending: new Map(),
+    parts: new Map(),
+  };
+  csharpOwnerCaches.set(index, fresh);
+  return fresh;
+}
+
+/** Whether anything outside an owner's own declaration can give it members: another `partial` part or a base class. */
+function csharpOwnerMayHaveOuterMembers(container: SyntaxNodeLike): boolean {
+  let hasBaseList = false;
+  for (const child of container.namedChildren) {
+    if (child.type === "modifier" && child.text === "partial") return true;
+    if (child.type === "base_list" && child.namedChildren.length) hasBaseList = true;
+  }
+  // A struct lists no base class, an interface's bases are not modeled, and an enum has none.
+  const hasNoBaseClass =
+    container.type === "struct_declaration" ||
+    container.type === "interface_declaration" ||
+    container.type === "enum_declaration";
+  return hasBaseList && !hasNoBaseClass;
+}
+
+/** The type declarations whose body holds `node`, innermost first: a base list or an attribute is not in the body. */
+function csharpEnclosingOwners(node: SyntaxNodeLike): SyntaxNodeLike[] {
+  const owners: SyntaxNodeLike[] = [];
+  for (let owner = nearestMemberContainer(node); owner; owner = nearestMemberContainer(owner)) {
+    const body = owner.childForFieldName("body");
+    if (body && body.startIndex <= node.startIndex && node.endIndex <= body.endIndex) owners.push(owner);
+  }
+  return owners;
+}
+
+/** `directLocalsWithinNode` stops at a nested class, interface, or enum, but not at a nested struct or record. */
+function declaredInNestedValueType(nameNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+  for (let current = nameNode.parent?.parent; current && current !== container; current = current.parent) {
+    if (current.type === "struct_declaration" || current.type === "record_declaration") return true;
+  }
+  return false;
+}
+
+/** A field or property whose declared type has its own name (`Color Color`), which C# lets name that type as well. */
+function csharpSameNamedTypeMember(def: SymbolDef, nameNode: SyntaxNodeLike, context: ParsedFileContext): boolean {
+  if (def.kind !== SymbolKind.Variable) return false;
+  let declaration = nameNode.parent;
+  if (declaration?.type === "variable_declarator") declaration = declaration.parent;
+  const typeNode = declaration ? declaredTypeNameNode(declaration, context.sup) : null;
+  if (!typeNode) return false;
+  const typeName = qualifiedDeclaredTypeText(typeNode, context.source).split(/[.:]/u).at(-1);
+  const normalize = context.sup.normalizeIdentifier;
+  return !!typeName && normalize(typeName) === normalize(def.localName);
+}
+
+/** Every member one part of a C# type declares, by normalized name. */
+function csharpPartMemberTable(part: KeywordClassRef): CsharpOwnerPartMembers {
+  const { container, context, module } = part;
+  const normalize = context.sup.normalizeIdentifier;
+  const table = new Map<string, CsharpOwnerMember[]>();
+  const add = (def: SymbolDef, member: Omit<CsharpOwnerMember, "def">): void => {
+    const key = normalize(def.localName);
+    const entry = { def, ...member };
+    const members = table.get(key);
+    if (members) members.push(entry);
+    else table.set(key, [entry]);
+  };
+  for (const def of directLocalsWithinNode(module.locals, container, context, () => true)) {
+    const nameNode = nameNodeForDef(context, def);
+    if (!nameNode || declaredInNestedValueType(nameNode, container)) continue;
+    const type = declaresMembers(def);
+    if (type && nameNode.parent?.namedChildren.some((child) => child.type === "type_parameter_list")) continue;
+    add(def, {
+      type,
+      inheritable: !isPrivateDeclaration(context.sup.id, nameNode),
+      sameNamedType: csharpSameNamedTypeMember(def, nameNode, context),
+    });
+  }
+  for (const def of csharpPrimaryParameters(part)) {
+    add(def, { type: false, inheritable: container.type === "record_declaration", sameNamedType: false });
+  }
+  return table;
+}
+
+async function buildCsharpOwnerChain(
+  index: ProjectIndex,
+  owner: KeywordClassRef,
+  cache: CsharpOwnerCache,
+): Promise<CsharpOwnerChain | null> {
+  if (!csharpOwnerMayHaveOuterMembers(owner.container)) return null;
+  const levels: (readonly CsharpOwnerPartMembers[])[] = [];
+  const seen = new Set<string>();
+  let current: KeywordClassRef | null = owner;
+  while (current && levels.length < RECEIVER_HIERARCHY_DEPTH) {
+    const key = keywordContainerKey(current.file, current.container);
+    if (seen.has(key)) break;
+    seen.add(key);
+    const { parts } = await csharpTypeParts(index, current);
+    levels.push(
+      parts.map((part) => {
+        const partKey = keywordContainerKey(part.file, part.container);
+        let table = cache.parts.get(partKey);
+        if (!table) {
+          table = csharpPartMemberTable(part);
+          cache.parts.set(partKey, table);
+        }
+        return table;
+      }),
+    );
+    // An unreadable or unproven base ends the chain: a root name it might hold is treated as unbound.
+    const base = await csharpBaseClassRef(index, parts);
+    current = base === "unproven" ? null : base;
+  }
+  return levels;
+}
+
+function csharpOwnerChainOf(index: ProjectIndex, owner: KeywordClassRef): Promise<CsharpOwnerChain | null> {
+  const cache = csharpOwnerCache(index);
+  const key = keywordContainerKey(owner.file, owner.container);
+  const ready = cache.chains.get(key);
+  if (ready !== undefined) return Promise.resolve(ready);
+  let pending = cache.pending.get(key);
+  if (!pending) {
+    pending = buildCsharpOwnerChain(index, owner, cache).then(
+      (chain) => {
+        cache.chains.set(key, chain);
+        cache.pending.delete(key);
+        return chain;
+      },
+      (error: unknown) => {
+        cache.pending.delete(key);
+        throw error;
+      },
+    );
+    cache.pending.set(key, pending);
+  }
+  return pending;
+}
+
+const NO_CSHARP_OUTER_MEMBER: CsharpAliasMemberLookup = { status: "none" };
+
+/**
+ * What an owner's chain finds for `name`: the nearest type that declares it. A nested type matches a type position; a
+ * value member of a different type than its own name hides the name too, while `Color Color` leaves it to the type.
+ */
+function lookupCsharpOwnerChain(chain: CsharpOwnerChain, name: string, typeOnly: boolean): CsharpAliasMemberLookup {
+  for (const [depth, parts] of chain.entries()) {
+    const found: SymbolDef[] = [];
+    let sameNamedType = false;
+    for (const part of parts) {
+      for (const member of part.get(name) ?? []) {
+        if ((typeOnly && !member.type) || (depth > 0 && !member.inheritable)) continue;
+        if (member.sameNamedType) sameNamedType = true;
+        else found.push(member.def);
+      }
+    }
+    if (found.length) return { status: "member", member: found.length === 1 ? found[0]! : null };
+    if (sameNamedType) return NO_CSHARP_OUTER_MEMBER;
+  }
+  return NO_CSHARP_OUTER_MEMBER;
+}
+
+/**
+ * The member of an enclosing type's other parts or project base classes that binds the root name `name` at `node`,
+ * read from owner chains an earlier {@link csharpOuterMember} or {@link warmCsharpOwnerChains} built. `undefined`
+ * until every enclosing owner has one. An unproven part scan or base is no member: the name goes on to its namespace.
+ */
+export function peekCsharpOuterMember(
+  index: ProjectIndex,
+  file: string,
+  node: SyntaxNodeLike,
+  name: string,
+): CsharpAliasMemberLookup | undefined {
+  const owners = csharpEnclosingOwners(node);
+  if (!owners.length) return NO_CSHARP_OUTER_MEMBER;
+  const { chains } = csharpOwnerCache(index);
+  const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
+  const typeOnly = csharpTypeOnlyName(node, true);
+  for (const owner of owners) {
+    const chain = chains.get(keywordContainerKey(file, owner));
+    if (chain === undefined) return undefined;
+    if (!chain) continue;
+    const found = lookupCsharpOwnerChain(chain, normalized, typeOnly);
+    if (found.status === "member") return found;
+  }
+  return NO_CSHARP_OUTER_MEMBER;
+}
+
+/** {@link peekCsharpOuterMember}, building the owner chains it needs. */
+export async function csharpOuterMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  name: string,
+): Promise<CsharpAliasMemberLookup> {
+  const context = await ensureParsedContextForIndex(index, mod.file);
+  const located = context.tree.rootNode.descendantForPosition(node.startPosition, node.startPosition);
+  const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
+  const typeOnly = csharpTypeOnlyName(node, true);
+  for (const container of csharpEnclosingOwners(located)) {
+    const chain = await csharpOwnerChainOf(index, { file: mod.file, container, context, module: mod });
+    if (!chain) continue;
+    const found = lookupCsharpOwnerChain(chain, normalized, typeOnly);
+    if (found.status === "member") return found;
+  }
+  return NO_CSHARP_OUTER_MEMBER;
+}
+
+/** Builds the owner chain of every type a C# module declares, so its sync lookups can read them with a peek. */
+export async function warmCsharpOwnerChains(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  parsed: ParsedFileContext,
+): Promise<void> {
+  for (const def of mod.locals) {
+    if (!declaresMembers(def)) continue;
+    const nameNode = nameNodeForDef(parsed, def);
+    const container = nameNode && nearestMemberContainer(nameNode);
+    if (container) await csharpOwnerChainOf(index, { file: mod.file, container, context: parsed, module: mod });
+  }
+}
+
+/**
  * C# searches the enclosing types, innermost first, each with its project base classes, before an alias.
  * Type positions consider only nested types; bare calls use shared arity-aware inherited-member selection.
+ * A name no alias holds is a type root, read from the cached owner chains and never left unproven.
  */
 export async function csharpAliasMemberLookup(
   index: ProjectIndex,
@@ -3568,9 +3905,10 @@ export async function csharpAliasMemberLookup(
   node: SyntaxNodeLike,
   name: string,
 ): Promise<CsharpAliasMemberLookup> {
-  let ref = await keywordClassRefFromNode(index, mod, node);
   const typeOnly = csharpTypeOnlyName(node, true);
   const call = !typeOnly && implicitSelfCallee("csharp", node.parent ?? node)?.id === node.id;
+  if (!call && !csharpAliasAt(mod, name, node)) return csharpOuterMember(index, mod, node, name);
+  let ref = await keywordClassRefFromNode(index, mod, node);
   while (ref) {
     const members = await csharpTypeChainMembersNamed(index, ref, name, typeOnly, call);
     if (members === "unproven") return { status: "unproven" };
@@ -3604,6 +3942,27 @@ export async function csharpAliasMemberLookup(
 }
 
 /**
+ * {@link resolveCsharpQualifiedReceiverType} for an async caller: the `using static` target files its root lookup reads
+ * are loaded first, and so are the owner chains that decide whether an enclosing type's member binds the root.
+ */
+async function csharpQualifiedReceiverTypeLoaded(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  typeNode: SyntaxNodeLike,
+  source: string,
+  scopeIndex: ScopeIndex,
+): Promise<SymbolDef | null> {
+  const context = await ensureParsedContextForIndex(index, mod.file);
+  const qualified = csharpQualifiedNameNode(typeNode);
+  const lead = qualified && csharpChainQualifier(qualified, source);
+  if (lead) await csharpOuterMember(index, mod, lead.qualifier, sliceText(lead.qualifier, source));
+  const files = createLoadingParsedFileProvider(index, { file: mod.file, parsed: context });
+  return withParsedFiles(files, () =>
+    resolveCsharpQualifiedReceiverType(index, mod, typeNode, source, scopeIndex, files),
+  );
+}
+
+/**
  * The type a C# field, property, or parameter declares, read in the file that declares it: a nominal type the project
  * declares. `null` for a method, a type parameter, or a name no project file declares.
  */
@@ -3620,7 +3979,7 @@ async function csharpMemberDeclaredType(index: ProjectIndex, member: SymbolDef):
   const typeText = qualifiedDeclaredTypeText(typeNode, context.source);
   if (typeParameterNamesInScope(declaration, context.source).has(typeText.split(/[.:]/)[0]!)) return null;
   const scopeIndex = getOrBuildScopeIndex(index, member.file, context.source, context.sup, module, context.tree);
-  return resolveCsharpQualifiedReceiverType(index, module, typeNode, context.source, scopeIndex);
+  return csharpQualifiedReceiverTypeLoaded(index, module, typeNode, context.source, scopeIndex);
 }
 
 /** A simple alias-named use: not a declaration, `::` alias qualifier, or qualified suffix. */
@@ -3630,20 +3989,32 @@ function isCsharpAliasSimpleName(sup: LanguageSupport, node: SyntaxNodeLike): bo
   return !access || getMemberAccessParts(sup, access).property?.id !== node.id;
 }
 
-/** A simple type root whose enclosing partial owner can supply declarations from another file. */
-export function csharpPartialOwnerTypeRoot(node: SyntaxNodeLike): boolean {
+/** A simple name C# binds as a type or as the root of a dotted name; not a qualified suffix or an alias qualifier. */
+export function csharpTypeRootName(node: SyntaxNodeLike): boolean {
   if (node.parent?.type === "alias_qualified_name") return false;
   const qualified = csharpQualifiedNameNode(node);
   if (qualified && qualified.startIndex < node.startIndex) return false;
+  if (csharpTypeOnlyName(node, true)) return true;
   const dotted = node.parent && csharpDottedNameRoot(node.parent);
-  const typeRoot = csharpTypeOnlyName(node, true) || dotted?.id === node.id;
-  if (!typeRoot) return false;
-  let owner = nearestMemberContainer(node);
-  while (owner) {
-    if (owner.namedChildren.some((child) => child.type === "modifier" && child.text === "partial")) return true;
-    owner = nearestMemberContainer(owner);
-  }
-  return false;
+  return dotted?.id === node.id;
+}
+
+/**
+ * Whether the lexical binding a use found is declared inside the innermost type around it. Another part or a base class
+ * cannot declare the same member, and a local or parameter is closer still, so nothing outside the file binds the name
+ * first. A type declared outside that type, in this file or another, can still be hidden by what the type receives.
+ */
+export function csharpBindingWithinOwner(binding: Binding | null, node: SyntaxNodeLike): boolean {
+  const declared = binding?.def?.start.index;
+  const owner = nearestMemberContainer(node);
+  return declared !== undefined && !!owner && owner.startIndex <= declared && declared < owner.endIndex;
+}
+
+/** The outcome of a member of an enclosing type's other parts or bases binding a name, as a go-to-definition answer. */
+export function csharpOuterMemberResolution(index: ProjectIndex, lookup: CsharpAliasMemberLookup): GoToResult | null {
+  if (lookup.status !== "member") return null;
+  if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };
+  return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }
 
 /**
@@ -3658,12 +4029,7 @@ export async function csharpAliasUsesHiddenByMembers(
 ): Promise<ReadonlyMap<number, CsharpAliasMemberLookup>> {
   const hidden = new Map<number, CsharpAliasMemberLookup>();
   const aliasTable = csharpAliasTable(mod);
-  const hasPartialOwner = mod.locals.some((def) => {
-    if (!declaresMembers(def)) return false;
-    const declaration = nameNodeForDef(parsed, def)?.parent;
-    return declaration?.namedChildren.some((child) => child.type === "modifier" && child.text === "partial");
-  });
-  if (!aliasTable.types.size && !aliasTable.namespaces.size && !hasPartialOwner) return hidden;
+  if (!aliasTable.types.size && !aliasTable.namespaces.size) return hidden;
   const { sup, source, tree } = parsed;
   const namesAlias = (node: SyntaxNodeLike): boolean => {
     if (node.type !== "identifier") return false;
@@ -3672,22 +4038,16 @@ export async function csharpAliasUsesHiddenByMembers(
   };
   const uses: SyntaxNodeLike[] = [];
   const collect = (node: SyntaxNodeLike): void => {
-    const root = node.type === "identifier" && hasPartialOwner && csharpPartialOwnerTypeRoot(node);
-    if ((namesAlias(node) || root) && isCsharpAliasSimpleName(sup, node)) uses.push(node);
+    if (namesAlias(node) && isCsharpAliasSimpleName(sup, node)) uses.push(node);
     for (const child of node.namedChildren) collect(child);
   };
   collect(tree.rootNode);
   const lookups = new Map<string, CsharpAliasMemberLookup>();
   for (const node of uses) {
     const name = sliceText(node, source);
+    // A closer binding hides the alias on its own, and an alias that is not in scope here is not hidden by a member.
     const closest = findClosestScopeBinding(scopeIndex, name, node, sup);
-    const partialRoot = hasPartialOwner && csharpPartialOwnerTypeRoot(node);
-    if (partialRoot) {
-      const lexicalRoot = closest?.kind === "local" || closest?.kind === "param" || closest?.kind === "type";
-      if (lexicalRoot) continue;
-    } else if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) {
-      continue;
-    }
+    if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) continue;
     const typeOnly = csharpTypeOnlyName(node, true);
     const call = implicitSelfCallee("csharp", node.parent ?? node)?.id === node.id;
     const argumentCount = call ? getCallArgumentCount({ languageId: "csharp", source, call: node.parent ?? node }) : "";
@@ -4112,7 +4472,7 @@ async function resolveReceiverDefinition(
     if (sup.id === "csharp") {
       const qualified = csharpQualifiedNameNode(constructor);
       if (qualified) {
-        const def = resolveCsharpQualifiedReceiverType(index, mod, constructor, source, getScopeIndex());
+        const def = await csharpQualifiedReceiverTypeLoaded(index, mod, constructor, source, getScopeIndex());
         return def ? { def, memberScope: "instance" } : null;
       }
     }
@@ -4617,15 +4977,32 @@ function findDirectLocalsWithinNode(
   normalizeIdentifier: (name: string) => string,
   predicate?: (local: SymbolDef) => boolean,
 ): SymbolDef[] {
+  const normalizedMember = normalizeIdentifier(member);
+  return directLocalsWithinNode(
+    locals,
+    container,
+    targetContext,
+    (local) => matchesReceiverMemberName(local, normalizedMember, targetContext, normalizeIdentifier),
+    predicate,
+  );
+}
+
+/** The locals `accepts` that `container` declares directly, not those of a nested member, function, or type. */
+function directLocalsWithinNode(
+  locals: readonly SymbolDef[],
+  container: SyntaxNodeLike,
+  targetContext: ParsedFileContext,
+  accepts: (local: SymbolDef) => boolean,
+  predicate?: (local: SymbolDef) => boolean,
+): SymbolDef[] {
   const matches: SymbolDef[] = [];
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
-  const normalizedMember = normalizeIdentifier(member);
   for (const local of locals) {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (
-      !matchesReceiverMemberName(local, normalizedMember, targetContext, normalizeIdentifier) ||
+      !accepts(local) ||
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||

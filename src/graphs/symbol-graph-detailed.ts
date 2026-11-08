@@ -33,11 +33,14 @@ import {
   csharpAliasTableAnswers,
   resolveCsharpNameRoot,
   csharpAliasUsesHiddenByMembers,
+  csharpTypeRootName,
   innermostNamespaceImport,
+  peekCsharpOuterMember,
   pythonDottedPhraseAtUse,
   pythonImportAtUse,
   resolveMemberAccessDefinition,
   sameParameterTypes,
+  warmCsharpOwnerChains,
 } from "../indexer/navigation-goto.js";
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
@@ -421,8 +424,10 @@ export async function buildSymbolGraphDetailed(
       );
       // C# binds a member of an enclosing type (own, partial, or inherited) before an alias of its name. The member
       // lookup is asynchronous and the walks below read alias facts synchronously, so it runs once per module here.
+      // The same holds for the types a type root can reach through other partial parts and base classes.
       const hiddenAliasUses =
         sup.id === "csharp" ? await csharpAliasUsesHiddenByMembers(index, moduleEntry, parsed, scopeIndex) : undefined;
+      if (sup.id === "csharp") await warmCsharpOwnerChains(index, moduleEntry, parsed);
       const aliasToSpecifier = new Map<string, string>();
       if (isJsTsLanguage(sup.id)) {
         for (const imp of moduleEntry.imports) {
@@ -569,8 +574,15 @@ export async function buildSymbolGraphDetailed(
       const hasIncompleteJvmPackage =
         sup.id === "kotlin" &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
+      // A type or member an enclosing type receives from another partial part or a base class binds a root name before
+      // any import, so the file-wide import tables must not answer for it.
+      const boundByOuterOwner = (name: string, node: SyntaxNodeLike): boolean =>
+        sup.id === "csharp" &&
+        csharpTypeRootName(node) &&
+        peekCsharpOuterMember(index, file, node, name)?.status === "member";
       const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
         !hiddenAliasUses?.has(node.startIndex) &&
+        !boundByOuterOwner(name, node) &&
         moduleAliasIsUnshadowed(bareNameUse(name, node), aliasToSpecifier.get(name));
       // Kotlin values shadow aliases only in expressions. Deferred member lookup must settle
       // before its import fallback can prove a use; a type-position alias keeps its type namespace,
@@ -582,6 +594,9 @@ export async function buildSymbolGraphDetailed(
       ): boolean => {
         if (isQualifiedTypeSuffix(sup, node)) return false;
         if (sup.id === "csharp") {
+          const key = aliasKey(name);
+          // A name no import alias holds has nothing in the tables to contradict; the shared lookup orders it.
+          if (!aliasToTargetDef.has(key) && !aliasToTargetModule.has(key)) return true;
           const root = resolveCsharpNameRoot(index, moduleEntry, node, src, resolutionFiles);
           if (root.kind === "namespace" || root.kind === "ambiguous" || root.kind === "unavailable") return false;
           if (root.kind === "resolved") {
@@ -668,6 +683,7 @@ export async function buildSymbolGraphDetailed(
         nodeAliases,
         noteCallableName,
         loadParsedFile,
+        parsedFiles: resolutionFiles,
       };
       if (sup.id === "python") {
         pythonMemberAccessResolvers.set(fileIdentityKey(file), edgePassContext.resolveMemberAccessTarget);

@@ -16,6 +16,8 @@ const STATIC_TYPES = {
     "namespace Other; public class Outer { public class B { public class Nested { public static void Run() {} } } }\n",
 };
 const NEAR_NAMESPACE = { "Near.cs": "namespace A.B; public class Nested { public static void Run() {} }\n" };
+const GENERIC_NB = "namespace N; public class B<T> { public class Nested { public static void Run() {} } }\n";
+const NESTED_B = "public class B { public class Nested { public static void Run() {} } }";
 
 export type CsharpDottedUsingCase = {
   name: string;
@@ -27,6 +29,10 @@ export type CsharpDottedUsingCase = {
   rootTarget: string | undefined;
   target: string | undefined;
   ambiguous: boolean;
+  /** A peer scan that cannot prove every part of the owner leaves reference coverage partial. */
+  incompleteScan: boolean;
+  /** A file whose declarations derived types reach by inheritance; reference discovery does not search those uses. */
+  unreferencedOwner: string | undefined;
 };
 
 function dottedUsingCase(
@@ -42,6 +48,9 @@ function dottedUsingCase(
     namespaceRoot?: boolean;
     partialOwner?: boolean;
     innerDirectives?: readonly string[];
+    baseClass?: string;
+    incompleteScan?: boolean;
+    unreferencedOwner?: string;
   } = {},
 ): CsharpDottedUsingCase {
   const scope = options.scope ?? "namespace";
@@ -53,7 +62,7 @@ function dottedUsingCase(
   if (options.innerDirectives) lines.push(...options.innerDirectives);
   const qualifier = options.qualifier ?? "B";
   lines.push(
-    options.partialOwner ? "partial class Use {" : "class Use {",
+    `${options.partialOwner ? "partial " : ""}class Use${options.baseClass ? ` : ${options.baseClass}` : ""} {`,
     `  void M() { ${qualifier}.Nested.Run(); }`,
     `  ${qualifier}.Nested value;`,
     `  void Plain() { ${qualifier} bare = null; }`,
@@ -74,6 +83,8 @@ function dottedUsingCase(
     rootTarget,
     target,
     ambiguous: options.ambiguous ?? false,
+    incompleteScan: options.incompleteScan ?? false,
+    unreferencedOwner: options.unreferencedOwner,
   };
 }
 
@@ -158,6 +169,72 @@ export const CSHARP_DOTTED_USING_CASES: readonly CsharpDottedUsingCase[] = [
       },
     }),
   ),
+  // A bare name `X` never binds `X<T>`: a generic type neither answers nor blocks the lookup. The namespace decoy is
+  // replaced because a global namespace `B` would come before a compilation-unit using.
+  dottedUsingCase("generic type beside a compilation-unit using", ["using N;"], "NB.cs", {
+    scope: "unit",
+    extra: {
+      "Decoy.cs": "namespace Decoys; public class Nested { public static void Run() {} }\n",
+      "GenericA.cs": `namespace A; ${NESTED_B.replace("class B", "class B<T>")}\n`,
+    },
+  }),
+  dottedUsingCase("generic using beside a namespace of that name", ["using N;"], "Decoy.cs", {
+    extra: { "NB.cs": GENERIC_NB },
+  }),
+  dottedUsingCase("generic using beside a non-generic using", AMBIGUOUS_USINGS, "OtherB.cs", {
+    extra: { "NB.cs": GENERIC_NB },
+  }),
+  dottedUsingCase("generic static using type beside a namespace", ["using static N.Outer;"], "Decoy.cs", {
+    extra: {
+      "NB.cs":
+        "namespace N; public class Outer { public class B<T> { public class Nested { public static void Run() {} } } }\n",
+    },
+  }),
+  // The global namespace holds its own types, which come before compilation-unit usings. A namespace `B` beside a
+  // global type `B` is a conflict in C#, so the decoy is replaced.
+  dottedUsingCase("global type beside a compilation-unit using", ["using N;"], "Global.cs", {
+    scope: "unit",
+    extra: {
+      "Decoy.cs": "namespace Decoys; public class Nested { public static void Run() {} }\n",
+      "Global.cs": `${NESTED_B}\n`,
+    },
+  }),
+  dottedUsingCase("inner namespace type before an outer namespace type", [], "InnerB.cs", {
+    scope: "nested",
+    extra: {
+      "Enclosing.cs": `namespace A; ${NESTED_B}\n`,
+      "InnerB.cs": `namespace A.Inner; ${NESTED_B}\n`,
+    },
+  }),
+  // A peer scan that cannot prove every partial part must not leave an ordinary root unresolved.
+  dottedUsingCase("partial owner with an incomplete peer scan before a using", ["using N;"], "NB.cs", {
+    partialOwner: true,
+    incompleteScan: true,
+    extra: {
+      "Part.cs": "namespace A; partial class Use { public void Other() {} }\n",
+      "sub/Elsewhere.cs": "namespace A; public class Elsewhere {}\n",
+    },
+  }),
+  // Nested types of a project base class precede usings, like those of another partial part.
+  dottedUsingCase("inherited nested type before a using", ["using N;"], "Base.cs", {
+    baseClass: "Base",
+    unreferencedOwner: "Base.cs",
+    extra: { "Base.cs": `namespace A; public class Base { ${NESTED_B} }\n` },
+  }),
+  dottedUsingCase("inherited nested type through two base classes", ["using N;"], "Base.cs", {
+    baseClass: "Mid",
+    unreferencedOwner: "Base.cs",
+    extra: {
+      "Base.cs": `namespace A; public class Base { ${NESTED_B} }\n`,
+      "Mid.cs": "namespace A; public class Mid : Base {}\n",
+    },
+  }),
+  dottedUsingCase("private inherited nested type before a using", ["using N;"], "NB.cs", {
+    baseClass: "Base",
+    extra: {
+      "Base.cs": `namespace A; public class Base { private ${NESTED_B.replace("public class B", "class B")} }\n`,
+    },
+  }),
 ];
 
 export function csharpPartialGenericRootFixture(): {
@@ -226,6 +303,7 @@ export async function expectDottedUsingReferences(
   testCase: CsharpDottedUsingCase,
 ): Promise<void> {
   for (const [file, source] of Object.entries(testCase.files)) {
+    if (file === testCase.unreferencedOwner) continue;
     if (file === "Use.cs") continue;
     const tokens: string[] = [];
     if (source.includes("class B")) tokens.push("B");
@@ -249,7 +327,9 @@ export async function expectDottedUsingReferences(
       expect(useLines, label).toEqual(expected);
       if (testCase.ambiguous) expect(refs.referenceCoverage.state, label).toBe("partial");
       const provenTypeRoot = token !== "B" || !!testCase.rootTarget;
-      if (testCase.target && provenTypeRoot) expect(refs.referenceCoverage.state, label).toBe("complete");
+      if (testCase.target && provenTypeRoot && !testCase.incompleteScan) {
+        expect(refs.referenceCoverage.state, label).toBe("complete");
+      }
     }
   }
 }

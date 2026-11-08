@@ -1,4 +1,5 @@
 import type { NameResolution } from "../../indexer/name-resolution-types.js";
+import type { ParsedFileProvider } from "../../indexer/parsed-cache.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
@@ -169,6 +170,8 @@ type EdgePassContext = {
   ) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
   loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
+  /** Files the shared name lookup reads synchronously for this module, such as `using static` targets. */
+  parsedFiles: ParsedFileProvider;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -699,6 +702,7 @@ function resolveNamedType(
       node,
       context.source,
       context.scopeIndex,
+      context.parsedFiles,
     );
   }
   // A Go composite literal or Zig struct initializer can name a qualified cross-file type

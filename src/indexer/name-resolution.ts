@@ -30,6 +30,7 @@ import {
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
+  csharpAliasAt,
   csharpAliasMemberLookup,
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
@@ -262,7 +263,10 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   const { index, mod, node } = use;
   const lookup = await csharpAliasMemberLookup(index, mod, node, lookupName);
   if (lookup.status === "none") return undefined;
-  if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+  if (lookup.status === "unproven") {
+    if (!csharpAliasAt(mod, lookupName, node)) return undefined;
+    return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+  }
   if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }

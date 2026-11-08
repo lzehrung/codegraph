@@ -1369,12 +1369,14 @@ describe("C# alias shadowing facts", () => {
       "  enum Mode { A }",
       "}",
       "class GlobalGeneric<T> {}",
+      "class GlobalPlain {}",
       "",
     ].join("\n");
     const facts = collectCsharpNamespaceFacts(treeForSource(source));
 
-    // `X` never binds `X<T>`, so only a namespace or a type without type parameters can shadow a bare name.
-    expect([...facts.types].sort()).toEqual(["Local.Both", "Local.Mode", "Local.Plain"]);
+    // `X` never binds `X<T>`, so only a namespace or a type without type parameters can shadow a bare name. A type of
+    // the global namespace is recorded by its bare name, because the global namespace has members of its own.
+    expect([...facts.types].sort()).toEqual(["GlobalPlain", "Local.Both", "Local.Mode", "Local.Plain"]);
     // A generic type outside every namespace still makes its file a global-namespace peer.
     expect(facts.regions.map((region) => region.name)).toEqual(["", "Local"]);
   });

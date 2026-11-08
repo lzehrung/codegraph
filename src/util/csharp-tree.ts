@@ -76,9 +76,9 @@ export type CsharpNamespaceFacts = {
   /** Namespace regions in source order, each opened by this file. */
   regions: CsharpNamespaceRegion[];
   /**
-   * Types without type parameters declared directly in a namespace, as dotted names (`Outer.Inner.Type`):
-   * a bare name `X` never binds `X<T>`. A C# 11 `file` type carries {@link CSHARP_FILE_LOCAL_PREFIX},
-   * because only this file can see it.
+   * Types without type parameters declared directly in a namespace or in the global namespace, as dotted names
+   * (`Outer.Inner.Type`, or `Type` for a global one): a bare name `X` never binds `X<T>`. A C# 11 `file` type
+   * carries {@link CSHARP_FILE_LOCAL_PREFIX}, because only this file can see it.
    */
   types: string[];
 };
@@ -214,17 +214,14 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike): CsharpNamespa
   };
 
   const addType = (node: SyntaxNodeLike, namespaceName: string | null): void => {
-    if (!namespaceName) {
-      hasGlobalType = true;
-      return;
-    }
+    if (!namespaceName) hasGlobalType = true;
     const children = node.namedChildren;
     // A bare name `X` binds a type with no type parameters, never `X<T>`.
     if (children.some((child) => child.type === "type_parameter_list")) return;
     const nameNode = node.childForFieldName("name");
     const name = nameNode ? normalizeCsharpIdentifier(nameNode.text) : "";
     if (!name) return;
-    const declared = `${namespaceName}.${name}`;
+    const declared = namespaceName ? `${namespaceName}.${name}` : name;
     const isFileLocal = children.some((child) => child.type === "modifier" && child.text === "file");
     types.add(isFileLocal ? CSHARP_FILE_LOCAL_PREFIX + declared : declared);
   };
