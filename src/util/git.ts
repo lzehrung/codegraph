@@ -22,6 +22,7 @@ export type GitDiscoveryCache = {
   ignoredRoots: Map<string, Promise<boolean>>;
   excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
   untrackedFiles: Map<string, Promise<string[]>>;
+  indexedBlobs: Map<string, Promise<IndexedBlob[]>>;
 };
 
 export function createGitDiscoveryCache(): GitDiscoveryCache {
@@ -30,6 +31,7 @@ export function createGitDiscoveryCache(): GitDiscoveryCache {
     ignoredRoots: new Map(),
     excludeFiles: new Map(),
     untrackedFiles: new Map(),
+    indexedBlobs: new Map(),
   };
 }
 
@@ -439,8 +441,8 @@ type IndexedBlob = {
 const GIT_LISTING_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * Tracked files among `relFileSet`, in index order, with the blob id for each file whose worktree content Git
- * already knows to match its index entry. `trustIndex` is false when the caller needs every file read again.
+ * Tracked files, optionally restricted to `relFileSet`, in index order, with the blob id for each file whose
+ * worktree content Git already knows to match its index entry. `trustIndex` is false to read every file again.
  *
  * An entry is reusable when it is a plain cached regular file (not flagged assume-unchanged or skip-worktree, which
  * hide edits from Git, and not unmerged) and `git ls-files --modified` does not list it. That is the check
@@ -451,14 +453,14 @@ const GIT_LISTING_MAX_BUFFER = 64 * 1024 * 1024;
  */
 async function listIndexedBlobs(
   projectRoot: string,
-  relFileSet: ReadonlySet<string>,
+  relFileSet: ReadonlySet<string> | undefined,
   trustIndex: boolean,
 ): Promise<IndexedBlob[]> {
   if (!trustIndex) {
     const { stdout } = await runGit(projectRoot, ["ls-files", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER });
     return stdout
       .split("\0")
-      .filter((rel) => rel && relFileSet.has(rel))
+      .filter((rel) => rel && (!relFileSet || relFileSet.has(rel)))
       .map((rel) => ({ rel, blob: undefined }));
   }
   const [staged, modified] = await Promise.all([
@@ -472,7 +474,7 @@ async function listIndexedBlobs(
     const tab = record.indexOf("\t");
     if (tab < 0) continue;
     const rel = record.slice(tab + 1);
-    if (!relFileSet.has(rel)) continue;
+    if (relFileSet && !relFileSet.has(rel)) continue;
     const previous = entries.get(rel);
     if (previous) {
       // An unmerged path is listed once per stage.
@@ -487,6 +489,19 @@ async function listIndexedBlobs(
   return [...entries.values()];
 }
 
+/** Tracked paths and reusable worktree blob ids, shared only within one discovery operation. */
+export async function listGitIndexedBlobs(
+  projectRoot: string,
+  discoveryCache?: GitDiscoveryCache,
+): Promise<IndexedBlob[]> {
+  const root = path.resolve(projectRoot);
+  const cached = discoveryCache?.indexedBlobs.get(root);
+  if (cached) return await cached;
+  const listing = listIndexedBlobs(projectRoot, undefined, true);
+  discoveryCache?.indexedBlobs.set(root, listing);
+  return await listing;
+}
+
 /**
  * Blob ids of the tracked files among `files`, keyed by normalized absolute path. A tracked file whose worktree
  * content matches its index entry reuses the index's blob id; the others are hashed with `git hash-object`.
@@ -495,7 +510,7 @@ async function listIndexedBlobs(
 export async function getGitBlobHashes(
   projectRoot: string,
   files: string[],
-  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; strict?: boolean },
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; strict?: boolean; discoveryCache?: GitDiscoveryCache },
 ): Promise<Map<string, string>> {
   const gitAvailable = opts?.gitAvailable ?? true;
   if (!gitAvailable) return new Map();
@@ -513,7 +528,16 @@ export async function getGitBlobHashes(
     // memory costs a little extra parsing but stays correct at any repo size.
     // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
     // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
-    const indexed = await listIndexedBlobs(projectRoot, relFileSet, !opts?.strict);
+    let indexed: IndexedBlob[];
+    if (opts?.strict) {
+      indexed = await listIndexedBlobs(projectRoot, relFileSet, false);
+    } else if (opts?.discoveryCache) {
+      indexed = (await listGitIndexedBlobs(projectRoot, opts.discoveryCache)).filter((entry) =>
+        relFileSet.has(entry.rel),
+      );
+    } else {
+      indexed = await listIndexedBlobs(projectRoot, relFileSet, true);
+    }
     if (!indexed.length) return new Map();
     const rehashedRel = indexed.filter((entry) => entry.blob === undefined).map((entry) => entry.rel);
     const hashes = await hashGitPaths(projectRoot, rehashedRel);

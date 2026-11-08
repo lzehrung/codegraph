@@ -110,6 +110,8 @@ Caching avoids repeated work; it does not change extraction or resolution semant
 
 Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff. Graph resolution options (`--resolve-node-modules`, `--resolution-hint`, and `graph.resolutionHints`) are part of that validated state, so changing them invalidates cached modules and edges instead of mixing resolutions from different runs.
 
+`buildProjectIndexIncremental` reconciles the manifest with tracked Git index blob ids as well as Git diffs. A clean diff does not prove that the index is current: a previously indexed deletion or edit can have been restored to committed content. Unchanged regular files reuse Git's blob ids without content hashing; restored files and their importers are updated on disk and memory caches.
+
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
 C#, Java, and Kotlin builds prepare per-file facts before resolving imports:

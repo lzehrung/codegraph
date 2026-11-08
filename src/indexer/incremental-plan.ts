@@ -7,7 +7,7 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { isGitRepo, listChangedFiles, listGitIndexedBlobs, listUntrackedFiles } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
 import { fileIdentityKey, normalizePath, pathExists } from "../util/paths.js";
@@ -430,15 +430,32 @@ export async function filterIncrementalDiscoveryCandidates(
 }
 
 /**
+ * Git diffs compare with a commit, not the last indexed worktree. Reconcile the manifest with the index's
+ * reusable blob ids too: a deleted file restored to HEAD and an indexed edit reverted to HEAD leave no diff.
+ * Entries without a reusable blob still need ordinary signature validation; this listing hashes no file.
+ */
+export async function collectGitManifestChangeCandidates(
+  projectRoot: string,
+  trackedEntries: Record<string, ManifestFileEntry>,
+  discoveryContext: ProjectDiscoveryContext,
+): Promise<string[]> {
+  const indexed = await listGitIndexedBlobs(projectRoot, discoveryContext.git);
+  const candidates: string[] = [];
+  for (const { rel, blob } of indexed) {
+    const file = normalizePath(path.isAbsolute(rel) ? rel : path.resolve(projectRoot, rel));
+    const entry = trackedEntries[file];
+    if (!entry || !blob || entry.gitSig !== blob) candidates.push(file);
+  }
+  return candidates;
+}
+
+/**
  * List new, untracked files that Git sees but the manifest does not yet know about,
  * filtered to the same discovery patterns/ignores a full scan would apply.
  *
- * This is the one piece a manifest-plus-git-diff reconciliation cannot otherwise cover:
- * modified and deleted tracked files are already detected cheaply via git diff and
- * per-file signature checks, but a file that was just created and never committed or
- * staged has no tracked entry and no diff record. Errors are not swallowed here;
- * callers decide whether a failure should fall back to a full scan or be treated as a
- * best-effort miss.
+ * Modified and deleted tracked files are detected via Git diffs, manifest/blob reconciliation and per-file
+ * signature checks. A file that was just created and never committed or staged has none of those signals.
+ * Errors are not swallowed here; callers decide whether a failure should fall back to a full scan.
  *
  * When `discovery.useGitignore` is `false`, Git's `--exclude-standard` is dropped too:
  * that mode explicitly wants gitignored files included, so filtering untracked
@@ -511,6 +528,7 @@ export async function resolveIncrementalFilePlan(
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
     const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
+    if (!(await isGitRepo(projectRoot, context.git))) return null;
     const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
 
     // Diff against the working tree, not just the current commit: a file that was
@@ -520,13 +538,14 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const [diffFiles, untrackedFiles] = await Promise.all([
+    const [diffFiles, untrackedFiles, manifestCandidates] = await Promise.all([
       manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
+      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context),
     ]);
     const workingTreeDiffFiles = await filterIncrementalDiscoveryCandidates(
       projectRoot,
-      diffFiles,
+      [...new Set([...diffFiles, ...manifestCandidates])],
       trackedEntries,
       opts,
       context,

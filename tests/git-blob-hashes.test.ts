@@ -2,6 +2,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getGitBlobHashes, setGitExecutableForTests } from "../src/util/git.js";
+import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
+import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 
@@ -103,6 +106,49 @@ describe("getGitBlobHashes", () => {
     expect(hashCalls).toHaveLength(1);
     expect(hashCalls[0]!.filter((arg) => arg.endsWith(".ts")).map((arg) => path.basename(arg))).toEqual(["edited.ts"]);
     expect(calls.filter((args) => args[0] === "ls-files")).toHaveLength(2);
+  });
+
+  it("reconciles restored and reverted files without hash-object for unchanged worktree bytes", async () => {
+    const root = await repoWithFiles(FILES, { "core.autocrlf": "false" });
+    const options = { cache: "disk" as const, threads: 1, logLevel: "silent" as const };
+    const clean = path.join(root, "clean.ts");
+    try {
+      await buildProjectIndex(root, options);
+      await fsp.unlink(clean);
+      await buildProjectIndexIncremental(root, options);
+      runGit(root, ["checkout", "--", "clean.ts"]);
+      const log = await recordGitCalls();
+      const restored = await buildProjectIndexIncremental(root, options);
+      expect(restored.byFile.has(fileIdentityKey(clean))).toBe(true);
+      let calls = await gitCalls(log);
+      expect(calls.filter((args) => args[0] === "hash-object")).toEqual([]);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toHaveLength(1);
+
+      await fsp.writeFile(log, "");
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { ...options, report });
+      expect(report.files?.parsed).toBe(0);
+      expect(report.files?.changed).toBe(0);
+      expect((await gitCalls(log)).filter((args) => args[0] === "hash-object")).toEqual([]);
+
+      await fsp.writeFile(clean, "export const changed = 2;\n");
+      await fsp.writeFile(log, "");
+      await buildProjectIndexIncremental(root, options);
+      calls = await gitCalls(log);
+      expect(calls.filter((args) => args[0] === "hash-object").flatMap((args) => args.slice(2))).toEqual([clean]);
+      runGit(root, ["checkout", "--", "clean.ts"]);
+      await fsp.writeFile(log, "");
+      const reverted = await buildProjectIndexIncremental(root, options);
+      expect(
+        reverted.byFile
+          .get(fileIdentityKey(clean))
+          ?.exports.flatMap((entry) => (entry.type === "local" ? [entry.exportedAs] : [])),
+      ).toEqual(["clean"]);
+      expect((await gitCalls(log)).filter((args) => args[0] === "hash-object")).toEqual([]);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+    }
   });
 
   it("hashes every file in strict mode", async () => {

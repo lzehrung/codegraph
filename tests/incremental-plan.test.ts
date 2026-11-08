@@ -10,6 +10,7 @@ import {
   tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
+  resolveIncrementalFilePlan,
 } from "../src/indexer/incremental-plan.js";
 import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
 import { buildProjectIndex, buildProjectIndexIncremental, buildGraphDelta } from "../src/indexer/build-index.js";
@@ -322,6 +323,80 @@ describe("resolveIncrementalFileList", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it.each([
+    { subdirectory: false, alias: false },
+    { subdirectory: true, alias: false },
+    { subdirectory: false, alias: true },
+    { subdirectory: true, alias: true },
+  ])(
+    "rediscovers restored tracked files (subdirectory=$subdirectory, alias=$alias)",
+    async ({ subdirectory, alias }) => {
+      const root = await mkTmpDir("cg-incremental-restored-plan-");
+      const aliasParent = await mkTmpDir("cg-incremental-restored-plan-alias-");
+      const project = subdirectory ? path.join(root, "project") : root;
+      let scanRoot = project;
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        await fs.mkdir(path.join(project, "src", "nested"), { recursive: true });
+        await fs.mkdir(path.join(project, "src", "excluded"), { recursive: true });
+        await fs.writeFile(path.join(project, "src", "nested", "restored.ts"), "export const restored = 1;\n");
+        await fs.writeFile(path.join(project, "src", "main.ts"), 'import { restored } from "./nested/restored";\n');
+        await fs.writeFile(path.join(project, "src", "excluded", "decoy.ts"), "export const restored = 99;\n");
+        await fs.writeFile(path.join(root, "outside.ts"), "export const restored = 100;\n");
+        git(root, ["add", "."]);
+        git(root, ["commit", "-qm", "base"]);
+        if (alias) {
+          scanRoot = path.join(aliasParent, "project");
+          try {
+            await fs.symlink(project, scanRoot, "dir");
+          } catch (error) {
+            if (isSymlinkUnavailable(error)) return;
+            throw error;
+          }
+        }
+        const options: BuildOptions = {
+          cache: "disk",
+          threads: 1,
+          logLevel: "silent",
+          discovery: { includeGlobs: ["src/**/*.ts"], ignoreGlobs: ["src/excluded/**"] },
+        };
+        await buildProjectIndex(scanRoot, options);
+        await fs.unlink(path.join(project, "src", "nested", "restored.ts"));
+        const deleted = await buildProjectIndexIncremental(scanRoot, options);
+        expect([...deleted.byFile.keys()].some((file) => file.endsWith("/restored.ts"))).toBe(false);
+        git(project, ["checkout", "--", "src/nested/restored.ts"]);
+        const context = projectFilesModule.createProjectDiscoveryContext(scanRoot);
+        const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+        const plan = await resolveIncrementalFilePlan(scanRoot, options, context);
+        expect(plan).not.toBeNull();
+        if (!plan) throw new Error("expected a Git-backed file plan");
+        const relative = (files: Iterable<string>): string[] =>
+          Array.from(files, (file) => path.relative(scanRoot, file).replace(/\\/g, "/")).sort();
+        expect(relative(plan.files)).toEqual(["src/main.ts", "src/nested/restored.ts"]);
+        expect(relative(plan.workingTreeDiffFiles)).toEqual(["src/nested/restored.ts"]);
+        expect(scanSpy).not.toHaveBeenCalled();
+        const incremental = await buildProjectIndexIncremental(scanRoot, {
+          ...options,
+          files: plan.files,
+          filesAreProjectScope: true,
+          discoveryContext: context,
+          reconciledManifestUpdatedAt: plan.manifestUpdatedAt,
+          reconciledWorkingTreeDiffFiles: plan.workingTreeDiffFiles,
+          reconciledUntrackedFiles: plan.untrackedFiles,
+        });
+        const cold = await buildProjectIndex(scanRoot, { ...options, cache: "off" });
+        expect(relative(incremental.byFile.keys())).toEqual(relative(cold.byFile.keys()));
+        expect(new Set(incremental.graph.edges)).toEqual(new Set(cold.graph.edges));
+      } finally {
+        vi.restoreAllMocks();
+        if (scanRoot !== project) await fs.unlink(scanRoot).catch(() => {});
+        await fs.rm(aliasParent, { recursive: true, force: true });
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("added-file specifier stems", () => {

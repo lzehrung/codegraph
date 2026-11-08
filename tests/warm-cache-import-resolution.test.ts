@@ -27,6 +27,7 @@ import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { csharpInheritedAliasCase } from "./helpers/csharp-inherited-alias-fixture.js";
+import { runGit as git } from "./helpers/git.js";
 import {
   DUPLICATE_DECLARATION_FIXTURES,
   expectDuplicateRemovalMatchesColdBuilds,
@@ -2095,4 +2096,142 @@ describe("Java and Kotlin declaration changes match a cold build after an increm
       });
     }
   }
+});
+
+describe("tracked file restoration matches cold builds", () => {
+  const original = 'import { left } from "./left";\nexport function value() { return left(); }\n';
+  const edited = 'import { right } from "./right";\nexport function value() { return right(); }\n';
+  const mainSource = 'import { value } from "./nested/value";\nexport function run() { return value(); }\n';
+  const scenarios = [
+    "delete and restore",
+    "edit and revert",
+    "edit and commit",
+    "restore beside another edit",
+  ] as const;
+  const cases = (["disk", "memory"] as const).flatMap((cache) =>
+    scenarios.map((scenario) => ({ cache, scenario, repository: true })),
+  );
+  cases.push(
+    ...(["disk", "memory"] as const).flatMap((cache) =>
+      (["delete and restore", "edit and revert"] as const).map((scenario) => ({
+        cache,
+        scenario,
+        repository: false,
+      })),
+    ),
+  );
+
+  async function expectRestoredMatchesCold(root: string, warm: ProjectIndex): Promise<void> {
+    const cold = await buildProjectIndex(root, { cache: "off", threads: 1, logLevel: "silent" });
+    expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+    for (const [file, mod] of cold.byFile) {
+      expect(warm.byFile.get(file)?.exports).toEqual(mod.exports);
+      expect(warm.byFile.get(file)?.imports).toEqual(mod.imports);
+    }
+    expect(new Set(warm.graph.edges)).toEqual(new Set(cold.graph.edges));
+    const main = path.join(root, "src", "main.ts");
+    const target = path.join(root, "src", "nested", "value.ts");
+    const decoy = path.join(root, "src", "other", "value.ts");
+    expect(warm.byFile.has(fileIdentityKey(target))).toBe(true);
+    expect(importBindings(warm, main)).toEqual([{ kind: "named", resolved: normalizePath(target) }]);
+    expect(edgeTargets(warm, main)).toEqual([`file:${normalizePath(target)}`]);
+    expect(edgeTargets(warm, main)).not.toContain(`file:${normalizePath(decoy)}`);
+    const goto = await goToDefinition(warm, { file: main, line: 2, column: 32 });
+    expect(goto.status).toBe("ok");
+    if (goto.status !== "ok") throw new Error("expected restored value to resolve");
+    expect(normalizePath(goto.definition.file)).toBe(normalizePath(target));
+    const references = await findReferences(warm, { file: target, line: 2, column: 17 });
+    expect(references.status).toBe("ok");
+    if (references.status !== "ok") throw new Error("expected restored value references");
+    expect(references.referenceCoverage.state).toBe("complete");
+    expect(references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(main))).toBe(
+      true,
+    );
+    expect(references.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(decoy))).toBe(
+      false,
+    );
+    const graphEdges = async (index: ProjectIndex): Promise<string[]> => {
+      const graph = await buildSymbolGraphDetailed(index);
+      return graph.edges
+        .map((edge) => {
+          const from = graph.nodes.get(edge.from)!;
+          const to = graph.nodes.get(edge.to)!;
+          return `${from.file}::${from.name}|${edge.label}|${to.file}::${to.name}`;
+        })
+        .sort();
+    };
+    const warmEdges = await graphEdges(warm);
+    expect(warmEdges).toEqual(await graphEdges(cold));
+    expect(warmEdges).toContain(`${normalizePath(main)}::run|calls|${normalizePath(target)}::value`);
+    expect(warmEdges.some((edge) => edge.includes(`|${normalizePath(decoy)}::value`))).toBe(false);
+  }
+
+  it.each(cases)("$scenario ($cache cache, Git=$repository)", async ({ cache, scenario, repository }) => {
+    const root = await mkTmpDir("cg-tracked-restore-");
+    const options = { cache, threads: 1, logLevel: "silent" as const };
+    try {
+      const target = await writeFixtureFile(root, "src/nested/value.ts", original);
+      await writeFixtureFile(root, "src/main.ts", mainSource);
+      await writeFixtureFile(root, "src/nested/left.ts", "export function left() { return 1; }\n");
+      await writeFixtureFile(root, "src/nested/right.ts", "export function right() { return 2; }\n");
+      await writeFixtureFile(root, "src/other/value.ts", "export function value() { return 99; }\n");
+      const unrelated = await writeFixtureFile(root, "src/unrelated.ts", "export const unrelated = 1;\n");
+      if (repository) {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        git(root, ["config", "core.autocrlf", "false"]);
+        git(root, ["add", "src"]);
+        git(root, ["commit", "-qm", "base"]);
+      }
+      await buildProjectIndex(root, options);
+      const deleted = scenario === "delete and restore" || scenario === "restore beside another edit";
+      if (deleted) await fsp.unlink(target);
+      else await fsp.writeFile(target, edited);
+      const intermediate = await buildProjectIndexIncremental(root, options);
+      if (deleted) {
+        expect(intermediate.byFile.has(fileIdentityKey(target))).toBe(false);
+        expect(edgeTargets(intermediate, path.join(root, "src/main.ts"))).toEqual(["external:./nested/value"]);
+      } else {
+        expect(edgeTargets(intermediate, target)).toEqual([
+          `file:${normalizePath(path.join(root, "src/nested/right.ts"))}`,
+        ]);
+      }
+      if (scenario === "edit and commit") {
+        await fsp.writeFile(target, `${edited}export const committedOnly = 1;\n`);
+        git(root, ["add", "src/nested/value.ts"]);
+        git(root, ["commit", "-qm", "updated"]);
+      } else if (repository) {
+        git(root, ["checkout", "--", "src/nested/value.ts"]);
+      } else {
+        await fsp.writeFile(target, original);
+      }
+      if (scenario === "restore beside another edit") {
+        await fsp.writeFile(unrelated, 'import { right } from "./nested/right";\nexport const unrelated = right();\n');
+      }
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+      const warm = await buildProjectIndexIncremental(root, options);
+      await expectRestoredMatchesCold(root, warm);
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+      const report: BuildReport = { timings: {} };
+      const reloaded = await buildProjectIndexIncremental(root, { ...options, report });
+      if (cache === "disk") {
+        expectNoReprocessedFiles(report);
+      } else {
+        expect(report.files?.cached).toBe(warm.byFile.size);
+        expect(report.backend?.native.filesUsed).toBe(0);
+      }
+      await expectRestoredMatchesCold(root, reloaded);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
