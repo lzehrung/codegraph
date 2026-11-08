@@ -40,6 +40,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "./helpers/kotlin-unread-tail-fixture.js";
 import {
   KOTLIN_EXTENSION_RECEIVER_LINES,
   KOTLIN_EXTENSION_RECEIVER_SOURCES,
@@ -1463,11 +1464,13 @@ nativeDescribe("native semantic coverage", () => {
         { file: ".regressions/unicode_consumer.java", line: 7, column: 12, expectedStatus: "ok" },
         { file: ".regressions/unicode_def.java", line: 3, column: 7, expectedStatus: "ok" },
       ),
+      // `unicode_nfd_consumer.kt` is in package `unicode_fixture` too, and its combining mark is a syntax error at the top
+      // of its tree, so the package is incomplete: the alias import is unproven, and go-to-definition finds nothing.
       sampleExpectation(
         "kotlin",
         [".regressions/unicode_def.kt", ".regressions/unicode_consumer.kt"],
         [{ file: ".regressions/unicode_def.kt", names: ["créer"] }],
-        { file: ".regressions/unicode_consumer.kt", line: 6, column: 10, expectedStatus: "ok" },
+        { file: ".regressions/unicode_consumer.kt", line: 6, column: 10, expectedStatus: "not_found" },
         { file: ".regressions/unicode_def.kt", line: 3, column: 5, expectedStatus: "ok" },
       ),
       sampleExpectation(
@@ -4250,7 +4253,7 @@ nativeDescribe("native semantic coverage", () => {
     tempDirs.push(root, cacheDir);
     const files = await writeFixtureFiles(root, {
       ...KOTLIN_DEFAULT_PACKAGE_SOURCES,
-      "Unread.kt": "class Before\n)\nfun defaultFn() = 0\n",
+      "Unread.kt": `class Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun defaultFn() = 0\n`,
     });
     const options = { cache: "disk", cacheDir, threads: 1 } as const;
     const cold = await buildProjectIndex(root, options);

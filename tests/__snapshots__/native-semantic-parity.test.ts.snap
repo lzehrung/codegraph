@@ -1060,15 +1060,10 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 53`] = `
 {
   "goto": {
-    "file": ".regressions/unicode_def.kt",
-    "line": 3,
-    "status": "ok",
+    "status": "not_found",
   },
   "references": {
     "refs": [
-      ".regressions/unicode_consumer.kt:3",
-      ".regressions/unicode_consumer.kt:3",
-      ".regressions/unicode_consumer.kt:6",
       ".regressions/unicode_def.kt:3",
     ],
     "status": "ok",

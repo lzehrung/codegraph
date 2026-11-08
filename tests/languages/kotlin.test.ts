@@ -36,6 +36,7 @@ import {
   expectKotlinReceiverReview,
   KOTLIN_RECEIVER_REVIEW_SOURCES,
 } from "../helpers/kotlin-receiver-review-fixture.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "../helpers/kotlin-unread-tail-fixture.js";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
@@ -127,9 +128,11 @@ const definition: LanguageTestDefinition = {
           from: "TypeConsumers.kt",
           to: { type: "file", path: "utils/MoreTypes.kt" },
         },
+        // The package scan reads .regressions/unicode_nfd_consumer.kt, a syntax error at the top of its tree, so package
+        // `unicode_fixture` is incomplete: the alias import is not proven to the file that declares the function.
         {
           from: ".regressions/unicode_consumer.kt",
-          to: { type: "file", path: ".regressions/unicode_def.kt" },
+          to: { type: "external", name: "unicode_fixture.cr\u00e9er" },
         },
       ],
       symbols: [
@@ -242,6 +245,49 @@ describe("Kotlin Unicode symbol ranges (C11)", () => {
       source: "// café ☕ prüfung\n/* über */ fun créer(): Int {\n\treturn 1\n}\n",
       symbolName: "créer",
     });
+  });
+});
+
+describe("Kotlin Unicode import alias", () => {
+  // In the sample directory the alias fixture's package `unicode_fixture` also holds unicode_nfd_consumer.kt, whose
+  // combining mark is a syntax error at the top of its tree, so that package is incomplete and the alias import is
+  // unproven (tests/goto.test.ts and tests/references.test.ts pin the answers). The two alias files alone are complete.
+  it("resolves the alias across files when every file of its package is read", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unicode-alias-"));
+    try {
+      const regressions = path.join(process.cwd(), "tests", "samples", "kotlin", ".regressions");
+      for (const name of ["unicode_consumer.kt", "unicode_def.kt"]) {
+        await fsp.copyFile(path.join(regressions, name), path.join(root, name));
+      }
+      const consumer = normalizePath(path.join(root, "unicode_consumer.kt"));
+      const definition = normalizePath(path.join(root, "unicode_def.kt"));
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      expect(index.graph.edges.filter((edge) => normalizePath(edge.from) === consumer).map((edge) => edge.to)).toEqual([
+        { type: "file", path: definition },
+      ]);
+      const target = await goToDefinition(index, { file: consumer, line: 6, column: 10 });
+      expect(target.status).toBe("ok");
+      if (target.status === "ok") {
+        expect(normalizePath(target.definition.file)).toBe(definition);
+        expect(target.definition.range.start.line).toBe(3);
+      }
+      const references = await findReferences(index, { file: definition, line: 3, column: 5 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        // The import statement (line 3) and the alias use (line 6) in the consumer, and the declaration in the definition.
+        const sites = references.references.map((entry) => `${path.basename(entry.file)}:${entry.range.start.line}`);
+        expect([...new Set(sites)].sort()).toEqual([
+          "unicode_consumer.kt:3",
+          "unicode_consumer.kt:6",
+          "unicode_def.kt:3",
+        ]);
+        expect(references.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1463,11 +1509,14 @@ describe("Kotlin package files without a usable syntax tree", () => {
     try {
       const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
       const paths = await writeFixtureFiles(root, {
-        // Big.kt is over the native limit past `Unread`, and Gap.kt has a syntax error at the top after `Before`.
+        // Big.kt is over the native limit past `Unread`, and an unterminated string in Gap.kt, after `Before`, leaves
+        // the rest of that file unread.
         "big/Small.kt": ["package com.acme.big", "", "class Known", ""].join("\n"),
         "big/Big.kt": `package com.acme.big\n\nclass Unread\n${padding}`,
         "gap/Peer.kt": ["package com.acme.gap", "", "class Peer", ""].join("\n"),
-        "gap/Gap.kt": ["package com.acme.gap", "", "class Before", ")", "fun after() = 1", ""].join("\n"),
+        "gap/Gap.kt": ["package com.acme.gap", "", "class Before", KOTLIN_UNREAD_TAIL_LINE, "fun after() = 1", ""].join(
+          "\n",
+        ),
         "q/Other.kt": ["package com.acme.q", "", "class Quiet", ""].join("\n"),
         "app/UseBig.kt": ["package com.acme.app", "", "import com.acme.big.*", ""].join("\n"),
         "app/UseGap.kt": ["package com.acme.app", "", "import com.acme.gap.*", ""].join("\n"),
@@ -1536,12 +1585,20 @@ describe("Kotlin package files without a usable syntax tree", () => {
 });
 
 describe("Kotlin package files with a syntax error", () => {
-  // The error leaves `select(String)` unread, so Gap.kt may overload what Peer.kt declares. `Before` was read first.
+  // The error leaves `select(String)` unread (an unterminated string takes the rest of the file), so Gap.kt may overload
+  // what Peer.kt declares. `Before` was read first.
   it("keeps the names read before the error and leaves a name it may declare unresolved", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-error-file-package-"));
     try {
       const paths = await writeFixtureFiles(root, {
-        "p/Gap.kt": ["package com.acme.p", "", "class Before", ")", "fun select(x: String) = x", ""].join("\n"),
+        "p/Gap.kt": [
+          "package com.acme.p",
+          "",
+          "class Before",
+          KOTLIN_UNREAD_TAIL_LINE,
+          "fun select(x: String) = x",
+          "",
+        ].join("\n"),
         "p/Peer.kt": ["package com.acme.p", "", "fun select(x: Int) = x", ""].join("\n"),
         "app/UseSelect.kt": ["package com.acme.app", "", "import com.acme.p.select", ""].join("\n"),
         "app/UseBefore.kt": ["package com.acme.app", "", "import com.acme.p.Before", ""].join("\n"),
@@ -1568,6 +1625,94 @@ describe("Kotlin package files with a syntax error", () => {
           .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""));
       expect(fileEdgesOf("app/UseSelect.kt")).toEqual([]);
       expect(fileEdgesOf("app/UseBefore.kt")).toEqual([paths["p/Gap.kt"]]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Error recovery resumes at the next declaration, so a stray token costs the token and not the rest of the file.
+  it("reads the declarations after a stray token, and binds an import of one", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-stray-token-package-"));
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "p/Gap.kt": [
+          "package com.acme.p",
+          "",
+          "class Before",
+          ")",
+          "fun after() = 1",
+          "fun select(x: String) = x",
+          "",
+        ].join("\n"),
+        "p/Peer.kt": ["package com.acme.p", "", "fun select(x: Int) = x", ""].join("\n"),
+        "app/UseAfter.kt": ["package com.acme.app", "", "import com.acme.p.after", ""].join("\n"),
+        "app/UseSelect.kt": ["package com.acme.app", "", "import com.acme.p.select", ""].join("\n"),
+        "app/UseBefore.kt": ["package com.acme.app", "", "import com.acme.p.Before", ""].join("\n"),
+      });
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      expect(
+        moduleOf("p/Gap.kt")?.parseErrorRanges?.length,
+        "the pinned grammar no longer fails on Gap.kt",
+      ).toBeTruthy();
+      // The names after the `)` are read, and the file is still marked: a stray token can as well swallow a declaration.
+      expect(moduleOf("p/Gap.kt")?.jvmFacts).toEqual({
+        packageName: "com.acme.p",
+        symbols: ["Before", "after", "select"],
+        javaTypes: ["Before"],
+        incomplete: true,
+      });
+      const resolved = (relative: string): unknown => moduleOf(relative)?.imports[0]?.resolved;
+      expect(normalizePath(String(resolved("app/UseBefore.kt")))).toBe(paths["p/Gap.kt"]);
+      expect(normalizePath(String(resolved("app/UseAfter.kt")))).toBe(paths["p/Gap.kt"]);
+      // Both files declare `select`, so no file is proven.
+      expect(resolved("app/UseSelect.kt")).toEqual({ external: "com.acme.p.select" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin files that error recovery used to stall on", () => {
+  // A stray `$` between two statements of a lambda, followed by names that start with a keyword and end in a decimal
+  // digit above ASCII (U+0663, U+0967, U+1D7CE, U+FF11 and U+0661). With every symbol valid, the scanner read the rest of
+  // the 225 bytes as one `_semi`, and recovery inserted one missing name after another: the parse took 15 to 100
+  // seconds, and the projection of the tree then failed on its node limit, so the file was not indexed at all.
+  const STRAY_DOLLAR_SOURCE =
+    "{x\na\n$ s\u0663(a)\n  by\u0967(a)\n(a)\n  where\u{1d7ce}(a)\n  constructor\u0967(a)\n  instanceof\u{ff11}(a)\n  g(a)\n}\n\n" +
+    "class C {\n  val p = a val\u0661 b\n}\n\nfun g(x: Int) = when (x) {\n  in\u0661 -> 1\n  else -> 2\n}\n\n" +
+    "fun h() = when {\n  !is\u0967 -> 1\n  else -> 2\n}\n";
+
+  it("indexes the file beside a normal file, with the error and the declarations around it", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-stray-dollar-"));
+    try {
+      expect(Buffer.byteLength(STRAY_DOLLAR_SOURCE)).toBe(225);
+      const paths = await writeFixtureFiles(root, {
+        "stray/Stray.kt": STRAY_DOLLAR_SOURCE,
+        "ok/Normal.kt": "package ok\n\nclass Normal {\n  fun greet(): Int = 1\n}\n\nfun helper(): Int = 2\n",
+        "app/Use.kt": "package app\n\nimport ok.helper\n\nfun use() = helper()\n",
+      });
+
+      const started = Date.now();
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      // The bound is far from the milliseconds the build takes and from the tens of seconds it took.
+      expect(Date.now() - started).toBeLessThan(15_000);
+
+      const moduleOf = (relative: string) => index.byFile.get(fileIdentityKey(paths[relative]!));
+      // The `$` is the one error. The class and both functions after it are read, and the file is not degraded.
+      const stray = moduleOf("stray/Stray.kt");
+      expect(stray?.nativeOutcome).toBe("used");
+      expect(stray?.parserDegraded).toBeUndefined();
+      expect(stray?.parseErrorRanges).toHaveLength(1);
+      expect(stray?.locals.map((local) => local.localName)).toEqual(expect.arrayContaining(["C", "g", "h"]));
+      expect(stray?.jvmFacts?.symbols).toEqual(["C", "g", "h"]);
+      // The file beside it is read in full, and its import resolves.
+      const normal = moduleOf("ok/Normal.kt");
+      expect(normal?.parseErrorRanges).toEqual([]);
+      expect(normal?.locals.map((local) => local.localName)).toEqual(["Normal", "greet", "helper"]);
+      expect(normalizePath(String(moduleOf("app/Use.kt")?.imports[0]?.resolved))).toBe(paths["ok/Normal.kt"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -2125,7 +2270,7 @@ describe("Kotlin default-package imports", () => {
   });
 
   it.each([
-    ["syntax error", "class Before\n)\nfun defaultFn(): Int = 0\n"],
+    ["syntax error", `class Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun defaultFn(): Int = 0\n`],
     ["oversized", `//${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}\nclass DefaultThing\n`],
   ])("does not prove an import past an unread %s file", async (_kind, unread) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-default-unread-"));

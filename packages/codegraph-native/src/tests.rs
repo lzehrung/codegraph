@@ -1461,3 +1461,80 @@ fn kotlin_parse_reads_long_dollar_and_quote_runs_in_linear_time() {
     let texts: Vec<&str> = templates.iter().map(|(_, text)| *text).collect();
     assert_eq!(texts, ["$$name", "$${name}"]);
 }
+
+/// For a tree: how many nodes of `kind` are outside any `ERROR`, how many `ERROR` nodes there are, and how many nodes.
+fn kotlin_error_shape(tree: &tree_sitter::Tree, kind: &str) -> (usize, usize, usize) {
+    let (mut outside_error, mut errors, mut nodes) = (0, 0, 0);
+    let mut stack = vec![(tree.root_node(), false)];
+    while let Some((node, inside_error)) = stack.pop() {
+        nodes += 1;
+        if node.is_error() {
+            errors += 1;
+        }
+        if node.kind() == kind && !inside_error {
+            outside_error += 1;
+        }
+        let inside_error = inside_error || node.is_error();
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor).map(|child| (child, inside_error)));
+    }
+    (outside_error, errors, nodes)
+}
+
+#[test]
+fn kotlin_parse_recovers_from_a_stray_dollar_before_names_with_decimal_digits() {
+    // A stray `$` between two statements of a lambda, followed by names that start with a keyword and end in a decimal
+    // digit above ASCII (U+0663, U+0967, U+1D7CE, U+FF11 and U+0661), made error recovery insert one missing name after
+    // another: the 225 bytes took 15 to 100 seconds, then the projection of the tree of hundreds of thousands of nodes
+    // failed on its node limit. The parse is bounded by the deadline, which is far from the milliseconds it takes.
+    let source = "{x\na\n$ s\u{663}(a)\n  by\u{967}(a)\n(a)\n  where\u{1d7ce}(a)\n  constructor\u{967}(a)\n  instanceof\u{ff11}(a)\n  g(a)\n}\n\nclass C {\n  val p = a val\u{661} b\n}\n\nfun g(x: Int) = when (x) {\n  in\u{661} -> 1\n  else -> 2\n}\n\nfun h() = when {\n  !is\u{967} -> 1\n  else -> 2\n}\n";
+    assert_eq!(source.len(), 225);
+    let (tree, _) = parse_kotlin_timed(source, std::time::Duration::from_secs(20));
+    let root = tree.root_node();
+    assert!(root.has_error(), "a stray `$` is a syntax error: {}", root.to_sexp());
+    // The `$` is the one thing the parser cannot use: one ERROR, no inserted name, a tree the size of the text, and the
+    // class and both functions after it are declarations outside the ERROR.
+    let (classes, errors, nodes) = kotlin_error_shape(&tree, "class_declaration");
+    assert_eq!((classes, errors), (1, 1), "{}", root.to_sexp());
+    assert!(nodes < 500, "{nodes} nodes: {}", root.to_sexp());
+    assert!(!root.to_sexp().contains("MISSING"), "{}", root.to_sexp());
+    assert_eq!(kotlin_error_shape(&tree, "function_declaration").0, 2, "{}", root.to_sexp());
+
+    // The addon's own parse and projection of the file finish with the tree, not with the node limit.
+    let columns = parse_syntax_tree_columns(source, "kotlin").expect("the sample should project");
+    assert!(columns.node_count() < 500, "{} nodes", columns.node_count());
+    let error_kind = columns.kinds.iter().position(|kind| kind == "ERROR").expect("an ERROR kind") as u32;
+    assert_eq!(columns.kind_ids.iter().filter(|kind| **kind == error_kind).count(), 1);
+}
+
+#[test]
+fn kotlin_parse_keeps_the_declarations_after_a_stray_character() {
+    // Error recovery once read everything up to the next template as one token, so the classes after a stray character
+    // were not in the tree at all. They are declarations outside the `ERROR`, whatever the stray character is.
+    let classes: String = (0..50)
+        .map(|index| format!("class C{index} {{\n  val v = {index}\n}}\n"))
+        .collect();
+    for stray in ["$ ", "$", "$$", "$as\u{663}", "\u{301}", "#", "`"] {
+        let source = format!("class A {{\n  val x = 1\n}}\n{stray}\n{classes}");
+        let (tree, _) = parse_kotlin_timed(&source, std::time::Duration::from_secs(20));
+        assert!(tree.root_node().has_error(), "{stray:?} is not valid Kotlin");
+        let (classes_found, _, _) = kotlin_error_shape(&tree, "class_declaration");
+        assert_eq!(classes_found, 51, "{stray:?}: {}", tree.root_node().to_sexp());
+        let (properties_found, _, _) = kotlin_error_shape(&tree, "property_declaration");
+        assert_eq!(properties_found, 51, "{stray:?}");
+    }
+}
+
+#[test]
+fn kotlin_parse_closes_a_class_left_open_at_the_end_of_the_file() {
+    // Error recovery needs a `_semi` after the last member to close the class with a missing `}`, and the scanner
+    // reports one at the end of the input after a newline or other whitespace.
+    for tail in ["\n", "\n   ", "\r\n", "  ", "\n\n\n"] {
+        let source = format!("class A {{\n    class B(val a: Int){tail}");
+        let (tree, _) = parse_kotlin_timed(&source, std::time::Duration::from_secs(20));
+        let root = tree.root_node();
+        let (classes, errors, _) = kotlin_error_shape(&tree, "class_declaration");
+        assert_eq!((classes, errors), (2, 0), "{source:?}: {}", root.to_sexp());
+        assert!(root.to_sexp().contains("(MISSING \"}\")"), "{source:?}: {}", root.to_sexp());
+    }
+}

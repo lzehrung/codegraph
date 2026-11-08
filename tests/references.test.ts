@@ -5662,16 +5662,24 @@ describe("Find References: Unicode cross-file fixtures", () => {
     expectReferenceAt(result, consumerFile, 7);
   });
 
-  it("finds references to a Kotlin Unicode import alias across files", async () => {
+  // The alias fixture's package `unicode_fixture` also holds unicode_nfd_consumer.kt, whose combining mark is not a
+  // letter to the grammar, so it ends in a syntax error at the top of its tree. The package is incomplete, so the alias
+  // import is unproven and its use is not a reference, and the coverage says why: a file with a parse error. With a
+  // complete package the alias use is found (tests/languages/kotlin.test.ts).
+  it("reports partial coverage for a Kotlin Unicode import alias while a peer in its package has a syntax error", async () => {
     const samplePath = path.resolve(process.cwd(), "tests", "samples", "kotlin");
     const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.kt").replace(/\\/g, "/");
     const definitionFile = path.join(samplePath, ".regressions", "unicode_def.kt").replace(/\\/g, "/");
-    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
-    const result = await testFindReferences(index, definitionFile, 3, 5, 2);
+    const peerFile = path.join(samplePath, ".regressions", "unicode_nfd_consumer.kt").replace(/\\/g, "/");
+    const index = await createTestIndexFromPath(samplePath);
+    const result = await testFindReferences(index, definitionFile, 3, 5, 1);
 
     expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
     expectReferenceAt(result, definitionFile, 3);
-    expectReferenceAt(result, consumerFile, 6);
+    expect(result.references.some((reference) => reference.file === consumerFile)).toBe(false);
+    expect(result.referenceCoverage).toMatchObject({ state: "partial", reasons: ["parse_error"] });
+    expect(result.referenceCoverage.affectedFiles).toEqual([peerFile]);
   });
 
   it("finds references to a Go Unicode-named function through a Unicode-letter alias", async () => {
