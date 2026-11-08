@@ -6,6 +6,8 @@ import { buildProjectIndex } from "../src/indexer/build-index.js";
 import { findImplementations, findTypeHierarchy } from "../src/indexer/type-hierarchy.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
+import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const roots: string[] = [];
@@ -48,6 +50,140 @@ const PROVEN_RELATIONS: ProvenRelation[] = [
   { from: "CsRecordClass", to: "CsRecordBase", relation: "extends" },
   { from: "CsRecordClass", to: "CsService", relation: "implements" },
   { from: "CsRecordStruct", to: "CsService", relation: "implements" },
+];
+
+type NestedBaseClauseFixture = { language: string; file: string; source: string; relations: readonly string[] };
+
+/** Compiler-verified where one exists (Roslyn, javac, kotlinc, tsc, Python); each outer type has no base clause. */
+const NESTED_BASE_CLAUSE_FIXTURES: readonly NestedBaseClauseFixture[] = [
+  {
+    language: "Java",
+    file: "Nested.java",
+    source: [
+      "interface Contract {}",
+      "",
+      "class Base {}",
+      "",
+      "class Outer {",
+      "    interface Inner extends Contract {}",
+      "",
+      "    static class Child extends Base {}",
+      "}",
+      "",
+    ].join("\n"),
+    relations: ["Child:extends:Base", "Inner:extends:Contract"],
+  },
+  {
+    language: "C#",
+    file: "Nested.cs",
+    source: [
+      "interface IContract { }",
+      "class Base { }",
+      "class Outer",
+      "{",
+      "    public interface IInner : IContract { }",
+      "    public class Child : Base { }",
+      "}",
+      "interface IOuter",
+      "{",
+      "    class Nested : Base { }",
+      "}",
+      "",
+    ].join("\n"),
+    relations: ["Child:extends:Base", "IInner:extends:IContract", "Nested:extends:Base"],
+  },
+  {
+    language: "Kotlin",
+    file: "Nested.kt",
+    source: [
+      "interface Contract",
+      "",
+      "open class Base",
+      "",
+      "class Outer {",
+      "    interface Inner : Contract",
+      "",
+      "    class Child : Base()",
+      "",
+      "    companion object : Contract",
+      "}",
+      "",
+    ].join("\n"),
+    relations: ["Child:extends:Base", "Inner:extends:Contract"],
+  },
+  {
+    language: "TypeScript",
+    file: "nested.ts",
+    source: [
+      "class Base {}",
+      "",
+      "export class Outer {",
+      "  make() {",
+      "    class Child extends Base {}",
+      "    return Child;",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    relations: ["Child:extends:Base"],
+  },
+  {
+    language: "Python",
+    file: "nested.py",
+    source: [
+      "class Bar:",
+      "    pass",
+      "",
+      "",
+      "def foo(x):",
+      "    return x",
+      "",
+      "",
+      "class Plain:",
+      "    value = foo(Bar)",
+      "",
+      "",
+      "class Outer:",
+      "    class Inner(Bar):",
+      "        pass",
+      "",
+    ].join("\n"),
+    relations: ["Inner:extends:Bar"],
+  },
+  {
+    language: "Swift",
+    file: "Nested.swift",
+    source: ["class Base {}", "protocol P {}", "class Outer {", "    class Inner: Base, P {}", "}", ""].join("\n"),
+    relations: ["Inner:extends:Base", "Inner:implements:P"],
+  },
+  {
+    language: "Ruby",
+    file: "nested.rb",
+    source: ["class Base", "end", "", "module Outer", "  class Inner < Base", "  end", "end", ""].join("\n"),
+    relations: ["Inner:extends:Base"],
+  },
+  {
+    language: "C++",
+    file: "nested.cpp",
+    source: ["class Base {};", "class Outer { class Inner : public Base {}; };", ""].join("\n"),
+    relations: ["Inner:extends:Base"],
+  },
+  {
+    language: "PHP",
+    file: "nested.php",
+    source: [
+      "<?php",
+      "trait T {}",
+      "class Base {}",
+      "class Outer {",
+      "    function make() {",
+      "        return new class extends Base { use T; };",
+      "    }",
+      "}",
+      "",
+    ].join("\n"),
+    relations: [],
+  },
 ];
 
 nativeDescribe("type hierarchy language parity", () => {
@@ -304,7 +440,7 @@ nativeDescribe("type hierarchy language parity", () => {
     expect(actualRelations).not.toContain("CppQualifiedDerived:extends:CppQualifierHost");
   });
 
-  it("extracts JavaScript extends and Go interface and struct embedding", async () => {
+  it("extracts JavaScript extends, Go struct embedding, and Go interface embedding as interface inheritance", async () => {
     const root = await mkTmpDir("cg-hierarchy-js-go-");
     roots.push(root);
     const fixtures: Record<string, string> = {
@@ -329,6 +465,9 @@ nativeDescribe("type hierarchy language parity", () => {
         "type GoStruct struct {",
         "  GoBase",
         "}",
+        "type GoRefined struct {",
+        "  GoWorker",
+        "}",
         "type GoNamed struct {",
         "  base GoBase",
         "}",
@@ -345,8 +484,14 @@ nativeDescribe("type hierarchy language parity", () => {
         .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`),
     );
 
+    // An interface embedding an interface extends it; only a struct embedding an interface implements it.
     expect(actualRelations).toEqual(
-      new Set(["JsChild:extends:JsBase", "GoWorker:implements:GoBase", "GoStruct:implements:GoBase"]),
+      new Set([
+        "JsChild:extends:JsBase",
+        "GoWorker:extends:GoBase",
+        "GoStruct:implements:GoBase",
+        "GoRefined:implements:GoWorker",
+      ]),
     );
 
     const jsChildId = nodesByName.get("JsChild");
@@ -365,9 +510,10 @@ nativeDescribe("type hierarchy language parity", () => {
       const implementations = findImplementations(index, graph, goBaseId);
       expect(implementations.status).toBe("ok");
       if (implementations.status === "ok") {
+        // The refining interface never implements GoBase, but the struct embedding it does.
         expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name).sort()).toEqual([
+          "GoRefined",
           "GoStruct",
-          "GoWorker",
         ]);
       }
     }
@@ -584,5 +730,111 @@ nativeDescribe("type hierarchy language parity", () => {
     expect(implementationsOf("Grand")).toEqual(["Late", "Leaf"]);
     expect(implementationsOf("SameParent")).toEqual(["SameWidget"]);
     expect(implementationsOf("Unrelated")).toEqual(["Decoy"]);
+  });
+
+  it.each(INTERFACE_INHERITANCE_FIXTURES)(
+    "keeps $language interface inheritance as extends and finds implementers through the child interface",
+    async (fixture) => {
+      const root = await mkTmpDir("cg-hierarchy-interface-inheritance-");
+      roots.push(root);
+      await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      expectInterfaceInheritance(root, index, graph, fixture, "cold");
+    },
+  );
+
+  it.each(NESTED_BASE_CLAUSE_FIXTURES)(
+    "reads a $language type's own base clause, never a nested type's or a call in its body",
+    async ({ file, source, relations }) => {
+      const root = await mkTmpDir("cg-hierarchy-nested-clause-");
+      roots.push(root);
+      await fs.writeFile(path.join(root, file), source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const actual = graph.edges
+        .filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+        .sort();
+      // Only the nested declaration carries its clause; the enclosing type, which has none, carries no edge.
+      expect(actual).toEqual([...relations].sort());
+    },
+  );
+
+  it("adds no edge for a TypeScript namespace-qualified heritage type instead of binding a same-named local", async () => {
+    const root = await mkTmpDir("cg-hierarchy-ts-qualified-");
+    roots.push(root);
+    await writeFixtureFiles(root, {
+      "contracts.ts": ["export interface Contract {", "  run(): void;", "}", ""].join("\n"),
+      "use.ts": [
+        'import * as ns from "./contracts";',
+        "",
+        "interface Contract {",
+        "  other(): void;",
+        "}",
+        "",
+        "export class Widget implements ns.Contract {",
+        "  run(): void {}",
+        "}",
+        "",
+        "export interface Refined extends ns.Contract {}",
+        "",
+        "export const local: Contract = { other() {} };",
+        "",
+      ].join("\n"),
+    });
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    // `ns.Contract` names a member of the namespace import; its bare name `Contract` is the local decoy, so neither
+    // heritage clause proves a base and neither adds an edge to the real contract or the local interface.
+    expect(
+      graph.edges.filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label)),
+    ).toEqual([]);
+    for (const file of ["contracts.ts", "use.ts"]) {
+      const contract = [...graph.nodes.values()].find(
+        (node) => node.name === "Contract" && path.basename(node.file) === file,
+      );
+      expect(contract, `${file} Contract`).toBeDefined();
+      const implementations = findImplementations(index, graph, contract!.id);
+      expect(implementations.status, file).toBe("ok");
+      if (implementations.status !== "ok") throw new Error("Expected an empty implementation result");
+      expect(implementations.implementations, file).toEqual([]);
+    }
+  });
+
+  it("records no edge for a Rust supertrait bound, while every implementer keeps its own impl edge", async () => {
+    const root = await mkTmpDir("cg-hierarchy-rust-supertrait-");
+    roots.push(root);
+    await fs.writeFile(
+      path.join(root, "traits.rs"),
+      [
+        "trait RustParent {",
+        "    fn run(&self);",
+        "}",
+        "trait RustChild: RustParent {}",
+        "struct RustWidget;",
+        "impl RustParent for RustWidget {",
+        "    fn run(&self) {}",
+        "}",
+        "impl RustChild for RustWidget {}",
+        "",
+      ].join("\n"),
+    );
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const graph = await buildSymbolGraphDetailed(index);
+    const relations = graph.edges
+      .filter((edge) => edge.label && ["extends", "implements", "trait", "mixin"].includes(edge.label))
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+    // rustc rejects `impl RustChild for Orphan` without `impl RustParent for Orphan`, so the trait bound adds no
+    // implementer that a direct impl edge misses, and the trait is never an implementation of its supertrait.
+    expect(relations).toEqual(["RustWidget:implements:RustChild", "RustWidget:implements:RustParent"]);
+    const parent = [...graph.nodes.values()].find((node) => node.name === "RustParent");
+    expect(parent).toBeDefined();
+    const implementations = findImplementations(index, graph, parent!.id);
+    if (implementations.status !== "ok") throw new Error("Expected Rust trait implementations");
+    expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name)).toEqual([
+      "RustWidget",
+    ]);
   });
 });

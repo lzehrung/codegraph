@@ -304,14 +304,22 @@ function collectTypeImplementations(
 ): ImplementationMatch[] {
   const matches = new Map<string, ImplementationMatch>();
   const queue: string[] = [];
-  // A contract that extends the target (Swift `protocol Child: Parent`, PHP `interface Child extends Parent`) is
-  // not an implementation of it, but whatever implements that contract does. Walk such contracts as intermediate
-  // nodes, each with the roots that count as implementing it.
+  // A contract that extends the target (`interface Child extends Parent`, C# and Kotlin `interface Child : Parent`,
+  // Swift `protocol Child: Parent`, a Go interface embedding another) is not an implementation of it, but whatever
+  // implements that contract does. Walk such contracts as intermediate nodes, each with the roots that count as
+  // implementing it.
   const contracts: ImplementedContract[] = [{ id: targetId, roots: acceptedRootRelations }];
   const walked = new Set<string>([targetId]);
+  // An interface can extend a class (TypeScript), but it is no subclass of it, and neither are the types that implement it.
+  const interfaceExtendsClass = (toId: string, edge: HierarchyEdge): boolean => {
+    if (edge.relation !== "extends" || graph.nodes.get(toId)?.kind !== "class") return false;
+    const kind = graph.nodes.get(edge.from)?.kind;
+    return kind === "interface" || kind === "type";
+  };
   for (let cursor = 0; cursor < contracts.length; cursor += 1) {
     const contract = contracts[cursor]!;
     for (const edge of hierarchy.incoming.get(contract.id) ?? []) {
+      if (interfaceExtendsClass(contract.id, edge)) continue;
       if (contract.roots.has(edge.relation)) {
         matches.set(edge.from, {
           symbolId: edge.from,
@@ -331,6 +339,7 @@ function collectTypeImplementations(
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor]!;
     for (const edge of hierarchy.incoming.get(current) ?? []) {
+      if (interfaceExtendsClass(current, edge)) continue;
       if (matches.has(edge.from)) continue;
       matches.set(edge.from, {
         symbolId: edge.from,

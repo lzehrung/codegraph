@@ -62,6 +62,8 @@ export type ReceiverAncestorEmbed = {
   member: string;
   typeField?: string;
   nameless?: boolean;
+  /** Edge label for each embedded type: an interface embedding an interface extends it; a struct embedding a type implements it. */
+  relation: ReceiverAncestryRelation;
 };
 
 export type ReceiverAncestry = {
@@ -170,13 +172,14 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     receiverAncestry: {
       clauses: [],
       embeds: [
-        { body: "interface_type", member: "type_elem" },
+        { body: "interface_type", member: "type_elem", relation: "extends" },
         {
           body: "struct_type",
           memberList: "field_declaration_list",
           member: "field_declaration",
           typeField: "type",
           nameless: true,
+          relation: "implements",
         },
       ],
     },
@@ -203,6 +206,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       clauses: [
         { nodeType: "superclass", relation: "extends", supertype: "all" },
         { nodeType: "super_interfaces", relation: "implements" },
+        { nodeType: "extends_interfaces", relation: "extends" },
       ],
     },
     memberCallNamesFreeFunctionOmittedReason: "A method call names a member of the receiver type, not a free function.",
@@ -338,6 +342,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       clauses: [
         { nodeType: "extends_clause", relation: "extends", field: "value", supertype: "all" },
         { nodeType: "implements_clause", relation: "implements" },
+        { nodeType: "extends_type_clause", relation: "extends" },
       ],
     },
     memberCallNamesFreeFunctionOmittedReason:
@@ -351,6 +356,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       clauses: [
         { nodeType: "extends_clause", relation: "extends", field: "value", supertype: "all" },
         { nodeType: "implements_clause", relation: "implements" },
+        { nodeType: "extends_type_clause", relation: "extends" },
       ],
     },
     memberCallNamesFreeFunctionOmittedReason:

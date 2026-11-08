@@ -66,7 +66,7 @@ import {
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
-import { collectNodesByType, declarationMemberArity, findFirstNodeByType, isIdentifierType } from "./ast.js";
+import { declarationMemberArity, findFirstNodeByType, isIdentifierType } from "./ast.js";
 import {
   CALL_ARGUMENT_NODE_TYPES,
   classifyReceiver,
@@ -1789,6 +1789,7 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
     return;
   }
   const narrowed = narrowBaseSpecifierNode(node);
+  if (isUnprovenHeritageExpression(narrowed)) return;
   if ((sup.id === "ts" || sup.id === "tsx") && narrowed.type === "member_expression") {
     out.push(narrowed);
     return;
@@ -1940,15 +1941,59 @@ function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: Synt
 
 type InheritanceRelation = ReceiverAncestryRelation;
 
+/**
+ * Whether a declaration is an interface. Kotlin shares `class_declaration` between classes and interfaces and tells
+ * them apart by the `interface` or `class` keyword token that precedes the name.
+ */
+function isInterfaceDeclaration(node: SyntaxNodeLike): boolean {
+  if (node.type === "interface_declaration") return true;
+  if (node.type !== "class_declaration") return false;
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child || child.type === "class") return false;
+    if (child.type === "interface") return true;
+  }
+}
+
+/**
+ * Kotlin indexes an interface as a class, so the graph node takes the declaration's `interface` keyword. A contract
+ * with no direct implementer is then still a contract, and `super` lookup skips it as it skips every interface.
+ */
+function markInterfaceNode(context: EdgePassContext, id: string): void {
+  const node = context.nodes.get(id);
+  if (node?.kind === "class") node.kind = "interface";
+}
+
+/**
+ * The clause nodes of `rule` that `declaration` itself owns: its children and their children, the depth receiver
+ * lookup reads. A nested declaration's own base clause sits deeper and is never the enclosing type's.
+ */
+function ownClauseNodes(declaration: SyntaxNodeLike, rule: ReceiverAncestorClause): SyntaxNodeLike[] {
+  const clauses: SyntaxNodeLike[] = [];
+  for (const child of declaration.namedChildren) {
+    if (child.type === rule.nodeType) clauses.push(child);
+    for (const grandchild of child.namedChildren) {
+      if (grandchild.type === rule.nodeType) clauses.push(grandchild);
+    }
+  }
+  return rule.each ? clauses : clauses.slice(0, 1);
+}
+
+/**
+ * `extends` or `implements` for one entry of a base list that mixes classes and interfaces. An interface only
+ * refines other interfaces, so every entry of its list extends. A class-like type extends at most one class and
+ * implements the rest: Kotlin marks the class with a constructor call, and C# lists it first.
+ */
 function baseClauseRelation(
   label: ReceiverAncestorClause["relation"],
   target: SymbolDef,
   index: number,
-  interfaceIds: Set<string>,
+  declaresInterface: boolean,
   identifier: SyntaxNodeLike,
   kotlin: boolean,
 ): InheritanceRelation {
   if (label !== "superclass-first") return label;
+  if (declaresInterface) return "extends";
   if (kotlin) {
     let current = identifier.parent;
     while (current && current.type !== "delegation_specifiers") {
@@ -1957,11 +2002,11 @@ function baseClauseRelation(
     }
     return "implements";
   }
-  if (interfaceIds.has(defNodeId(target)) || index > 0) return "implements";
+  if (target.kind === SymbolKind.Interface || index > 0) return "implements";
   return "extends";
 }
 
-/** Records `implements` for every embedded type of a Go interface or struct declaration. */
+/** Records an edge for every embedded type of a Go interface or struct declaration, labeled by the embedding rule. */
 async function recordEmbedRelations(
   context: EdgePassContext,
   fromId: string,
@@ -1979,7 +2024,7 @@ async function recordEmbedRelations(
       if (rule.nameless && member.childForFieldName("name")) continue;
       const specifier = rule.typeField ? member.childForFieldName(rule.typeField) : member;
       if (!specifier) continue;
-      await recordIdentifierRelations(context, fromId, specifier, () => "implements");
+      await recordIdentifierRelations(context, fromId, specifier, () => rule.relation);
     }
   }
 }
@@ -1990,22 +2035,13 @@ export async function emitClassInheritanceEdges(
 ): Promise<void> {
   const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
-
-  const interfaceIds = new Set(
-    classNodes
-      .filter(
-        (candidate) =>
-          candidate.node.type === "interface_declaration" ||
-          candidate.node.type === "protocol_declaration" ||
-          candidate.node.type === "trait_item" ||
-          /^(?:interface|protocol|trait)\b/.test(sliceText(candidate.node, context.source).trimStart()),
-      )
-      .map((candidate) => defNodeId(candidate.def)),
-  );
+  const kotlin = context.sup.id === "kotlin";
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
+    const declaresInterface = isInterfaceDeclaration(cls.node);
+    if (declaresInterface) markInterfaceNode(context, fromId);
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
       extensionNominal = null;
@@ -2028,13 +2064,7 @@ export async function emitClassInheritanceEdges(
       if (superclass && superclass.namedChildren.length > 1) continue;
     }
     for (const rule of rules.clauses) {
-      const clauses: SyntaxNodeLike[] = [];
-      if (rule.each) {
-        collectNodesByType(cls.node, rule.nodeType, clauses);
-      } else {
-        const found = findFirstNodeByType(cls.node, rule.nodeType);
-        if (found) clauses.push(found);
-      }
+      const clauses = ownClauseNodes(cls.node, rule);
       for (const clause of clauses) {
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
         await recordIdentifierRelations(
@@ -2042,7 +2072,7 @@ export async function emitClassInheritanceEdges(
           fromId,
           specifiers,
           (target, index, identifier) =>
-            baseClauseRelation(rule.relation, target, index, interfaceIds, identifier, context.sup.id === "kotlin"),
+            baseClauseRelation(rule.relation, target, index, declaresInterface, identifier, kotlin),
           extensionNominal,
         );
       }

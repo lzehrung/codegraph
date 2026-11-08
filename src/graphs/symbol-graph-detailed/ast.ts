@@ -346,13 +346,6 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
   return positionalParameters.length;
 }
 
-export function collectNodesByType(node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]): void {
-  for (const child of node.namedChildren ?? []) {
-    if (child.type === type) out.push(child);
-    collectNodesByType(child, type, out);
-  }
-}
-
 export function scanForAliasUse(
   node: SyntaxNodeLike,
   sup: LanguageSupport,

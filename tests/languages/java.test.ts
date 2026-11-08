@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { defNodeId } from "../../src/graphs/symbol-graph.js";
+import { defNodeId, type SymbolGraph } from "../../src/graphs/symbol-graph.js";
+import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
@@ -2245,4 +2246,253 @@ it("resolves a package-qualified Java type despite a value parameter", async () 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+describe("Java interface inheritance", () => {
+  const relationsOf = (graph: SymbolGraph): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+
+  it("records a generic parent and a list of parents as extends and finds implementers through them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-inheritance-"));
+    try {
+      await writeFixtureFiles(root, {
+        "All.java": [
+          "interface IA {}",
+          "",
+          "interface IB {}",
+          "",
+          "interface IC extends IA, IB {}",
+          "",
+          "interface G<T> {}",
+          "",
+          "interface H extends G<String> {}",
+          "",
+          "class W implements IC {}",
+          "",
+          "class V implements H {}",
+          "",
+          "enum E implements IC {",
+          "    X",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(relationsOf(graph)).toEqual([
+        "E:implements:IC",
+        "H:extends:G",
+        "IC:extends:IA",
+        "IC:extends:IB",
+        "V:implements:H",
+        "W:implements:IC",
+      ]);
+      const implementationsOf = (name: string): string[] => {
+        const target = [...graph.nodes.values()].find((node) => node.name === name && node.kind === "interface");
+        if (!target) throw new Error(`Expected the ${name} interface`);
+        const result = findImplementations(index, graph, target.id);
+        if (result.status !== "ok") throw new Error(`Expected implementations of ${name}`);
+        return result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name ?? "").sort();
+      };
+      expect(implementationsOf("IA")).toEqual(["E", "W"]);
+      expect(implementationsOf("IB")).toEqual(["E", "W"]);
+      expect(implementationsOf("IC")).toEqual(["E", "W"]);
+      expect(implementationsOf("G")).toEqual(["V"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves members a child interface inherits for navigation, references, and call edges alike", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-members-"));
+    try {
+      const parent = [
+        "package a;",
+        "",
+        "public interface Parent {",
+        "    int run();",
+        "",
+        "    default int shared() {",
+        "        return 1;",
+        "    }",
+        "}",
+        "",
+      ];
+      const child = [
+        "package b;",
+        "",
+        "import a.Parent;",
+        "",
+        "public interface Child extends Parent {",
+        "    default int own() {",
+        "        return shared() + this.run();",
+        "    }",
+        "}",
+        "",
+      ];
+      const use = [
+        "package c;",
+        "",
+        "import b.Child;",
+        "",
+        "public class Use {",
+        "    public int f(Child c) {",
+        "        return c.run() + c.shared();",
+        "    }",
+        "}",
+        "",
+      ];
+      const decoy = [
+        "package z;",
+        "",
+        "public class Decoy {",
+        "    public int run() {",
+        "        return 0;",
+        "    }",
+        "",
+        "    public int shared() {",
+        "        return 0;",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "a/Parent.java": parent.join("\n"),
+        "b/Child.java": child.join("\n"),
+        "c/Use.java": use.join("\n"),
+        "z/Decoy.java": decoy.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+      const graph = await buildSymbolGraphDetailed(index);
+
+      // Each use of an inherited member reaches the parent's declaration, not the same-named decoy.
+      const sites = [
+        { file: "c/Use.java", lines: use, line: 7, token: "run", declaration: 4 },
+        { file: "c/Use.java", lines: use, line: 7, token: "shared", declaration: 6 },
+        { file: "b/Child.java", lines: child, line: 7, token: "shared", declaration: 6 },
+        { file: "b/Child.java", lines: child, line: 7, token: "run", declaration: 4 },
+      ];
+      for (const site of sites) {
+        const result = await goToDefinition(index, {
+          file: files[site.file]!,
+          line: site.line,
+          column: columnOf(site.lines, site.line, site.token),
+        });
+        expect(result.status, `${site.file} ${site.token}`).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.file, `${site.file} ${site.token}`).toBe(files["a/Parent.java"]);
+        expect(result.definition.range.start.line, `${site.file} ${site.token}`).toBe(site.declaration);
+      }
+
+      for (const [token, line, expectedLines] of [
+        ["run", 4, ["a/Parent.java:4", "b/Child.java:7", "c/Use.java:7"]],
+        ["shared", 6, ["a/Parent.java:6", "b/Child.java:7", "c/Use.java:7"]],
+      ] as const) {
+        const refs = await findReferences(index, {
+          file: files["a/Parent.java"]!,
+          line,
+          column: columnOf(parent, line, token),
+        });
+        if (refs.status !== "ok") throw new Error(`Expected references to ${token}`);
+        expect(refs.referenceCoverage, token).toEqual({ scope: "indexed_candidates", state: "complete" });
+        const found = refs.references
+          .map(
+            (reference) => `${path.relative(root, reference.file).replace(/\\/g, "/")}:${reference.range.start.line}`,
+          )
+          .sort();
+        expect(found, token).toEqual(expectedLines);
+      }
+
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          return `${from?.name}@${path.basename(from?.file ?? "")}->${to?.name}@${path.basename(to?.file ?? "")}`;
+        })
+        .sort();
+      expect(calls).toEqual([
+        "f@Use.java->run@Parent.java",
+        "f@Use.java->shared@Parent.java",
+        "own@Child.java->run@Parent.java",
+        "own@Child.java->shared@Parent.java",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never inherits a static interface method into a sub-interface for navigation or call edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-static-"));
+    try {
+      const use = [
+        "package c;",
+        "",
+        "import a.IParent;",
+        "import b.IChild;",
+        "",
+        "public class Use {",
+        "    public int f() {",
+        "        return IChild.helper();",
+        "    }",
+        "",
+        "    public int g() {",
+        "        return IParent.helper();",
+        "    }",
+        "}",
+        "",
+      ];
+      // javac rejects `IChild.helper()` (cannot find symbol): a static interface method belongs to its interface alone.
+      const files = await writeFixtureFiles(root, {
+        "a/IParent.java": [
+          "package a;",
+          "",
+          "public interface IParent {",
+          "    static int helper() {",
+          "        return 1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "b/IChild.java": [
+          "package b;",
+          "",
+          "import a.IParent;",
+          "",
+          "public interface IChild extends IParent {",
+          "}",
+          "",
+        ].join("\n"),
+        "c/Use.java": use.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const inherited = await goToDefinition(index, {
+        file: files["c/Use.java"]!,
+        line: 8,
+        column: columnOf(use, 8, "helper"),
+      });
+      expect(inherited.status).toBe("not_found");
+      const declared = await goToDefinition(index, {
+        file: files["c/Use.java"]!,
+        line: 12,
+        column: columnOf(use, 12, "helper"),
+      });
+      expect(declared.status).toBe("ok");
+      if (declared.status === "ok") {
+        expect(declared.definition.file).toBe(files["a/IParent.java"]);
+        expect(declared.definition.range.start.line).toBe(4);
+      }
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["g->helper"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

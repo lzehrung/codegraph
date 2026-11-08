@@ -208,6 +208,8 @@ const HIERARCHY_LABELS: Record<string, true> = {
 const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
   "binary_expression",
   "call_expression",
+  // A TypeScript namespace-qualified type (`ns.Contract`) names a member of that namespace; its bare name would bind elsewhere.
+  "nested_type_identifier",
   "new_expression",
   "subscript_expression",
   "ternary_expression",
@@ -1839,9 +1841,19 @@ export function emitReceiverCallEdges(
       });
     }
   }
+  let activeOwner = "";
+  // A Java interface's static method belongs to that interface alone: an ancestor walk never inherits it.
+  const isUninheritedStaticMethod = (ownerId: string, memberId: string): boolean => {
+    if (ownerId === activeOwner) return false;
+    const ownerNode = graph.nodes.get(ownerId);
+    if (ownerNode?.kind !== "interface") return false;
+    if (supportForFileWithoutHeaderSample(ownerNode.file, languageExtensions)?.id !== "java") return false;
+    const scope = memberScopes.get(memberId) ?? memberScopes.get(canonicalMemberId(memberId, nodeAliases));
+    return graph.nodes.get(memberId)?.kind === "function" && scope === "static";
+  };
   const model: MemberModel<string, string> = {
     ownerKey: (id) => id,
-    members: (id) => membersByOwner.get(id) ?? [],
+    members: (id) => (membersByOwner.get(id) ?? []).filter((memberId) => !isUninheritedStaticMethod(id, memberId)),
     supertypes: (id, classOnly) => {
       if (!classOnly) return supertypesByOwner.get(id) ?? [];
       return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
@@ -1896,6 +1908,7 @@ export function emitReceiverCallEdges(
     const support = supportForFileWithoutHeaderSample(candidate.site.file, languageExtensions);
     const languageId = support?.id ?? "";
     activeCandidate = candidate;
+    activeOwner = owner;
     const lookup = selectMember([owner], model, {
       name: candidate.memberName,
       argumentCount: candidate.argumentCount,
