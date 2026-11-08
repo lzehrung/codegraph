@@ -38,7 +38,11 @@ import {
 } from "../util/member-access.js";
 import { definitionIdentityKey } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
-import { MEMBER_ACCESS_ROWS, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
+import {
+  anonymousOwnerForm,
+  MEMBER_ACCESS_ROWS,
+  supportsReceiverMemberNavigation,
+} from "../util/member-access-tables.js";
 import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } from "./ts-callables.js";
 import {
   effectiveExplicitBinding,
@@ -60,6 +64,7 @@ import {
   declaresMembers,
   declaredSupertypeKind,
   hasStaticMemberDistinction,
+  isAnonymousMemberContainer,
   memberContainerDef,
   nearestMemberContainer,
   isNonBaseHeritageArgument,
@@ -2311,10 +2316,11 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
 /**
  * One direct base a class declares. `unproven` is a base clause entry that names a type no reader can resolve (a
  * computed expression, a generic owner, a path without a constant root); it keeps the hierarchy from counting as
- * known, where dropping it would make an absent base look like no base.
+ * known, where dropping it would make an absent base look like no base. A `simple` base keeps the offset of its name
+ * (`at`), so a scope lookup can read the binding that spelling names.
  */
 type DeclaredBaseType =
-  | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
+  | { kind: "simple"; name: string; at: number; kotlinEntry?: KotlinSupertypeEntry }
   | {
       kind: "qualified";
       base: string;
@@ -2434,7 +2440,7 @@ function collectDeclaredBaseTypes(
     if (!name || seen.has(name)) return;
     seen.add(name);
     const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
-    bases.push(kotlinEntry ? { kind: "simple", name, kotlinEntry } : { kind: "simple", name });
+    bases.push({ kind: "simple", name, at: node.startIndex, ...(kotlinEntry ? { kotlinEntry } : {}) });
   };
   const addQualified = (base: string, path: string[], node: SyntaxNodeLike, nameNode: SyntaxNodeLike = node): void => {
     if (!base || path.length === 0) return;
@@ -2545,7 +2551,27 @@ function collectDeclaredBaseTypes(
     consider(child);
     for (const grand of child.namedChildren) consider(grand);
   }
+  const unnamedBase = unnamedTypeBase(container, sup);
+  if (unnamedBase?.proven) collectType(unnamedBase.node);
   return bases;
+}
+
+/**
+ * The base type an unnamed type names in its own header: Java `new Base() { ... }` has no clause node, so
+ * its creation's `type` field is the base. A creation that also names an enclosing instance
+ * (`outer.new Inner() { ... }`) resolves that type inside the instance's class, which a bare name cannot prove.
+ */
+function unnamedTypeBase(
+  container: SyntaxNodeLike,
+  sup: LanguageSupport,
+): { node: SyntaxNodeLike; proven: boolean } | null {
+  const field = anonymousOwnerForm(sup.id, container.type)?.baseField;
+  const node = field ? container.childForFieldName(field) : null;
+  if (!node) return null;
+  const namesEnclosingInstance = container.namedChildren.some(
+    (child) => child.endIndex <= node.startIndex && child.type !== "type_arguments",
+  );
+  return { node, proven: !namesEnclosingInstance };
 }
 
 function asMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
@@ -2721,10 +2747,12 @@ function isUninheritedJavaInterfaceStaticMethod(
   return hit.kind === SymbolKind.Function && scope === "static";
 }
 
-/** A heritage or mixin clause whose type expression is not a resolvable name. */
+/** A heritage or mixin clause whose type expression is not a resolvable name, or a base that an enclosing instance qualifies. */
 function containerHeritageIsUnproven(container: SyntaxNodeLike, source: string, sup: LanguageSupport): boolean {
   const ancestry = MEMBER_ACCESS_ROWS[sup.id]?.receiverAncestry;
   if (!ancestry) return false;
+  const unnamedBase = unnamedTypeBase(container, sup);
+  if (unnamedBase && !unnamedBase.proven) return true;
   const clauseTypes = new Set(ancestry.clauses.map((rule) => rule.nodeType));
   const nodes: SyntaxNodeLike[] = [];
   for (const child of container.namedChildren) {
@@ -2771,14 +2799,48 @@ async function resolveReceiverTypeName(
   return resolveNamedMemberContainer(index, mod, trimmed, normalize);
 }
 
+/** The name that starts a base's spelling and the node that spells it: the base itself, or the root of a qualified one. */
+function heritageRoot(
+  parsed: ParsedFileContext,
+  base: DeclaredBaseType,
+): { name: string; node: SyntaxNodeLike } | null {
+  if (base.kind === "simple") {
+    return { name: base.name, node: parsed.tree.rootNode.descendantForIndex(base.at, base.at + base.name.length) };
+  }
+  if (base.kind !== "qualified") return null;
+  const chain = collectMemberAccessChain({ sup: parsed.sup, source: parsed.source, chainNode: base.node });
+  return chain ? { name: base.base, node: chain.base } : null;
+}
+
+/**
+ * A JavaScript or TypeScript heritage name can be a parameter or variable that holds the base class
+ * (`(Base) => class extends Base { ... }`), and a qualified one can hang off such a value
+ * (`(ns) => class extends ns.Base { ... }`). No declaration names that base, however a same-named class or
+ * namespace import elsewhere in the module resolves, so it stays unproven.
+ */
+function heritageNameBoundToValue(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  parsed: ParsedFileContext,
+  base: DeclaredBaseType,
+): boolean {
+  if (!isJsTsLanguage(parsed.sup.id)) return false;
+  const root = heritageRoot(parsed, base);
+  if (!root) return false;
+  const scope = getOrBuildScopeIndex(index, mod.file, parsed.source, parsed.sup, mod, parsed.tree);
+  const binding = findClosestScopeBinding(scope, root.name, root.node, parsed.sup);
+  return binding?.kind === "param" || binding?.kind === "local";
+}
+
 async function resolveDeclaredBase(
   index: ProjectIndex,
   mod: ModuleIndex,
-  sup: LanguageSupport,
-  base: DeclaredBaseType,
   parsed: ParsedFileContext,
+  base: DeclaredBaseType,
 ): Promise<SymbolDef | undefined> {
+  const sup = parsed.sup;
   if (base.kind === "unproven") return undefined;
+  if (heritageNameBoundToValue(index, mod, parsed, base)) return undefined;
   if (base.kind === "ruby-constant") {
     const constant = resolveRubyConstantReference(index, mod, base.reference);
     return constant ? asMemberContainer(index, constant) : undefined;
@@ -2815,6 +2877,17 @@ async function hierarchyOmitsMember(
   seen.add(key);
   const ref = await keywordClassRefFromDef(index, containerDef);
   if (!ref) return false;
+  return containerOmitsMember(index, ref, memberName, memberScope, seen);
+}
+
+/** `hierarchyOmitsMember` for a declaration body already in hand: its own members, then every base. */
+async function containerOmitsMember(
+  index: ProjectIndex,
+  ref: KeywordClassRef,
+  memberName: string,
+  memberScope: ReceiverMemberScope,
+  seen: Set<string>,
+): Promise<boolean> {
   const normalize = ref.context.sup.normalizeIdentifier;
   const memberPredicate =
     memberScope === "any"
@@ -2829,7 +2902,7 @@ async function hierarchyOmitsMember(
   if (ref.context.sup.id === "csharp" || ref.context.sup.id === "swift") {
     const shared = await findSharedOwnerMemberDefinitions({
       index,
-      ownerFile: containerDef.file,
+      ownerFile: ref.file,
       ownerContainer: ref.container,
       ownerSource: ref.context.source,
       languageId: ref.context.sup.id,
@@ -2841,7 +2914,7 @@ async function hierarchyOmitsMember(
   if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) return false;
   const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, index, ref.module, false);
   for (const base of bases) {
-    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context.sup, base, ref.context);
+    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
     if (!baseDef) return false;
     if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
   }
@@ -2889,15 +2962,19 @@ export async function provenClassifiedReceiverOmitsMember(
     if (!bases.length) return false;
     const seen = new Set<string>();
     for (const base of bases) {
-      const baseDef = await resolveDeclaredBase(index, mod, parsed.sup, base, parsed);
+      const baseDef = await resolveDeclaredBase(index, mod, parsed, base);
       if (!baseDef) return false;
       if (!(await hierarchyOmitsMember(index, baseDef, memberName, receiver.memberScope, seen))) return false;
     }
     return true;
   }
   const def = definitionForContainer(mod, container);
-  if (!def) return false;
-  return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
+  if (def) return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
+  // An unnamed type body has no definition to start from: it omits the member when its own members and
+  // every base do.
+  if (!isAnonymousMemberContainer(parsed.sup.id, container)) return false;
+  const ref = { file: mod.file, container, context: parsed, module: mod };
+  return containerOmitsMember(index, ref, memberName, receiver.memberScope, new Set());
 }
 
 async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
@@ -2966,9 +3043,11 @@ async function baseRefsFromContainer(
     const normalized = sup.normalizeIdentifier(name);
     return sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
   };
+  const parsed: ParsedFileContext = { source, tree, sup };
   for (const base of bases) {
     // An unreadable base contributes no members; the walk never substitutes another type for it.
     if (base.kind === "unproven") continue;
+    if (heritageNameBoundToValue(index, mod, parsed, base)) continue;
     let def: SymbolDef | undefined;
     if (base.kind === "simple") {
       def = resolveNamedMemberContainer(index, mod, base.name, normalize);
@@ -3398,15 +3477,37 @@ export async function resolveImplicitSelfMember(
 ): Promise<SymbolDef | null | undefined> {
   const call = node.parent ?? node;
   if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
+  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  // An unnamed type body (`new Base() { ... }`) sees its own hierarchy first; a name that hierarchy lacks
+  // belongs to the enclosing owner, innermost first, so each hop runs from the container it just left.
+  let anchor = node;
+  for (;;) {
+    const resolved = await resolveImplicitSelfAt(index, mod, anchor, name, source, languageId, argumentCount);
+    if (resolved !== undefined) return resolved;
+    const container = nearestMemberContainer(anchor);
+    if (!container || !isAnonymousMemberContainer(languageId, container)) return undefined;
+    anchor = container;
+  }
+}
+
+/** The implicit-`this` member lookup in the owner that lexically encloses `anchor`; `undefined` leaves the name open. */
+async function resolveImplicitSelfAt(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  anchor: SyntaxNodeLike,
+  name: string,
+  source: string,
+  languageId: string,
+  argumentCount: number | undefined,
+): Promise<SymbolDef | null | undefined> {
   const jvm = languageId === "java" || languageId === "kotlin";
   const staticScoped = languageId === "csharp" || jvm;
-  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
-  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(anchor, source) ? "static" : "any";
   const report = { named: false, ambiguous: false };
   const member = await resolveKeywordReceiverMember(
     index,
     mod,
-    node,
+    anchor,
     name,
     memberScope,
     false,
@@ -3425,7 +3526,7 @@ export async function resolveImplicitSelfMember(
   const instance = await resolveKeywordReceiverMember(
     index,
     mod,
-    node,
+    anchor,
     name,
     "any",
     false,
