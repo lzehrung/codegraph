@@ -18,13 +18,14 @@ import {
   isDirectKeywordMemberDeclaration,
   memberAcceptsCallAt,
   qualifiedBaseNames,
+  readRubyConstantReference,
   resolvePhpObjectCreationTarget,
   resolveQualifiedMemberContainer,
+  resolveRubyConstantReference,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   resolveSwiftAliasContainer,
   resolveSwiftAliasHeritage,
-  rubyAbsoluteConstant,
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -1915,15 +1916,17 @@ async function resolveBareBase(context: EdgePassContext, identifier: SyntaxNodeL
 
 /**
  * A qualified base (`other.Base`, `Other::Base`, Go `pkg.Base`) is found through its qualifier by the lookup member
- * navigation uses for the same clause, or it names nothing: the last name alone would match any same-named type.
+ * navigation uses for the same clause, or it names nothing: the last name alone would match any same-named type. A
+ * Ruby constant path is searched through the namespaces that enclose it, as goto does.
  */
 async function resolveQualifiedPathBase(
   context: EdgePassContext,
   qualified: SyntaxNodeLike,
 ): Promise<SymbolDef | null> {
-  // An absolute Ruby `::Base` has no qualifier: it is a plain top-level name.
-  const absoluteConstant = rubyAbsoluteConstant(qualified);
-  if (absoluteConstant) return await resolveBareBase(context, absoluteConstant);
+  if (context.sup.id === "ruby") {
+    const reference = readRubyConstantReference(qualified);
+    return reference ? resolveRubyConstantReference(context.index, context.moduleEntry, reference) : null;
+  }
   const names = qualifiedBaseNames(context.sup, context.source, qualified);
   if (!names) return null;
   const [base, ...path] = names;

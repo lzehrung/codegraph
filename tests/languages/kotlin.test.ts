@@ -2700,7 +2700,9 @@ describe("Kotlin base classes named without a constructor call", () => {
       const index = await buildProjectIndex(root, { cache: "off" });
       const superCall = async (line: number) =>
         await goToDefinition(index, { file, line, column: columnInLines(lines, line, "ping") });
-      // The bare nested base proves its class, so its super call resolves; a qualified base is not resolved here.
+      // The bare nested base proves its class, so its super call resolves. A qualified base resolves through its
+      // qualifier when it is a constructor call (`Outer.Nested()`); a bare qualified entry in a class with only
+      // secondary constructors proves no class, so its super call stays open.
       const local = await superCall(9);
       expect(local.status).toBe("ok");
       if (local.status === "ok") expect(local.definition.range.start.line).toBe(3);
@@ -2708,7 +2710,9 @@ describe("Kotlin base classes named without a constructor call", () => {
       expect(plainBase.status).toBe("ok");
       if (plainBase.status === "ok") expect(plainBase.definition.range.start.line).toBe(14);
       expect((await superCall(29)).status).toBe("not_found");
-      expect((await superCall(33)).status).toBe("not_found");
+      const invoked = await superCall(33);
+      expect(invoked.status).toBe("ok");
+      if (invoked.status === "ok") expect(invoked.definition.range.start.line).toBe(3);
       // A qualified type inside constructor value arguments or a lambda argument does not make a plain base unproven:
       // `ArgumentCast` still proves `Base` omits `toString`, so `Other.toString` stays complete.
       const otherRefs = await findReferences(index, {
@@ -2720,8 +2724,8 @@ describe("Kotlin base classes named without a constructor call", () => {
       if (otherRefs.status !== "ok") return;
       expect(otherRefs.references.map((reference) => reference.range.start.line)).toEqual([23]);
       expect(otherRefs.referenceCoverage?.state).toBe("complete");
-      // The two open calls may still reach `ping`, so the omission proof must not rule them out and coverage must not
-      // claim to be complete.
+      // The open call in `Qualified` may still reach `ping`, so the omission proof must not rule it out and coverage
+      // must not claim to be complete.
       const baseRefs = await findReferences(index, { file, line: 14, column: columnInLines(lines, 14, "ping") });
       expect(baseRefs.status).toBe("ok");
       if (baseRefs.status !== "ok") return;
@@ -2732,8 +2736,56 @@ describe("Kotlin base classes named without a constructor call", () => {
       const refs = await findReferences(index, { file, line: 3, column: columnInLines(lines, 3, "ping") });
       expect(refs.status).toBe("ok");
       if (refs.status !== "ok") return;
-      expect(refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([3, 9]);
+      expect(refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([3, 9, 33]);
       expect(refs.referenceCoverage?.state).toBe("partial");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("proves a qualified base that the project declares and leaves one it does not declare open", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-omission-"));
+    try {
+      const lines = [
+        "class Declared {",
+        "    open class Inner",
+        "}",
+        "",
+        "class Resolvable {",
+        "    fun alpha(): Int = 1",
+        "}",
+        "",
+        "class Unresolvable {",
+        "    fun beta(): Int = 2",
+        "}",
+        "",
+        "class FromDeclared : Declared.Inner() {",
+        "    fun call(): Int = super.alpha()",
+        "}",
+        "",
+        "class FromMissing : Missing.Base() {",
+        "    fun call(): Int = super.beta()",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Main.kt": lines.join("\n") });
+      const file = files["Main.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const referencesOf = async (line: number, token: string) => {
+        const refs = await findReferences(index, { file, line, column: columnInLines(lines, line, token) });
+        if (refs.status !== "ok") throw new Error(`Expected references at line ${line}`);
+        return refs;
+      };
+      // `Declared.Inner` resolves through its qualifier and declares no `alpha`, so the open `super.alpha()` in
+      // `FromDeclared` is ruled out: the references to `Resolvable.alpha` are complete.
+      const alpha = await referencesOf(6, "alpha");
+      expect(alpha.references.map((reference) => reference.range.start.line)).toEqual([6]);
+      expect(alpha.referenceCoverage?.state).toBe("complete");
+      // `Missing.Base` names no declaration, so `FromMissing` may inherit a `beta` that the project declares: the open
+      // `super.beta()` stays a candidate and the references to `Unresolvable.beta` are partial.
+      const beta = await referencesOf(10, "beta");
+      expect(beta.references.map((reference) => reference.range.start.line)).toEqual([10]);
+      expect(beta.referenceCoverage?.state).toBe("partial");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

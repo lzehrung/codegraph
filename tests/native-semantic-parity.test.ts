@@ -3667,6 +3667,7 @@ nativeDescribe("native semantic coverage", () => {
       expectKotlinSecondaryConstructorHierarchy(root, index, await buildSymbolGraphDetailed(index), phase);
     }
   });
+
   it.each(QUALIFIED_BASE_FIXTURES)(
     "keeps $language qualified bases identical across a native disk-cache reload",
     async (fixture) => {

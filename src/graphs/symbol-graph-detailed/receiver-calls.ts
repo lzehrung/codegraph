@@ -208,6 +208,8 @@ const HIERARCHY_LABELS: Record<string, true> = {
 const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
   "binary_expression",
   "call_expression",
+  // Ruby: `class P < (flag ? Other::Base : Object)` picks its base at run time.
+  "conditional",
   // A Kotlin function type (`(Event) -> Unit`) inherits a function interface; its parameter and return types are not supertypes.
   "function_type",
   // A TypeScript namespace-qualified type (`ns.Contract`) names a member of that namespace; its bare name would bind elsewhere.

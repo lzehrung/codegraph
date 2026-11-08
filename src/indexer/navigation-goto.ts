@@ -765,75 +765,109 @@ export function innermostNamespaceImport(
 }
 
 /**
- * The constant names of a Ruby `scope_resolution`, root first (`Outer`, `Inner`, `Tool` for `Outer::Inner::Tool`). Null
- * when the root is not a constant (`self::Tool`) or the path is only an absolute `::Tool`, which is a plain top-level
- * name. An absolute path with a qualifier (`::Outer::Tool`) starts at the top level, where the qualified exports are
- * keyed, so it reads like the relative spelling.
+ * A Ruby constant path as written, and where its lookup starts: `A::B` searches the lexical namespaces outward,
+ * `::A::B` starts at the top level, and `self::B` names a member of the enclosing namespace.
  */
-function rubyScopeResolutionSegments(scopeResolution: SyntaxNodeLike, source: string): string[] | null {
-  const segments: string[] = [];
+export type RubyConstantReference = {
+  /** The constant names, root first (`Outer`, `Inner`, `Tool` for `Outer::Inner::Tool`). */
+  names: readonly string[];
+  anchor: "lexical" | "top-level" | "self";
+  /** The full constant path of each module and class enclosing the use, outermost first. */
+  namespaces: readonly string[];
+};
+
+/**
+ * The modules and classes enclosing a Ruby node, as the full constant path of each, outermost first. A class's own name
+ * and superclass expression are evaluated in the scope outside it, so they never count that class.
+ */
+function rubyEnclosingNamespaces(node: SyntaxNodeLike): string[] {
+  const scopes: SyntaxNodeLike[] = [];
+  let child = node;
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "class" || current.type === "module") {
+      const evaluatedOutside =
+        current.childForFieldName("name")?.id === child.id || current.childForFieldName("superclass")?.id === child.id;
+      if (!evaluatedOutside) scopes.unshift(current);
+    }
+    child = current;
+  }
+  let path = "";
+  const namespaces: string[] = [];
+  for (const scope of scopes) {
+    const written = (scope.childForFieldName("name")?.text ?? "").replace(/\s+/gu, "");
+    if (!written) continue;
+    const absolute = written.startsWith("::");
+    const segment = absolute ? written.slice(2) : written;
+    path = absolute || !path ? segment : `${path}::${segment}`;
+    namespaces.push(path);
+  }
+  return namespaces;
+}
+
+/** The constant path a Ruby `scope_resolution` spells, or null when its root is not a constant, `self`, or the top level. */
+export function readRubyConstantReference(scopeResolution: SyntaxNodeLike): RubyConstantReference | null {
+  const names: string[] = [];
   let current: SyntaxNodeLike | null = scopeResolution;
   while (current?.type === "scope_resolution") {
     const name = current.childForFieldName("name");
-    if (!name || name.type !== "constant") return null;
-    const text = sliceText(name, source);
-    if (!text) return null;
-    segments.unshift(text);
+    if (name?.type !== "constant") return null;
+    names.unshift(name.text);
     current = current.childForFieldName("scope");
   }
-  if (current) {
-    const root = current.type === "constant" ? sliceText(current, source) : "";
-    if (!root) return null;
-    segments.unshift(root);
-  }
-  return segments.length > 1 ? segments : null;
+  const namespaces = rubyEnclosingNamespaces(scopeResolution);
+  if (!current) return { names, anchor: "top-level", namespaces };
+  if (current.type === "self") return { names, anchor: "self", namespaces };
+  if (current.type !== "constant") return null;
+  return { names: [current.text, ...names], anchor: "lexical", namespaces };
 }
 
-/** The constant of an absolute Ruby `::Base`: a plain top-level name, with no qualifier to read through. */
-export function rubyAbsoluteConstant(scopeResolution: SyntaxNodeLike): SyntaxNodeLike | null {
-  if (scopeResolution.type !== "scope_resolution" || scopeResolution.childForFieldName("scope")) return null;
-  const name = scopeResolution.childForFieldName("name");
-  return name?.type === "constant" ? name : null;
+/** The exports a Ruby constant path may name, nearest scope first: each lexical namespace outward, then the top level. */
+function rubyConstantCandidates({ names, anchor, namespaces }: RubyConstantReference): string[] {
+  const written = names.join("::");
+  if (anchor === "top-level") return [written];
+  if (anchor === "self") return namespaces.length ? [`${namespaces[namespaces.length - 1]!}::${written}`] : [];
+  return [...namespaces.toReversed().map((namespace) => `${namespace}::${written}`), written];
 }
 
-function rubyScopeResolutionPath(node: SyntaxNodeLike, source: string): { path: string; root: string } | null {
-  if (node.type !== "constant") return null;
-  const owner = node.parent;
-  if (owner?.type !== "scope_resolution") return null;
-  const ownerName = owner.childForFieldName("name");
-  if (!ownerName || ownerName.startIndex !== node.startIndex || ownerName.endIndex !== node.endIndex) return null;
-  // `Outer::Inner::Tool` nests scope_resolution on `scope`, so flatten from the
-  // clicked name instead of stopping at the first nested scope.
-  const segments = rubyScopeResolutionSegments(owner, source);
-  return segments ? { path: segments.join("::"), root: segments[0]! } : null;
+/** The first constant of a Ruby constant path (`Outer` for `Outer::Inner::Tool`). */
+function rubyConstantRoot(path: string): string {
+  return path.split("::", 1)[0]!;
 }
 
 /**
- * `Outer::Inner::Tool` is one constant path. Nested classes are exported under that
- * path, not as bare `Tool`, so the chain has to ask for the qualified export. The definition is
- * the one declaration the path names; an absent or ambiguous path proves none.
+ * The files each root constant may be declared in: the current file, and every file a `require` brought a top-level
+ * constant of that name from (those arrive as namespace imports named for the constant). One pass reads the imports for
+ * every candidate path of a reference.
+ */
+function rubyConstantFilesByRoot(mod: ModuleIndex, roots: ReadonlySet<string>): Map<string, string[]> {
+  const filesByRoot = new Map<string, string[]>();
+  const seen = new Set<string>();
+  const add = (root: string, file: string): void => {
+    const key = `${root}\0${fileIdentityKey(file)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const files = filesByRoot.get(root);
+    if (files) files.push(file);
+    else filesByRoot.set(root, [file]);
+  };
+  for (const imp of mod.imports) {
+    if (imp.kind !== "namespace" || typeof imp.resolved !== "string" || !roots.has(imp.localNS)) continue;
+    add(imp.localNS, imp.resolved);
+  }
+  for (const root of roots) add(root, mod.file);
+  return filesByRoot;
+}
+
+/**
+ * `Outer::Inner::Tool` is one constant path. Nested classes are exported under that path, not as bare `Tool`, so the
+ * chain has to ask for the qualified export of each file that may declare it. The definition is the one declaration the
+ * path names; `null` is an ambiguous path, and `undefined` one no export names.
  */
 function resolveRubyQualifiedConstantPath(
   index: ProjectIndex,
-  mod: ModuleIndex,
   path: string,
-  root: string,
-): SymbolDef | null {
-  const files: string[] = [];
-  const seen = new Set<string>();
-  const add = (file: string | undefined): void => {
-    if (!file) return;
-    const key = fileIdentityKey(file);
-    if (seen.has(key)) return;
-    seen.add(key);
-    files.push(file);
-  };
-  for (const imp of mod.imports) {
-    if (imp.kind === "namespace" && imp.localNS === root && typeof imp.resolved === "string") {
-      add(imp.resolved);
-    }
-  }
-  add(mod.file);
+  files: readonly string[],
+): SymbolDef | null | undefined {
   const hits: SymbolDef[] = [];
   for (const file of files) {
     const hit = resolveExport(index, file, path, { allowLocalFallback: false });
@@ -851,24 +885,58 @@ function resolveRubyQualifiedConstantPath(
     }
     hits.push(hit.def);
   }
+  if (!hits.length) return undefined;
   return hits.length === 1 ? hits[0]! : null;
 }
 
-function resolveRubyQualifiedConstantDefinition(
+/**
+ * The one declaration a Ruby constant path names, searching the lexical namespaces as Ruby does: the nearest scope that
+ * declares the path decides, and an ambiguous declaration there ends the search with no answer. Shared by goto, the
+ * detailed graph, and member navigation, so a qualified base names the same constant everywhere.
+ */
+export function resolveRubyConstantReference(
   index: ProjectIndex,
   mod: ModuleIndex,
-  node: SyntaxNodeLike,
-  source: string,
-): GoToResult | null {
-  const qualified = rubyScopeResolutionPath(node, source);
-  if (!qualified) return null;
-  const definition = resolveRubyQualifiedConstantPath(index, mod, qualified.path, qualified.root);
-  if (!definition) return null;
-  return okGoToResult(index, definition, {
-    via: { exportedName: qualified.path },
-    resolution: "member-access",
-    confidence: "medium",
-  });
+  reference: RubyConstantReference,
+): SymbolDef | null {
+  const candidates = rubyConstantCandidates(reference);
+  if (!candidates.length) return null;
+  const filesByRoot = rubyConstantFilesByRoot(mod, new Set(candidates.map(rubyConstantRoot)));
+  for (const candidate of candidates) {
+    const found = resolveRubyQualifiedConstantPath(
+      index,
+      candidate,
+      filesByRoot.get(rubyConstantRoot(candidate)) ?? [],
+    );
+    if (found !== undefined) return found;
+  }
+  return null;
+}
+
+/** The Ruby constant path whose last name is `node`: the name of a `scope_resolution`. */
+function rubyConstantReferenceEndingAt(node: SyntaxNodeLike): RubyConstantReference | null {
+  if (node.type !== "constant") return null;
+  const owner = node.parent;
+  if (owner?.type !== "scope_resolution") return null;
+  const ownerName = owner.childForFieldName("name");
+  if (!ownerName || ownerName.startIndex !== node.startIndex || ownerName.endIndex !== node.endIndex) return null;
+  return readRubyConstantReference(owner);
+}
+
+/**
+ * Whether a Ruby constant path that no declaration proves cannot name anything a project declares: it has no qualifier
+ * to read through (`::Base`), or its qualifier is declared nowhere (`ActiveRecord::Base`). A `self::Base` path may reach
+ * an inherited constant, and a declared qualifier may be reopened in several files, so both keep the generic lookup.
+ */
+function rubyConstantPathIsUndeclared(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  sup: LanguageSupport,
+  reference: RubyConstantReference,
+): boolean {
+  if (reference.anchor === "self") return false;
+  if (reference.names.length === 1) return true;
+  return !resolveRubyVisibleConstant(index, mod, sup, reference.names[0]!);
 }
 
 type JvmPackageSymbolIndex = {
@@ -1080,14 +1148,22 @@ export async function resolveMemberAccessDefinition(params: {
   const ensureScopeIndex = (): ScopeIndex =>
     ownedScopeIndex ?? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
   if (sup.id === "ruby") {
-    const qualified = resolveRubyQualifiedConstantDefinition(index, mod, node, source);
-    if (qualified) return qualified;
-    // The tail of a constant whose qualifier no project file declares (`ActiveRecord::Base`) is a member of that
-    // external qualifier, so its own spelling must not bind a top-level constant of that name. A declared qualifier that
-    // proves no single export (a module reopened in several files) keeps the bare lookup.
-    const unproven = rubyScopeResolutionPath(node, source);
-    if (unproven && !resolveRubyVisibleConstant(index, mod, sup, unproven.root)) {
-      return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    const reference = rubyConstantReferenceEndingAt(node);
+    if (reference) {
+      const definition = resolveRubyConstantReference(index, mod, reference);
+      if (definition) {
+        return okGoToResult(index, definition, {
+          via: { exportedName: reference.names.join("::") },
+          resolution: "member-access",
+          confidence: "medium",
+        });
+      }
+      // The tail of a constant whose qualifier no project file declares (`ActiveRecord::Base`) is a member of that
+      // external qualifier, and a top-level `::Base` has no qualifier to read through, so its own spelling must not bind
+      // a constant of that name.
+      if (rubyConstantPathIsUndeclared(index, mod, sup, reference)) {
+        return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+      }
     }
   }
   const parent = node.parent;
@@ -1765,6 +1841,7 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
 type DeclaredBaseType =
   | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
   | { kind: "qualified"; base: string; path: readonly string[]; kotlinEntry?: KotlinSupertypeEntry }
+  | { kind: "ruby-constant"; reference: RubyConstantReference }
   | { kind: "unproven" };
 
 /** The child type holding one name segment of a dotted `user_type`. */
@@ -1849,7 +1926,6 @@ function parseCppBaseType(node: SyntaxNodeLike, source: string): { base: string;
  * qualified base through this, so they resolve the same path.
  */
 export function qualifiedBaseNames(sup: LanguageSupport, source: string, node: SyntaxNodeLike): string[] | null {
-  if (sup.id === "ruby" && node.type === "scope_resolution") return rubyScopeResolutionSegments(node, source);
   if (sup.id === "go" && node.type === "qualified_type") {
     const packageName = node.childForFieldName("package");
     const name = node.childForFieldName("name");
@@ -1928,9 +2004,17 @@ function collectDeclaredBaseTypes(
         return;
       }
     }
-    const absoluteConstant = rubyAbsoluteConstant(core);
-    if (absoluteConstant) {
-      addSimple(sliceText(absoluteConstant, source), absoluteConstant);
+    if (sup.id === "ruby" && core.type === "scope_resolution") {
+      const reference = readRubyConstantReference(core);
+      if (!reference) {
+        addUnproven();
+        return;
+      }
+      const key = `ruby:${reference.anchor}:${reference.namespaces.join("/")}:${reference.names.join("::")}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        bases.push({ kind: "ruby-constant", reference });
+      }
       return;
     }
     const unwrapped = unwrapNamedType(core, sup);
@@ -2047,6 +2131,16 @@ function pythonDottedImportFile(mod: ModuleIndex, phrase: readonly string[]): st
 }
 
 /**
+ * Python's unaliased `import a.b` binds the package `a`, yet its binding resolves to the leaf module `a.b`: an attribute
+ * of `a` is read from the package, never from that module. A `from a.b import c` submodule binding is named by `c`.
+ */
+function isPythonDottedImportBinding(imp: ImportBinding): boolean {
+  if (imp.kind !== "namespace" || imp.explicitAlias) return false;
+  const [first, ...rest] = imp.from.split(".");
+  return !!rest.length && imp.localNS === first;
+}
+
+/**
  * The type a qualified base names, read through its qualifier: a module's export (Python, JavaScript, TypeScript), a
  * constant path (Ruby), a type nested in the body of another (Swift), or a C++ scope. A qualifier that proves nothing
  * leaves the base unresolved; the base's own last name is never looked up by itself.
@@ -2064,7 +2158,8 @@ export async function resolveQualifiedMemberContainer(
     return (await resolveCppQualifiedMemberContainer(index, mod, [baseName, ...path])) ?? undefined;
   }
   if (sup.id === "ruby") {
-    const definition = resolveRubyQualifiedConstantPath(index, mod, [baseName, ...path].join("::"), baseName);
+    const reference: RubyConstantReference = { names: [baseName, ...path], anchor: "lexical", namespaces: [] };
+    const definition = resolveRubyConstantReference(index, mod, reference);
     return definition ? asMemberContainer(index, definition) : undefined;
   }
   if (sup.id === "swift") {
@@ -2086,7 +2181,10 @@ export async function resolveQualifiedMemberContainer(
     return hit?.kind === "resolved" ? asMemberContainer(index, hit.def) : undefined;
   }
   const namespaceImports = mod.imports.filter(
-    (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
+    (imp) =>
+      imp.kind === "namespace" &&
+      normalize(imp.localNS) === normalize(baseName) &&
+      !(sup.id === "python" && isPythonDottedImportBinding(imp)),
   );
   if (namespaceImports.length !== 1) return undefined;
   const resolved = namespaceImports[0]!.resolved;
@@ -2186,6 +2284,10 @@ async function resolveDeclaredBase(
   base: DeclaredBaseType,
 ): Promise<SymbolDef | undefined> {
   if (base.kind === "unproven") return undefined;
+  if (base.kind === "ruby-constant") {
+    const constant = resolveRubyConstantReference(index, mod, base.reference);
+    return constant ? asMemberContainer(index, constant) : undefined;
+  }
   const normalize = sup.normalizeIdentifier;
   const named =
     base.kind === "simple"
@@ -2368,10 +2470,15 @@ async function baseRefsFromContainer(
   for (const base of bases) {
     // An unreadable base contributes no members; the walk never substitutes another type for it.
     if (base.kind === "unproven") continue;
-    let def =
-      base.kind === "simple"
-        ? resolveNamedMemberContainer(index, mod, base.name, normalize)
-        : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+    let def: SymbolDef | undefined;
+    if (base.kind === "simple") {
+      def = resolveNamedMemberContainer(index, mod, base.name, normalize);
+    } else if (base.kind === "ruby-constant") {
+      const constant = resolveRubyConstantReference(index, mod, base.reference);
+      def = constant ? asMemberContainer(index, constant) : undefined;
+    } else {
+      def = await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+    }
     if (!def && base.kind === "simple" && sup.id !== "php") {
       const scope = sup.id === "python" ? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree) : undefined;
       const named = resolveNamedDefinition(
@@ -2406,7 +2513,7 @@ async function baseRefsFromContainer(
     // call (`Base()`) or, in a class that declares only secondary constructors, a bare entry whose declaration is a
     // class. Every other bare entry is an interface or not a whole type name: it never answers `super`, while an own
     // receiver still inherits interface default members.
-    const { kotlinEntry } = base;
+    const kotlinEntry = base.kind === "ruby-constant" ? undefined : base.kotlinEntry;
     const isBareKotlinClass =
       kotlinEntry === "bare" && kotlinMayNameClassBare(container) && declaredSupertypeKind(ref.container) === "class";
     if (superclassOnly && sup.id === "kotlin" && kotlinEntry !== "invoked" && !isBareKotlinClass) continue;
