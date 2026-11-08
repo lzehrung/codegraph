@@ -1875,20 +1875,26 @@ function jvmImporterState(index: ProjectIndex, root: string, importer: string): 
 }
 
 describe("Java and Kotlin declaration changes match a cold build after an incremental update", () => {
-  /** Applies each step (a null body deletes the file) and compares every importer with a cold build after it. */
+  /**
+   * Applies each step (a null body deletes the file) and compares every importer with a cold build after it.
+   * Returns each importer's incremental state after the initial build and after each step.
+   */
   async function expectStepsMatchColdBuilds(
     cache: "disk" | "memory",
     files: Record<string, string>,
     steps: Array<Record<string, string | null>>,
     importers: string[],
     beforeStep?: (root: string, cacheDir: string) => Promise<void>,
-  ): Promise<void> {
+  ): Promise<Array<Record<string, unknown>>> {
     const root = await mkTmpDir("cg-jvm-declaration-parity-");
     const cacheDir = await mkTmpDir("cg-jvm-declaration-parity-cache-");
     const build = { cache, cacheDir, threads: 1 } as const;
+    const importerStates = (index: ProjectIndex): Record<string, unknown> =>
+      Object.fromEntries(importers.map((importer) => [importer, jvmImporterState(index, root, importer)]));
+    const states: Array<Record<string, unknown>> = [];
     try {
       await writeFixtureFiles(root, files);
-      await buildProjectIndex(root, build);
+      states.push(importerStates(await buildProjectIndex(root, build)));
       for (const step of steps) {
         await beforeStep?.(root, cacheDir);
         for (const [name, text] of Object.entries(step)) {
@@ -1900,7 +1906,9 @@ describe("Java and Kotlin declaration changes match a cold build after an increm
         for (const importer of importers) {
           expect(jvmImporterState(incremental, root, importer)).toEqual(jvmImporterState(cold, root, importer));
         }
+        states.push(importerStates(incremental));
       }
+      return states;
     } finally {
       closeDiskCacheDatabase(root, build);
       await fsp.rm(root, { recursive: true, force: true });
@@ -2017,4 +2025,74 @@ describe("Java and Kotlin declaration changes match a cold build after an increm
       );
     },
   );
+
+  // An import that resolves through a declaration can change answer when a file moves into or out of the package
+  // it names. The importer has no manifest edge to that file, so only a declaration recheck reaches the importer.
+  const jvmPackageLanguages = [
+    { language: "java", ext: "java" },
+    { language: "kotlin", ext: "kt" },
+  ] as const;
+
+  /** A file that declares class Helpers in the given package. */
+  function helpersSource(language: "java" | "kotlin", pkg: string): string {
+    return language === "java"
+      ? `package ${pkg};\n\npublic class Helpers {\n  public static void run() {}\n}\n`
+      : `package ${pkg}\n\nclass Helpers\n`;
+  }
+
+  /** A file in package app that imports the given name. */
+  function importerSource(language: "java" | "kotlin", imported: string): string {
+    return language === "java"
+      ? `package app;\n\nimport ${imported};\n\nclass Main {}\n`
+      : `package app\n\nimport ${imported}\n\nfun main() {}\n`;
+  }
+
+  for (const { language, ext } of jvmPackageLanguages) {
+    const importer = `app/Main.${ext}`;
+    const declarer = `x/Helpers.${ext}`;
+    for (const cache of caches) {
+      it(`resolves a ${language} import once a file moves into the imported package (${cache} cache)`, async () => {
+        const states = await expectStepsMatchColdBuilds(
+          cache,
+          { [declarer]: helpersSource(language, "old"), [importer]: importerSource(language, "lib.Helpers") },
+          [{ [declarer]: helpersSource(language, "lib") }],
+          [importer],
+        );
+        expect(states).toMatchObject([
+          { [importer]: { targets: [{ external: "lib.Helpers" }], edges: ["external:lib.Helpers"] } },
+          { [importer]: { targets: [declarer], edges: [`file:/x/Helpers.${ext}`] } },
+        ]);
+      });
+
+      it(`leaves a ${language} import external once a file moves out of the imported package (${cache} cache)`, async () => {
+        const states = await expectStepsMatchColdBuilds(
+          cache,
+          { [declarer]: helpersSource(language, "lib"), [importer]: importerSource(language, "lib.Helpers") },
+          [{ [declarer]: helpersSource(language, "old") }],
+          [importer],
+        );
+        expect(states).toMatchObject([
+          { [importer]: { targets: [declarer], edges: [`file:/x/Helpers.${ext}`] } },
+          { [importer]: { targets: [{ external: "lib.Helpers" }], edges: ["external:lib.Helpers"] } },
+        ]);
+      });
+
+      it(`binds a ${language} import to the survivor once one of two same-named declarations moves away (${cache} cache)`, async () => {
+        const states = await expectStepsMatchColdBuilds(
+          cache,
+          {
+            [`a/Helpers.${ext}`]: helpersSource(language, "helpers"),
+            [`b/Helpers.${ext}`]: helpersSource(language, "helpers"),
+            [importer]: importerSource(language, "helpers.Helpers"),
+          },
+          [{ [`b/Helpers.${ext}`]: helpersSource(language, "other") }],
+          [importer],
+        );
+        expect(states).toMatchObject([
+          { [importer]: { targets: [{ external: "helpers.Helpers" }], edges: ["external:helpers.Helpers"] } },
+          { [importer]: { targets: [`a/Helpers.${ext}`], edges: [`file:/a/Helpers.${ext}`] } },
+        ]);
+      });
+    }
+  }
 });
