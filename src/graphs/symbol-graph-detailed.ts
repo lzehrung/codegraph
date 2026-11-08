@@ -33,11 +33,14 @@ import {
   csharpAliasTableAnswers,
   csharpAliasUsesHiddenByMembers,
   innermostNamespaceImport,
+  pythonDottedPhraseAtUse,
+  pythonImportAtUse,
   resolveMemberAccessDefinition,
   sameParameterTypes,
 } from "../indexer/navigation-goto.js";
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
+import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import {
@@ -453,6 +456,12 @@ export async function buildSymbolGraphDetailed(
         aliasKey,
         resolveMemberPathFromModule,
         resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
+          if (sup.id === "python") {
+            const binding = pythonImportAtUse(moduleEntry, useNode, src, tree, sup, scopeIndex);
+            if (!binding || binding.kind !== "namespace") return undefined;
+            if (isPythonDottedImportBinding(binding)) return pythonDottedImportPackageFile(index, binding);
+            return typeof binding.resolved === "string" ? binding.resolved : undefined;
+          }
           const imported =
             sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
               ? innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier)
@@ -477,13 +486,13 @@ export async function buildSymbolGraphDetailed(
         },
         ...(sup.id === "python"
           ? {
-              // The alias maps hold a dotted key for each module an `import a.b.c` lets the source spell (`a.b.c`).
+              // A dotted spelling is usable only through the positioned package binding.
               resolveNamespacePhrase: (alias: string, names: readonly string[], useNode: SyntaxNodeLike) => {
                 for (let consumed = names.length; consumed >= 1; consumed -= 1) {
-                  const file = aliasToTargetModule.get(`${alias}.${names.slice(0, consumed).join(".")}`);
-                  if (!file) continue;
-                  if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode), undefined)) return undefined;
-                  return { file, consumed };
+                  const phrase = `${alias}.${names.slice(0, consumed).join(".")}`;
+                  const file = pythonDottedPhraseAtUse(index, moduleEntry, useNode, phrase, src, tree, sup, scopeIndex);
+                  if (file) return { file, consumed };
+                  if (file === null) return undefined;
                 }
                 return undefined;
               },

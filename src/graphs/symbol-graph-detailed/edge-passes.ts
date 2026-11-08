@@ -1923,7 +1923,7 @@ async function resolveQualifiedPathBase(
   qualified: SyntaxNodeLike,
 ): Promise<SymbolDef | null> {
   if (context.sup.id === "ruby") {
-    const reference = readRubyConstantReference(qualified);
+    const reference = readRubyConstantReference(qualified, context.index, context.moduleEntry);
     return reference ? resolveRubyConstantReference(context.index, context.moduleEntry, reference) : null;
   }
   const names = qualifiedBaseNames(context.sup, context.source, qualified);
@@ -1936,6 +1936,7 @@ async function resolveQualifiedPathBase(
     path,
     context.sup.normalizeIdentifier,
     context.sup,
+    { node: qualified, source: context.source, tree: context.tree, scopeIndex: context.scopeIndex },
   );
   return container ?? null;
 }

@@ -34,7 +34,6 @@ import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import { AMBIGUOUS_CPP_OVERLOAD_REASON } from "./ambiguous-resolution.js";
 import {
-  effectiveExplicitBinding,
   findRubyReopenedConstantParts,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
@@ -150,6 +149,7 @@ import { createUnionFind, pushAll, replaceContents } from "../util/collections.j
 import {
   isPythonDottedImportBinding,
   pythonImportedModuleFiles,
+  pythonImportPrecedesUse,
   pythonLoadedSubmodules,
 } from "./python-dotted-imports.js";
 import { toTreeSitterPosition } from "./shared.js";
@@ -1009,9 +1009,15 @@ async function findReferencesInternal(
     const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
+      let rubyQualifiedConstant = false;
+      if (parsedContext.sup.id === "ruby") {
+        const position = toTreeSitterPosition(occurrence.start);
+        const node = parsedContext.tree.rootNode.descendantForPosition(position, position);
+        rubyQualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
+      }
       // A scope occurrence is not proof of a member call. Languages that invoke a free
       // function that way verify the site; an unresolvable receiver stays unavailable.
-      if (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence)) {
+      if (rubyQualifiedConstant || (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence))) {
         memberCallOccurrencesNeedVerification = true;
         continue;
       }
@@ -1394,8 +1400,6 @@ async function findReferencesInternal(
         if (hasReachedCollectionLimit()) break;
         const cjsModuleValue = cjsExportedName === exportedName;
         if (imp.kind === "namespace" && !cjsModuleValue) {
-          // `a.b` is the submodule a dotted import of this module loads, not a name `a`'s `__init__` declares.
-          if (loadedSubmodules?.get(fileIdentityKey(targetFile))?.has(exportedName)) continue;
           if (
             !isGoExportedMemberName(
               supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
@@ -1442,7 +1446,13 @@ async function findReferencesInternal(
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
-            if (parsed.sup.id === "csharp" && imp.localRange) {
+            const loadedImports = loadedSubmodules?.get(fileIdentityKey(targetFile))?.get(exportedName);
+            if (loadedImports?.length) {
+              const position = toTreeSitterPosition(range.start);
+              const use = parsed.tree.rootNode.descendantForPosition(position, position);
+              if (loadedImports.some((binding) => pythonImportPrecedesUse(binding, use, parsed.tree))) continue;
+            }
+            if ((parsed.sup.id === "csharp" && imp.localRange) || parsed.sup.id === "python") {
               const proof = await goToDefinition(
                 index,
                 { file: fileId, line: range.start.line, column: range.start.column },
@@ -1523,6 +1533,14 @@ async function findReferencesInternal(
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) break;
+              if (parsed.sup.id === "python") {
+                const proof = await goToDefinition(
+                  index,
+                  { file: fileId, line: range.start.line, column: range.start.column },
+                  parsed,
+                );
+                if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+              }
               pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
             }
           }
@@ -1583,6 +1601,12 @@ async function findReferencesInternal(
               );
               for (const range of ranges) {
                 if (hasReachedCollectionLimit()) break;
+                const proof = await goToDefinition(
+                  index,
+                  { file: fileId, line: range.start.line, column: range.start.column },
+                  parsed,
+                );
+                if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
                 pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
               }
               continue;
@@ -2411,21 +2435,6 @@ export async function collectNamespaceMemberRefs(
   const normalizedNs = normalize(ns);
   const namespaceSegments = normalizedNs.includes(".") ? normalizedNs.split(".") : undefined;
   const normalizedMember = normalize(member);
-  let effectivePythonBinding: ImportBinding | undefined;
-  if (sup.id === "python" && importBinding && imports) {
-    let bindingName: string | undefined;
-    if (importBinding.kind === "namespace") bindingName = importBinding.localNS;
-    else if (importBinding.kind === "named" || importBinding.kind === "default") bindingName = importBinding.local;
-    if (bindingName) {
-      const normalizedBindingName = normalize(bindingName);
-      effectivePythonBinding = effectiveExplicitBinding(imports, sup.id, (binding) => {
-        if (binding.kind === "namespace") return normalize(binding.localNS) === normalizedBindingName;
-        return (
-          (binding.kind === "named" || binding.kind === "default") && normalize(binding.local) === normalizedBindingName
-        );
-      });
-    }
-  }
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
@@ -2461,17 +2470,16 @@ export async function collectNamespaceMemberRefs(
               : null;
           const aliasQualified = isCsharpAliasQualifier(receiver, sup);
           const inFileScope =
-            aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
-          const inPythonBindingScope =
-            sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
+            sup.id === "python"
+              ? !closest || !!closest.import
+              : aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
           const inAliasScope =
-            inPythonBindingScope &&
-            (sup.id !== "csharp" ||
-              !importBinding ||
-              !imports ||
-              importBinding.kind !== "namespace" ||
-              !importBinding.localRange ||
-              innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding);
+            sup.id !== "csharp" ||
+            !importBinding ||
+            !imports ||
+            importBinding.kind !== "namespace" ||
+            !importBinding.localRange ||
+            innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding;
           if (inAliasScope && inFileScope) ranges.push(toRange(prop));
         }
       }

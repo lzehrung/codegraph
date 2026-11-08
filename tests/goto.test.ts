@@ -103,6 +103,8 @@ import {
   KOTLIN_TYPE_VALUE_LINES,
   KOTLIN_TYPE_VALUE_TYPE_LINES,
 } from "./helpers/scope-binding-read-fixtures.js";
+import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixture.js";
+import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
 
 describe("Go to Definition", () => {
   it("separates C# declaration headers from default reads and restores aliases after loop and catch scopes", async () => {
@@ -7477,5 +7479,40 @@ describe("members inherited through a child interface", () => {
 describe("Kotlin super calls through a class with only secondary constructors", () => {
   it("resolves super.run() in go-to-definition and the detailed graph, never reaching a same-named decoy base", async () => {
     await expectKotlinSecondaryConstructorSuperCalls();
+  });
+});
+
+describe("qualified reopening and dotted import binding navigation", () => {
+  it("uses the positioned Python binding and Ruby reopened root, not their decoys", async () => {
+    const ruby = QUALIFIED_BASE_FIXTURES.find((fixture) => fixture.language === "Ruby");
+    if (!ruby) throw new Error("Missing Ruby qualified base fixture");
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-qualified-binding-goto-"));
+    try {
+      await writeFixtureFiles(root, PYTHON_DOTTED_IMPORT_FILES);
+      await writeFixtureFiles(root, ruby.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [files, site, expected] of [
+        [PYTHON_DOTTED_IMPORT_FILES, { file: "use_rebound.py", marker: "identify()" }, "other/__init__.py"],
+        [PYTHON_DOTTED_IMPORT_FILES, { file: "use_rebound.py", marker: "helper()", occurrence: 0 }, "other/sub.py"],
+        [ruby.files, { file: "reopen_use.rb", marker: "Lib::Base", offset: 5 }, "reopen_real.rb"],
+        [ruby.files, { file: "reopen_lexical_use.rb", marker: "Lib::Base", offset: 5 }, "reopen_lexical_defs.rb"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: path.join(root, site.file),
+          ...positionOf(files, site),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing target for ${site.file}`);
+        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(path.join(root, expected)));
+      }
+      const shadowed = { file: "use_function_rebind.py", marker: "helper()", occurrence: 1 };
+      const result = await goToDefinition(index, {
+        file: path.join(root, shadowed.file),
+        ...positionOf(PYTHON_DOTTED_IMPORT_FILES, shadowed),
+      });
+      expect(result.status).toBe("not_found");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

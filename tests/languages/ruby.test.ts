@@ -11,6 +11,8 @@ import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } f
 import { exportedNameOf } from "../helpers/narrow.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
+import { QUALIFIED_BASE_FIXTURES, expectQualifiedBases } from "../helpers/qualified-base-fixture.js";
+import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
 
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "ruby");
 
@@ -421,6 +423,22 @@ describe("Ruby require_relative lookup", () => {
         expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(expected));
         expect(fileIdentityKey(goto.definition.file)).not.toBe(fileIdentityKey(excluded));
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby qualified scope reopenings", () => {
+  it("follows the proven lexical or top-level root across consumers", async () => {
+    const fixture = QUALIFIED_BASE_FIXTURES.find((candidate) => candidate.language === "Ruby");
+    if (!fixture) throw new Error("Missing Ruby qualified base fixture");
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-qualified-reopenings-"));
+    try {
+      await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      await expectQualifiedBases(root, index, graph, fixture, "language");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

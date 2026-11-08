@@ -12,7 +12,13 @@ import {
   REFERENCE_COVERAGE_REASON_ORDER,
 } from "../src/indexer/navigation-references.js";
 import { findUsageReferences } from "../src/indexer/navigation.js";
-import { findReferences, goToDefinition, type FindReferencesResult, type ProjectIndex } from "../src/index.js";
+import {
+  buildProjectIndex,
+  findReferences,
+  goToDefinition,
+  type FindReferencesResult,
+  type ProjectIndex,
+} from "../src/index.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
@@ -110,6 +116,8 @@ import {
   KOTLIN_TYPE_VALUE_FILES,
   KOTLIN_TYPE_VALUE_TYPE_LINES,
 } from "./helpers/scope-binding-read-fixtures.js";
+import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixture.js";
+import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
 
 describe("declaration header reference namespaces", () => {
   it("includes C# default and constant-pattern reads without expired scope or alias matches", async () => {
@@ -9319,5 +9327,45 @@ describe("references to members inherited through a child interface", () => {
 describe("references to a Kotlin base member called through a class with only secondary constructors", () => {
   it("includes every super call, complete, and excludes a same-named decoy base", async () => {
     await expectKotlinSecondaryConstructorSuperReferences();
+  });
+});
+
+describe("qualified reopening and dotted import references", () => {
+  it("retains lazy package attributes and the proven Ruby and Python targets without decoys", async () => {
+    const ruby = QUALIFIED_BASE_FIXTURES.find((fixture) => fixture.language === "Ruby");
+    if (!ruby) throw new Error("Missing Ruby qualified base fixture");
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-qualified-binding-refs-"));
+    try {
+      await writeFixtureFiles(root, PYTHON_DOTTED_IMPORT_FILES);
+      await writeFixtureFiles(root, ruby.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [files, definition, included, excluded] of [
+        [
+          PYTHON_DOTTED_IMPORT_FILES,
+          { file: "pkg/__init__.py", marker: "def sub", offset: 4 },
+          ["lazy.py", 5],
+          ["lazy.py", 8],
+        ],
+        [
+          PYTHON_DOTTED_IMPORT_FILES,
+          { file: "other/sub.py", marker: "helper" },
+          ["use_rebound.py", 9],
+          ["use_rebound.py", 12],
+        ],
+        [ruby.files, { file: "reopen_real.rb", marker: "Base" }, ["reopen_use.rb", 5], ["reopen_lexical_use.rb", 5]],
+      ] as const) {
+        const result = await findReferences(index, {
+          file: path.join(root, definition.file),
+          ...positionOf(files, definition),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing references for ${definition.file}`);
+        const locations = result.references.map((ref) => `${fileIdentityKey(ref.file)}:${ref.range.start.line}`);
+        expect(locations).toContain(`${fileIdentityKey(path.join(root, included[0]))}:${included[1]}`);
+        expect(locations).not.toContain(`${fileIdentityKey(path.join(root, excluded[0]))}:${excluded[1]}`);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

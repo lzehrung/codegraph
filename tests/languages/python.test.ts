@@ -21,6 +21,8 @@ import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs/specifiers.js";
 import { exportedNameOf } from "../helpers/narrow.js";
+import { PYTHON_DOTTED_IMPORT_FILES, expectPythonDottedImports } from "../helpers/python-dotted-import-fixture.js";
+import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -2287,3 +2289,17 @@ describe("Python inherited and replaced property navigation", () => {
 });
 
 describeTypeParameterReceiverRows("python", "Python PEP 695 type parameter beside a same-named class");
+
+describe("Python dotted imports with rebound roots", () => {
+  it("keeps positioned bindings and lazy imports consistent across consumers", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-dotted-bindings-"));
+    try {
+      await writeFixtureFiles(root, PYTHON_DOTTED_IMPORT_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      await expectPythonDottedImports(root, index, graph, "language");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

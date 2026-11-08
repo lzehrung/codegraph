@@ -1,4 +1,5 @@
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./import-types.js";
 import type { ProjectIndex } from "./types.js";
 
@@ -107,8 +108,10 @@ export function pythonDottedPhraseFile(
   index: ProjectIndex,
   imports: readonly ImportBinding[],
   phrase: string,
+  accepts: (binding: ImportBinding) => boolean = () => true,
 ): string | null | undefined {
   for (const imp of imports) {
+    if (!accepts(imp)) continue;
     const module = pythonImportedModules(imp).find((candidate) => candidate.phrase === phrase);
     if (module) return indexedModuleFile(index, module.files) ?? null;
   }
@@ -138,16 +141,118 @@ export function pythonNamespaceExportFile(
   return dotted ? pythonDottedImportPackageFile(index, dotted) : file;
 }
 
+type PythonImportSite = { statement: SyntaxNodeLike; from: string; local: string; imported?: string };
+const pythonImportSites = new WeakMap<SyntaxTreeLike, Map<string, PythonImportSite[]>>();
+
+/** Reconstruct import positions from the syntax tree; Python namespace bindings do not retain token ranges. */
+function importSites(tree: SyntaxTreeLike): Map<string, PythonImportSite[]> {
+  const cached = pythonImportSites.get(tree);
+  if (cached) return cached;
+  const sites = new Map<string, PythonImportSite[]>();
+  const walk = (node: SyntaxNodeLike): void => {
+    if (node.type === "import_statement" || node.type === "import_from_statement") {
+      const fromNode = node.type === "import_from_statement" ? node.childForFieldName("module_name") : null;
+      for (const item of node.namedChildren) {
+        if (item === fromNode || (item.type !== "dotted_name" && item.type !== "aliased_import")) continue;
+        if (fromNode && item.startIndex === fromNode.startIndex && item.endIndex === fromNode.endIndex) continue;
+        const name = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
+        if (!name) continue;
+        const alias = item.type === "aliased_import" ? item.childForFieldName("alias")?.text : undefined;
+        const local = alias ?? (fromNode ? name : name.split(".")[0]!);
+        const site: PythonImportSite = {
+          statement: node,
+          from: fromNode?.text ?? name,
+          local,
+          ...(fromNode ? { imported: name } : {}),
+        };
+        const matches = sites.get(local);
+        if (matches) matches.push(site);
+        else sites.set(local, [site]);
+      }
+    }
+    for (const child of node.namedChildren) walk(child);
+  };
+  walk(tree.rootNode);
+  pythonImportSites.set(tree, sites);
+  return sites;
+}
+
+function matchingImportSites(imp: ImportBinding, tree: SyntaxTreeLike): readonly PythonImportSite[] {
+  if (imp.kind === "star") return [];
+  const local = imp.kind === "namespace" ? imp.localNS : imp.local;
+  return (importSites(tree).get(local) ?? []).filter((site) => {
+    if (site.from !== imp.from) return false;
+    if (imp.kind === "named") return site.imported === imp.imported;
+    return true;
+  });
+}
+/** The narrowest function containing a use and a later local import of the same name. */
+export function pythonLaterImportScopeSpan(
+  imp: ImportBinding,
+  use: SyntaxNodeLike,
+  tree: SyntaxTreeLike,
+): number | undefined {
+  let span: number | undefined;
+  for (const site of matchingImportSites(imp, tree)) {
+    if (site.statement.startIndex <= use.startIndex) continue;
+    let scope = site.statement.parent;
+    while (scope && scope.type !== "function_definition" && scope.type !== "module") scope = scope.parent;
+    if (scope?.type !== "function_definition") continue;
+    const body = scope.childForFieldName("body");
+    if (!body || body.startIndex > use.startIndex || body.endIndex < use.endIndex) continue;
+    const candidate = body.endIndex - body.startIndex;
+    if (span === undefined || candidate < span) span = candidate;
+  }
+  return span;
+}
+
+/** A directly executed import's scope span and source position, when visible at this use. */
+export function pythonImportPosition(
+  imp: ImportBinding,
+  use: SyntaxNodeLike,
+  tree: SyntaxTreeLike,
+  includeLaterModuleBindings = false,
+  allowConditional = false,
+): { span: number; start: number } | undefined {
+  let best: { span: number; start: number } | undefined;
+  for (const site of matchingImportSites(imp, tree)) {
+    const statement = site.statement;
+    const parent = statement.parent;
+    let scope = parent;
+    while (scope && scope.type !== "function_definition" && scope.type !== "module") scope = scope.parent;
+    let span: number;
+    if (scope?.type === "module") {
+      if (!allowConditional && parent?.type !== "module") continue;
+      if (!includeLaterModuleBindings && statement.startIndex >= use.startIndex) continue;
+      span = Number.POSITIVE_INFINITY;
+    } else {
+      if (scope?.type !== "function_definition" || statement.startIndex >= use.startIndex) continue;
+      const body = scope.childForFieldName("body");
+      if (!body || body.startIndex > use.startIndex || body.endIndex < use.endIndex) continue;
+      if (!allowConditional && parent?.startIndex !== body.startIndex) continue;
+      span = body.endIndex - body.startIndex;
+    }
+    if (!best || span < best.span || (span === best.span && statement.startIndex > best.start)) {
+      best = { span, start: statement.startIndex };
+    }
+  }
+  return best;
+}
+
+/** Only an unconditional earlier import can prove that a package's submodule has loaded. */
+export function pythonImportPrecedesUse(imp: ImportBinding, use: SyntaxNodeLike, tree: SyntaxTreeLike): boolean {
+  return !!pythonImportPosition(imp, use, tree);
+}
+
 /**
- * The names the unaliased dotted imports of a module make submodules of each package they load, keyed by that package's
- * file identity: `b` for the package `a` after an `import a.b.c`. Once such an import has run, `a.b` is that submodule,
- * whatever the package's own `__init__` declares by that name.
+ * The imports that may load each package's submodule, keyed by package file and attribute name. A caller must check
+ * each import's execution at the use site before excluding a package attribute.
  */
 export function pythonLoadedSubmodules(
   index: ProjectIndex,
   imports: readonly ImportBinding[],
-): ReadonlyMap<string, ReadonlySet<string>> {
-  const byPackage = new Map<string, Set<string>>();
+): ReadonlyMap<string, ReadonlyMap<string, readonly ImportBinding[]>> {
+  const byPackage = new Map<string, Map<string, ImportBinding[]>>();
   for (const imp of imports) {
     const packages = pythonImportedModules(imp).slice(0, -1);
     if (!packages.length) continue;
@@ -157,9 +262,14 @@ export function pythonLoadedSubmodules(
       const next = segments[position + 1];
       if (!file || !next) continue;
       const key = fileIdentityKey(file);
-      const names = byPackage.get(key);
-      if (names) names.add(next);
-      else byPackage.set(key, new Set([next]));
+      let names = byPackage.get(key);
+      if (!names) {
+        names = new Map();
+        byPackage.set(key, names);
+      }
+      const bindings = names.get(next);
+      if (bindings) bindings.push(imp);
+      else names.set(next, [imp]);
     }
   }
   return byPackage;

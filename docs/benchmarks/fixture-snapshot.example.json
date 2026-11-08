@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-08T16:19:21.589Z",
+  "generatedAt": "2026-11-08T17:26:16.911Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1395,
+  "numTotalTests": 1398,
   "numFailedTests": 0,
   "languages": [
     {
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 77,
-      "passed": 77,
+      "tests": 78,
+      "passed": 78,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -187,8 +187,8 @@
       "files": [
         "tests/languages/python.test.ts"
       ],
-      "tests": 80,
-      "passed": 80,
+      "tests": 81,
+      "passed": 81,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -209,8 +209,8 @@
       "files": [
         "tests/languages/ruby.test.ts"
       ],
-      "tests": 18,
-      "passed": 18,
+      "tests": 19,
+      "passed": 19,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

@@ -9,6 +9,9 @@ import { pythonPropertyDecorator, type PythonPropertyDecorator } from "./python-
 import {
   isPythonDottedImportBinding,
   pythonDottedImportPackageFile,
+  pythonImportPosition,
+  pythonLaterImportScopeSpan,
+  pythonImportPrecedesUse,
   pythonDottedPhraseFile,
 } from "./python-dotted-imports.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -95,6 +98,7 @@ import {
   csharpQualifiedNameNode,
   findClosestScopeBinding,
   getOrBuildScopeIndex,
+  laterLocalShadowsUse,
   resolveNamedDefinition,
 } from "./navigation-local.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
@@ -780,13 +784,15 @@ export type RubyConstantReference = {
   anchor: "lexical" | "top-level" | "self";
   /** The full constant path of each module and class enclosing the use, outermost first. */
   namespaces: readonly string[];
+  /** A qualified enclosing declaration whose root could not be established. */
+  unprovenNamespace?: boolean;
 };
 
 /**
  * The modules and classes enclosing a Ruby node, as the full constant path of each, outermost first. A class's own name
  * and superclass expression are evaluated in the scope outside it, so they never count that class.
  */
-function rubyEnclosingNamespaces(node: SyntaxNodeLike): string[] {
+function rubyEnclosingNamespaces(node: SyntaxNodeLike, index: ProjectIndex, mod: ModuleIndex): string[] | null {
   const scopes: SyntaxNodeLike[] = [];
   let child = node;
   for (let current = node.parent; current; current = current.parent) {
@@ -797,34 +803,75 @@ function rubyEnclosingNamespaces(node: SyntaxNodeLike): string[] {
     }
     child = current;
   }
-  let path = "";
   const namespaces: string[] = [];
   for (const scope of scopes) {
-    const written = (scope.childForFieldName("name")?.text ?? "").replace(/\s+/gu, "");
-    if (!written) continue;
-    const absolute = written.startsWith("::");
-    const segment = absolute ? written.slice(2) : written;
-    path = absolute || !path ? segment : `${path}::${segment}`;
-    namespaces.push(path);
+    const name = scope.childForFieldName("name");
+    if (!name) return null;
+    if (name.type === "constant") {
+      const parent = namespaces.at(-1);
+      namespaces.push(parent ? `${parent}::${name.text}` : name.text);
+      continue;
+    }
+    const written = rubyConstantPath(name);
+    if (!written) return null;
+    if (written.names.length === 1 && written.anchor !== "lexical") {
+      if (written.anchor === "top-level") namespaces.push(written.names[0]!);
+      else {
+        const parent = namespaces.at(-1);
+        if (!parent) return null;
+        namespaces.push(`${parent}::${written.names[0]}`);
+      }
+      continue;
+    }
+    const candidates = rubyConstantCandidates({ names: [written.names[0]!], anchor: written.anchor, namespaces });
+    const filesByRoot = rubyConstantFilesByRoot(mod, new Set(candidates.map(rubyConstantRoot)));
+    let root: string | undefined;
+    for (const candidate of candidates) {
+      const found = resolveRubyQualifiedConstantPath(
+        index,
+        candidate,
+        filesByRoot.get(rubyConstantRoot(candidate)) ?? [],
+      );
+      if (found === null) return null;
+      if (found && !declaresMembers(found)) return null;
+      if (found) {
+        root = candidate;
+        break;
+      }
+    }
+    if (!root) return null;
+    namespaces.push([root, ...written.names.slice(1)].join("::"));
   }
   return namespaces;
 }
 
-/** The constant path a Ruby `scope_resolution` spells, or null when its root is not a constant, `self`, or the top level. */
-export function readRubyConstantReference(scopeResolution: SyntaxNodeLike): RubyConstantReference | null {
+/** Read a Ruby constant path without assuming where its root is declared. */
+function rubyConstantPath(node: SyntaxNodeLike): Pick<RubyConstantReference, "names" | "anchor"> | null {
+  if (node.type !== "scope_resolution") return null;
   const names: string[] = [];
-  let current: SyntaxNodeLike | null = scopeResolution;
+  let current: SyntaxNodeLike | null = node;
   while (current?.type === "scope_resolution") {
     const name = current.childForFieldName("name");
     if (name?.type !== "constant") return null;
     names.unshift(name.text);
     current = current.childForFieldName("scope");
   }
-  const namespaces = rubyEnclosingNamespaces(scopeResolution);
-  if (!current) return { names, anchor: "top-level", namespaces };
-  if (current.type === "self") return { names, anchor: "self", namespaces };
+  if (!current) return { names, anchor: "top-level" };
+  if (current.type === "self") return { names, anchor: "self" };
   if (current.type !== "constant") return null;
-  return { names: [current.text, ...names], anchor: "lexical", namespaces };
+  return { names: [current.text, ...names], anchor: "lexical" };
+}
+
+/** A Ruby constant path and its proven lexical namespaces. */
+export function readRubyConstantReference(
+  scopeResolution: SyntaxNodeLike,
+  index: ProjectIndex,
+  mod: ModuleIndex,
+): RubyConstantReference | null {
+  const path = rubyConstantPath(scopeResolution);
+  if (!path) return null;
+  const namespaces = rubyEnclosingNamespaces(scopeResolution, index, mod);
+  return { ...path, namespaces: namespaces ?? [], ...(namespaces ? {} : { unprovenNamespace: true }) };
 }
 
 /** The exports a Ruby constant path may name, nearest scope first: each lexical namespace outward, then the top level. */
@@ -905,6 +952,7 @@ export function resolveRubyConstantReference(
   mod: ModuleIndex,
   reference: RubyConstantReference,
 ): SymbolDef | null {
+  if (reference.unprovenNamespace) return null;
   const candidates = rubyConstantCandidates(reference);
   if (!candidates.length) return null;
   const filesByRoot = rubyConstantFilesByRoot(mod, new Set(candidates.map(rubyConstantRoot)));
@@ -920,13 +968,17 @@ export function resolveRubyConstantReference(
 }
 
 /** The Ruby constant path whose last name is `node`: the name of a `scope_resolution`. */
-function rubyConstantReferenceEndingAt(node: SyntaxNodeLike): RubyConstantReference | null {
+function rubyConstantReferenceEndingAt(
+  node: SyntaxNodeLike,
+  index: ProjectIndex,
+  mod: ModuleIndex,
+): RubyConstantReference | null {
   if (node.type !== "constant") return null;
   const owner = node.parent;
   if (owner?.type !== "scope_resolution") return null;
   const ownerName = owner.childForFieldName("name");
   if (!ownerName || ownerName.startIndex !== node.startIndex || ownerName.endIndex !== node.endIndex) return null;
-  return readRubyConstantReference(owner);
+  return readRubyConstantReference(owner, index, mod);
 }
 
 /**
@@ -1125,6 +1177,77 @@ function resolveJvmPackageExpression(
   return target ? { kind: "resolved", def: target } : null;
 }
 
+/** The Python import binding selected at a receiver use, after lexical shadowing and source-order lookup. */
+export function pythonImportAtUse(
+  mod: ModuleIndex,
+  root: SyntaxNodeLike,
+  source: string,
+  tree: SyntaxTreeLike,
+  sup: LanguageSupport,
+  scopeIndex: ScopeIndex,
+): ImportBinding | null | undefined {
+  const name = sliceText(root, source);
+  const closest = findClosestScopeBinding(scopeIndex, name, root, sup);
+  if (closest && !closest.import) return undefined;
+  if (laterLocalShadowsUse(scopeIndex, name, root, sup)) return null;
+  let insideFunction = false;
+  for (let current = root.parent; current; current = current.parent) {
+    if (current.type !== "function_definition") continue;
+    const body = current.childForFieldName("body");
+    if (body && body.startIndex <= root.startIndex && body.endIndex >= root.endIndex) {
+      insideFunction = true;
+      break;
+    }
+  }
+  let winner: ImportBinding | undefined;
+  let best: { span: number; start: number } | undefined;
+  let laterLocalSpan: number | undefined;
+  for (const imp of mod.imports) {
+    if (imp.kind === "star") continue;
+    const local = imp.kind === "namespace" ? imp.localNS : imp.local;
+    if (local !== name || isExpandedStarBinding(imp, mod.imports)) continue;
+    const laterSpan = pythonLaterImportScopeSpan(imp, root, tree);
+    if (laterSpan !== undefined && (laterLocalSpan === undefined || laterSpan < laterLocalSpan)) {
+      laterLocalSpan = laterSpan;
+    }
+    const position = pythonImportPosition(imp, root, tree, insideFunction, true);
+    if (!position) continue;
+    if (!best || position.span < best.span || (position.span === best.span && position.start > best.start)) {
+      best = position;
+      winner = imp;
+    }
+  }
+  if (laterLocalSpan !== undefined && (!best || best.span > laterLocalSpan)) return null;
+  return winner;
+}
+
+/** A dotted phrase names an imported module only when its root still names the imported package. */
+export function pythonDottedPhraseAtUse(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  root: SyntaxNodeLike,
+  phrase: string,
+  source: string,
+  tree: SyntaxTreeLike,
+  sup: LanguageSupport,
+  scopeIndex: ScopeIndex,
+): string | null | undefined {
+  const binding = pythonImportAtUse(mod, root, source, tree, sup, scopeIndex);
+  if (!binding || binding.kind !== "namespace") return undefined;
+  const rootName = sliceText(root, source);
+  return pythonDottedPhraseFile(index, mod.imports, phrase, (candidate) => {
+    if (!isPythonDottedImportBinding(candidate) || !pythonImportPrecedesUse(candidate, root, tree)) return false;
+    if (isPythonDottedImportBinding(binding)) return binding.localNS === rootName;
+    const packageFile = pythonDottedImportPackageFile(index, candidate);
+    return (
+      binding.from === rootName &&
+      typeof binding.resolved === "string" &&
+      !!packageFile &&
+      fileIdentityKey(binding.resolved) === fileIdentityKey(packageFile)
+    );
+  });
+}
+
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
   mod: ModuleIndex;
@@ -1154,7 +1277,7 @@ export async function resolveMemberAccessDefinition(params: {
   const ensureScopeIndex = (): ScopeIndex =>
     ownedScopeIndex ?? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
   if (sup.id === "ruby") {
-    const reference = rubyConstantReferenceEndingAt(node);
+    const reference = rubyConstantReferenceEndingAt(node, index, mod);
     if (reference) {
       const definition = resolveRubyConstantReference(index, mod, reference);
       if (definition) {
@@ -1164,6 +1287,7 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      if (reference.unprovenNamespace) return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
       // The tail of a constant whose qualifier no project file declares (`ActiveRecord::Base`) is a member of that
       // external qualifier, and a top-level `::Base` has no qualifier to read through, so its own spelling must not bind
       // a constant of that name.
@@ -1258,13 +1382,21 @@ export async function resolveMemberAccessDefinition(params: {
     if (exprIsId) {
       const aliasQualifier = isCsharpAliasQualifier(expr, sup);
       const exprName = sliceText(expr, source);
-      if (!aliasQualifier) {
+      const pythonImport =
+        sup.id === "python" ? pythonImportAtUse(mod, expr, source, tree, sup, ensureScopeIndex()) : undefined;
+      if (pythonImport === null) return null;
+      const pythonBinding =
+        sup.id === "python" ? findClosestScopeBinding(ensureScopeIndex(), exprName, expr, sup) : null;
+      if (!aliasQualifier && !(pythonImport && pythonBinding?.import)) {
         const lexicalBinding = resolveLexicalBinding?.(expr);
         if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
         if (sup.id === "csharp" && !csharpNameUnshadowed(ensureScopeIndex(), expr, exprName)) return null;
       }
       let imp: ImportBinding | undefined;
-      if (sup.id === "php") {
+      if (sup.id === "python") {
+        imp = pythonImport;
+        if (!imp && (pythonBinding || laterLocalShadowsUse(ensureScopeIndex(), exprName, expr, sup))) return null;
+      } else if (sup.id === "php") {
         imp = findPhpImportAlias(mod.imports, exprName, "class") ?? undefined;
       } else if (sup.id === "zig") {
         imp = innermostNamespaceImport(mod.imports, exprName, expr);
@@ -1384,9 +1516,18 @@ export async function resolveMemberAccessDefinition(params: {
       // Recognize those literal phrases up front so the chain walk below lands on the module each one names, instead
       // of treating each dot as an ordinary member-access hop and failing on a segment the import only spells.
       if (sup.id === "python") {
-        const dottedText = sliceText(expr, source);
-        if (dottedText.includes(".")) {
-          const phraseFile = pythonDottedPhraseFile(index, mod.imports, dottedText);
+        const chain = collectMemberAccessChain({ sup, source, chainNode: expr });
+        if (chain && isReceiverNameNode(sup, chain.base.type)) {
+          const phraseFile = pythonDottedPhraseAtUse(
+            index,
+            mod,
+            chain.base,
+            sliceText(expr, source),
+            source,
+            tree,
+            sup,
+            ensureScopeIndex(),
+          );
           if (phraseFile !== undefined) {
             return phraseFile ? { kind: "namespace", file: phraseFile.replace(/\\/g, "/") } : null;
           }
@@ -1843,7 +1984,13 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
  */
 type DeclaredBaseType =
   | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
-  | { kind: "qualified"; base: string; path: readonly string[]; kotlinEntry?: KotlinSupertypeEntry }
+  | {
+      kind: "qualified";
+      base: string;
+      path: readonly string[];
+      node: SyntaxNodeLike;
+      kotlinEntry?: KotlinSupertypeEntry;
+    }
   | { kind: "ruby-constant"; reference: RubyConstantReference }
   | { kind: "unproven" };
 
@@ -1943,6 +2090,8 @@ function collectDeclaredBaseTypes(
   container: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
+  index: ProjectIndex,
+  mod: ModuleIndex,
   superclassOnly = false,
 ): DeclaredBaseType[] {
   const ancestry = MEMBER_ACCESS_ROWS[sup.id]?.receiverAncestry;
@@ -1956,14 +2105,16 @@ function collectDeclaredBaseTypes(
     const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
     bases.push(kotlinEntry ? { kind: "simple", name, kotlinEntry } : { kind: "simple", name });
   };
-  const addQualified = (base: string, path: string[], node: SyntaxNodeLike): void => {
+  const addQualified = (base: string, path: string[], node: SyntaxNodeLike, nameNode: SyntaxNodeLike = node): void => {
     if (!base || path.length === 0) return;
     const key = `${base}.${path.join(".")}`;
 
     if (seen.has(key)) return;
     seen.add(key);
-    const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
-    bases.push(kotlinEntry ? { kind: "qualified", base, path, kotlinEntry } : { kind: "qualified", base, path });
+    const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(nameNode) : null;
+    bases.push(
+      kotlinEntry ? { kind: "qualified", base, path, node, kotlinEntry } : { kind: "qualified", base, path, node },
+    );
   };
   let sawUnproven = false;
   const addUnproven = (): void => {
@@ -1977,7 +2128,7 @@ function collectDeclaredBaseTypes(
     if (dotted) {
       const [root, ...path] = dotted.segments.map((segment) => sliceText(segment, source));
       if (dotted.genericOwner) addUnproven();
-      else addQualified(root!, path, dotted.segments.at(-1)!);
+      else addQualified(root!, path, node, dotted.segments.at(-1)!);
       return;
     }
     const core = peelTypeWrappers(node);
@@ -2008,7 +2159,7 @@ function collectDeclaredBaseTypes(
       }
     }
     if (sup.id === "ruby" && core.type === "scope_resolution") {
-      const reference = readRubyConstantReference(core);
+      const reference = readRubyConstantReference(core, index, mod);
       if (!reference) {
         addUnproven();
         return;
@@ -2130,6 +2281,7 @@ export async function resolveQualifiedMemberContainer(
   path: readonly string[],
   normalize: (name: string) => string,
   sup: LanguageSupport,
+  use?: { node: SyntaxNodeLike; source: string; tree: SyntaxTreeLike; scopeIndex?: ScopeIndex },
 ): Promise<SymbolDef | undefined> {
   if (path.length === 0) return undefined;
   if (sup.id === "cpp") {
@@ -2154,20 +2306,34 @@ export async function resolveQualifiedMemberContainer(
     return resolveJvmQualifiedPath(index, mod.file, sup.id, root ?? null, [baseName, ...path], true) ?? undefined;
   }
   if (sup.id === "python") {
-    // An unaliased `import a.b.c` names the packages `a` and `a.b` and the leaf `a.b.c`: the longest such leading
-    // spelling starts the walk, and the names after it are attributes of that module.
+    if (!use) return undefined;
+    const chain = collectMemberAccessChain({ sup, source: use.source, chainNode: use.node });
+    if (!chain || !isReceiverNameNode(sup, chain.base.type)) return undefined;
+    const scope = use.scopeIndex ?? getOrBuildScopeIndex(index, mod.file, use.source, sup, mod, use.tree);
+    const binding = pythonImportAtUse(mod, chain.base, use.source, use.tree, sup, scope);
+    if (!binding || binding.kind !== "namespace") return undefined;
     const names = [baseName, ...path];
     for (let count = names.length - 1; count >= 1; count -= 1) {
-      const moduleFile = pythonDottedPhraseFile(index, mod.imports, names.slice(0, count).join("."));
+      const moduleFile = pythonDottedPhraseAtUse(
+        index,
+        mod,
+        chain.base,
+        names.slice(0, count).join("."),
+        use.source,
+        use.tree,
+        sup,
+        scope,
+      );
       if (moduleFile === undefined) continue;
       return moduleFile ? resolveExportPath(index, moduleFile, names.slice(count), sup) : undefined;
     }
+    const file = isPythonDottedImportBinding(binding)
+      ? pythonDottedImportPackageFile(index, binding)
+      : binding.resolved;
+    return typeof file === "string" ? resolveExportPath(index, file, path, sup) : undefined;
   }
   const namespaceImports = mod.imports.filter(
-    (imp) =>
-      imp.kind === "namespace" &&
-      normalize(imp.localNS) === normalize(baseName) &&
-      !(sup.id === "python" && isPythonDottedImportBinding(imp)),
+    (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
   );
   if (namespaceImports.length !== 1) return undefined;
   const resolved = namespaceImports[0]!.resolved;
@@ -2279,6 +2445,7 @@ async function resolveDeclaredBase(
   mod: ModuleIndex,
   sup: LanguageSupport,
   base: DeclaredBaseType,
+  parsed: ParsedFileContext,
 ): Promise<SymbolDef | undefined> {
   if (base.kind === "unproven") return undefined;
   if (base.kind === "ruby-constant") {
@@ -2289,7 +2456,11 @@ async function resolveDeclaredBase(
   const named =
     base.kind === "simple"
       ? resolveNamedMemberContainer(index, mod, base.name, normalize)
-      : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+      : await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup, {
+          node: base.node,
+          source: parsed.source,
+          tree: parsed.tree,
+        });
   if (!named || sup.id !== "swift") return named;
   return await swiftBaseDeclaration(index, named);
 }
@@ -2337,9 +2508,9 @@ async function hierarchyOmitsMember(
     if (shared.length > 0) return false;
   }
   if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) return false;
-  const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, false);
+  const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, index, ref.module, false);
   for (const base of bases) {
-    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context.sup, base);
+    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context.sup, base, ref.context);
     if (!baseDef) return false;
     if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
   }
@@ -2383,11 +2554,11 @@ export async function provenClassifiedReceiverOmitsMember(
   if (!container) return false;
   if (receiver.kind === "supertype") {
     if (containerHeritageIsUnproven(container, parsed.source, parsed.sup)) return false;
-    const bases = collectDeclaredBaseTypes(container, parsed.source, parsed.sup, true);
+    const bases = collectDeclaredBaseTypes(container, parsed.source, parsed.sup, index, mod, true);
     if (!bases.length) return false;
     const seen = new Set<string>();
     for (const base of bases) {
-      const baseDef = await resolveDeclaredBase(index, mod, parsed.sup, base);
+      const baseDef = await resolveDeclaredBase(index, mod, parsed.sup, base, parsed);
       if (!baseDef) return false;
       if (!(await hierarchyOmitsMember(index, baseDef, memberName, receiver.memberScope, seen))) return false;
     }
@@ -2457,7 +2628,7 @@ async function baseRefsFromContainer(
     const base = await csharpBaseClassRef(index, parts);
     return base && base !== "unproven" ? [base] : [];
   }
-  const bases = collectDeclaredBaseTypes(container, source, sup, superclassOnly);
+  const bases = collectDeclaredBaseTypes(container, source, sup, index, mod, superclassOnly);
   const refs: KeywordClassRef[] = [];
   const seen = new Set<string>();
   const normalize = (name: string): string => {
@@ -2474,7 +2645,11 @@ async function baseRefsFromContainer(
       const constant = resolveRubyConstantReference(index, mod, base.reference);
       def = constant ? asMemberContainer(index, constant) : undefined;
     } else {
-      def = await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup);
+      def = await resolveQualifiedMemberContainer(index, mod, base.base, base.path, normalize, sup, {
+        node: base.node,
+        source,
+        tree,
+      });
     }
     if (!def && base.kind === "simple" && sup.id !== "php") {
       const scope = sup.id === "python" ? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree) : undefined;
@@ -3420,7 +3595,7 @@ function resolvePhpProvenBaseClass(
   source: string,
   sup: LanguageSupport,
 ): SymbolDef | null {
-  const bases = collectDeclaredBaseTypes(classNode, source, sup, true);
+  const bases = collectDeclaredBaseTypes(classNode, source, sup, index, mod, true);
   if (bases.length !== 1) return null;
   const base = bases[0];
   if (!base || base.kind !== "simple") return null;
@@ -5066,6 +5241,7 @@ async function resolvePythonQualifiedBase(
     path,
     sup.normalizeIdentifier,
     sup,
+    { node: attribute, source, tree: classRef.context.tree },
   );
   return container?.kind === SymbolKind.Class ? container : undefined;
 }
