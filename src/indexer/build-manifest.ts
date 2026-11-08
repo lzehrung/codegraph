@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { getGitHeadOrEmptyTree, gitMayConvertLineEndings, listChangedFileEntries } from "../util/git.js";
+import { getGitHeadOrEmptyTree, listChangedFileEntries } from "../util/git.js";
 import { logWithLevel } from "../logging.js";
 import {
   computeConfigHash,
@@ -82,10 +82,7 @@ export async function writeIndexManifestSnapshot(args: {
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
   let gitDirtyFiles: string[] | undefined;
   let gitDirtySubmodules: string[] | undefined;
-  let gitLineEndingConversion: boolean | undefined;
   if (lastCommit) {
-    // Never rejects; runs beside the diff because the two Git children do not depend on each other.
-    const lineEndingProbe = gitMayConvertLineEndings(args.projectRoot);
     try {
       const changed = await listChangedFileEntries(args.projectRoot, {
         base: lastCommit,
@@ -111,7 +108,6 @@ export async function writeIndexManifestSnapshot(args: {
         error,
       );
     }
-    gitLineEndingConversion = await lineEndingProbe;
   }
   const configHashStartedAt = performance.now();
   const configHashResult =
@@ -132,7 +128,6 @@ export async function writeIndexManifestSnapshot(args: {
     ...(gitDirtySubmodules !== undefined
       ? { gitDirtySubmodules: gitDirtySubmodules.map((directory) => cacheRelativePath(args.projectRoot, directory)) }
       : {}),
-    ...(gitLineEndingConversion !== undefined ? { gitLineEndingConversion } : {}),
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),

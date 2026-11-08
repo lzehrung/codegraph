@@ -118,10 +118,10 @@ Git's diff omits some changes, so an update compares these files' `mtime:size` s
 
 - **Flagged files.** A tracked file marked `assume-unchanged` or `skip-worktree` never appears in a diff. The Git child that lists untracked files also names flagged tracked files, so every update verifies them without another child.
 - **Submodules.** A diff names one gitlink per submodule. An update lists the tracked and untracked files of each changed submodule, and of each submodule the manifest recorded as dirty (`gitDirtySubmodules`), as full discovery does. This costs up to three Git children per such submodule.
-- **Line endings.** With `core.autocrlf` set to `true` or `input`, or a `text`/`eol` attribute, Git reports an eol-only rewrite as clean. The manifest records that conversion (`gitLineEndingConversion`), and a clean update then stats every tracked file. Each Git signature also carries the file's raw size, so a rewrite never reuses a module or graph entry extracted from other bytes, in memory caches too.
+- **Line endings.** With `core.autocrlf` set to `true` or `input`, or a `text`/`eol` attribute, Git reports an eol-only rewrite as clean. Each Git signature carries the file's raw size, so any update that compares signatures (an edited, flagged or submodule file, `--cache-strict`, a memory-cache build) reuses no module or graph entry extracted from other bytes. A clean update does not stat tracked files: an eol-only rewrite of an otherwise unchanged file is noticed when that file changes again or on a cold build.
 - **Case-only renames.** On a case-insensitive file system, a manifest key that Git's listing no longer spells that way (`Foo.ts` renamed to `foo.ts`) is retired, so one file never holds two spellings.
 
-An update in a repository without flagged files, submodules or line-ending conversion spawns no further Git child. Known limits: a flag set in a submodule's own index is not seen, and a change to `core.autocrlf` or to attributes applies from the next manifest write.
+An update in a repository without flagged files or submodules spawns no further Git child. Known limits: a flag set in a submodule's own index is not seen, and an eol-only rewrite waits for the next change to its file or a cold build.
 
 Index builds are not atomic filesystem snapshots. If files change during a build, repeat the update.
 

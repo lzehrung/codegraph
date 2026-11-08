@@ -565,19 +565,14 @@ export async function findStaleOrUnseenManifestFiles(
  *   recorded as dirty, so a submodule restored since is reconciled once. A manifest that recorded none (absent or
  *   invalid) reconciles every submodule.
  * - A tracked file flagged assume-unchanged or skip-worktree is omitted from every Git diff.
- * - When Git may rewrite line endings (`verifyTrackedFiles`), an eol-only rewrite leaves its blob id unchanged, so every
- *   tracked file's stat is compared. Callers set it only when no other candidate already forces a signature pass.
  */
 export async function collectGitHiddenChangeCandidates(args: {
   projectRoot: string;
   trackedEntries: Record<string, ManifestFileEntry>;
-  /** Manifest files that exist now. */
-  trackedFiles: ReadonlySet<string>;
   changedSubmodules: readonly string[];
   /** Submodules the manifest recorded as dirty, or undefined when it recorded none. */
   recordedSubmodules: readonly string[] | undefined;
   flaggedFiles: readonly string[];
-  verifyTrackedFiles: boolean;
   opts: BuildOptions | undefined;
   context: ProjectDiscoveryContext;
   concurrency?: number;
@@ -608,7 +603,6 @@ export async function collectGitHiddenChangeCandidates(args: {
       : [],
   );
   for (const file of args.flaggedFiles) if (Object.hasOwn(args.trackedEntries, file)) verified.add(file);
-  if (args.verifyTrackedFiles) for (const file of args.trackedFiles) verified.add(file);
   return await findStaleOrUnseenManifestFiles([...verified], args.trackedEntries, concurrency);
 }
 
@@ -741,11 +735,9 @@ export async function resolveIncrementalFilePlan(
     const hiddenChangeFiles = await collectGitHiddenChangeCandidates({
       projectRoot,
       trackedEntries,
-      trackedFiles,
       changedSubmodules: diff.gitlinks,
       recordedSubmodules: manifest.gitDirtySubmodules,
       flaggedFiles: signals.flagged,
-      verifyTrackedFiles: (manifest.gitLineEndingConversion ?? true) && !gitDiffFiles.length,
       opts,
       context,
     });

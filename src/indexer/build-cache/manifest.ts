@@ -115,12 +115,6 @@ export type IndexManifest = {
    * again even after it was restored. Absent or invalid requires reconciling every submodule.
    */
   gitDirtySubmodules?: string[];
-  /**
-   * Whether Git could rewrite line endings when it compared worktree files with the index (`core.autocrlf` or a
-   * `text`/`eol` attribute) as of the write. Git then reports an eol-only rewrite as clean, so a clean update checks
-   * every tracked file's stat signature. Absent or invalid is treated as true.
-   */
-  gitLineEndingConversion?: boolean;
   configHash?: string;
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
@@ -411,7 +405,6 @@ export async function loadManifest(
       declaredContainers: storedDeclaredContainers,
       gitDirtyFiles: storedGitDirtyFiles,
       gitDirtySubmodules: storedGitDirtySubmodules,
-      gitLineEndingConversion: storedGitLineEndingConversion,
       ...parsedWithoutDerivedPaths
     } = parsed;
     // A recorded path list is usable only when every entry stays inside the project root.
@@ -422,8 +415,6 @@ export async function loadManifest(
     };
     const gitDirtyFiles = sanitizeRecordedPaths(storedGitDirtyFiles);
     const gitDirtySubmodules = sanitizeRecordedPaths(storedGitDirtySubmodules);
-    const gitLineEndingConversion =
-      typeof storedGitLineEndingConversion === "boolean" ? storedGitLineEndingConversion : undefined;
     const declaredContainers = resolveManifestDeclaredContainers(
       projectRoot,
       parsed.projectRoot,
@@ -439,7 +430,6 @@ export async function loadManifest(
       ...(declaredContainers !== undefined ? { declaredContainers } : {}),
       ...(gitDirtyFiles !== undefined ? { gitDirtyFiles } : {}),
       ...(gitDirtySubmodules !== undefined ? { gitDirtySubmodules } : {}),
-      ...(gitLineEndingConversion !== undefined ? { gitLineEndingConversion } : {}),
     };
     return migrated;
   } catch (error) {

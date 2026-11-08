@@ -14,7 +14,6 @@ import { findRespelledTrackedFiles } from "../src/indexer/incremental-plan.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import {
   createGitDiscoveryCache,
-  gitMayConvertLineEndings,
   listChangedFileEntries,
   listUntrackedAndFlaggedFiles,
   setGitExecutableForTests,
@@ -33,7 +32,7 @@ afterEach(async () => {
   await roots.cleanup();
 });
 
-type StoredManifest = { gitDirtySubmodules?: string[]; gitLineEndingConversion?: boolean };
+type StoredManifest = { gitDirtySubmodules?: string[] };
 
 async function readStoredManifest(root: string): Promise<StoredManifest> {
   const text = await fsp.readFile(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"), "utf8");
@@ -373,8 +372,10 @@ describe("line-ending rewrites that Git reports clean", () => {
   ] as const;
 
   describe.each(CONFIGS)("$name", ({ config, attributes }) => {
-    it.each(MODES)("matches a cold build after eol-only rewrites (%s)", async (mode) => {
+    it.each(MODES)("matches a cold build when an eol-only rewrite meets a signature pass (%s)", async (mode) => {
       const root = await createRepo(FILES, config, attributes);
+      const left = path.join(root, "src/nested/left.ts");
+      const greeter = path.join(root, "src/demo/Greeter.java");
       const rewrite = async (transform: (text: string) => string): Promise<void> => {
         for (const name of ["src/nested/value.ts", "src/demo/Greeter.java"]) {
           const file = path.join(root, name);
@@ -385,30 +386,62 @@ describe("line-ending rewrites that Git reports clean", () => {
       try {
         const original = await updater.update();
         await rewrite(toCrlf);
-        // The diff against the indexed commit, which an update trusts, reports the rewritten files clean: this is the
-        // case the test exists for. (`git status` still lists them; the blob listing then hashes them to the same id.)
+        // The diff against the indexed commit, which a clean update trusts, reports the rewritten files clean.
         expect(
           runGit(root, ["diff", "--name-only", "HEAD", "--", "src/nested/value.ts", "src/demo/Greeter.java"]),
         ).toBe("");
+        // An edit beside them makes the update compare signatures, which carry each file's raw size.
+        await fsp.writeFile(left, "export function left() { return 10; }\n");
         const crlf = await updater.update();
-        const greeter = path.join(root, "src/demo/Greeter.java");
         expect(crlf.byFile.get(fileIdentityKey(greeter))).not.toEqual(original.byFile.get(fileIdentityKey(greeter)));
         await expectMatchesCold(root, crlf);
         await rewrite(toLf);
+        await fsp.writeFile(left, "export function left() { return 11; }\n");
         const lf = await updater.update();
         expect(lf.byFile.get(fileIdentityKey(greeter))).toEqual(original.byFile.get(fileIdentityKey(greeter)));
         await expectMatchesCold(root, lf);
-        await rewrite(toCrlf);
-        await expectMatchesCold(root, await updater.update());
       } finally {
         updater.close();
       }
     });
   });
 
+  it("matches a cold build after an eol-only rewrite when every update compares signatures (memory)", async () => {
+    const root = await createRepo(FILES, { "core.autocrlf": "true" });
+    const greeter = path.join(root, "src/demo/Greeter.java");
+    const updater = createUpdater(root, "memory");
+    try {
+      const original = await updater.update();
+      await fsp.writeFile(greeter, toCrlf(JAVA));
+      const crlf = await updater.update();
+      expect(crlf.byFile.get(fileIdentityKey(greeter))).not.toEqual(original.byFile.get(fileIdentityKey(greeter)));
+      await expectMatchesCold(root, crlf);
+    } finally {
+      updater.close();
+    }
+  });
+
+  it("leaves an eol-only rewrite of an unchanged file to its next change or a cold build (documented limit)", async () => {
+    const root = await createRepo(FILES, { "core.autocrlf": "true" });
+    const greeter = path.join(root, "src/demo/Greeter.java");
+    const key = fileIdentityKey(greeter);
+    const updater = createUpdater(root, "disk");
+    try {
+      const original = await updater.update();
+      await fsp.writeFile(greeter, toCrlf(JAVA));
+      // Git reports the file clean and a clean update does not stat tracked files, so the old module stays.
+      expect((await updater.update()).byFile.get(key)).toEqual(original.byFile.get(key));
+      const cold = await buildProjectIndex(root, { cache: "off", threads: 1, logLevel: "silent" });
+      expect(cold.byFile.get(key)).not.toEqual(original.byFile.get(key));
+      await fsp.appendFile(greeter, "// edit\r\n");
+      await expectMatchesCold(root, await updater.update());
+    } finally {
+      updater.close();
+    }
+  });
+
   it("sees an eol-only rewrite as an ordinary Git change when no conversion applies", async () => {
     const root = await createRepo(FILES, { "core.autocrlf": "false" });
-    expect(await gitMayConvertLineEndings(root)).toBe(false);
     const updater = createUpdater(root, "disk");
     try {
       await updater.update();
@@ -418,39 +451,6 @@ describe("line-ending rewrites that Git reports clean", () => {
       await expectMatchesCold(root, await updater.update());
     } finally {
       updater.close();
-    }
-  });
-
-  it("detects Git line-ending conversion from core.autocrlf and from attributes", async () => {
-    const plain = await createRepo(SOURCES);
-    expect(await gitMayConvertLineEndings(plain)).toBe(false);
-    for (const value of ["true", "input"]) {
-      runGit(plain, ["config", "core.autocrlf", value]);
-      expect(await gitMayConvertLineEndings(plain)).toBe(true);
-    }
-    runGit(plain, ["config", "core.autocrlf", "false"]);
-    expect(await gitMayConvertLineEndings(plain)).toBe(false);
-    for (const attributes of ["* text=auto\n", "*.ts text\n", "*.ts eol=lf\n", "*.ts crlf\n"]) {
-      await fsp.writeFile(path.join(plain, ".gitattributes"), attributes);
-      expect(await gitMayConvertLineEndings(plain), attributes).toBe(true);
-    }
-    await fsp.writeFile(path.join(plain, ".gitattributes"), "*.ts -text\n*.png binary\n");
-    expect(await gitMayConvertLineEndings(plain)).toBe(false);
-  });
-
-  it("records whether Git may convert line endings in the manifest, and stats files only when it may", async () => {
-    const options = { cache: "disk", threads: 1, logLevel: "silent" } as const;
-    for (const [config, expected] of [
-      [{ "core.autocrlf": "false" }, false],
-      [{ "core.autocrlf": "true" }, true],
-    ] as const) {
-      const root = await createRepo(SOURCES, config);
-      try {
-        await buildProjectIndex(root, options);
-        expect((await readStoredManifest(root)).gitLineEndingConversion).toBe(expected);
-      } finally {
-        closeDiskCacheDatabase(root, options);
-      }
     }
   });
 });
@@ -567,7 +567,7 @@ describe("Git children spawned by incremental updates", () => {
       expect(
         calls.filter((args) => args[0] === "ls-files" && args.includes("-v") && args.includes("--others")),
       ).toHaveLength(1);
-      // No blob listing, hash, line-ending probe or attribute probe: those run when a manifest is written.
+      // A clean update reads no blob ids, hashes no file and runs no configuration or attribute probe.
       expect(calls.filter((args) => args[0] === "hash-object")).toEqual([]);
       expect(calls.filter((args) => args[0] === "ls-files" && (args.includes("-s") || args.includes("-m")))).toEqual(
         [],

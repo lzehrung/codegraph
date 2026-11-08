@@ -1117,43 +1117,6 @@ export async function listSubmoduleFiles(
   return Array.from(new Set([...tracked, ...untracked.flat()]));
 }
 
-/** Line-ending conversions Git applies to a tracked file: its `text`, `eol` and `crlf` attributes, as pathspec magic. */
-const LINE_ENDING_ATTRIBUTE_PATHSPECS = [
-  ":(attr:text)",
-  ":(attr:text=auto)",
-  ":(attr:eol=lf)",
-  ":(attr:eol=crlf)",
-  ":(attr:crlf)",
-  ":(attr:crlf=input)",
-];
-
-/**
- * Whether Git may rewrite line endings when it compares a worktree file with its index entry: `core.autocrlf` is on
- * (`true` or `input`) or a tracked file carries a line-ending attribute. The index blob id of such a file does not name
- * its worktree bytes, so an eol-only rewrite leaves Git reporting the file clean. A probe that cannot answer reports
- * `true`.
- */
-export async function gitMayConvertLineEndings(projectRoot: string): Promise<boolean> {
-  try {
-    const [autocrlf, attributed] = await Promise.all([
-      runGit(projectRoot, ["config", "--get", "core.autocrlf"]).then(
-        ({ stdout }) => stdout.trim().toLowerCase(),
-        (error: unknown) => {
-          // `git config --get` exits 1 when the key is unset.
-          if (/\bfailed \(1\):/.test(error instanceof Error ? error.message : String(error))) return "false";
-          throw error;
-        },
-      ),
-      runGit(projectRoot, ["ls-files", "-z", "--cached", "--", ...LINE_ENDING_ATTRIBUTE_PATHSPECS], {
-        maxBuffer: GIT_LISTING_MAX_BUFFER,
-      }),
-    ]);
-    return !["false", "no", "off", "0"].includes(autocrlf) || !!attributed.stdout;
-  } catch {
-    return true;
-  }
-}
-
 /**
  * Get unified diff text from Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.

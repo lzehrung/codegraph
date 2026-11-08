@@ -2971,19 +2971,15 @@ async function buildProjectIndexIncrementalInProbeCache(
       delete trackedEntries[file];
       manifestRequiresSanitization = true;
     }
-    // Files Git cannot report on (changed submodules, flagged files, eol-converted files) are verified by stat. Only a
-    // build that would otherwise skip signature validation needs the eol check, since validation stats every file.
+    // Files Git cannot report on (changed submodules and flagged files) are verified by stat.
     if (worktreeSignals) {
-      const maySkipFileValidation = !manifestDiffFiles.length && !gitFiles.length && !additionalFiles.length;
       const hiddenChangeFiles = await measureSourceDiscovery(() =>
         collectGitHiddenChangeCandidates({
           projectRoot,
           trackedEntries,
-          trackedFiles,
           changedSubmodules,
           recordedSubmodules: manifest.gitDirtySubmodules,
           flaggedFiles: worktreeSignals.flagged,
-          verifyTrackedFiles: (manifest.gitLineEndingConversion ?? true) && maySkipFileValidation,
           opts,
           context: discoveryContext,
           concurrency: buildConcurrency(opts),
@@ -3881,12 +3877,9 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     hiddenChangeFiles = await collectGitHiddenChangeCandidates({
       projectRoot,
       trackedEntries,
-      trackedFiles,
       changedSubmodules: worktreeDiff?.gitlinks ?? [],
       recordedSubmodules: manifest?.gitDirtySubmodules,
       flaggedFiles: worktreeSignals.flagged,
-      // The signature comparison below already covers every tracked file.
-      verifyTrackedFiles: false,
       opts,
       context: discoveryContext,
       concurrency: buildConcurrency(opts),
