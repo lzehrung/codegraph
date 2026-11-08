@@ -128,8 +128,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 134 rebuilds Kotlin detailed graphs that recorded the base class of a class with only secondary constructors as
  * `implements`, or the parameter and return types of a function-type supertype as supertypes: a bare entry that
  * resolves to a class is `extends`, and one whose kind is not proven, or a function type, records no edge.
+ * Epoch 135 resolves a qualified base through its qualifier (Python module attribute, Ruby constant path, Swift nested
+ * type, Go package type, JavaScript namespace member, Kotlin dotted type) and never by its last name or its qualifier.
  */
-export const CORE_ALGORITHM_EPOCH = 134;
+export const CORE_ALGORITHM_EPOCH = 135;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -17,11 +17,14 @@ import {
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
   memberAcceptsCallAt,
+  qualifiedBaseNames,
   resolvePhpObjectCreationTarget,
+  resolveQualifiedMemberContainer,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   resolveSwiftAliasContainer,
   resolveSwiftAliasHeritage,
+  rubyAbsoluteConstant,
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
@@ -58,6 +61,7 @@ import {
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
+import { isSwiftQualifiedTypeSuffix } from "../../util/swift-tree.js";
 import {
   MEMBER_ACCESS_ROWS,
   type ReceiverAncestorClause,
@@ -1702,15 +1706,26 @@ const QUALIFIER_NAME_FIELD: Record<string, string> = {
   qualified_name: "name", // C#: Namespace.Base, Outer.Inner
   alias_qualified_name: "name", // C#: X::Base, global::Namespace.Base
   qualified_identifier: "name", // C++: ns::Base
-  scope_resolution: "name", // Ruby: Module::Base
-  qualified_type: "name", // Go: pkg.Base
 };
+
+/**
+ * The node that spells a qualified base whose qualifier the member-access lookup proves: a Python module attribute, a
+ * Ruby constant path, a Go package type. The base's own last name is never looked up by itself.
+ */
+const MEMBER_ACCESS_BASE_NODE_TYPES: Readonly<Record<string, string>> = {
+  python: "attribute",
+  ruby: "scope_resolution",
+  go: "qualified_type",
+};
+
+function isMemberAccessBase(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  return MEMBER_ACCESS_BASE_NODE_TYPES[sup.id] === node.type;
+}
 
 /** Generic wrappers contribute the base name, not their type arguments. */
 const GENERIC_WRAPPER_TYPES: Record<string, true> = {
   generic_name: true,
   generic_type: true,
-  user_type: true,
   template_type: true,
 };
 const GENERIC_ARGUMENT_CHILD_TYPES: Record<string, true> = {
@@ -1760,6 +1775,13 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
       current = named;
       continue;
     }
+    if (current.type === "user_type") {
+      // A dotted Kotlin or Swift type is its last segment, found through the segments before it.
+      const named = (current.namedChildren ?? []).findLast((child) => !GENERIC_ARGUMENT_CHILD_TYPES[child.type]);
+      if (!named || named === current) return current;
+      current = named;
+      continue;
+    }
     if (GENERIC_WRAPPER_TYPES[current.type]) {
       const named =
         current.childForFieldName("name") ??
@@ -1796,7 +1818,11 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
   }
   const narrowed = narrowBaseSpecifierNode(node);
   if (isUnprovenHeritageExpression(narrowed)) return;
-  if ((sup.id === "ts" || sup.id === "tsx") && narrowed.type === "member_expression") {
+  if (isJsTsLanguage(sup.id) && narrowed.type === "member_expression") {
+    out.push(narrowed);
+    return;
+  }
+  if (isMemberAccessBase(sup, narrowed)) {
     out.push(narrowed);
     return;
   }
@@ -1871,6 +1897,67 @@ async function swiftExtendedNominal(context: EdgePassContext, target: SymbolDef)
   return nominal && !nominal.swiftExtensionOwner ? nominal : null;
 }
 
+/** A bare base name: the shared lookup, or a Swift nested type, or a Ruby constant `require` published. */
+async function resolveBareBase(context: EdgePassContext, identifier: SyntaxNodeLike): Promise<SymbolDef | null> {
+  const name = sliceText(identifier, context.source);
+  // A later segment of a dotted Swift type names a type nested in the segments before it; settling runs that lookup.
+  if (isSwiftQualifiedTypeSuffix(identifier)) {
+    return await context.settleName(name, identifier, context.resolveName(name, identifier));
+  }
+  const target = context.resolveIdentifier(name, identifier);
+  // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
+  // same visibility as goto so `class Worker < Base` follows the required class.
+  if (!target && context.sup.id === "ruby") {
+    return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
+  }
+  return target;
+}
+
+/**
+ * A qualified base (`other.Base`, `Other::Base`, Go `pkg.Base`) is found through its qualifier by the lookup member
+ * navigation uses for the same clause, or it names nothing: the last name alone would match any same-named type.
+ */
+async function resolveQualifiedPathBase(
+  context: EdgePassContext,
+  qualified: SyntaxNodeLike,
+): Promise<SymbolDef | null> {
+  // An absolute Ruby `::Base` has no qualifier: it is a plain top-level name.
+  const absoluteConstant = rubyAbsoluteConstant(qualified);
+  if (absoluteConstant) return await resolveBareBase(context, absoluteConstant);
+  const names = qualifiedBaseNames(context.sup, context.source, qualified);
+  if (!names) return null;
+  const [base, ...path] = names;
+  const container = await resolveQualifiedMemberContainer(
+    context.index,
+    context.moduleEntry,
+    base!,
+    path,
+    context.sup.normalizeIdentifier,
+    context.sup,
+  );
+  return container ?? null;
+}
+
+async function resolveBaseSpecifier(context: EdgePassContext, identifier: SyntaxNodeLike): Promise<SymbolDef | null> {
+  if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
+    const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
+    const container = await resolveCppQualifiedMemberContainer(
+      context.index,
+      context.moduleEntry,
+      qualifiedPath,
+      context.loadParsedFile,
+    );
+    if (container || qualifiedPath.length < 2) return container;
+    return context.resolveIdentifier(qualifiedPath.join("::"), identifier);
+  }
+  if (isJsTsLanguage(context.sup.id) && identifier.type === "member_expression") {
+    const qualified = context.resolveMemberChainTarget(identifier);
+    return qualified && declaresMembers(qualified) ? qualified : null;
+  }
+  if (isMemberAccessBase(context.sup, identifier)) return await resolveQualifiedPathBase(context, identifier);
+  return await resolveBareBase(context, identifier);
+}
+
 async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
@@ -1886,30 +1973,7 @@ async function recordIdentifierRelations(
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
-    let target: SymbolDef | null;
-    if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
-      const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
-      target = await resolveCppQualifiedMemberContainer(
-        context.index,
-        context.moduleEntry,
-        qualifiedPath,
-        context.loadParsedFile,
-      );
-      if (!target && qualifiedPath.length > 1) {
-        target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
-      }
-    } else if ((context.sup.id === "ts" || context.sup.id === "tsx") && identifier.type === "member_expression") {
-      const qualified = context.resolveMemberChainTarget(identifier);
-      target = qualified && declaresMembers(qualified) ? qualified : null;
-    } else {
-      const name = sliceText(identifier, context.source);
-      target = context.resolveIdentifier(name, identifier);
-      // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
-      // same visibility as goto so `class Worker < Base` follows the required class.
-      if (!target && context.sup.id === "ruby") {
-        target = resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
-      }
-    }
+    let target = await resolveBaseSpecifier(context, identifier);
     if (!target) continue;
     let swiftBase: SwiftBase | null = null;
     if (context.sup.id === "swift") {

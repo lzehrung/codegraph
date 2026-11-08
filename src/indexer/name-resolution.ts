@@ -21,6 +21,7 @@ import {
   jvmQualifiedTypeSegments,
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
+import { isSwiftQualifiedTypeSuffix, swiftQualifiedTypeSegments } from "../util/swift-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
@@ -39,6 +40,7 @@ import {
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
   resolveJvmPackageSymbol,
+  resolveSwiftNestedTypePath,
 } from "./navigation-goto.js";
 import {
   definitionForBinding,
@@ -247,6 +249,27 @@ function resolveQualifiedJvmName(
   }
   return target;
 }
+
+/**
+ * A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it, so its
+ * own spelling never binds a bare name. The first segment is looked up as an ordinary name and must declare members;
+ * the nested walk runs when the resolution is settled. A root that binds nothing, or a generic owner, proves no path.
+ */
+function resolveSwiftQualifiedTypeSuffix(use: BareNameUse): NameResolution | undefined {
+  const { node, parsed } = use;
+  if (!isSwiftQualifiedTypeSuffix(node)) return undefined;
+  const unproven: NameResolution = { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+  const segments = swiftQualifiedTypeSegments(node);
+  if (!segments) return unproven;
+  const root = segments[0]!;
+  let rootResult = resolveBareName({ ...use, node: root, name: sliceText(root, parsed.source) });
+  while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
+  const owner = rootResult?.status === "ok" ? rootResult.definition : null;
+  if (!owner || !declaresMembers(owner)) return unproven;
+  const names = segments.slice(1).map((segment) => sliceText(segment, parsed.source));
+  return { status: "deferred", request: { kind: "swift-nested-type", owner, names }, fallback: unproven };
+}
+
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
  * lookup step answers; go-to-definition then tries a declaration at the position.
@@ -288,6 +311,10 @@ export function resolveBareName(
         ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
         : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     }
+  }
+  if (sup.id === "swift") {
+    const qualifiedType = resolveSwiftQualifiedTypeSuffix(use);
+    if (qualifiedType) return qualifiedType;
   }
   const policy = nameLookupPolicyFor(sup.id);
   const lookupName = policy.lookupName?.(use) ?? use.name;
@@ -402,6 +429,9 @@ export async function settleNameResolution(
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
       if (settled) return settled;
+    } else if (request.kind === "swift-nested-type") {
+      const nested = await resolveSwiftNestedTypePath(index, request.owner, request.names);
+      if (nested) return okGoToResult(index, nested, { resolution: "member-access", confidence: "medium" });
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;

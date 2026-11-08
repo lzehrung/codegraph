@@ -763,6 +763,38 @@ export function innermostNamespaceImport(
   return undefined;
 }
 
+/**
+ * The constant names of a Ruby `scope_resolution`, root first (`Outer`, `Inner`, `Tool` for `Outer::Inner::Tool`). Null
+ * when the root is not a constant (`self::Tool`) or the path is only an absolute `::Tool`, which is a plain top-level
+ * name. An absolute path with a qualifier (`::Outer::Tool`) starts at the top level, where the qualified exports are
+ * keyed, so it reads like the relative spelling.
+ */
+function rubyScopeResolutionSegments(scopeResolution: SyntaxNodeLike, source: string): string[] | null {
+  const segments: string[] = [];
+  let current: SyntaxNodeLike | null = scopeResolution;
+  while (current?.type === "scope_resolution") {
+    const name = current.childForFieldName("name");
+    if (!name || name.type !== "constant") return null;
+    const text = sliceText(name, source);
+    if (!text) return null;
+    segments.unshift(text);
+    current = current.childForFieldName("scope");
+  }
+  if (current) {
+    const root = current.type === "constant" ? sliceText(current, source) : "";
+    if (!root) return null;
+    segments.unshift(root);
+  }
+  return segments.length > 1 ? segments : null;
+}
+
+/** The constant of an absolute Ruby `::Base`: a plain top-level name, with no qualifier to read through. */
+export function rubyAbsoluteConstant(scopeResolution: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (scopeResolution.type !== "scope_resolution" || scopeResolution.childForFieldName("scope")) return null;
+  const name = scopeResolution.childForFieldName("name");
+  return name?.type === "constant" ? name : null;
+}
+
 function rubyScopeResolutionPath(node: SyntaxNodeLike, source: string): { path: string; root: string } | null {
   if (node.type !== "constant") return null;
   const owner = node.parent;
@@ -771,35 +803,21 @@ function rubyScopeResolutionPath(node: SyntaxNodeLike, source: string): { path: 
   if (!ownerName || ownerName.startIndex !== node.startIndex || ownerName.endIndex !== node.endIndex) return null;
   // `Outer::Inner::Tool` nests scope_resolution on `scope`, so flatten from the
   // clicked name instead of stopping at the first nested scope.
-  const segments: string[] = [];
-  let current: SyntaxNodeLike | null = owner;
-  while (current?.type === "scope_resolution") {
-    const name = current.childForFieldName("name");
-    const scope = current.childForFieldName("scope");
-    if (!name || name.type !== "constant") return null;
-    const text = sliceText(name, source);
-    if (!text) return null;
-    segments.unshift(text);
-    current = scope;
-  }
-  if (!current || current.type !== "constant" || segments.length === 0) return null;
-  const root = sliceText(current, source);
-  if (!root) return null;
-  return { path: `${root}::${segments.join("::")}`, root };
+  const segments = rubyScopeResolutionSegments(owner, source);
+  return segments ? { path: segments.join("::"), root: segments[0]! } : null;
 }
 
 /**
  * `Outer::Inner::Tool` is one constant path. Nested classes are exported under that
- * path, not as bare `Tool`, so the chain has to ask for the qualified export.
+ * path, not as bare `Tool`, so the chain has to ask for the qualified export. The definition is
+ * the one declaration the path names; an absent or ambiguous path proves none.
  */
-function resolveRubyQualifiedConstantDefinition(
+function resolveRubyQualifiedConstantPath(
   index: ProjectIndex,
   mod: ModuleIndex,
-  node: SyntaxNodeLike,
-  source: string,
-): GoToResult | null {
-  const qualified = rubyScopeResolutionPath(node, source);
-  if (!qualified) return null;
+  path: string,
+  root: string,
+): SymbolDef | null {
   const files: string[] = [];
   const seen = new Set<string>();
   const add = (file: string | undefined): void => {
@@ -810,14 +828,14 @@ function resolveRubyQualifiedConstantDefinition(
     files.push(file);
   };
   for (const imp of mod.imports) {
-    if (imp.kind === "namespace" && imp.localNS === qualified.root && typeof imp.resolved === "string") {
+    if (imp.kind === "namespace" && imp.localNS === root && typeof imp.resolved === "string") {
       add(imp.resolved);
     }
   }
   add(mod.file);
   const hits: SymbolDef[] = [];
   for (const file of files) {
-    const hit = resolveExport(index, file, qualified.path, { allowLocalFallback: false });
+    const hit = resolveExport(index, file, path, { allowLocalFallback: false });
     if (hit?.kind !== "resolved") continue;
     if (
       hits.some(
@@ -832,8 +850,20 @@ function resolveRubyQualifiedConstantDefinition(
     }
     hits.push(hit.def);
   }
-  if (hits.length !== 1) return null;
-  return okGoToResult(index, hits[0]!, {
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+function resolveRubyQualifiedConstantDefinition(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  source: string,
+): GoToResult | null {
+  const qualified = rubyScopeResolutionPath(node, source);
+  if (!qualified) return null;
+  const definition = resolveRubyQualifiedConstantPath(index, mod, qualified.path, qualified.root);
+  if (!definition) return null;
+  return okGoToResult(index, definition, {
     via: { exportedName: qualified.path },
     resolution: "member-access",
     confidence: "medium",
@@ -968,6 +998,13 @@ export async function resolveMemberAccessDefinition(params: {
   if (sup.id === "ruby") {
     const qualified = resolveRubyQualifiedConstantDefinition(index, mod, node, source);
     if (qualified) return qualified;
+    // The tail of a constant whose qualifier no project file declares (`ActiveRecord::Base`) is a member of that
+    // external qualifier, so its own spelling must not bind a top-level constant of that name. A declared qualifier that
+    // proves no single export (a module reopened in several files) keeps the bare lookup.
+    const unproven = rubyScopeResolutionPath(node, source);
+    if (unproven && !resolveRubyVisibleConstant(index, mod, sup, unproven.root)) {
+      return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    }
   }
   const parent = node.parent;
   if (!parent || !sup.supportsCrossModuleSymbols) {
@@ -1636,9 +1673,46 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
   return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
 }
 
+/**
+ * One direct base a class declares. `unproven` is a base clause entry that names a type no reader can resolve (a
+ * computed expression, a generic owner, a path without a constant root); it keeps the hierarchy from counting as
+ * known, where dropping it would make an absent base look like no base.
+ */
 type DeclaredBaseType =
   | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
-  | { kind: "qualified"; base: string; path: readonly string[] };
+  | { kind: "qualified"; base: string; path: readonly string[]; kotlinEntry?: KotlinSupertypeEntry }
+  | { kind: "unproven" };
+
+/** The child type holding one name segment of a dotted `user_type`. */
+const USER_TYPE_SEGMENT_NODE_TYPES: Readonly<Record<string, string>> = {
+  kotlin: "identifier",
+  swift: "type_identifier",
+};
+
+/**
+ * The name segments of a Kotlin or Swift `user_type` that spells a dotted name (`Other.Base`), root first. Type arguments
+ * are not segments; one between two segments makes the owner generic (`Outer<T>.Inner`), which proves no path.
+ */
+function dottedUserTypeSegments(
+  sup: LanguageSupport,
+  node: SyntaxNodeLike,
+): { segments: SyntaxNodeLike[]; genericOwner: boolean } | null {
+  const segmentType = USER_TYPE_SEGMENT_NODE_TYPES[sup.id];
+  if (!segmentType || node.type !== "user_type") return null;
+  const segments: SyntaxNodeLike[] = [];
+  let genericOwner = false;
+  let sawArguments = false;
+  for (const child of node.namedChildren) {
+    if (child.type === "type_arguments") {
+      sawArguments = true;
+      continue;
+    }
+    if (child.type !== segmentType) continue;
+    if (sawArguments) genericOwner = true;
+    segments.push(child);
+  }
+  return segments.length > 1 ? { segments, genericOwner } : null;
+}
 
 function peelTypeWrappers(node: SyntaxNodeLike): SyntaxNodeLike {
   let current: SyntaxNodeLike | null = node;
@@ -1684,6 +1758,24 @@ function parseCppBaseType(node: SyntaxNodeLike, source: string): { base: string;
   return names.length ? { base: names[0]!, path: names.slice(1) } : null;
 }
 
+/**
+ * The names a qualified base spells, root first: `other` and `Base` for Python `other.Base`, `Outer`, `Inner`, and `Tool`
+ * for Ruby `Outer::Inner::Tool`, `pkg` and `Base` for Go `pkg.Base`. Null when the spelling is no path of plain names
+ * (a call, a subscript, a Ruby path without a constant root). The detailed graph and member navigation both read a
+ * qualified base through this, so they resolve the same path.
+ */
+export function qualifiedBaseNames(sup: LanguageSupport, source: string, node: SyntaxNodeLike): string[] | null {
+  if (sup.id === "ruby" && node.type === "scope_resolution") return rubyScopeResolutionSegments(node, source);
+  if (sup.id === "go" && node.type === "qualified_type") {
+    const packageName = node.childForFieldName("package");
+    const name = node.childForFieldName("name");
+    return packageName && name ? [sliceText(packageName, source), sliceText(name, source)] : null;
+  }
+  const chain = collectMemberAccessChain({ sup, source, chainNode: node });
+  if (!chain || !isSimpleTypeNameNode(chain.base, sup) || !chain.names.length) return null;
+  return [sliceText(chain.base, source), ...chain.names.toReversed()];
+}
+
 function collectDeclaredBaseTypes(
   container: SyntaxNodeLike,
   source: string,
@@ -1701,15 +1793,30 @@ function collectDeclaredBaseTypes(
     const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
     bases.push(kotlinEntry ? { kind: "simple", name, kotlinEntry } : { kind: "simple", name });
   };
-  const addQualified = (base: string, path: string[]): void => {
+  const addQualified = (base: string, path: string[], node: SyntaxNodeLike): void => {
     if (!base || path.length === 0) return;
     const key = `${base}.${path.join(".")}`;
 
     if (seen.has(key)) return;
     seen.add(key);
-    bases.push({ kind: "qualified", base, path });
+    const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
+    bases.push(kotlinEntry ? { kind: "qualified", base, path, kotlinEntry } : { kind: "qualified", base, path });
+  };
+  let sawUnproven = false;
+  const addUnproven = (): void => {
+    if (sawUnproven) return;
+    sawUnproven = true;
+    bases.push({ kind: "unproven" });
   };
   const collectType = (node: SyntaxNodeLike): void => {
+    // A dotted Kotlin or Swift type reads through its qualifier; its first segment alone would name the qualifier.
+    const dotted = dottedUserTypeSegments(sup, node);
+    if (dotted) {
+      const [root, ...path] = dotted.segments.map((segment) => sliceText(segment, source));
+      if (dotted.genericOwner) addUnproven();
+      else addQualified(root!, path, dotted.segments.at(-1)!);
+      return;
+    }
     const core = peelTypeWrappers(node);
     if (core.type === "constructor_invocation") {
       // Kotlin writes a superclass call as `Base(args)`: its callee is the base type, and its arguments are expressions.
@@ -1732,10 +1839,15 @@ function collectDeclaredBaseTypes(
     if (sup.id === "cpp") {
       const qualified = parseCppBaseType(core, source);
       if (qualified) {
-        if (qualified.path.length) addQualified(qualified.base, qualified.path);
+        if (qualified.path.length) addQualified(qualified.base, qualified.path, core);
         else addSimple(qualified.base, core);
         return;
       }
+    }
+    const absoluteConstant = rubyAbsoluteConstant(core);
+    if (absoluteConstant) {
+      addSimple(sliceText(absoluteConstant, source), absoluteConstant);
+      return;
     }
     const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
@@ -1743,10 +1855,9 @@ function collectDeclaredBaseTypes(
       return;
     }
     if (isMemberAccessNode(sup, core)) {
-      const chain = collectMemberAccessChain({ sup, source, chainNode: core });
-      if (chain && isSimpleTypeNameNode(chain.base, sup) && chain.names.length) {
-        addQualified(sliceText(chain.base, source), [...chain.names].reverse());
-      }
+      const names = qualifiedBaseNames(sup, source, core);
+      if (names) addQualified(names[0]!, names.slice(1), core);
+      else addUnproven();
       return;
     }
     if (memberAccessTraversalTypes(sup).has(core.type)) return;
@@ -1836,7 +1947,27 @@ function resolveNamedMemberContainer(
   return undefined;
 }
 
-async function resolveQualifiedMemberContainer(
+/** The leaf module of Python's unaliased `import a.b`: it binds only `a`, so the whole dotted phrase reaches the module again. */
+function pythonDottedImportFile(mod: ModuleIndex, phrase: readonly string[]): string | undefined {
+  if (phrase.length < 2) return undefined;
+  const dotted = phrase.join(".");
+  const binding = mod.imports.find(
+    (imp) =>
+      imp.kind === "namespace" &&
+      imp.mechanism === "python" &&
+      !imp.explicitAlias &&
+      imp.from === dotted &&
+      typeof imp.resolved === "string",
+  );
+  return typeof binding?.resolved === "string" ? binding.resolved : undefined;
+}
+
+/**
+ * The type a qualified base names, read through its qualifier: a module's export (Python, JavaScript, TypeScript), a
+ * constant path (Ruby), a type nested in the body of another (Swift), or a C++ scope. A qualifier that proves nothing
+ * leaves the base unresolved; the base's own last name is never looked up by itself.
+ */
+export async function resolveQualifiedMemberContainer(
   index: ProjectIndex,
   mod: ModuleIndex,
   baseName: string,
@@ -1848,6 +1979,19 @@ async function resolveQualifiedMemberContainer(
   if (sup.id === "cpp") {
     return (await resolveCppQualifiedMemberContainer(index, mod, [baseName, ...path])) ?? undefined;
   }
+  if (sup.id === "ruby") {
+    const definition = resolveRubyQualifiedConstantPath(index, mod, [baseName, ...path].join("::"), baseName);
+    return definition ? asMemberContainer(index, definition) : undefined;
+  }
+  if (sup.id === "swift") {
+    const owner = resolveNamedMemberContainer(index, mod, baseName, normalize);
+    return owner ? await resolveSwiftNestedTypePath(index, owner, path) : undefined;
+  }
+  const dottedFile = sup.id === "python" ? pythonDottedImportFile(mod, [baseName, ...path.slice(0, -1)]) : undefined;
+  if (dottedFile) {
+    const hit = resolveExport(index, dottedFile, path[path.length - 1]!, { allowLocalFallback: false });
+    return hit?.kind === "resolved" ? asMemberContainer(index, hit.def) : undefined;
+  }
   const namespaceImports = mod.imports.filter(
     (imp) => imp.kind === "namespace" && normalize(imp.localNS) === normalize(baseName),
   );
@@ -1858,6 +2002,8 @@ async function resolveQualifiedMemberContainer(
   for (let partIndex = 0; partIndex < path.length; partIndex += 1) {
     const part = path[partIndex]!;
     const last = partIndex === path.length - 1;
+    // Go reaches another package through its exported names only.
+    if (!isGoExportedMemberName(sup.id, part)) return undefined;
     const hit = resolveExport(index, file, part, { allowLocalFallback: false });
     if (!hit) return undefined;
     if (hit.kind === "namespace") {
@@ -1871,17 +2017,8 @@ async function resolveQualifiedMemberContainer(
   return undefined;
 }
 
-/**
- * A dotted Kotlin type (`Outer.Nested`) names its base through a qualifier that the base lookups here do not resolve,
- * so the clause cannot prove which declaration it inherits from.
- */
-function isKotlinQualifiedType(node: SyntaxNodeLike): boolean {
-  if (node.type !== "user_type") return false;
-  return node.namedChildren.filter((child) => child.type === "identifier").length > 1;
-}
-
 function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
-  if (isUnprovenHeritageExpression(node) || isKotlinQualifiedType(node)) return true;
+  if (isUnprovenHeritageExpression(node)) return true;
   if (node.type === "constructor_invocation") {
     return node.namedChildren.some((child) => child.type !== "value_arguments" && nodeContainsUnprovenHeritage(child));
   }
@@ -1955,6 +2092,7 @@ async function resolveDeclaredBase(
   sup: LanguageSupport,
   base: DeclaredBaseType,
 ): Promise<SymbolDef | undefined> {
+  if (base.kind === "unproven") return undefined;
   const normalize = sup.normalizeIdentifier;
   const named =
     base.kind === "simple"
@@ -2135,6 +2273,8 @@ async function baseRefsFromContainer(
     return sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
   };
   for (const base of bases) {
+    // An unreadable base contributes no members; the walk never substitutes another type for it.
+    if (base.kind === "unproven") continue;
     let def =
       base.kind === "simple"
         ? resolveNamedMemberContainer(index, mod, base.name, normalize)
@@ -2173,7 +2313,7 @@ async function baseRefsFromContainer(
     // call (`Base()`) or, in a class that declares only secondary constructors, a bare entry whose declaration is a
     // class. Every other bare entry is an interface or not a whole type name: it never answers `super`, while an own
     // receiver still inherits interface default members.
-    const kotlinEntry = base.kind === "simple" ? base.kotlinEntry : undefined;
+    const { kotlinEntry } = base;
     const isBareKotlinClass =
       kotlinEntry === "bare" && kotlinMayNameClassBare(container) && declaredSupertypeKind(ref.container) === "class";
     if (superclassOnly && sup.id === "kotlin" && kotlinEntry !== "invoked" && !isBareKotlinClass) continue;
@@ -3162,6 +3302,42 @@ export async function resolveSwiftAliasHeritage(index: ProjectIndex, alias: Symb
 async function swiftBaseDeclaration(index: ProjectIndex, named: SymbolDef): Promise<SymbolDef | undefined> {
   if (named.kind !== SymbolKind.TypeAlias) return named;
   return await resolveSwiftAliasHeritage(index, named);
+}
+
+/** The one type named `name` that the body of the Swift type `owner` declares. A nested type declared in an extension is not read. */
+async function swiftNestedType(index: ProjectIndex, owner: SymbolDef, name: string): Promise<SymbolDef | undefined> {
+  const ref = await keywordClassRefFromDef(index, owner);
+  if (ref?.context.sup.id !== "swift") return undefined;
+  const nested = findDirectLocalsWithinNode(
+    ref.module.locals,
+    name,
+    ref.container,
+    ref.context,
+    ref.context.sup.normalizeIdentifier,
+  ).filter((local) => local.isMember && declaresMembers(local));
+  return nested.length === 1 ? nested[0] : undefined;
+}
+
+/**
+ * The type a dotted Swift name reaches from the declaration of its first segment: every later segment is a type declared
+ * in the body of the segment before it, and a typealias in the chain is followed to the nominal type it provably names.
+ * A missing, ambiguous, or extension-declared nested type proves no path. Shared by the lookup of a qualified type name
+ * and by the base-clause readers, so a nested base names the same type everywhere.
+ */
+export async function resolveSwiftNestedTypePath(
+  index: ProjectIndex,
+  owner: SymbolDef,
+  names: readonly string[],
+): Promise<SymbolDef | undefined> {
+  let current = owner;
+  for (const name of names) {
+    const container = await swiftBaseDeclaration(index, current);
+    if (!container) return undefined;
+    const nested = await swiftNestedType(index, container, name);
+    if (!nested) return undefined;
+    current = nested;
+  }
+  return current;
 }
 
 /** Whether a declaration ends a Swift alias chain: a nominal type, or a protocol where the caller accepts one. */
@@ -4622,18 +4798,19 @@ function preferredPythonInstanceAttribute(
   return initializerAssignment ?? firstMethodAssignment;
 }
 
-function pythonBaseIdentifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] {
+/** The base specifiers of a Python class: each bare name, and each dotted `module.Name` as one qualified specifier. */
+function pythonBaseSpecifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] {
   const bases =
     classNode.childForFieldName("superclasses") ??
     (classNode.namedChildren ?? []).find((child) => child.type === "argument_list");
   if (!bases) return [];
-  const names: SyntaxNodeLike[] = [];
+  const specifiers: SyntaxNodeLike[] = [];
   const visit = (node: SyntaxNodeLike): void => {
     if (node.type === "keyword_argument" || node.type === "dictionary_splat" || node.type === "list_splat") {
       return;
     }
-    if (node.type === "identifier") {
-      names.push(node);
+    if (node.type === "identifier" || node.type === "attribute") {
+      specifiers.push(node);
       return;
     }
     if (node.type === "subscript") {
@@ -4644,7 +4821,7 @@ function pythonBaseIdentifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] 
     for (const child of node.namedChildren) visit(child);
   };
   visit(bases);
-  return names;
+  return specifiers;
 }
 
 function resolvePythonNamedClass(index: ProjectIndex, mod: ModuleIndex, name: string): SymbolDef | undefined {
@@ -4672,17 +4849,44 @@ function resolvePythonNamedClass(index: ProjectIndex, mod: ModuleIndex, name: st
   return undefined;
 }
 
+/**
+ * A dotted Python base (`other.Base`) is an attribute of the module the import binds to its leftmost name. The
+ * attribute is read through that module's exports; its own last name is never looked up by itself.
+ */
+async function resolvePythonQualifiedBase(
+  index: ProjectIndex,
+  classRef: PythonClassRef,
+  attribute: SyntaxNodeLike,
+): Promise<SymbolDef | undefined> {
+  const { source, sup } = classRef.context;
+  const names = qualifiedBaseNames(sup, source, attribute);
+  if (!names) return undefined;
+  const [base, ...path] = names;
+  const container = await resolveQualifiedMemberContainer(
+    index,
+    classRef.module,
+    base!,
+    path,
+    sup.normalizeIdentifier,
+    sup,
+  );
+  return container?.kind === SymbolKind.Class ? container : undefined;
+}
+
 async function pythonBaseClassRefs(
   index: ProjectIndex,
   classRef: PythonClassRef,
   loadParsedFile: PythonParsedFileLoader | undefined,
   cache: PythonReceiverResolutionCache | undefined,
 ): Promise<PythonClassRef[]> {
-  const names = pythonBaseIdentifierNodes(classRef.container);
+  const specifiers = pythonBaseSpecifierNodes(classRef.container);
   const refs: PythonClassRef[] = [];
   const seen = new Set<string>();
-  for (const nameNode of names) {
-    const def = resolvePythonNamedClass(index, classRef.module, sliceText(nameNode, classRef.context.source));
+  for (const specifier of specifiers) {
+    const def =
+      specifier.type === "attribute"
+        ? await resolvePythonQualifiedBase(index, classRef, specifier)
+        : resolvePythonNamedClass(index, classRef.module, sliceText(specifier, classRef.context.source));
     if (!def) continue;
     const key = definitionIdentityKey(def);
     if (seen.has(key)) continue;

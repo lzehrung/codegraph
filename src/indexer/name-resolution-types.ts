@@ -28,6 +28,8 @@ export type DeferredNameRequest =
   | { kind: "implicit-self-member"; lookupName: string }
   /** An enclosing C# member (only a nested type in type positions) binds before a using alias of that name. */
   | { kind: "csharp-alias-member"; lookupName: string }
+  /** A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it. */
+  | { kind: "swift-nested-type"; owner: SymbolDef; names: readonly string[] }
   /** Several included C/C++ declarations that may be one callable. */
   | { kind: "c-included-star"; lookupName: string; cNamespace: "tag" | "ordinary" | undefined };
 
