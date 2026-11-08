@@ -391,7 +391,8 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
       const warmUnresolved = getUnresolvedImports(warm.graph, { projectRoot: root }).map((entry) => entry.name);
       expect(warmUnresolved).not.toContain("pkg.util");
 
-      const gotoWarm = await goToDefinition(warm, { file: main, line: 1, column: columnOf(mainLines, 1, "pkg") });
+      // `pkg` has no `__init__.py`, so its own name lands nowhere; the attribute `helper` proves the module resolves.
+      const gotoWarm = await goToDefinition(warm, { file: main, line: 3, column: columnOf(mainLines, 3, "helper") });
       expect(gotoWarm.status).toBe("ok");
       if (gotoWarm.status !== "ok") throw new Error("expected goToDefinition to resolve after pkg/util.py was added");
       expect(normalizePath(gotoWarm.definition.file)).toBe(normalizePath(util));

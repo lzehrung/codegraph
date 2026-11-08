@@ -207,6 +207,9 @@ const HIERARCHY_LABELS: Record<string, true> = {
 };
 const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
   "binary_expression",
+  // Python `class A(make_base())` and Ruby `class A < Other.const_get(:Base)` call a function or method for the base:
+  // neither its callee chain nor its arguments is a base.
+  "call",
   "call_expression",
   // Ruby: `class P < (flag ? Other::Base : Object)` picks its base at run time.
   "conditional",
@@ -221,6 +224,13 @@ const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
 
 export function isUnprovenHeritageExpression(node: SyntaxNodeLike): boolean {
   return UNPROVEN_HERITAGE_EXPRESSION_TYPES.has(node.type);
+}
+
+/** Python base-list entries that are never base types: `metaclass=M` and other keyword arguments, and `*bases` splats. */
+const NON_BASE_HERITAGE_ARGUMENT_TYPES = new Set(["keyword_argument", "dictionary_splat", "list_splat"]);
+
+export function isNonBaseHeritageArgument(node: SyntaxNodeLike): boolean {
+  return NON_BASE_HERITAGE_ARGUMENT_TYPES.has(node.type);
 }
 
 /**

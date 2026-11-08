@@ -7,7 +7,7 @@ import type { ProjectIndex } from "../../src/indexer/types.js";
 import { normalizePath } from "../../src/util/paths.js";
 
 /** A spelling in a fixture file: the `occurrence`th `marker`, moved `offset` characters right. */
-type Site = { file: string; marker: string; occurrence?: number; offset?: number };
+export type Site = { file: string; marker: string; occurrence?: number; offset?: number };
 /** Where go-to-definition lands as `name@file`, or `null` for `not_found`. */
 type GotoCase = Site & { expect: string | null };
 /** `includes` and `excludes` are `file:line` entries; `coverage` is the state `findReferences` must report. */
@@ -19,10 +19,12 @@ type ReferencesCase = Site & {
 
 /**
  * One language's qualified bases beside same-named decoys: a base reached through its qualifier, an ordinary
- * unqualified base, and a qualifier no project file declares. The Python sources were checked on CPython (class
- * resolution order and attribute lookup), the Kotlin sources on kotlinc and the Java sources on javac (compiled and run,
- * superclass by reflection), and the JavaScript sources other than `ext.js`, which imports an unresolvable package on
- * purpose, on Node. No Ruby, Swift, or Go toolchain ran for these sources, which follow the language specifications.
+ * unqualified base, and a qualifier no project file declares. The sources ran or compiled on each language's toolchain:
+ * CPython 3.13 and Ruby 3.3 (the superclass of each class), Node (the prototype chain; `ext.js` imports an unresolvable
+ * package on purpose and was not run), kotlinc and javac (compiled and run, superclass by reflection), the Swift 5.10
+ * type checker (the nested base and its members compile; `Empty.Base` and a decoy-only member do not), and the Go 1.23
+ * compiler (a method is promoted only through the embedded `other.Base`). `UIKit.UIView` needs an Apple platform, so it
+ * was only checked to name no project type.
  */
 export type QualifiedBaseFixture = {
   language: string;
@@ -35,7 +37,7 @@ export type QualifiedBaseFixture = {
   references: readonly ReferencesCase[];
 };
 
-const lines = (...rows: string[]): string => [...rows, ""].join("\n");
+export const lines = (...rows: string[]): string => [...rows, ""].join("\n");
 
 export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
   {
@@ -53,6 +55,10 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         "",
         "    def real_only(self):",
         '        return "other"',
+        "",
+        "",
+        "def make_base(base):",
+        "    return base",
       ),
       "decoy.py": lines(
         "class Base:",
@@ -151,6 +157,26 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         "        self.init_only()",
         "        return self.pkg_only()",
       ),
+      "use_call.py": lines(
+        "import other",
+        "from decoy import Base",
+        "from other import make_base",
+        "",
+        "",
+        "class C(make_base(Base)):",
+        "    def run(self):",
+        "        return self.decoy_only()",
+        "",
+        "",
+        "class D(make_base(other.Base)):",
+        "    def run(self):",
+        "        return self.real_only()",
+        "",
+        "",
+        "class F(other.make_base(Base), other.Base):",
+        "    def run(self):",
+        "        return self.real_only()",
+      ),
       "use_pkg_both.py": lines(
         "import pkg",
         "import pkg.mod",
@@ -179,7 +205,9 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       "A@use_alias.py -extends-> Base@other.py",
       "B@use_pkg_both.py -extends-> Base@pkg/__init__.py",
       "D@use_both.py -extends-> Base@decoy.py",
+      "F@use_call.py -extends-> Base@other.py",
       "G@use_deep.py -extends-> Base@pkg/sub/mod.py",
+      "K@use_pkg_attr.py -extends-> Base@pkg/__init__.py",
       "L@use_local.py -extends-> Base@other.py",
       "P@use_plain.py -extends-> Base@other.py",
       "R@pkg/use_rel.py -extends-> Base@pkg/mod.py",
@@ -189,11 +217,18 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       "W@use_module.py -extends-> Base@other.py",
     ],
     subtypes: {
-      "Base@other.py": ["A@use_alias.py", "L@use_local.py", "P@use_plain.py", "W@use_both.py", "W@use_module.py"],
+      "Base@other.py": [
+        "A@use_alias.py",
+        "F@use_call.py",
+        "L@use_local.py",
+        "P@use_plain.py",
+        "W@use_both.py",
+        "W@use_module.py",
+      ],
       "Base@decoy.py": ["D@use_both.py"],
-      // `K` reads `pkg.Base` through `import pkg.mod` alone, which proves no package module: it is not a subtype.
+      // `import pkg.mod` binds the package, so `K` reads `pkg.Base` from `pkg/__init__.py`, never from the submodule.
       "Base@pkg/mod.py": ["R@pkg/use_rel.py", "U@use_pkg.py", "V@use_pkg.py"],
-      "Base@pkg/__init__.py": ["B@use_pkg_both.py"],
+      "Base@pkg/__init__.py": ["B@use_pkg_both.py", "K@use_pkg_attr.py"],
       "Base@pkg/sub/mod.py": ["G@use_deep.py"],
     },
     gotos: [
@@ -206,8 +241,12 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       { file: "use_pkg.py", marker: "pkg_only()", occurrence: 1, expect: "pkg_only@pkg/mod.py" },
       { file: "pkg/use_rel.py", marker: "pkg_only()", expect: "pkg_only@pkg/mod.py" },
       { file: "use_deep.py", marker: "deep_only()", expect: "deep_only@pkg/sub/mod.py" },
-      { file: "use_pkg_attr.py", marker: "init_only()", expect: null },
+      { file: "use_pkg_attr.py", marker: "init_only()", expect: "init_only@pkg/__init__.py" },
       { file: "use_pkg_attr.py", marker: "pkg_only()", expect: null },
+      // A base a call computes proves no class: neither the callee chain nor its arguments is one.
+      { file: "use_call.py", marker: "decoy_only()", expect: null },
+      { file: "use_call.py", marker: "real_only()", occurrence: 0, expect: null },
+      { file: "use_call.py", marker: "real_only()", occurrence: 1, expect: "real_only@other.py" },
       { file: "use_pkg_both.py", marker: "init_only()", expect: "init_only@pkg/__init__.py" },
       { file: "use_pkg_both.py", marker: "pkg_only()", expect: null },
       { file: "use_module.py", marker: "other.Base", offset: 6, expect: "Base@other.py" },
@@ -232,15 +271,14 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         marker: "pkg_only",
         includes: ["use_pkg.py:7", "use_pkg.py:12", "pkg/use_rel.py:6"],
         excludes: ["use_pkg_attr.py:7", "use_pkg_both.py:8"],
-        // `K` has an unresolved base, so its `self.pkg_only()` cannot be ruled out.
-        coverage: "partial",
+        coverage: "complete",
       },
       {
         file: "pkg/__init__.py",
         marker: "init_only",
-        includes: ["use_pkg_both.py:7"],
-        excludes: ["use_pkg_attr.py:6"],
-        coverage: "partial",
+        includes: ["use_pkg_both.py:7", "use_pkg_attr.py:6"],
+        excludes: [],
+        coverage: "complete",
       },
     ],
   },
@@ -367,7 +405,7 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         "  end",
         "end",
       ),
-      // A base picked at run time names no single class.
+      // A base picked at run time, or by a method call, names no single class.
       "computed.rb": lines(
         'require_relative "other"',
         "",
@@ -377,6 +415,18 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         "  def run",
         "    self.real_only",
         "  end",
+        "end",
+        "",
+        "class Via < Other.const_get(:Base)",
+        "  def run",
+        "    self.real_only",
+        "  end",
+        "end",
+        "",
+        "class Anon < Class.new(Other::Base)",
+        "end",
+        "",
+        "class Pair < Struct.new(:left, :right)",
         "end",
       ),
     },
@@ -413,7 +463,8 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       { file: "absolute.rb", marker: "ns_only", occurrence: 2, expect: "ns_only@absolute.rb" },
       { file: "absolute.rb", marker: "::Base", offset: 2, expect: "Base@decoy.rb" },
       { file: "absolute.rb", marker: "self::Base", offset: 6, expect: "Base@absolute.rb" },
-      { file: "computed.rb", marker: "real_only", expect: null },
+      { file: "computed.rb", marker: "real_only", occurrence: 0, expect: null },
+      { file: "computed.rb", marker: "real_only", occurrence: 1, expect: null },
       { file: "use.rb", marker: "ActiveRecord::Base", offset: 14, expect: null },
     ],
     references: [
@@ -771,7 +822,7 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
   },
 ];
 
-function positionOf(files: Readonly<Record<string, string>>, site: Site): { line: number; column: number } {
+export function positionOf(files: Readonly<Record<string, string>>, site: Site): { line: number; column: number } {
   const text = files[site.file];
   if (text === undefined) throw new Error(`No fixture file ${site.file}`);
   let at = -1;

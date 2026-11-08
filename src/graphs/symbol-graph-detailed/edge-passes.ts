@@ -84,6 +84,7 @@ import {
   cppQualifiedNameSegments,
   declaredSupertypeKind,
   declaresMembers,
+  isNonBaseHeritageArgument,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
   kotlinMayNameClassBare,
@@ -1288,7 +1289,12 @@ export async function emitFunctionBodyEdges(
               exportedName = sliceText(prop, context.source);
             }
           }
-          if (exportedName) {
+          // An unaliased Python `import a.b` makes `a.b` the submodule, whatever `a`'s `__init__` declares as `b`.
+          const namesDottedModule =
+            !!exportedName &&
+            context.sup.id === "python" &&
+            context.aliasToTargetModule.has(`${nameKey}.${exportedName}`);
+          if (exportedName && !namesDottedModule) {
             target = context.resolveExportFrom(modFile, exportedName);
             if (!target && (context.sup.id !== "go" || isGoExportedMemberName(context.sup.id, exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
@@ -1742,13 +1748,6 @@ const CALL_LIKE_WRAPPER_SKIP_TYPES: Record<string, Record<string, true>> = {
   explicit_delegation: { primary_expression: true }, // Interface by delegate
 };
 
-/** Python base-list entries that are never base types. */
-const BASE_TYPE_IGNORED_TYPES: Record<string, true> = {
-  keyword_argument: true,
-  dictionary_splat: true,
-  list_splat: true,
-};
-
 /** Remove type arguments and wrapper syntax before resolving a direct base. */
 function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
   let current = node;
@@ -1812,7 +1811,7 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 /** Collect one type identifier per direct base or interface specifier. */
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
   if (isUnprovenHeritageExpression(node)) return;
-  if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
+  if (isNonBaseHeritageArgument(node)) return;
   if (sup.id === "cpp" && node.type === "qualified_identifier") {
     out.push(node);
     return;

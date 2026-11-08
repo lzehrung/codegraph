@@ -475,6 +475,20 @@ export async function buildSymbolGraphDetailed(
           }
           return aliasToTargetModule.get(aliasKey(alias));
         },
+        ...(sup.id === "python"
+          ? {
+              // The alias maps hold a dotted key for each module an `import a.b.c` lets the source spell (`a.b.c`).
+              resolveNamespacePhrase: (alias: string, names: readonly string[], useNode: SyntaxNodeLike) => {
+                for (let consumed = names.length; consumed >= 1; consumed -= 1) {
+                  const file = aliasToTargetModule.get(`${alias}.${names.slice(0, consumed).join(".")}`);
+                  if (!file) continue;
+                  if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode), undefined)) return undefined;
+                  return { file, consumed };
+                }
+                return undefined;
+              },
+            }
+          : {}),
       });
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;

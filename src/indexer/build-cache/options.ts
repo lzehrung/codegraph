@@ -130,6 +130,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * resolves to a class is `extends`, and one whose kind is not proven, or a function type, records no edge.
  * Epoch 135 resolves a qualified base through its qualifier (Python module attribute, Ruby constant path, Swift nested
  * type, Go package type, JavaScript namespace member, Kotlin dotted type) and never by its last name or its qualifier.
+ * Python `pkg.x` after `import pkg.mod` reads the package, and a call in a base list proves no base.
  */
 export const CORE_ALGORITHM_EPOCH = 135;
 /**

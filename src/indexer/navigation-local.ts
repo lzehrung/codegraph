@@ -29,6 +29,11 @@ import {
   resolveImported,
 } from "./navigation-resolve.js";
 import { phpNamedImportRole } from "./import-types.js";
+import {
+  isPythonDottedImportBinding,
+  pythonDottedImportPackageFile,
+  pythonNamespaceExportFile,
+} from "./python-dotted-imports.js";
 import { resolvePhpExplicitImport } from "./php-namespace-symbols.js";
 import { AMBIGUOUS_STAR_IMPORT_REASON } from "./ambiguous-resolution.js";
 import {
@@ -608,7 +613,10 @@ export function resolveNamedDefinition(
     }
   }
   if (hit?.kind === "namespace" && effectiveBinding?.kind !== "explicit") {
-    const targetMod = index.byFile.get(fileIdentityKey(hit.file));
+    // A module that runs an unaliased `import a.b` exports `a` as the namespace of the leaf, but the name is the package.
+    const namespaceFile =
+      support.id === "python" ? pythonNamespaceExportFile(index, mod.imports, name, hit.file) : hit.file;
+    const targetMod = namespaceFile ? index.byFile.get(fileIdentityKey(namespaceFile)) : undefined;
     const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
     if (firstExport) {
       return okGoToResult(index, firstExport.target, {
@@ -752,7 +760,10 @@ export function resolveNamedDefinition(
         }
       }
     } else if (imp.kind === "namespace" && support.normalizeIdentifier(imp.localNS) === normalizedName) {
-      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+      // An unaliased `import a.b` binds the package `a`, not the leaf module its binding resolves to.
+      let targetFile: string | undefined;
+      if (isPythonDottedImportBinding(imp)) targetFile = pythonDottedImportPackageFile(index, imp);
+      else if (typeof imp.resolved === "string") targetFile = normalizePath(imp.resolved);
       if (imp.mechanism === "cjs" && targetFile) {
         const classValue = cjsRequireValueBinding(index, targetFile);
         if (classValue) {

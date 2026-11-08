@@ -62,7 +62,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | TypeScript | 16    | 0          |
 | TSX        | 12    | 0          |
 | JavaScript | 11    | 0          |
-| Python     | 14    | 0          |
+| Python     | 15    | 0          |
 | PHP        | 12    | 0          |
 | Go         | 9     | 0          |
 | Java       | 15    | 0          |
@@ -75,7 +75,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | Swift      | 16    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 255 cells across 15 languages, 0 known gaps.
+Total: 256 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

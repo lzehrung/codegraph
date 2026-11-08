@@ -26,6 +26,15 @@ export function createMemberChainResolver(args: {
   aliasKey: (name: string) => string;
   resolveMemberPathFromModule: (startFile: string, names: string[]) => SymbolDef | null;
   resolveNamespaceAlias?: (alias: string, useNode: SyntaxNodeLike) => string | undefined;
+  /**
+   * The module a chain's leading names spell through the alias, longest spelling first (Python `a.b.c.x` after an
+   * `import a.b.c`): its file and how many names it consumed.
+   */
+  resolveNamespacePhrase?: (
+    alias: string,
+    names: readonly string[],
+    useNode: SyntaxNodeLike,
+  ) => { file: string; consumed: number } | undefined;
 }): MemberChainResolver {
   const memberExpressionType = memberExpressionTypeFor(args.sup);
   const propertyIdentifierTypes = memberPropertyIdentifierTypes(args.sup);
@@ -40,6 +49,14 @@ export function createMemberChainResolver(args: {
     });
     if (!chain || !isIdentifierType(args.sup, chain.base.type)) return null;
     const alias = sliceText(chain.base, args.source);
+    // Chain names run from the last access back to the first; a spelled module is read from the first.
+    const phrase = args.resolveNamespacePhrase
+      ? args.resolveNamespacePhrase(alias, [...chain.names].reverse(), chain.base)
+      : undefined;
+    if (phrase) {
+      const rest = chain.names.slice(0, chain.names.length - phrase.consumed);
+      return rest.length ? args.resolveMemberPathFromModule(phrase.file, rest) : null;
+    }
     const targetFile = args.resolveNamespaceAlias
       ? args.resolveNamespaceAlias(alias, chain.base)
       : args.aliasToTargetModule.get(args.aliasKey(alias));

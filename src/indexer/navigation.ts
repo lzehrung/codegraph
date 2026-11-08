@@ -147,12 +147,50 @@ import {
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
+import {
+  isPythonDottedImportBinding,
+  pythonImportedModuleFiles,
+  pythonLoadedSubmodules,
+} from "./python-dotted-imports.js";
 import { toTreeSitterPosition } from "./shared.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
 const MAX_REFERENCE_NAMESPACE_PATHS = 64;
+
+/**
+ * A package an unaliased Python `import a.b.c` names besides the leaf its binding resolves to: `a` or `a.b`, which a
+ * module can reach under that package's own dotted spelling.
+ */
+type ImportPackageView = { file: string; phrase: string };
+
+/**
+ * The ways one import is scanned for references: the binding as it resolves, then each package a dotted Python import
+ * also names, searched under that package's own dotted spelling.
+ */
+function* importScanViews(
+  index: ProjectIndex,
+  imports: readonly ImportBinding[],
+): Generator<{ imp: ImportBinding; packageView?: ImportPackageView }> {
+  for (const imp of imports) {
+    yield { imp };
+    if (!isPythonDottedImportBinding(imp)) continue;
+    for (const { phrase, file } of pythonImportedModuleFiles(index, imp)) {
+      if (phrase !== imp.from) yield { imp, packageView: { file, phrase } };
+    }
+  }
+}
+
+function importScanTarget(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  packageView: ImportPackageView | undefined,
+): string | undefined {
+  if (packageView) return packageView.file;
+  // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
+  return typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
+}
 
 export async function goToDefinition(
   index: ProjectIndex,
@@ -1241,12 +1279,12 @@ async function findReferencesInternal(
       }
     }
 
-    for (const imp of module.imports) {
+    const loadedSubmodules =
+      parsedContext.sup.id === "python" ? pythonLoadedSubmodules(index, module.imports) : undefined;
+    for (const { imp, packageView } of importScanViews(index, module.imports)) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
-      // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
-      const targetFile =
-        typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
+      const targetFile = importScanTarget(index, imp, packageView);
       if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
         const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
         const targetDirectories = new Set(
@@ -1356,6 +1394,8 @@ async function findReferencesInternal(
         if (hasReachedCollectionLimit()) break;
         const cjsModuleValue = cjsExportedName === exportedName;
         if (imp.kind === "namespace" && !cjsModuleValue) {
+          // `a.b` is the submodule a dotted import of this module loads, not a name `a`'s `__init__` declares.
+          if (loadedSubmodules?.get(fileIdentityKey(targetFile))?.has(exportedName)) continue;
           if (
             !isGoExportedMemberName(
               supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
@@ -1375,7 +1415,8 @@ async function findReferencesInternal(
           // Python binds the first segment of an unaliased dotted import, while an alias
           // binds the whole module. Other namespaces use their local name directly.
           const namespaceSearchName =
-            imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
+            packageView?.phrase ??
+            (imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS);
           const targetModule = index.byFile.get(fileIdentityKey(targetFile));
           if (
             targetModule?.exports.some(

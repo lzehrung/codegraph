@@ -6,6 +6,11 @@ import {
   type LanguageSupport,
 } from "../languages.js";
 import { pythonPropertyDecorator, type PythonPropertyDecorator } from "./python-property-decorator.js";
+import {
+  isPythonDottedImportBinding,
+  pythonDottedImportPackageFile,
+  pythonDottedPhraseFile,
+} from "./python-dotted-imports.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -49,6 +54,7 @@ import {
   hasStaticMemberDistinction,
   memberContainerDef,
   nearestMemberContainer,
+  isNonBaseHeritageArgument,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
   kotlinMayNameClassBare,
@@ -1301,6 +1307,11 @@ export async function resolveMemberAccessDefinition(params: {
             const classValue = cjsRequireValueBinding(index, imp.resolved);
             if (classValue) return { kind: "resolved", def: classValue };
           }
+          // An unaliased `import a.b` binds the package `a`, not the leaf module its binding resolves to.
+          if (sup.id === "python" && isPythonDottedImportBinding(imp)) {
+            const packageFile = pythonDottedImportPackageFile(index, imp);
+            return packageFile ? { kind: "namespace", file: packageFile.replace(/\\/g, "/") } : null;
+          }
           return {
             kind: "namespace",
             file: typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : imp.resolved?.external || "",
@@ -1368,24 +1379,16 @@ export async function resolveMemberAccessDefinition(params: {
     }
 
     if (optionalMemberTypes.has(expr.type)) {
-      // A Python unaliased dotted import (`import a.b`) binds only the first segment `a`,
-      // resolved to the leaf module `a.b` names; the source can only ever repeat that whole
-      // dotted phrase to reach it again (`a.b.symbol(...)`), never a bare intermediate segment
-      // on its own. Recognize that literal phrase up front so the chain walk below lands on the
-      // leaf module the import machinery already resolved, instead of treating each dot as an
-      // ordinary member-access hop and failing on the segment duplicating the import's spelling.
+      // A Python unaliased dotted import (`import a.b.c`) binds the package `a`, and the source reaches the package
+      // `a.b` and the leaf `a.b.c` by repeating their dotted phrases (`a.b.symbol(...)`, `a.b.c.symbol(...)`).
+      // Recognize those literal phrases up front so the chain walk below lands on the module each one names, instead
+      // of treating each dot as an ordinary member-access hop and failing on a segment the import only spells.
       if (sup.id === "python") {
         const dottedText = sliceText(expr, source);
         if (dottedText.includes(".")) {
-          const dottedImport = mod.imports.find(
-            (imp) =>
-              imp.kind === "namespace" &&
-              imp.mechanism === "python" &&
-              imp.from === dottedText &&
-              typeof imp.resolved === "string",
-          );
-          if (dottedImport && typeof dottedImport.resolved === "string") {
-            return { kind: "namespace", file: dottedImport.resolved.replace(/\\/g, "/") };
+          const phraseFile = pythonDottedPhraseFile(index, mod.imports, dottedText);
+          if (phraseFile !== undefined) {
+            return phraseFile ? { kind: "namespace", file: phraseFile.replace(/\\/g, "/") } : null;
           }
         }
       }
@@ -2115,31 +2118,6 @@ function resolveNamedMemberContainer(
   return undefined;
 }
 
-/** The leaf module of Python's unaliased `import a.b`: it binds only `a`, so the whole dotted phrase reaches the module again. */
-function pythonDottedImportFile(mod: ModuleIndex, phrase: readonly string[]): string | undefined {
-  if (phrase.length < 2) return undefined;
-  const dotted = phrase.join(".");
-  const binding = mod.imports.find(
-    (imp) =>
-      imp.kind === "namespace" &&
-      imp.mechanism === "python" &&
-      !imp.explicitAlias &&
-      imp.from === dotted &&
-      typeof imp.resolved === "string",
-  );
-  return typeof binding?.resolved === "string" ? binding.resolved : undefined;
-}
-
-/**
- * Python's unaliased `import a.b` binds the package `a`, yet its binding resolves to the leaf module `a.b`: an attribute
- * of `a` is read from the package, never from that module. A `from a.b import c` submodule binding is named by `c`.
- */
-function isPythonDottedImportBinding(imp: ImportBinding): boolean {
-  if (imp.kind !== "namespace" || imp.explicitAlias) return false;
-  const [first, ...rest] = imp.from.split(".");
-  return !!rest.length && imp.localNS === first;
-}
-
 /**
  * The type a qualified base names, read through its qualifier: a module's export (Python, JavaScript, TypeScript), a
  * constant path (Ruby), a type nested in the body of another (Swift), or a C++ scope. A qualifier that proves nothing
@@ -2175,10 +2153,15 @@ export async function resolveQualifiedMemberContainer(
     }
     return resolveJvmQualifiedPath(index, mod.file, sup.id, root ?? null, [baseName, ...path], true) ?? undefined;
   }
-  const dottedFile = sup.id === "python" ? pythonDottedImportFile(mod, [baseName, ...path.slice(0, -1)]) : undefined;
-  if (dottedFile) {
-    const hit = resolveExport(index, dottedFile, path[path.length - 1]!, { allowLocalFallback: false });
-    return hit?.kind === "resolved" ? asMemberContainer(index, hit.def) : undefined;
+  if (sup.id === "python") {
+    // An unaliased `import a.b.c` names the packages `a` and `a.b` and the leaf `a.b.c`: the longest such leading
+    // spelling starts the walk, and the names after it are attributes of that module.
+    const names = [baseName, ...path];
+    for (let count = names.length - 1; count >= 1; count -= 1) {
+      const moduleFile = pythonDottedPhraseFile(index, mod.imports, names.slice(0, count).join("."));
+      if (moduleFile === undefined) continue;
+      return moduleFile ? resolveExportPath(index, moduleFile, names.slice(count), sup) : undefined;
+    }
   }
   const namespaceImports = mod.imports.filter(
     (imp) =>
@@ -2188,8 +2171,17 @@ export async function resolveQualifiedMemberContainer(
   );
   if (namespaceImports.length !== 1) return undefined;
   const resolved = namespaceImports[0]!.resolved;
-  let file = typeof resolved === "string" ? resolved : undefined;
-  if (!file) return undefined;
+  return typeof resolved === "string" ? resolveExportPath(index, resolved, path, sup) : undefined;
+}
+
+/** The container `path` names when each part is an export of the module the part before it named, from `startFile`. */
+function resolveExportPath(
+  index: ProjectIndex,
+  startFile: string,
+  path: readonly string[],
+  sup: LanguageSupport,
+): SymbolDef | undefined {
+  let file = startFile;
   for (let partIndex = 0; partIndex < path.length; partIndex += 1) {
     const part = path[partIndex]!;
     const last = partIndex === path.length - 1;
@@ -2208,13 +2200,18 @@ export async function resolveQualifiedMemberContainer(
   return undefined;
 }
 
+/** Whether `child` of the heritage node `parent` can decide which base the clause names. */
+function decidesHeritage(parent: SyntaxNodeLike, child: SyntaxNodeLike): boolean {
+  // A type argument names a type in its own scope, and a keyword or splat argument names no base.
+  if (child.type === "type_arguments" || isNonBaseHeritageArgument(child)) return false;
+  // A Kotlin constructor call (`Base(args)`) names its base by its callee type; its arguments are expressions.
+  const isConstructorCallArgument = parent.type === "constructor_invocation" && child.type === "value_arguments";
+  return !isConstructorCallArgument;
+}
+
 function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
   if (isUnprovenHeritageExpression(node)) return true;
-  if (node.type === "constructor_invocation") {
-    return node.namedChildren.some((child) => child.type !== "value_arguments" && nodeContainsUnprovenHeritage(child));
-  }
-  // A type argument names a type in its own scope; it never decides which base the clause names.
-  return node.namedChildren.some((child) => child.type !== "type_arguments" && nodeContainsUnprovenHeritage(child));
+  return node.namedChildren.some((child) => decidesHeritage(node, child) && nodeContainsUnprovenHeritage(child));
 }
 
 /** A Java interface's static method is reachable through that interface alone; sub-interfaces and classes never inherit it. */
@@ -5006,9 +5003,9 @@ function pythonBaseSpecifierNodes(classNode: SyntaxNodeLike): SyntaxNodeLike[] {
   if (!bases) return [];
   const specifiers: SyntaxNodeLike[] = [];
   const visit = (node: SyntaxNodeLike): void => {
-    if (node.type === "keyword_argument" || node.type === "dictionary_splat" || node.type === "list_splat") {
-      return;
-    }
+    // A call computes its base (`Manager(BaseManager.from_queryset(QuerySet))`), so neither its callee chain nor its
+    // arguments is a base, and a keyword or splat argument is never one.
+    if (isNonBaseHeritageArgument(node) || isUnprovenHeritageExpression(node)) return;
     if (node.type === "identifier" || node.type === "attribute") {
       specifiers.push(node);
       return;

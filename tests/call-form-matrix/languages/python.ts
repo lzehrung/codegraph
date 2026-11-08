@@ -73,6 +73,21 @@ export const pythonCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
   },
   {
+    id: "python/qualified-call-dotted-package",
+    language: "python",
+    callForm: "qualified-call",
+    files: {
+      "pkg/__init__.py": ["def add(a, b):", "    return a + b", ""].join("\n"),
+      "pkg/mod.py": ["def add(a, b):", "    return -1", ""].join("\n"),
+      "use.py": ["import pkg.mod", "", "", "def sum_pair():", "    return pkg.add(1, 2)", ""].join("\n"),
+    },
+    use: { file: "use.py", line: 5, token: "add" },
+    expected: { file: "pkg/__init__.py", line: 1, token: "add" },
+    decoy: { file: "pkg/mod.py", line: 1, token: "add" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use.py", fromName: "sum_pair" },
+  },
+  {
     id: "python/self-member-call",
     language: "python",
     callForm: "self-member-call",

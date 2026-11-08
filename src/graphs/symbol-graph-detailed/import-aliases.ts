@@ -20,6 +20,7 @@ import {
 import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
+import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "../../indexer/python-dotted-imports.js";
 import { normalizeKotlinIdentifier } from "../../util/identifiers.js";
 
 export type ImportAliasMaps = {
@@ -98,6 +99,28 @@ export function buildImportAliasMaps(
     }
   }
 
+  /** An unaliased Python import of a module of the package `name`: `import name` or `import name.sub`. */
+  const importsModuleOfPackage = (binding: ImportBinding, name: string): boolean =>
+    binding.kind === "namespace" &&
+    binding.mechanism === "python" &&
+    !binding.explicitAlias &&
+    binding.localNS === name &&
+    binding.from.split(".")[0] === name;
+
+  /**
+   * An unaliased `import a.b.c` binds the package `a` and lets the source spell `a.b` and `a.b.c`. The name maps to the
+   * package and each longer spelling to its module under its dotted key, which no identifier alias can collide with.
+   * A spelling only counts while the name still means that package: its effective binding imports a module of it.
+   */
+  const registerPythonDottedImport = (imp: ImportBinding, effective: ImportBinding): void => {
+    if (imp.kind !== "namespace") return;
+    if (effective !== imp && !importsModuleOfPackage(effective, imp.localNS)) return;
+    for (const { phrase, file } of pythonImportedModuleFiles(index, imp)) {
+      if (phrase.includes(".")) aliasToTargetModule.set(phrase, normalizePath(file));
+      else if (effective === imp) aliasToTargetModule.set(aliasKey(phrase), normalizePath(file));
+    }
+  };
+
   moduleEntry.imports.forEach((imp) => {
     // Star expansion republishes the star's own names as extra bindings with no source range.
     // Resolving those here would let whichever copy this array places last silently overwrite
@@ -114,6 +137,10 @@ export function buildImportAliasMaps(
         (candidate) => explicitBindingLocalName(candidate) === bindingName,
         pythonLocalStartIndexes.get(bindingName),
       );
+      if (effectiveBinding?.kind === "explicit" && isPythonDottedImportBinding(imp)) {
+        registerPythonDottedImport(imp, effectiveBinding.binding);
+        return;
+      }
       if (effectiveBinding?.kind !== "explicit" || effectiveBinding.binding !== imp) return;
     }
     if (key === undefined) return;

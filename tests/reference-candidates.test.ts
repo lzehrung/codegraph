@@ -25,6 +25,7 @@ import type { ProjectIndex, SymbolDef } from "../src/indexer/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { exportedNamesOf, referenceCandidatesByFullScan, relativeTo } from "./helpers/reference-candidate-oracle.js";
+import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixture.js";
 
 const roots = createTempRootRegistry();
 
@@ -167,6 +168,22 @@ describe("reference candidate selection", () => {
     expect(result.referenceCoverage?.state).toBe("complete");
   });
 
+  it("offers the consumers of an unaliased dotted Python import as candidates of the package's definitions", async () => {
+    const root = await writeProject({ ...PYTHON_DOTTED_IMPORT_FILES });
+    const index = await buildProjectIndex(root, { cache: "off" });
+
+    const packageHelper = candidateFilesOf(index, root, definitionOf(index, "helper", "pkg/__init__.py"));
+    expect(packageHelper).toEqual(
+      expect.arrayContaining(["use_one.py", "use_deep.py", "use_plain.py", "use_both.py", "use_both2.py"]),
+    );
+    // `import pkg.mod as m` binds the submodule alone, so it cannot reach the package's `helper`.
+    expect(packageHelper).not.toContain("use_alias.py");
+
+    const submoduleHelper = candidateFilesOf(index, root, definitionOf(index, "helper", "pkg/mod.py"));
+    expect(submoduleHelper).toEqual(expect.arrayContaining(["use_one.py", "use_alias.py"]));
+    expect(submoduleHelper).not.toContain("use_deep.py");
+  });
+
   it("lists exactly what a scan of every module lists, for every definition of the sample and edge projects", async () => {
     const testsDirectory = path.resolve(process.cwd(), "tests");
     const projectRoots: string[] = [];
@@ -202,6 +219,7 @@ describe("reference candidate selection", () => {
       }
     }
     for (const files of Object.values(CYCLE_PROJECTS)) projectRoots.push(await writeProject(files));
+    projectRoots.push(await writeProject({ ...PYTHON_DOTTED_IMPORT_FILES }));
 
     let compared = 0;
     const mismatches: string[] = [];
