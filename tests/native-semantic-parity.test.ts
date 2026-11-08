@@ -1720,6 +1720,149 @@ nativeDescribe("native semantic coverage", () => {
     }
   });
 
+  it("keeps native anonymous class and object super, this, and same-name calls after cache reload", async () => {
+    const fixtures = {
+      java: {
+        base: [
+          "package app;",
+          "",
+          "public class Base {",
+          '    public String run() { return "Base.run"; }',
+          '    public String pick() { return "Base.pick"; }',
+          '    public String both() { return "Base.both"; }',
+          "}",
+        ],
+        outer: [
+          "package app;",
+          "",
+          "public class Outer extends Base {",
+          '    public String both() { return "Outer.both"; }',
+          "",
+          "    public Base go() {",
+          "        return new Base() {",
+          '            private String delegate = "v";',
+          "",
+          "            public String execute() {",
+          "                String zero = super.run();",
+          "                return zero + this.pick() + both() + delegate() + delegate;",
+          "            }",
+          "",
+          '            private String delegate() { return "d"; }',
+          "        };",
+          "    }",
+          "}",
+        ],
+        needles: {
+          run: "String run()",
+          zero: "zero = super.run(",
+          tail: "return zero + this.pick()",
+          delegate: "private String delegate()",
+        },
+      },
+      kt: {
+        base: [
+          "package app",
+          "",
+          "open class Base {",
+          '    open fun run(): String = "Base.run"',
+          '    open fun pick(): String = "Base.pick"',
+          '    open fun both(): String = "Base.both"',
+          "}",
+        ],
+        outer: [
+          "package app",
+          "",
+          "class Outer : Base() {",
+          '    override fun both(): String = "Outer.both"',
+          "",
+          "    fun go(): Base {",
+          "        return object : Base() {",
+          '            private val delegate = "v"',
+          "",
+          "            fun execute(): String {",
+          "                val zero = super.run()",
+          "                return zero + this.pick() + both() + delegate() + delegate",
+          "            }",
+          "",
+          '            private fun delegate(): String = "d"',
+          "        }",
+          "    }",
+          "}",
+        ],
+        needles: {
+          run: "fun run()",
+          zero: "val zero = super.run()",
+          tail: "return zero + this.pick()",
+          delegate: "private fun delegate()",
+        },
+      },
+    };
+    const where = (
+      lines: readonly string[],
+      needle: string,
+      token: string,
+      nth = 1,
+    ): { line: number; column: number } => {
+      const line = lines.findIndex((text) => text.includes(needle)) + 1;
+      let column = -1;
+      for (let seen = 0; seen < nth; seen += 1) column = lines[line - 1]!.indexOf(token, column + 1);
+      return { line, column: column + 1 };
+    };
+    for (const ext of ["java", "kt"] as const) {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-native-anonymous-owner-${ext}-`));
+      tempDirs.push(root);
+      const { base, outer, needles } = fixtures[ext];
+      const files = await writeFixtureFiles(root, {
+        [`app/Base.${ext}`]: `${base.join("\n")}\n`,
+        [`app/Outer.${ext}`]: `${outer.join("\n")}\n`,
+      });
+      const basePath = files[`app/Base.${ext}`]!;
+      const outerPath = files[`app/Outer.${ext}`]!;
+      const baseRun = where(base, needles.run, "run");
+      const sites = [
+        { ...where(outer, needles.zero, "run"), expected: `Base.${ext}:${baseRun.line}` },
+        { ...where(outer, needles.tail, "pick"), expected: `Base.${ext}:${where(base, "pick()", "pick").line}` },
+        // The anonymous body's inherited `both` precedes the enclosing class's override.
+        { ...where(outer, needles.tail, "both"), expected: `Base.${ext}:${where(base, "both()", "both").line}` },
+        // A call names the method beside the same-named field or property.
+        {
+          ...where(outer, needles.tail, "delegate"),
+          expected: `Outer.${ext}:${where(outer, needles.delegate, "delegate").line}`,
+        },
+      ];
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache });
+        for (const module of index.byFile.values()) {
+          expect(module.nativeOutcome).toBe("used");
+          expect(module.parseErrorRanges).toEqual([]);
+        }
+        for (const site of sites) {
+          const result = await goToDefinition(index, { file: outerPath, line: site.line, column: site.column });
+          expect(result.status).toBe("ok");
+          if (result.status === "ok") {
+            expect(`${path.basename(result.definition.file)}:${result.definition.range.start.line}`).toBe(
+              site.expected,
+            );
+          }
+        }
+        const references = await findReferences(index, { file: basePath, line: baseRun.line, column: baseRun.column });
+        expect(references.status).toBe("ok");
+        if (references.status === "ok") {
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(
+            references.references.some((site) => site.file === outerPath && site.range.start.line === sites[0]!.line),
+          ).toBe(true);
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        const targets = graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "execute")
+          .map((edge) => `${graph.nodes.get(edge.to)?.name}@${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`)
+          .sort();
+        expect(targets).toEqual([`both@Base.${ext}`, `delegate@Outer.${ext}`, `pick@Base.${ext}`, `run@Base.${ext}`]);
+      }
+    }
+  });
+
   it("keeps native Kotlin type parameters ahead of a same-named import alias after cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-type-parameters-"));
     tempDirs.push(root);

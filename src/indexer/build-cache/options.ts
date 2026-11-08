@@ -134,7 +134,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 136 rebuilds C# root lookup, records static-using directive positions for namespace precedence, and records
  * the non-generic types of the global namespace in each file's namespace facts.
  * Epoch 137 rebuilds detailed graphs and navigation where `super`, `this`, and bare member calls inside an anonymous
- * class or object body resolved through the enclosing type, and adds the `calls` edges that class expressions lacked.
+ * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
+ * binds a call to the method that shares its name with a field or property.
  */
 export const CORE_ALGORITHM_EPOCH = 137;
 /**

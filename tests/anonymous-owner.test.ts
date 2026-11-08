@@ -886,4 +886,159 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
     });
     expect(callTargets(fixture, "mixin.ts", "exercise")).toEqual([]);
   });
+
+  it("binds a call to the method that shares its name with a field or property, anonymous and named", async () => {
+    // The Java and Kotlin sources below compile unchanged with javac and kotlinc.
+    const sources = {
+      java: [
+        "package app;",
+        "",
+        "public class Holder {",
+        "    static class Adapter {",
+        '        public String read() { return "Adapter.read"; }',
+        "    }",
+        "",
+        "    public static class Wrapper {",
+        '        public String read() { return "Wrapper.read"; }',
+        "    }",
+        "",
+        "    public String viaAnonymous() {",
+        "        Wrapper wrapper = new Wrapper() {",
+        "            private Adapter delegate;",
+        "",
+        "            public String fetch() {",
+        "                return delegate().read() + this.delegate().read() + (delegate != null);",
+        "            }",
+        "",
+        "            private Adapter delegate() {",
+        "                if (delegate == null) delegate = new Adapter();",
+        "                return delegate;",
+        "            }",
+        "        };",
+        "        return wrapper.read();",
+        "    }",
+        "}",
+        "",
+        "class Named {",
+        "    private int size = 3;",
+        "",
+        "    int size() { return size + 1; }",
+        "",
+        "    int total() { return size() + this.size() + size + this.size; }",
+        "}",
+        "",
+        "class FieldOnly {",
+        "    private int count = 1;",
+        "",
+        "    int twice() { return count + this.count; }",
+        "}",
+      ],
+      kt: [
+        "package app",
+        "",
+        "class Adapter {",
+        '    fun read(): String = "Adapter.read"',
+        "}",
+        "",
+        "open class Wrapper {",
+        '    open fun read(): String = "Wrapper.read"',
+        "}",
+        "",
+        "class Holder {",
+        "    fun viaAnonymous(): Wrapper {",
+        "        return object : Wrapper() {",
+        "            private val delegate = Adapter()",
+        "",
+        "            fun fetch(): String = delegate().read() + this.delegate().read() + delegate.read()",
+        "",
+        "            private fun delegate(): Adapter = delegate",
+        "        }",
+        "    }",
+        "}",
+        "",
+        "class Named {",
+        "    private val size = 3",
+        "",
+        "    fun size(): Int = size + 1",
+        "",
+        "    fun total(): Int = size() + this.size() + size + this.size",
+        "}",
+        "",
+        "class FieldOnly {",
+        "    private val count = 1",
+        "",
+        "    fun twice(): Int = count + this.count",
+        "}",
+      ],
+    };
+    const needles = {
+      java: {
+        calls: "return delegate().read()",
+        method: "private Adapter delegate() {",
+        sizeMethod: "int size() {",
+        total: "int total()",
+        countField: "private int count = 1;",
+        twice: "int twice()",
+      },
+      kt: {
+        calls: "fun fetch()",
+        method: "private fun delegate()",
+        sizeMethod: "fun size()",
+        total: "fun total()",
+        countField: "private val count = 1",
+        twice: "fun twice()",
+      },
+    };
+    for (const ext of ["java", "kt"] as const) {
+      const file = `app/Holder.${ext}`;
+      const files: Record<string, string> = { [file]: `${sources[ext].join("\n")}\n` };
+      const fixture = await fixtureFor(`cg-same-name-member-${ext}-`, files);
+      const at = (needle: string): number => lineOf(files, file, needle);
+      const n = needles[ext];
+      const delegateMethod = { file, line: at(n.method) };
+      const sizeMethod = { file, line: at(n.sizeMethod) };
+      const countField = { file, line: at(n.countField) };
+      await assertSites(fixture, [
+        // A call names the method, never the field or property beside it, in an anonymous body and a named class.
+        {
+          file,
+          line: at(n.calls),
+          token: "delegate",
+          expected: delegateMethod,
+          edges: [{ label: "calls", from: { file, name: "fetch" } }],
+        },
+        {
+          file,
+          line: at(n.calls),
+          token: "delegate",
+          occurrence: 2,
+          expected: delegateMethod,
+          edges: [{ label: "calls", from: { file, name: "fetch" } }],
+        },
+        {
+          file,
+          line: at(n.total),
+          token: "size",
+          expected: sizeMethod,
+          edges: [{ label: "calls", from: { file, name: "total" } }],
+        },
+        {
+          file,
+          line: at(n.total),
+          token: "size",
+          occurrence: 2,
+          expected: sizeMethod,
+          edges: [{ label: "calls", from: { file, name: "total" } }],
+        },
+        // A name with no method beside it is unchanged.
+        { file, line: at(n.twice), token: "count", expected: countField },
+        { file, line: at(n.twice), token: "count", occurrence: 2, expected: countField },
+      ]);
+      expect(callTargets(fixture, file, "fetch").filter((name) => name === "delegate")).toEqual([
+        "delegate",
+        "delegate",
+      ]);
+      expect(callTargets(fixture, file, "total")).toEqual(["size", "size"]);
+    }
+  });
 });

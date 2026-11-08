@@ -2059,6 +2059,9 @@ export async function resolveMemberAccessDefinition(params: {
         keywordScope,
         false,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
+        undefined,
+        undefined,
+        memberAccessIsCall(sup.id, memberNode),
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -2101,6 +2104,9 @@ export async function resolveMemberAccessDefinition(params: {
         keywordScope,
         true,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
+        undefined,
+        undefined,
+        memberAccessIsCall(sup.id, memberNode),
       );
       if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
@@ -3120,6 +3126,7 @@ async function resolveKeywordReceiverMember(
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
   report?: KeywordMemberReport,
+  callSite = false,
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -3265,6 +3272,7 @@ async function resolveKeywordReceiverMember(
     useFile: mod.file,
     startAtAncestor,
     keepUniqueArityMismatch: !startAtAncestor,
+    callSite,
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
     normalizeIdentifier: current.context.sup.id === "swift" ? current.context.sup.normalizeIdentifier : undefined,
@@ -3490,6 +3498,17 @@ export async function resolveImplicitSelfMember(
   }
 }
 
+/** Whether the member access `memberNode` is the callee of a call (`this.size()`), where the language marks it. */
+function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boolean {
+  if (languageId === "java") return memberNode.type === "method_invocation";
+  const call = memberNode.parent;
+  if (languageId === "kotlin") return call?.type === "call_expression" && call.namedChildren[0]?.id === memberNode.id;
+  if (languageId === "csharp") {
+    return call?.type === "invocation_expression" && call.childForFieldName("function")?.id === memberNode.id;
+  }
+  return false;
+}
+
 /** The implicit-`this` member lookup in the owner that lexically encloses `anchor`; `undefined` leaves the name open. */
 async function resolveImplicitSelfAt(
   index: ProjectIndex,
@@ -3514,6 +3533,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     report,
+    languageId !== "swift",
   );
   if (member) return member;
   // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
@@ -3533,6 +3553,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     instanceReport,
+    true,
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;

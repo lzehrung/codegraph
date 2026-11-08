@@ -37,6 +37,11 @@ export type MemberSelectionOptions = {
   firstDeclarationWins?: boolean;
   /** Language-specific identifier equality; source names remain unchanged. */
   normalizeIdentifier?: ((name: string) => string) | undefined;
+  /**
+   * The use is a call. A field or property that shares a callable member's name at one lookup level is
+   * not what a call invokes, so the callable members decide. Without a callable member the level is unchanged.
+   */
+  callSite?: boolean;
 };
 
 /** Static and instance members have independent lookup chains in these languages. */
@@ -86,6 +91,16 @@ function distinctCandidates<Owner, Member>(
     selected.push(group[0]!);
   }
   return selected;
+}
+
+/** At a call site, drop same-named non-callable members of a level that also declares a callable one. */
+function preferCallables<Owner, Member>(
+  candidates: readonly Member[],
+  model: MemberModel<Owner, Member>,
+): readonly Member[] {
+  if (candidates.length < 2) return candidates;
+  const callables = candidates.filter((member) => model.callable(member));
+  return callables.length ? callables : candidates;
 }
 
 function memberNameMatches<Owner, Member>(
@@ -166,7 +181,8 @@ export function selectMember<Owner, Member>(
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
     }
-    const unique = distinctCandidates(candidates, model, options.argumentCount);
+    const distinct = distinctCandidates(candidates, model, options.argumentCount);
+    const unique = options.callSite ? preferCallables(distinct, model) : distinct;
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;
