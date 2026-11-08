@@ -5660,4 +5660,166 @@ describe("C# interface inheritance", () => {
       },
     );
   });
+
+  it("resolves a member a child interface inherits for navigation, references, and call edges alike", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-interface-members-"));
+    try {
+      const parent = [
+        "namespace A",
+        "{",
+        "    public interface IParent",
+        "    {",
+        "        int Run();",
+        "    }",
+        "}",
+        "",
+      ];
+      const child = [
+        "using A;",
+        "",
+        "namespace B",
+        "{",
+        "    public interface IChild : IParent",
+        "    {",
+        "        int Own() { return this.Run(); }",
+        "    }",
+        "}",
+        "",
+      ];
+      const use = [
+        "using B;",
+        "",
+        "namespace C",
+        "{",
+        "    public class Use",
+        "    {",
+        "        public int F(IChild c)",
+        "        {",
+        "            return c.Run();",
+        "        }",
+        "    }",
+        "}",
+        "",
+      ];
+      const decoy = [
+        "namespace Z",
+        "{",
+        "    public class Decoy",
+        "    {",
+        "        public int Run() { return 0; }",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "A/IParent.cs": parent.join("\n"),
+        "B/IChild.cs": child.join("\n"),
+        "C/Use.cs": use.join("\n"),
+        "Z/Decoy.cs": decoy.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // The receiver typed as the child interface, and `this` inside its default method, reach the parent's member and
+      // not the same-named decoy; a class would expose only its base class chain.
+      for (const [file, lines, line] of [
+        ["C/Use.cs", use, 9],
+        ["B/IChild.cs", child, 7],
+      ] as const) {
+        const result = await goToDefinition(index, { file: files[file]!, line, column: columnOf(lines, line, "Run") });
+        expect(result.status, file).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.file, file).toBe(files["A/IParent.cs"]);
+        expect(result.definition.range.start.line, file).toBe(5);
+      }
+      const refs = await findReferences(index, {
+        file: files["A/IParent.cs"]!,
+        line: 5,
+        column: columnOf(parent, 5, "Run"),
+      });
+      if (refs.status !== "ok") throw new Error("Expected references to IParent.Run");
+      expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refs.references
+          .map(
+            (reference) => `${path.relative(root, reference.file).replace(/\\/g, "/")}:${reference.range.start.line}`,
+          )
+          .sort(),
+      ).toEqual(["A/IParent.cs:5", "B/IChild.cs:7", "C/Use.cs:9"]);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => {
+          const from = graph.nodes.get(edge.from);
+          const to = graph.nodes.get(edge.to);
+          return `${from?.name}@${path.basename(from?.file ?? "")}->${to?.name}@${path.basename(to?.file ?? "")}`;
+        })
+        .sort();
+      expect(calls).toEqual(["F@Use.cs->Run@IParent.cs", "Own@IChild.cs->Run@IParent.cs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an overload that two base interfaces both declare ambiguous in navigation and the graph", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-interface-ambiguous-"));
+    try {
+      const lines = [
+        "public interface IA { int Run(int x); }",
+        "public interface IB { int Run(string s); }",
+        "public interface IC : IA, IB { }",
+        "public class Use",
+        "{",
+        "    public int F(IC c) { return c.Run(1); }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "All.cs": lines.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // Choosing between Run(int) and Run(string) needs argument types; arity alone leaves both candidates.
+      const result = await goToDefinition(index, {
+        file: files["All.cs"]!,
+        line: 6,
+        column: columnOf(lines, 6, "Run"),
+      });
+      expect(result.status).toBe("not_found");
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a member a class and both of its interfaces declare to each receiver's own type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-interface-class-members-"));
+    try {
+      const lines = [
+        "public interface IA { int Run(); }",
+        "public interface IB { int Run(); }",
+        "public class Widget : IA, IB { public int Run() { return 1; } }",
+        "public class Use",
+        "{",
+        "    public int F(Widget w, IA a, IB b) { return w.Run() + a.Run() + b.Run(); }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "All.cs": lines.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      // The class receiver stops at the class's own member; each interface receiver reaches its own interface only.
+      for (const [token, declarationLine] of [
+        ["w.Run", 3],
+        ["a.Run", 1],
+        ["b.Run", 2],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["All.cs"]!,
+          line: 6,
+          column: columnOf(lines, 6, token) + 2,
+        });
+        expect(result.status, token).toBe("ok");
+        if (result.status !== "ok") continue;
+        expect(result.definition.range.start.line, token).toBe(declarationLine);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

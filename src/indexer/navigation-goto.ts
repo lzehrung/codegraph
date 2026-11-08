@@ -2116,6 +2116,9 @@ async function baseRefsFromContainer(
   if (sup.id === "csharp") {
     const part = { file: mod.file, container, context: { source, tree, sup }, module: mod };
     const { parts } = await csharpTypeParts(index, part);
+    // A class exposes its base class chain only; an interface also exposes the members of its base interfaces.
+    if (container.type === "interface_declaration")
+      return superclassOnly ? [] : await csharpInterfaceBaseRefs(index, parts);
     const base = await csharpBaseClassRef(index, parts);
     return base && base !== "unproven" ? [base] : [];
   }
@@ -2728,6 +2731,29 @@ async function csharpBaseClassRef(
     baseClass = base;
   }
   return baseClass;
+}
+
+/**
+ * The project-declared interfaces a C# interface extends, across its `partial` parts. One unreadable, ambiguous, or
+ * unprovable entry leaves the walk empty instead of guessing among the others; `csharpBaseClassRef` keeps an interface
+ * container unproven for alias binding, so an inherited interface member never hides an alias.
+ */
+async function csharpInterfaceBaseRefs(
+  index: ProjectIndex,
+  parts: readonly KeywordClassRef[],
+): Promise<KeywordClassRef[]> {
+  const refs: KeywordClassRef[] = [];
+  for (const part of parts) {
+    const baseList = part.container.namedChildren.find((child) => child.type === "base_list");
+    if (!baseList) continue;
+    if (containerHeritageIsUnproven(part.container, part.context.source, part.context.sup)) return [];
+    for (const baseNode of baseList.namedChildren) {
+      const base = await csharpDeclaredBaseRef(index, part, baseNode);
+      if (base === "unproven") return [];
+      if (base?.container.type === "interface_declaration") refs.push(base);
+    }
+  }
+  return refs;
 }
 
 /**
