@@ -1,4 +1,5 @@
 import fsp, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { parseRustImportStatements } from "../../src/languages/import-statement-parsers.js";
@@ -2560,3 +2561,5 @@ describe("Rust restricted visibility forms", () => {
     }
   });
 });
+
+describeTypeParameterReceiverRows("rust", "Rust type parameter beside a same-named struct");

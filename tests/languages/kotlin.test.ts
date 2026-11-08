@@ -26,6 +26,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
@@ -2329,3 +2330,4 @@ describe("Kotlin interface inheritance", () => {
     }
   });
 });
+describeTypeParameterReceiverRows("kotlin", "Kotlin type parameter beside a same-named class");

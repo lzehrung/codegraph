@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -2347,3 +2348,5 @@ describe("C++ qualified base calls", () => {
     }
   });
 });
+
+describeTypeParameterReceiverRows("cpp", "C++ template parameter beside a same-named class");

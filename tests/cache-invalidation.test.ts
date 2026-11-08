@@ -2661,6 +2661,74 @@ describe("Cache invalidation and strict hashing", () => {
     const openUse = await goToDefinition(rebuilt, { file: use, line: 3, column: useLine.indexOf("Open") + 1 });
     expect(openUse.status === "ok" && path.basename(openUse.definition.file)).toBe("Open.java");
   });
+
+  it("rebuilds module rows with a malformed type-parameter flag", async () => {
+    const root = await mkTmpDir("dg-type-parameter-row-");
+    const main = path.join(root, "Main.kt");
+    await fsp.mkdir(path.join(root, "lib"), { recursive: true });
+    await fsp.writeFile(path.join(root, "lib", "T.kt"), "package lib\nclass T { fun hello() = 1 }\n", "utf8");
+    const useLine = "fun use() { val t = T(); t.hello() }";
+    await fsp.writeFile(main, `import lib.T\n\nfun <T> f(x: T) = x\n${useLine}\n`, "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const signature = readModuleCacheSignature(root, main);
+    if (!signature) throw new Error("expected cached Kotlin module");
+    const normalizedFile = normalize(path.resolve(main));
+    buildCache.closeDiskCacheDatabase(root, { cache: "disk" });
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      const row = db.prepare("SELECT payload FROM module_cache WHERE file = ?").get(cacheFile(root, main)) as {
+        payload: Uint8Array;
+      };
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as {
+        locals: Array<{ localName: string; kind: string; typeParameter?: unknown }>;
+      };
+      const local = parsed.locals.find((entry) => entry.localName === "T" && entry.kind === "type");
+      if (!local) throw new Error("expected the type parameter in the cached module");
+      expect(local.typeParameter).toBe(true);
+      local.typeParameter = "yes";
+      db.prepare("UPDATE module_cache SET payload = ? WHERE file = ?").run(
+        brotliCompressSync(JSON.stringify(parsed)),
+        cacheFile(root, main),
+      );
+    } finally {
+      db.close();
+    }
+    expect(await buildCache.tryLoadFromCache(root, normalizedFile, signature, { cache: "disk" })).toBeNull();
+    const rebuilt = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const member = await goToDefinition(rebuilt, { file: main, line: 4, column: useLine.lastIndexOf("hello") + 1 });
+    expect(member.status === "ok" && path.basename(member.definition.file)).toBe("T.kt");
+  });
+
+  it("rejects a project snapshot with a malformed type-parameter flag", async () => {
+    const root = await mkTmpDir("dg-type-parameter-snapshot-");
+    const main = path.join(root, "Main.kt");
+    await fsp.mkdir(path.join(root, "lib"), { recursive: true });
+    await fsp.writeFile(path.join(root, "lib", "T.kt"), "package lib\nclass T { fun hello() = 1 }\n", "utf8");
+    const useLine = "fun use() { val t = T(); t.hello() }";
+    await fsp.writeFile(main, `import lib.T\n\nfun <T> f(x: T) = x\n${useLine}\n`, "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = await readProjectSnapshot(snapshotPath);
+    embedSqliteModulesInSnapshot(root, snapshot);
+    const modules = snapshot.modules as Array<{ locals: Array<{ localName: string; typeParameter?: unknown }> }>;
+    const parameter = modules.flatMap((module) => module.locals).find((local) => local.typeParameter === true);
+    if (!parameter) throw new Error("expected the type parameter in the project snapshot");
+    parameter.typeParameter = "yes";
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    const report: BuildReport = { timings: {} };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+      expect(
+        report.manifest?.corruptions?.some((entry) => entry.artifact.endsWith("project-index-snapshot.json")),
+      ).toBe(true);
+      const member = await goToDefinition(rebuilt, { file: main, line: 4, column: useLine.lastIndexOf("hello") + 1 });
+      expect(member.status === "ok" && path.basename(member.definition.file)).toBe("T.kt");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
   it("rejects a project snapshot missing indexed callable identity", async () => {
     const root = await mkTmpDir("dg-callable-identity-snapshot-");
     const file = path.join(root, "entry.ts");

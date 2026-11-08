@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-08T04:37:35.363Z",
+  "generatedAt": "2026-11-08T04:57:18.390Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1287,
+  "numTotalTests": 1367,
   "numFailedTests": 0,
   "languages": [
     {
@@ -44,8 +44,8 @@
       "files": [
         "tests/languages/csharp.test.ts"
       ],
-      "tests": 283,
-      "passed": 283,
+      "tests": 291,
+      "passed": 291,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -55,8 +55,8 @@
       "files": [
         "tests/languages/cpp.test.ts"
       ],
-      "tests": 50,
-      "passed": 50,
+      "tests": 78,
+      "passed": 78,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -77,8 +77,8 @@
       "files": [
         "tests/languages/go.test.ts"
       ],
-      "tests": 17,
-      "passed": 17,
+      "tests": 29,
+      "passed": 29,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 66,
-      "passed": 66,
+      "tests": 70,
+      "passed": 70,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 61,
-      "passed": 61,
+      "tests": 69,
+      "passed": 69,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -187,8 +187,8 @@
       "files": [
         "tests/languages/python.test.ts"
       ],
-      "tests": 76,
-      "passed": 76,
+      "tests": 80,
+      "passed": 80,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -220,8 +220,8 @@
       "files": [
         "tests/languages/rust.test.ts"
       ],
-      "tests": 71,
-      "passed": 71,
+      "tests": 75,
+      "passed": 75,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -264,8 +264,8 @@
       "files": [
         "tests/languages/swift.test.ts"
       ],
-      "tests": 31,
-      "passed": 31,
+      "tests": 35,
+      "passed": 35,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -286,8 +286,8 @@
       "files": [
         "tests/languages/tsx.test.ts"
       ],
-      "tests": 11,
-      "passed": 11,
+      "tests": 15,
+      "passed": 15,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -297,8 +297,8 @@
       "files": [
         "tests/languages/typescript.test.ts"
       ],
-      "tests": 21,
-      "passed": 21,
+      "tests": 25,
+      "passed": 25,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

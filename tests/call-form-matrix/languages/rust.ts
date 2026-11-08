@@ -3,6 +3,7 @@
  * below states why two forms have no cell.
  */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 export const rustOmissions: readonly CallFormOmission[] = [
   {
@@ -304,4 +305,5 @@ export const rustCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.rs", fromName: "nested" },
   },
+  typeParameterReceiverCell("rust"),
 ];

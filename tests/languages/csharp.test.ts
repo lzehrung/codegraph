@@ -65,6 +65,7 @@ import {
 } from "../helpers/duplicate-declaration-import-fixture.js";
 import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 import { CSHARP_SCOPE_READ_FILES, CSHARP_SCOPE_READ_LINES } from "../helpers/scope-binding-read-fixtures.js";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -5823,3 +5824,4 @@ describe("C# interface inheritance", () => {
     }
   });
 });
+describeTypeParameterReceiverRows("csharp", "C# type parameter beside a same-named class");

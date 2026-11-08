@@ -1474,6 +1474,7 @@ function capitalizedTypeReceiverName(sup: LanguageSupport, receiver: SyntaxNodeL
 
 /** Whether a resolved definition can declare callable members. */
 export function declaresMembers(def: SymbolDef): boolean {
+  if (def.typeParameter) return false;
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
 }
 

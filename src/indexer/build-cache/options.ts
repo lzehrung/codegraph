@@ -120,8 +120,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 130 rebuilds detailed graphs that record interface inheritance as `extends` (now also for Java and TypeScript),
  * C# interfaces declared in other files as `implements`, Kotlin interfaces as interface symbols, and each type's base
  * clause from its own declaration instead of a nested type's.
+ * Epoch 131 rebuilds symbols that mark a generic type parameter and the detailed graphs whose receiver calls resolved a
+ * type-parameter receiver to a same-named class.
  */
-export const CORE_ALGORITHM_EPOCH = 130;
+export const CORE_ALGORITHM_EPOCH = 131;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

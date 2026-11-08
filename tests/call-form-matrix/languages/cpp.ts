@@ -1,5 +1,6 @@
 /** C++ call-form cells (docs/plans/2026-09-28-unified-name-resolution.md, Step 1). */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const cppOmissions: readonly CallFormOmission[] = [];
@@ -303,4 +304,5 @@ export const cppCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.cpp", fromName: "nested" },
   },
+  typeParameterReceiverCell("cpp"),
 ];

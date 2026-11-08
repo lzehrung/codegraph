@@ -3,6 +3,7 @@
  * below states why three forms have no cell.
  */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 export const goOmissions: readonly CallFormOmission[] = [
   {
@@ -268,4 +269,5 @@ export const goCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.go", fromName: "nested" },
   },
+  typeParameterReceiverCell("go"),
 ];

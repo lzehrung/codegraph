@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -816,3 +817,4 @@ describe("TypeScript interface inheritance", () => {
     }
   });
 });
+describeTypeParameterReceiverRows("ts", "TypeScript type parameter beside a same-named class");

@@ -104,6 +104,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Private base methods are not inherited, and a static context has no target.
 - A same-name use with several candidates or an unproven receiver makes coverage `partial`; an unbound name does not.
 - A classified receiver (`new Widget()`, a type name, `this`) excludes a use only when its type and every supertype resolve.
+- A generic type parameter is a type variable, never a class, in Kotlin, C#, Go, Java, TypeScript, TSX, Rust, Swift, Python (PEP 695), and C++ templates. A receiver typed by `T` beside a class `T` gives no member target, no call edge, and no reference; reference coverage stays `partial`. A constructed or declared `T` outside the generic scope still resolves to the class. The rule covers function, method, class, impl, and `template` parameters, Go receiver parameters (`func (b Box[T])`) and shared constraints (`[K, V I]`); bounds are not solved.
 
 ### Calls and call compatibility
 

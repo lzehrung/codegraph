@@ -7,6 +7,7 @@ import { normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
@@ -493,3 +494,5 @@ describe("Go same-package peer visibility", () => {
     }
   });
 });
+
+describeTypeParameterReceiverRows("go", "Go type parameter beside a same-named type");
