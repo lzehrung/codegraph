@@ -9,6 +9,7 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
+import type { LambdaReceiverCache } from "../indexer/kotlin-lambda-receiver.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
@@ -564,6 +565,14 @@ export async function buildSymbolGraphDetailed(
         if (enclosing) return indexedOrNull(enclosing.status === "member" ? enclosing.member : null);
         return indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
       };
+      // A lambda's receiver comes from its callee's declaration, resolved as go-to-definition resolves that callee.
+      // Receivers proven for this file's lambdas are shared by every call the walk settles in it.
+      const lambdaReceivers: LambdaReceiverCache = new Map();
+      const resolveLambdaCallee = (callee: SyntaxNodeLike): Promise<SymbolDef | null> => {
+        if (callee.parent?.type === "navigation_expression") return edgePassContext.resolveMemberAccessTarget(callee);
+        const calleeName = src.slice(callee.startIndex, callee.endIndex);
+        return settleName(calleeName, callee, resolveName(calleeName, callee));
+      };
       const settleName = async (
         name: string,
         node: SyntaxNodeLike,
@@ -574,6 +583,8 @@ export async function buildSymbolGraphDetailed(
           requireAcceptedArity: true,
           recoverIncludedStar: (lookupName, cNamespace) =>
             recoverIncludedCallableStar(index, moduleEntry, sup.id, lookupName, cNamespace, node, src),
+          resolveCallee: resolveLambdaCallee,
+          lambdaReceivers,
         });
         return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };

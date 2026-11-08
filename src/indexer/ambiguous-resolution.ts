@@ -27,6 +27,11 @@ export const AMBIGUOUS_RECEIVER_MEMBER_REASON = "No unique receiver member";
  * `Base::run`) and it is deliberately absent from the ambiguous reasons: reference coverage stays complete.
  */
 export const INAPPLICABLE_RECEIVER_MEMBER_REASON = "No applicable receiver member";
+/**
+ * A Kotlin lambda that may have an implicit receiver encloses the call, and that receiver's members are not indexed
+ * (an external type, an unresolved callee, an overload set), so the receiver may declare the name before the enclosing type.
+ */
+export const UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON = "Kotlin lambda receiver may declare this member";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -37,6 +42,7 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   AMBIGUOUS_RECEIVER_MEMBER_REASON,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
 ]);
 
 export function isAmbiguousResolutionReason(reason: string | undefined): boolean {

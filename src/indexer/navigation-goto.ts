@@ -3624,6 +3624,76 @@ async function resolveImplicitSelfAt(
   return instance || instanceReport.named ? null : undefined;
 }
 
+/** Kotlin members of `Any`, with their parameter counts: every receiver has them and no project type declares them. */
+const KOTLIN_ANY_MEMBER_ARITY: Readonly<Record<string, number>> = { equals: 1, hashCode: 0, toString: 0 };
+
+/** What a typed implicit receiver, such as a Kotlin lambda's, says about a bare call named `member`. */
+export type ReceiverTypeMember =
+  | { status: "member"; member: SymbolDef }
+  /** The type may declare it: an overload set the argument count does not settle, a hidden member, or an unindexed supertype. */
+  | { status: "unproven" }
+  /** The type and every supertype lack it, so lookup continues with the next receiver. */
+  | { status: "omitted" };
+
+/**
+ * Looks `member` up on `receiver`, the type of an implicit receiver, the way an explicit receiver of that type is
+ * looked up: the type's own and inherited members, then extensions declared beside it. A miss is `omitted` only when
+ * the whole hierarchy is indexed and lacks the name, so the caller may continue to the next receiver.
+ */
+export async function lookupReceiverTypeMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  receiver: SymbolDef,
+  member: string,
+  argumentCount: number | undefined,
+): Promise<ReceiverTypeMember> {
+  const unproven: ReceiverTypeMember = { status: "unproven" };
+  if (!declaresMembers(receiver)) return unproven;
+  const context = await ensureParsedContextForIndex(index, receiver.file);
+  const targetModule = index.byFile.get(fileIdentityKey(receiver.file));
+  const position = toTreeSitterPosition(receiver.range.start);
+  const container = context.tree.rootNode.descendantForPosition(position, position).parent;
+  if (!targetModule || !container) return unproven;
+  const report = { named: false, ambiguous: false };
+  let found = await resolveKeywordReceiverMember(
+    index,
+    mod,
+    use,
+    member,
+    "any",
+    false,
+    argumentCount,
+    receiver,
+    report,
+  );
+  if (!found && !report.named) {
+    found = await findReceiverMemberDefinition(
+      index,
+      targetModule.locals,
+      member,
+      receiver,
+      container,
+      context,
+      context.sup.normalizeIdentifier,
+      "any",
+      argumentCount,
+    );
+  }
+  if (found) {
+    const foundContext =
+      fileIdentityKey(found.file) === fileIdentityKey(receiver.file)
+        ? context
+        : await ensureParsedContextForIndex(index, found.file);
+    return crossFilePeerMemberHidden(mod.file, found, foundContext) ? unproven : { status: "member", member: found };
+  }
+  if (report.named) return unproven;
+  const anyName = normalizeKotlinIdentifier(member);
+  const anyArity = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, anyName) ? KOTLIN_ANY_MEMBER_ARITY[anyName] : undefined;
+  if (anyArity !== undefined && (argumentCount === undefined || argumentCount === anyArity)) return unproven;
+  return (await hierarchyOmitsMember(index, receiver, member, "any", new Set())) ? { status: "omitted" } : unproven;
+}
+
 /**
  * What C# simple-name lookup finds for the name of a using alias before it reaches the alias: a member of an
  * enclosing type (its own, a `partial` part's, or a non-private one inherited from a base class), or nothing. `member`

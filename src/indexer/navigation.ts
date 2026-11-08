@@ -417,6 +417,12 @@ export async function goToDefinition(
     const settled = await settleNameResolution(use, resolution, {
       recoverIncludedStar: (lookupName, cNamespace) =>
         recoverIncludedCallableStar(index, mod, sup.id, lookupName, cNamespace, node, source),
+      // A lambda's receiver comes from its callee's declaration, which go-to-definition resolves at the callee.
+      resolveCallee: async (callee) => {
+        const { line: calleeLine, column: calleeColumn } = toRange(callee).start;
+        const resolved = await goToDefinition(index, { file, line: calleeLine, column: calleeColumn }, context);
+        return resolved.status === "ok" ? resolved.definition : null;
+      },
     });
     if (settled) return settled;
   }
