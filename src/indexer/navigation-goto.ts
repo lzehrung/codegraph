@@ -131,6 +131,7 @@ import {
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
   AMBIGUOUS_RECEIVER_MEMBER_REASON,
+  INAPPLICABLE_RECEIVER_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -2227,7 +2228,7 @@ export async function resolveMemberAccessDefinition(params: {
             targetContext.sup.id === "php" ||
             targetContext.sup.id === "swift";
           if (hierarchyLanguage && declaresMembers(objDef) && !receiver.runtimeTypeOnly) {
-            const report = { named: false, ambiguous: false };
+            const report: KeywordMemberReport = { named: false, ambiguous: false };
             memberDef = await resolveKeywordReceiverMember(
               index,
               mod,
@@ -2239,7 +2240,14 @@ export async function resolveMemberAccessDefinition(params: {
               objDef,
               report,
             );
-            if (!memberDef && report.named) return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
+            if (!memberDef && report.named) {
+              // Two members that both fit leave the target open. Named members that all reject the call hide the name
+              // from the rest of the hierarchy, so the use is no candidate for a hidden declaration.
+              const reason = report.inapplicable
+                ? INAPPLICABLE_RECEIVER_MEMBER_REASON
+                : AMBIGUOUS_RECEIVER_MEMBER_REASON;
+              return { status: "not_found", reason };
+            }
           }
           if (
             !memberDef &&
@@ -3124,7 +3132,7 @@ async function baseRefsFromContainer(
 }
 
 /** What a hierarchy member walk saw, for callers that must not fall back past it. */
-type KeywordMemberReport = { named: boolean; ambiguous: boolean };
+type KeywordMemberReport = { named: boolean; ambiguous: boolean; inapplicable?: boolean };
 
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
@@ -3304,6 +3312,7 @@ async function resolveKeywordReceiverMember(
   if (report) {
     report.named = selected.named;
     report.ambiguous = selected.status === "ambiguous";
+    report.inapplicable = selected.status === "ambiguous" && !!selected.inapplicable;
   }
   return selected.status === "unique" ? selected.member : undefined;
 }

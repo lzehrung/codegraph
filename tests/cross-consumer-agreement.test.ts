@@ -339,6 +339,41 @@ const cppAmbiguousOverload = {
   "use.cpp": src(['#include "api.hpp"', "int g() { return f(1); }", "int h() { return f(1.5); }"]),
 };
 
+/**
+ * Valid C++ picks one of Derived's `run` overloads by parameter type; codegraph does not rank overloads. Derived hides
+ * `Base::run`, so only Derived's own overloads can be the target.
+ */
+const cppMemberAmbiguousOverload = {
+  "shapes.hpp": src([
+    "class Base {",
+    "public:",
+    "  int run(char c) { return 1; }",
+    "};",
+    "class Derived : public Base {",
+    "public:",
+    "  int run(int a) { return a; }",
+    "  int run(long a) { return 2; }",
+    "};",
+  ]),
+  "use.cpp": src(['#include "shapes.hpp"', "int callDerived(double x) {", "  Derived d;", "  return d.run(x);", "}"]),
+};
+
+/** Derived's `run` overloads hide `Base::run`, and neither takes zero arguments, so the call has no target. */
+const cppHidingOverloadsFitNoCall = {
+  "shapes.hpp": src([
+    "class Base {",
+    "public:",
+    "  int run() { return 1; }",
+    "};",
+    "class Derived : public Base {",
+    "public:",
+    "  int run(int a) { return a; }",
+    "  int run(int a, int b) { return a + b; }",
+    "};",
+  ]),
+  "use.cpp": src(['#include "shapes.hpp"', "int callDerived() {", "  Derived d;", "  return d.run();", "}"]),
+};
+
 const kotlinConstructorProperty = {
   "G.kt": src([
     "class Gadget(val name: String) {",
@@ -976,6 +1011,29 @@ const rows: AgreementRow[] = [
     undefined,
     {
       declaration: { file: "api.hpp", line: 1, token: "f" },
+    },
+  ),
+  useRow(
+    "C++ member call that fits several overloads of the derived class",
+    "C++",
+    cppMemberAmbiguousOverload,
+    { file: "use.cpp", line: 4, token: "run" },
+    "not_found",
+    undefined,
+    {
+      declaration: { file: "shapes.hpp", line: 7, token: "run" },
+    },
+  ),
+  useRow(
+    "C++ derived overloads that hide the base member and fit no call",
+    "C++",
+    cppHidingOverloadsFitNoCall,
+    { file: "use.cpp", line: 4, token: "run" },
+    "not_found",
+    calls("use.cpp", "callDerived"),
+    {
+      declaration: { file: "shapes.hpp", line: 3, token: "run" },
+      provenNonReference: "Derived's run overloads hide Base::run, so the call cannot name it",
     },
   ),
 

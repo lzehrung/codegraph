@@ -23,7 +23,12 @@ export type MemberModel<Owner, Member> = {
 export type MemberSelection<Member> =
   | { status: "none"; named: false }
   | { status: "unique"; named: true; member: Member }
-  | { status: "ambiguous"; named: true };
+  | {
+      status: "ambiguous";
+      named: true;
+      /** Every named member rejects the call and none stands in for it: the name is hidden, not contested. */
+      inapplicable?: true;
+    };
 
 export type MemberSelectionOptions = {
   name: string;
@@ -217,15 +222,15 @@ export function selectMember<Owner, Member>(
           match = member;
         }
         if (match !== undefined) return { status: "unique", named: true, member: match };
-        if (
-          options.keepUniqueArityMismatch &&
-          unique.length === 1 &&
-          (!model.invocationArity || distinct.length === 1) &&
-          !hasNamedAncestor(level, model, options, queryName)
-        ) {
+        // No member accepts the call. A lone mismatched member still stands in for it unless an ancestor declares
+        // the name too, which leaves the target open instead of proving the name hidden.
+        const loneArityMismatch =
+          options.keepUniqueArityMismatch && unique.length === 1 && (!model.invocationArity || distinct.length === 1);
+        if (loneArityMismatch) {
+          if (hasNamedAncestor(level, model, options, queryName)) return { status: "ambiguous", named: true };
           return { status: "unique", named: true, member: unique[0]! };
         }
-        return { status: "ambiguous", named: true };
+        return { status: "ambiguous", named: true, inapplicable: true };
       }
     }
     if (overloadState) {
@@ -275,5 +280,5 @@ export function selectMember<Owner, Member>(
     return { status: "unique", named: true, member: overloadState.accepted[0]!.member };
   if (overloadState && overloadState.accepted.length > 1) return { status: "ambiguous", named: true };
   if (lenient !== undefined) return { status: "unique", named: true, member: lenient };
-  return named ? { status: "ambiguous", named: true } : { status: "none", named: false };
+  return named ? { status: "ambiguous", named: true, inapplicable: true } : { status: "none", named: false };
 }

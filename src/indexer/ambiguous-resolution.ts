@@ -19,8 +19,14 @@ export const UNPROVEN_CSHARP_ALIAS_MEMBER_REASON = "C# alias may be hidden by a 
 export const AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON = "No unique applicable C# member before using alias";
 /** An implicit receiver has multiple viable or unproven same-name member candidates. */
 export const AMBIGUOUS_IMPLICIT_MEMBER_REASON = "No unique member through the implicit receiver";
-/** A known receiver declares the name, but no unique member can be selected. */
+/** A known receiver declares the name, but its members compete for the call or leave the target unproven. */
 export const AMBIGUOUS_RECEIVER_MEMBER_REASON = "No unique receiver member";
+/**
+ * A known receiver declares the name, but none of its members accepts the call. The members hide the name from the
+ * rest of the hierarchy, so the use is not a candidate for a hidden declaration (C++ `Derived::run` hiding
+ * `Base::run`) and it is deliberately absent from the ambiguous reasons: reference coverage stays complete.
+ */
+export const INAPPLICABLE_RECEIVER_MEMBER_REASON = "No applicable receiver member";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
