@@ -16,10 +16,9 @@ export type DeferredNameRequest =
   /** A member of the enclosing type, found through `this`/`self`. */
   | { kind: "implicit-self-member"; lookupName: string }
   /**
-   * A Kotlin lambda between the call and its enclosing type may carry an implicit receiver whose members come first.
-   * `lambdas` are those lambdas, innermost first.
+   * Kotlin lambda and extension-body receivers between the call and its enclosing type, innermost first.
    */
-  | { kind: "kotlin-lambda-receiver-member"; lookupName: string; lambdas: readonly SyntaxNodeLike[] }
+  | { kind: "kotlin-lambda-receiver-member"; lookupName: string; receivers: readonly SyntaxNodeLike[] }
   /** An enclosing C# member (only a nested type in type positions) binds before a using alias of that name. */
   | { kind: "csharp-alias-member"; lookupName: string }
   /** A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it. */

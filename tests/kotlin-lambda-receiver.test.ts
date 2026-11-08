@@ -51,6 +51,7 @@ const DSL = [
   "class Rendered { val render: Transform = makeTransform() }",
   "class Formatted { val format: Invoker = Invoker() }",
   "class Ringed { val ring: Int = 1 }",
+  "class Gauge { val reading: Int = 1 }",
   "",
   "typealias Transform = (String) -> String",
   "fun makeTransform(): Transform = { it }",
@@ -76,6 +77,8 @@ const DSL = [
   "fun rendered(block: Rendered.() -> Unit) { Rendered().block() }",
   "fun formatted(block: Formatted.() -> Unit) { Formatted().block() }",
   "fun ringed(block: Ringed.() -> Unit) { Ringed().block() }",
+  "fun Gauge.reading(tag: String): String = tag",
+  "fun gauge(block: Gauge.() -> Unit) { Gauge().block() }",
   "",
 ].join("\n");
 
@@ -94,6 +97,7 @@ const OWNER = [
   "    fun action(tag: String): String = tag",
   "    fun transform(tag: String): String = tag",
   "    fun operation(tag: String): String = tag",
+  "    fun reading(tag: String): Int = tag.length",
   "",
   '    fun viaBuild() { build { stamp("viaBuild") } }',
   '    fun viaBuildTwo() { buildTwo(1) { stamp("viaBuildTwo") } }',
@@ -121,6 +125,8 @@ const OWNER = [
   '    fun viaRenderedProperty() { rendered { render("viaRenderedProperty") } }',
   '    fun viaFormattedProperty() { formatted { format("viaFormattedProperty") } }',
   '    fun viaRingedProperty() { ringed { ring("viaRingedProperty") } }',
+  '    fun viaGaugeExtension() { gauge { reading("viaGaugeExtension") } }',
+  '    fun Gauge.viaGaugeBody() { reading("viaGaugeBody") }',
   '    fun viaFallThrough(b: Builder) { b.apply { own("viaFallThrough") } }',
   '    fun viaLocal() { build { fun stamp(tag: String) {}; stamp("viaLocal") } }',
   '    fun viaPlain() { plain { b -> stamp("viaPlain") } }',
@@ -185,12 +191,15 @@ const THIS = [
   "    fun action(tag: String): String = tag",
   "    fun transform(tag: String): String = tag",
   "    fun operation(tag: String): String = tag",
+  "    fun reading(tag: String): Int = tag.length",
   "",
   '    fun viaThis() { build { this.stamp("viaThis") } }',
   '    fun viaThisLabeled() { labeled { this.label("viaThisLabeled") } }',
   '    fun viaThisTypedProperty() { typed { this.action("viaThisTypedProperty") } }',
   '    fun viaThisConvertedProperty() { converted { this.transform("viaThisConvertedProperty") } }',
   '    fun viaThisOperatedProperty() { operated { this.operation("viaThisOperatedProperty") } }',
+  '    fun viaThisGaugeExtension() { gauge { this.reading("viaThisGaugeExtension") } }',
+  '    fun Gauge.viaThisGaugeBody() { this.reading("viaThisGaugeBody") }',
   '    fun viaThisApply(b: Builder) { b.apply { this.stamp("viaThisApply") } }',
   '    fun viaThisNested() { with(Other()) { build { this.stamp("viaThisNested") } } }',
   '    fun viaThisNestedOther() { build { with(Other()) { this.stamp("viaThisNestedOther") } } }',
@@ -238,6 +247,9 @@ const OWNER_TRANSFORM = { file: "app/Owner.kt", line: lineOf(OWNER, "fun transfo
 const OWNER_OPERATION = { file: "app/Owner.kt", line: lineOf(OWNER, "fun operation("), token: "operation(" };
 const OWNER_RING = { file: "app/Owner.kt", line: lineOf(OWNER, "fun ring("), token: "ring(" };
 const RINGED_RING = { file: "app/Dsl.kt", line: lineOf(DSL, "class Ringed"), token: "ring" };
+const GAUGE_READING = { file: "app/Dsl.kt", line: lineOf(DSL, "fun Gauge.reading("), token: "reading(" };
+const OWNER_READING = { file: "app/Owner.kt", line: lineOf(OWNER, "fun reading("), token: "reading(" };
+const HOLDER_READING = { file: "app/This.kt", line: lineOf(THIS, "fun reading("), token: "reading(" };
 const HOLDER_TRANSFORM = { file: "app/This.kt", line: lineOf(THIS, "fun transform("), token: "transform(" };
 const HOLDER_OPERATION = { file: "app/This.kt", line: lineOf(THIS, "fun operation("), token: "operation(" };
 
@@ -389,6 +401,16 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
     });
   });
 
+  describe("binds an extension on the receiver when a plain property of the name cannot take the call", () => {
+    const cases: Array<[string, string, Target, Target]> = [
+      ["viaGaugeExtension", "a lambda receiver", GAUGE_READING, OWNER_READING],
+      ["viaGaugeBody", "an extension function body", GAUGE_READING, OWNER_READING],
+    ];
+    it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
+      await expectCall("app/Owner.kt", OWNER, caller, caller, target, decoy);
+    });
+  });
+
   describe("stays unproven when the receiver's members are unknown", () => {
     const decoyAppend = { file: "app/Careful.kt", line: lineOf(UNPROVEN, "fun append"), token: "append(" };
     const decoyPing = { file: "app/Careful.kt", line: lineOf(UNPROVEN, "fun ping"), token: "ping(" };
@@ -499,6 +521,8 @@ describe("an explicit this inside a lambda", () => {
     ["viaThisOutside", "no lambda at all", HOLDER_STAMP, BUILDER_STAMP],
     ["viaThisLabeled", "a call beside a same-named property of the receiver", LABELED_METHOD, HOLDER_LABEL],
     ["viaThisTypedProperty", "a function-typed property of the receiver", TYPED_ACTION, HOLDER_ACTION],
+    ["viaThisGaugeExtension", "a plain property beside an extension on the receiver", GAUGE_READING, HOLDER_READING],
+    ["viaThisGaugeBody", "an extension function body", GAUGE_READING, HOLDER_READING],
   ];
   it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
     await expectCall("app/This.kt", THIS, caller, caller, target, decoy);

@@ -39,7 +39,7 @@ import {
   csharpQualifiedThroughGenericOwner,
   definitionForBinding,
 } from "../navigation-local.js";
-import { enclosingLambdas } from "../kotlin-lambda-receiver.js";
+import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
@@ -356,15 +356,15 @@ export const kotlinLookupPolicy: NameLookupPolicy = {
   ...jvmLookupPolicy,
   wrapRest(state, rest) {
     if (!isImplicitSelfCall(state) || !bindsBelowLambdaReceivers(state)) return rest();
-    const lambdas = enclosingLambdas(state.use.node);
-    if (!lambdas.length) return rest();
+    const receivers = enclosingReceiverScopes(state.use.node);
+    if (!receivers.length) return rest();
     const resolution = rest();
     // A class or alias name is a constructor call, which no receiver's member can be.
     const named = definitionWithoutDeferredSteps(resolution);
     if (named && declaresMembers(named)) return resolution;
     return {
       status: "deferred",
-      request: { kind: "kotlin-lambda-receiver-member", lookupName: state.lookupName, lambdas },
+      request: { kind: "kotlin-lambda-receiver-member", lookupName: state.lookupName, receivers },
       fallback: resolution,
     };
   },

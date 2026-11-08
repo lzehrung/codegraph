@@ -58,6 +58,7 @@ import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callab
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { expectKotlinSecondaryConstructorSuperReferences } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
+import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "./helpers/kotlin-extension-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
@@ -126,6 +127,31 @@ import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixtu
 import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
 
 describe("declaration header reference namespaces", () => {
+  it("excludes Kotlin extension receiver calls from same-file lexical decoy references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_EXTENSION_RECEIVER_SOURCES);
+      const index = await indexer.buildProjectIndex(root, { cache: "off" });
+      for (const [file, line, column, expected] of [
+        ["model/Box.kt", 3, 9, [4, 8]],
+        ["app/Use.kt", 3, 5, [3]],
+        ["app/Use.kt", 6, 9, [6]],
+        ["app/Extensions.kt", 3, 9, [9]],
+      ] as const) {
+        const result = await findReferences(index, { file: files[file]!, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.referenceCoverage.state).toBe("complete");
+          expect(
+            result.references.filter((site) => site.file === files["app/Use.kt"]).map((site) => site.range.start.line),
+          ).toEqual(expected);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("includes C# default and constant-pattern reads without expired scope or alias matches", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-header-refs-"));
     try {

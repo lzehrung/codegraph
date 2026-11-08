@@ -107,6 +107,7 @@ import {
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
 } from "../util/member-access.js";
+import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberName,
@@ -149,7 +150,7 @@ import {
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
-import { kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
+import { kotlinCalleeUnderImplicitReceiver, kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
 import {
   isPythonDottedImportBinding,
@@ -1006,6 +1007,7 @@ async function findReferencesInternal(
       }
     }
   }
+  const kotlinExtension = isKotlinExtensionFunction(parsedContext, definition);
 
   const requiresSameFileVerifiedScan =
     ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
@@ -1013,7 +1015,8 @@ async function findReferencesInternal(
       !receiverMemberDefinition) ||
     scansNamespaceReferences ||
     requiresTypeScriptOverloadVerifiedScan ||
-    requiresRuntimeBindingVerifiedScan;
+    requiresRuntimeBindingVerifiedScan ||
+    kotlinExtension;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
@@ -1032,6 +1035,11 @@ async function findReferencesInternal(
         const position = toTreeSitterPosition(occurrence.start);
         const node = parsedContext.tree.rootNode.descendantForPosition(position, position);
         rubyQualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
+      }
+      // A bare Kotlin call under a lambda or extension body may bind to that implicit receiver instead of this scope.
+      if (isKotlinReceiverClaimableCall(parsedContext, occurrence)) {
+        memberCallOccurrencesNeedVerification = true;
+        continue;
       }
       // A scope occurrence is not proof of a member call. Languages that invoke a free
       // function that way verify the site; an unresolvable receiver stays unavailable.
@@ -2042,6 +2050,22 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
   const position = toTreeSitterPosition(def.range.start);
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
+}
+
+/** A Kotlin extension function: a bare call names it only when an implicit receiver of its type exists. */
+function isKotlinExtensionFunction(parsedContext: ParsedFileContext, def: SymbolDef): boolean {
+  if (parsedContext.sup.id !== "kotlin") return false;
+  const declaration = syntaxNodeForDefinition(parsedContext, def).parent;
+  return !!declaration && !!kotlinExtensionReceiverType(declaration);
+}
+
+/** A scope occurrence that is a bare Kotlin call under a lambda or extension body, which an implicit receiver may claim. */
+function isKotlinReceiverClaimableCall(parsedContext: ParsedFileContext, occurrence: Range): boolean {
+  const start = occurrence.start.index;
+  if (parsedContext.sup.id !== "kotlin" || start === undefined) return false;
+  return kotlinCalleeUnderImplicitReceiver(
+    parsedContext.tree.rootNode.descendantForIndex(start, occurrence.end.index ?? start),
+  );
 }
 
 /**

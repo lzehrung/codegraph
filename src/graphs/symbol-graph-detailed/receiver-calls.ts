@@ -31,7 +31,13 @@ import {
   receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
-import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
+import {
+  declarationMemberArity,
+  findFirstNodeByType,
+  isIdentifierType,
+  kotlinExtensionReceiverType,
+  PARAMETER_LIST_NODE_TYPES,
+} from "./ast.js";
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -796,11 +802,7 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
  */
 export function kotlinExtensionReceiverTypeNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   if (node.type !== "function_declaration") return null;
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-  const receiverType = node.namedChildren.find(
-    (child) => child.startIndex < nameNode.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
-  );
+  const receiverType = kotlinExtensionReceiverType(node);
   return receiverType ? unwrapNamedType(receiverType, sup) : null;
 }
 

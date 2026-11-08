@@ -42,6 +42,10 @@ import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/
 import { expectKotlinSecondaryConstructorSuperCalls } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
+  KOTLIN_EXTENSION_RECEIVER_LINES,
+  KOTLIN_EXTENSION_RECEIVER_SOURCES,
+} from "./helpers/kotlin-extension-receiver-fixture.js";
+import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
   QUALIFIED_TYPE_CASES,
@@ -113,6 +117,32 @@ import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixtu
 import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
 
 describe("Go to Definition", () => {
+  it("resolves Kotlin extension-body calls before enclosing and file decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-goto-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_EXTENSION_RECEIVER_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [line, token, target, declaration] of [
+        [4, "hit", "model/Box.kt", 3],
+        [8, "hit", "model/Box.kt", 3],
+        [9, "extra", "app/Extensions.kt", 3],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["app/Use.kt"]!,
+          line,
+          column: columnInLines(KOTLIN_EXTENSION_RECEIVER_LINES["app/Use.kt"], line, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(files[target]);
+          expect(result.definition.range.start.line).toBe(declaration);
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("separates C# declaration headers from default reads and restores aliases after loop and catch scopes", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-header-goto-"));
     try {

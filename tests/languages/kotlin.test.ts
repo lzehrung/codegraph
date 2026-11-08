@@ -31,6 +31,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
+import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "../helpers/kotlin-extension-receiver-fixture.js";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
@@ -1698,6 +1699,28 @@ describe("Kotlin same-package sibling classes", () => {
 });
 
 describe("Kotlin implicit-receiver precedence", () => {
+  it("attributes extension-body calls to receiver members and in-scope peer extensions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-body-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_EXTENSION_RECEIVER_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const mod of index.byFile.values()) expect(mod.parseErrorRanges).toEqual([]);
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [caller, target] of [
+        ["render", "model/Box.kt"],
+        ["display", "model/Box.kt"],
+        ["crossFile", "app/Extensions.kt"],
+      ] as const) {
+        const calls = graph.edges.filter(
+          (edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller,
+        );
+        expect(calls.map((edge) => graph.nodes.get(edge.to)?.file)).toEqual([files[target]]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("lets inherited, non-private members beat same-package and wildcard-imported functions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-inherited-member-"));
     try {

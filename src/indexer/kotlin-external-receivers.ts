@@ -151,6 +151,7 @@ const EXTERNAL_TYPE_ROWS: Readonly<Record<string, { groups: readonly string[]; o
 
 /** Types that share another row's names: subclasses that declare nothing of their own. */
 const EXTERNAL_TYPE_SAME_AS: Readonly<Record<string, string>> = {
+  "java.lang.StringBuilder": "kotlin.text.StringBuilder",
   "java.lang.Exception": "java.lang.Throwable",
   "java.lang.RuntimeException": "java.lang.Throwable",
   "java.lang.Error": "java.lang.Throwable",
@@ -163,6 +164,10 @@ const EXTERNAL_TYPE_SAME_AS: Readonly<Record<string, string>> = {
 
 /** The types a bare spelling names without an import: the default imports of `kotlin.*`, `kotlin.collections.*`, and `java.lang.*`. */
 const DEFAULT_IMPORT_TYPES: Readonly<Record<string, string>> = {
+  MutableList: "kotlin.collections.MutableList",
+  MutableSet: "kotlin.collections.MutableSet",
+  MutableMap: "kotlin.collections.MutableMap",
+  StringBuilder: "kotlin.text.StringBuilder",
   ArrayList: "java.util.ArrayList",
   LinkedHashMap: "java.util.LinkedHashMap",
   HashMap: "java.util.HashMap",

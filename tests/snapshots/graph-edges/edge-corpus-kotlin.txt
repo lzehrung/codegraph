@@ -72,6 +72,7 @@ symbol navigation/model/Records.kt::create@49:13 -[calls]-> navigation/model/Rec
 symbol navigation/model/Records.kt::create@49:13 -[member_of]-> navigation/model/Records.kt::Box@29:7
 symbol navigation/model/Records.kt::format@22:9 -[calls]-> navigation/model/Records.kt::render@12:5 site=22:42
 symbol navigation/model/Records.kt::format@22:9 -[member_of]-> navigation/model/Records.kt::Formatter@20:8
+symbol navigation/model/Records.kt::fromOuter@44:13 -[calls]-> navigation/model/Records.kt::read@34:9 site=44:44
 symbol navigation/model/Records.kt::fromOuter@44:13 -[member_of]-> navigation/model/Records.kt::Inner@39:17
 symbol navigation/model/Records.kt::outerValue@41:13 -[member_of]-> navigation/model/Records.kt::Inner@39:17
 symbol navigation/model/Records.kt::read@34:9 -[member_of]-> navigation/model/Records.kt::Box@29:7

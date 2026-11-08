@@ -1,9 +1,15 @@
 /**
- * Kotlin lambdas with an implicit receiver. A lambda passed where a function type with a receiver is expected
- * (`Builder.() -> Unit`, `x.apply { }`, `with(x) { }`) binds a bare call to a member of that receiver before any member
- * of the enclosing type, so `build { emit() }` calls `Builder.emit` even when the enclosing class declares an `emit`.
- * Receivers nest innermost first. A receiver that lacks the name, or whose member the call cannot reach, hands the
- * lookup to the next one, and finally to the enclosing type.
+ * Kotlin implicit receivers other than the enclosing type. A lambda passed where a function type with a receiver is
+ * expected (`Builder.() -> Unit`, `x.apply { }`, `with(x) { }`) binds a bare call to a member of that receiver before
+ * any member of the enclosing type, so `build { emit() }` calls `Builder.emit` even when the enclosing class declares an
+ * `emit`. The body and parameter defaults of an extension function, and the accessors of an extension property, run
+ * with the declared receiver as `this` the same way: `fun Builder.configure() { emit() }`. Receivers nest innermost
+ * first. A receiver that lacks the name, or whose member the call cannot reach, hands the lookup to the next one, and
+ * finally to the enclosing type.
+ *
+ * A project receiver type answers with its accessible members, then with the extensions in scope on it, searched scope
+ * by scope (an enclosing class or local scope, an explicit or alias import, the package, a star import): within one
+ * scope the extension declared on the most specific receiver type wins.
  *
  * What proves a lambda's receiver, from declarations and syntax, never from inferred expression types:
  * - a callee declared in the project names its parameter's type: a function type with a receiver (through a type alias)
@@ -24,6 +30,7 @@
  */
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   memberContainerDef,
   nearestMemberContainer,
@@ -43,10 +50,22 @@ import {
   resolveExternalType,
   UNIVERSAL_EXTENSION_NAMES,
 } from "./kotlin-external-receivers.js";
-import { declaredVisibility, lookupReceiverTypeMember, topLevelDeclarationInScope } from "./kotlin-receiver-members.js";
+import {
+  acceptsArgumentCount,
+  declaredVisibility,
+  lookupExternalReceiverExtension,
+  lookupReceiverTypeExtension,
+  lookupReceiverTypeMember,
+  topLevelDeclarationInScope,
+} from "./kotlin-receiver-members.js";
 import { kotlinPropertyInvocationArity } from "./member-selection.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
-import { declarationReaches, memberAcceptsCallAt, type ReceiverTypeMember } from "./navigation-goto.js";
+import {
+  declarationReaches,
+  implicitSelfCallee,
+  memberAcceptsCallAt,
+  type ReceiverTypeMember,
+} from "./navigation-goto.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import type { ParsedFileContext } from "./parse-context.js";
@@ -61,7 +80,7 @@ export type LambdaReceiver =
   /** An instance of a project class or interface, whose members can be searched. */
   | { kind: "type"; def: SymbolDef; nullable: boolean }
   /** A well-known type outside the project, with the names a bare call may bind to through it. */
-  | { kind: "external"; names: ReadonlySet<string> }
+  | { kind: "external"; fqn: string; names: ReadonlySet<string> }
   /** A receiver may exist, and its members are not in the index. */
   | { kind: "unproven" };
 
@@ -99,7 +118,6 @@ const UNPROVEN: LambdaReceiver = { kind: "unproven" };
 const UNPROVEN_VERDICT: LambdaReceiverVerdict = { status: "unproven" };
 const SHADOWED_VERDICT: LambdaReceiverVerdict = { status: "shadowed" };
 const NO_VERDICT: LambdaReceiverVerdict = { status: "none" };
-const OMITTED_MEMBER: ReceiverTypeMember = { status: "omitted" };
 
 /** What a receiver gives a call: its member, or a property of the name that its type may make callable. */
 type CalledMember = ReceiverTypeMember | { status: "maybe-invoked" };
@@ -225,6 +243,50 @@ export function enclosingLambdas(node: SyntaxNodeLike): SyntaxNodeLike[] {
     if (current.type === "lambda_literal") lambdas.push(current);
   }
   return lambdas;
+}
+
+/**
+ * The children of each receiver-carrying declaration whose expressions run with that receiver in scope: an extension
+ * function's body and parameter defaults, an anonymous function's body, and an extension property's accessors (the
+ * only parts of a property that run code).
+ */
+const RECEIVER_SCOPE_PARTS: Readonly<Record<string, Readonly<Record<string, true>>>> = {
+  function_declaration: { function_body: true, function_value_parameters: true },
+  anonymous_function: { function_body: true },
+  property_declaration: { getter: true, setter: true },
+};
+
+/** Whether `part`, a child of the declaration `owner`, runs with the receiver `owner` declares in scope. */
+function extensionReceiverReaches(owner: SyntaxNodeLike, part: SyntaxNodeLike): boolean {
+  if (!Object.hasOwn(RECEIVER_SCOPE_PARTS, owner.type)) return false;
+  if (!RECEIVER_SCOPE_PARTS[owner.type]?.[part.type]) return false;
+  return !!kotlinExtensionReceiverType(owner);
+}
+
+/**
+ * Implicit receivers between a use and its enclosing class, innermost first: the lambdas that may carry one, and the
+ * extension function, extension property, or anonymous function with a receiver whose receiver is `this` there. An
+ * extension receiver is in scope in the function body and parameter defaults or a property accessor, not in the rest of
+ * its declaration header.
+ */
+export function enclosingReceiverScopes(node: SyntaxNodeLike): SyntaxNodeLike[] {
+  const receivers: SyntaxNodeLike[] = [];
+  let child = node;
+  for (let current = node.parent; current; child = current, current = current.parent) {
+    if (CLASS_BODY_TYPES[current.type]) break;
+    if (current.type === "lambda_literal") receivers.push(current);
+    else if (extensionReceiverReaches(current, child)) receivers.push(current);
+  }
+  return receivers;
+}
+
+/**
+ * Whether `node` is the callee of a bare call that a lambda's or extension's implicit receiver may claim before the
+ * lexical binding: a receiverless call under a lambda or extension body.
+ */
+export function kotlinCalleeUnderImplicitReceiver(node: SyntaxNodeLike): boolean {
+  const isBareCallee = implicitSelfCallee("kotlin", node.parent ?? node)?.id === node.id;
+  return isBareCallee && !!enclosingReceiverScopes(node).length;
 }
 
 function calleeShape(expression: SyntaxNodeLike | undefined): Pick<LambdaArgument, "callee" | "receiverExpression"> {
@@ -379,7 +441,7 @@ async function aliasTarget(
 function externalReceiver(site: Site, type: SyntaxNodeLike): LambdaReceiver {
   const fqn = resolveExternalType(site.mod, type.text);
   const names = fqn ? externalTypeNames(fqn) : undefined;
-  return names ? { kind: "external", names } : UNPROVEN;
+  return names && fqn ? { kind: "external", fqn, names } : UNPROVEN;
 }
 
 /** The receiver an instance of the type `node` is, as declared in `site`. */
@@ -582,13 +644,6 @@ async function receiverOfDeclaration(
   return list ? receiverOfParameterList(env, site, list, slot) : null;
 }
 
-/** Whether a call with `argumentCount` arguments can be made to `def`: unknown counts and arities accept. */
-function acceptsArgumentCount(def: SymbolDef, argumentCount: number | undefined): boolean {
-  const arity = def.callable?.arity;
-  if (argumentCount === undefined || !arity) return true;
-  return argumentCount >= arity.minArgs && (arity.maxArgs === null || argumentCount <= arity.maxArgs);
-}
-
 /**
  * Whether the call can name the declaration `node` from where it stands, so an unrelated same-named declaration
  * elsewhere in the project (another package, another class) does not outvote the library function the call means. A
@@ -751,7 +806,7 @@ async function receiverOfLibraryFunction(
   if (slot.kind === "trailing") {
     const builder = externalBuilderReceiver(env.site.mod, name);
     const names = builder ? externalTypeNames(builder) : undefined;
-    if (names) return { kind: "external", names };
+    if (names && builder) return { kind: "external", fqn: builder, names };
     if (isJdkSamConstructor(env.site.mod, name, receiverExpression?.text)) return NONE;
   }
   if (Object.hasOwn(EXECUTOR_FUNCTIONS, name)) {
@@ -889,21 +944,53 @@ async function propertyInvocation(env: LambdaReceiverEnvironment, def: SymbolDef
 
 /**
  * `lookupReceiverTypeMember` for a call. A property answers it only when a call can invoke it. A plain one is no
- * candidate, so the lookup passes to the next receiver and the enclosing type, as kotlinc does. One whose type may
- * declare `invoke` may answer it, which leaves the call unproven and no other declaration provably its target.
+ * candidate, so an extension in scope on the receiver takes the call, else the lookup passes to the next receiver and
+ * the enclosing type, as kotlinc does. One whose type may declare `invoke` may answer it, which leaves the call
+ * unproven and no other declaration provably its target.
  */
 async function lookupCalledMember(
   env: LambdaReceiverEnvironment,
   use: SyntaxNodeLike,
-  receiver: SymbolDef,
+  receiver: { def: SymbolDef; nullable: boolean },
   name: string,
   argumentCount: number | undefined,
 ): Promise<CalledMember> {
-  const found = await lookupReceiverTypeMember(env.index, env.site.mod, use, receiver, name, argumentCount, "call");
+  const found = await lookupReceiverTypeMember(
+    env.index,
+    env.site.mod,
+    use,
+    receiver.def,
+    name,
+    argumentCount,
+    env.resolveTypeName,
+    receiver.nullable,
+    "call",
+  );
   if (found.status !== "member") return found;
   const invocation = await propertyInvocation(env, found.member);
   if (invocation === "invokable") return found;
-  return invocation === "plain" ? OMITTED_MEMBER : MAYBE_INVOKED_MEMBER;
+  if (invocation === "unproven") return MAYBE_INVOKED_MEMBER;
+  return lookupReceiverTypeExtension(
+    env.index,
+    env.site.mod,
+    use,
+    receiver.def,
+    name,
+    argumentCount,
+    env.resolveTypeName,
+  );
+}
+
+/** The receiver of a lambda or of an extension function or property body, cached per file by where the scope starts. */
+function receiverOfScope(env: LambdaReceiverEnvironment, scope: SyntaxNodeLike): Promise<LambdaReceiver> {
+  if (scope.type === "lambda_literal") return receiverOfLambda(env, scope);
+  let receiver = env.classified.get(scope.startIndex);
+  if (!receiver) {
+    const type = kotlinExtensionReceiverType(scope);
+    receiver = type ? receiverOfType(env, env.site, type) : Promise.resolve(NONE);
+    env.classified.set(scope.startIndex, receiver);
+  }
+  return receiver;
 }
 
 /**
@@ -921,38 +1008,51 @@ async function typedReceiverVerdict(
   const { parsed } = env.site;
   const call = use.node.parent ?? use.node;
   const argumentCount = getCallArgumentCount({ languageId: "kotlin", source: parsed.source, call }) ?? undefined;
-  const found = await lookupCalledMember(env, use.node, receiver.def, use.name, argumentCount);
+  const found = await lookupCalledMember(env, use.node, receiver, use.name, argumentCount);
   if (found.status === "unproven") return UNPROVEN_VERDICT;
   if (found.status === "maybe-invoked" && !receiver.nullable) return SHADOWED_VERDICT;
   // A receiver whose only declaration of the name takes another argument count is no candidate; the next receiver is tried.
-  if (
-    found.status === "member" &&
-    !receiver.nullable &&
-    memberAcceptsCallAt(env.index, found.member, use.node, parsed.source, "kotlin")
-  ) {
+  if (found.status === "member" && memberAcceptsCallAt(env.index, found.member, use.node, parsed.source, "kotlin")) {
     return { status: "member", member: found.member };
   }
   return UNIVERSAL_EXTENSION_NAMES.has(normalizeKotlinIdentifier(use.name)) ? UNPROVEN_VERDICT : null;
 }
 
 /**
- * What the lambdas between the bare call `use` and its class body say about `name`: a member of the closest receiver
- * that declares it, `unproven` when a receiver that may declare it cannot be searched, `shadowed` when a known
- * external receiver declares or extends it or a receiver's property of that name may be invoked through its type, or
- * `none` when no receiver claims it and the enclosing type decides. `lambdas` are the lambdas around the call when the
- * caller already walked them.
+ * What the lambdas and extension bodies between the bare call `use` and its class body say about `name`: a member of
+ * the closest receiver that declares it, `unproven` when a receiver that may declare it cannot be searched, `shadowed`
+ * when a known external receiver declares or extends it or a receiver's property of that name may be invoked through
+ * its type, or `none` when no receiver claims it and the enclosing type decides. `receivers` are the lambdas and
+ * extension bodies around the call when the caller already walked them.
  */
 export async function kotlinLambdaReceiverVerdict(
   env: LambdaReceiverEnvironment,
-  use: { node: SyntaxNodeLike; name: string; lambdas?: readonly SyntaxNodeLike[] },
+  use: { node: SyntaxNodeLike; name: string; receivers?: readonly SyntaxNodeLike[] },
 ): Promise<LambdaReceiverVerdict> {
   const name = normalizeKotlinIdentifier(use.name);
-  for (const lambda of use.lambdas ?? enclosingLambdas(use.node)) {
-    const receiver = await receiverOfLambda(env, lambda);
+  for (const scope of use.receivers ?? enclosingReceiverScopes(use.node)) {
+    const receiver = await receiverOfScope(env, scope);
     if (receiver.kind === "none") continue;
     if (receiver.kind === "unproven") return UNPROVEN_VERDICT;
     if (receiver.kind === "external") {
       if (receiver.names.has(name)) return SHADOWED_VERDICT;
+      const argumentCount =
+        getCallArgumentCount({
+          languageId: "kotlin",
+          source: env.site.parsed.source,
+          call: use.node.parent ?? use.node,
+        }) ?? undefined;
+      const extension = await lookupExternalReceiverExtension(
+        env.index,
+        env.site.mod,
+        use.node,
+        receiver.fqn,
+        use.name,
+        argumentCount,
+        env.resolveTypeName,
+      );
+      if (extension.status === "member") return { status: "member", member: extension.member };
+      if (extension.status === "unproven") return UNPROVEN_VERDICT;
       continue;
     }
     const verdict = await typedReceiverVerdict(env, use, receiver);
@@ -963,7 +1063,7 @@ export async function kotlinLambdaReceiverVerdict(
 
 /** A Kotlin `this` that may not be the enclosing type's: inside a lambda that may have a receiver, or labeled. */
 export function kotlinThisNeedsScopeProof(node: SyntaxNodeLike): boolean {
-  return node.type === "this_expression" && (!!node.namedChildren.length || !!enclosingLambdas(node).length);
+  return node.type === "this_expression" && (!!node.namedChildren.length || !!enclosingReceiverScopes(node).length);
 }
 
 const NO_MEMBER_REASON = "No matching receiver member definition";
@@ -982,8 +1082,8 @@ async function innermostReceiver(
   env: LambdaReceiverEnvironment,
   access: SyntaxNodeLike,
 ): Promise<LambdaReceiver | "enclosing"> {
-  for (const lambda of enclosingLambdas(access)) {
-    const receiver = await receiverOfLambda(env, lambda);
+  for (const scope of enclosingReceiverScopes(access)) {
+    const receiver = await receiverOfScope(env, scope);
     if (receiver.kind !== "none") return receiver;
   }
   return "enclosing";
@@ -991,35 +1091,40 @@ async function innermostReceiver(
 
 /** The type before the name of an extension function declaration: `Builder` in `fun Builder.configure() { }`. */
 function extensionReceiverType(declaration: SyntaxNodeLike): SyntaxNodeLike | null {
-  if (declaration.type !== "function_declaration") return null;
-  const name = declaration.childForFieldName("name");
-  if (!name) return null;
-  const type = declaration.namedChildren.find(
-    (child) => child.startIndex < name.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
-  );
-  return type ?? null;
+  return declaration.type === "function_declaration" ? kotlinExtensionReceiverType(declaration) : null;
+}
+
+/** The name an extension function or property declares, which `this@name` labels its receiver by. */
+function extensionLabelNode(declaration: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (declaration.type === "function_declaration") return declaration.childForFieldName("name");
+  if (declaration.type !== "property_declaration" || !kotlinExtensionReceiverType(declaration)) return null;
+  const variable = declaration.namedChildren.find((child) => child.type === "variable_declaration");
+  return variable?.namedChildren.find((child) => child.type === "identifier") ?? null;
 }
 
 /**
- * The receiver of the extension function `this@label` names, from the type its declaration spells before the name:
- * `fun Builder.configure() { this@configure.emit() }`. A function of that name that declares no receiver names none.
+ * The receiver of the extension function or property `this@label` names, from the type its declaration spells before
+ * the name: `fun Builder.configure() { this@configure.emit() }`. A function of that name that declares no receiver
+ * names none.
  */
-async function extensionFunctionReceiver(
+async function extensionLabelReceiver(
   env: LambdaReceiverEnvironment,
   access: SyntaxNodeLike,
   label: string,
 ): Promise<LambdaReceiver | null> {
   for (let current = access.parent; current; current = current.parent) {
-    if (current.type !== "function_declaration") continue;
-    const name = current.childForFieldName("name");
+    const name = extensionLabelNode(current);
     if (!name || normalizeKotlinIdentifier(name.text) !== label) continue;
-    const typeNode = extensionReceiverType(current);
+    const typeNode = kotlinExtensionReceiverType(current);
     return typeNode ? receiverOfType(env, env.site, typeNode) : NONE;
   }
   return null;
 }
 
-/** What `this@label` names: a lambda by its label, else an enclosing named type or extension function; no such scope has no receiver. */
+/**
+ * What `this@label` names: a lambda by its label, else an enclosing named type, extension function or property. A
+ * label that names no such scope has no receiver.
+ */
 async function labeledReceiver(
   env: LambdaReceiverEnvironment,
   access: SyntaxNodeLike,
@@ -1033,13 +1138,14 @@ async function labeledReceiver(
     const def = memberContainerDef(env.site.mod, container);
     return def ? { kind: "type", def, nullable: false } : UNPROVEN;
   }
-  return (await extensionFunctionReceiver(env, access, label)) ?? NONE;
+  return (await extensionLabelReceiver(env, access, label)) ?? NONE;
 }
 
 /**
  * The member `this.m` or `this@label.m` names when `this` is not the enclosing type's: a member of the closest lambda
- * receiver, or of the lambda or type the label names. A receiver whose members cannot be searched leaves no target.
- * Null leaves the access to the shared member lookup, which reads `this` as the enclosing type.
+ * or extension receiver, or of the lambda, type, or extension function or property the label names. A receiver whose
+ * members cannot be searched leaves no target. Null leaves the access to the shared member lookup, which reads `this`
+ * as the enclosing type.
  */
 export async function kotlinThisMemberResult(
   env: LambdaReceiverEnvironment,
@@ -1065,11 +1171,36 @@ export async function kotlinThisMemberResult(
     : await innermostReceiver(env, access);
   if (receiver === "enclosing") return null;
   if (receiver.kind === "none") return { status: "not_found", reason: NO_MEMBER_REASON };
-  if (receiver.kind !== "type") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
+  if (receiver.kind === "unproven") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
   const member = sliceText(property, source);
-  const found = callNode
-    ? await lookupCalledMember(env, property, receiver.def, member, argumentCount)
-    : await lookupReceiverTypeMember(index, site.mod, property, receiver.def, member, argumentCount);
+  let found: CalledMember;
+  if (receiver.kind === "external") {
+    if (receiver.names.has(normalizeKotlinIdentifier(member))) {
+      return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
+    }
+    found = await lookupExternalReceiverExtension(
+      index,
+      site.mod,
+      property,
+      receiver.fqn,
+      member,
+      argumentCount,
+      env.resolveTypeName,
+    );
+  } else if (callNode) {
+    found = await lookupCalledMember(env, property, receiver, member, argumentCount);
+  } else {
+    found = await lookupReceiverTypeMember(
+      index,
+      site.mod,
+      property,
+      receiver.def,
+      member,
+      argumentCount,
+      env.resolveTypeName,
+      receiver.nullable,
+    );
+  }
   if (found.status === "member") {
     return okGoToResult(index, found.member, {
       via: { exportedName: member },

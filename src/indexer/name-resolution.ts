@@ -293,7 +293,7 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
  */
 async function settleKotlinLambdaReceiver(
   use: BareNameUse,
-  request: { lookupName: string; lambdas: readonly SyntaxNodeLike[] },
+  request: { lookupName: string; receivers: readonly SyntaxNodeLike[] },
   fallback: NameResolution | null,
   options: SettleNameOptions,
 ): Promise<GoToResult | null | undefined> {
@@ -306,7 +306,7 @@ async function settleKotlinLambdaReceiver(
       resolveTypeName: resolveJvmTypeName,
       classified: options.lambdaReceivers ?? new Map(),
     },
-    { node, name: request.lookupName, lambdas: request.lambdas },
+    { node, name: request.lookupName, receivers: request.receivers },
   );
   if (verdict.status === "none") return undefined;
   if (verdict.status === "member") {

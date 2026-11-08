@@ -6,11 +6,23 @@ import {
 } from "../../helpers/qualified-type-import-fixture.js";
 import { KOTLIN_QUOTED_SCOPE_FILES, KOTLIN_QUOTED_SCOPE_SOURCES } from "../../helpers/kotlin-quoted-fixture.js";
 import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
+import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "../../helpers/kotlin-extension-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const kotlinOmissions: readonly CallFormOmission[] = [];
 
 export const kotlinCells: MatrixCell[] = [
+  {
+    id: "kotlin/extension-receiver-call",
+    language: "kotlin",
+    callForm: "bare-call",
+    files: KOTLIN_EXTENSION_RECEIVER_SOURCES,
+    use: { file: "app/Use.kt", line: 8, token: "hit" },
+    expected: { file: "model/Box.kt", line: 3, token: "hit" },
+    decoy: { file: "app/Use.kt", line: 6, token: "hit" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "app/Use.kt", fromName: "display" },
+  },
   ...[
     { spelling: "quoted-binding", caller: "quotedParameter", line: 2 },
     { spelling: "quoted-receiver", caller: "plainParameter", line: 3 },

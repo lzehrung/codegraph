@@ -3703,11 +3703,9 @@ export type ReceiverTypeMember =
   | { status: "omitted" };
 
 /**
- * Looks `member` up on `receiver`, the type of an implicit receiver, the way an explicit receiver of that type is
- * looked up: the type's own and inherited members, then extensions declared beside it. A miss is `omitted` only when
- * the whole hierarchy is indexed and lacks the name, so the caller may continue to the next receiver. Whether the
- * member found is visible at `use` is the caller's question: an inaccessible member is still `member` here. `memberUse`
- * tells a call, which prefers methods and invokable properties, from a read, as it does for an explicit receiver.
+ * Looks up actual members on an implicit receiver and its supertypes. Kotlin extension candidates are selected
+ * separately from the call site's scope, after accessible members have been considered. `memberUse` tells a call,
+ * which prefers methods and invokable properties, from a read, as it does for an explicit receiver.
  */
 export async function findReceiverTypeMember(
   index: ProjectIndex,
@@ -3721,13 +3719,8 @@ export async function findReceiverTypeMember(
 ): Promise<ReceiverTypeMember> {
   const unproven: ReceiverTypeMember = { status: "unproven" };
   if (!declaresMembers(receiver)) return unproven;
-  const context = await ensureParsedContextForIndex(index, receiver.file);
-  const targetModule = index.byFile.get(fileIdentityKey(receiver.file));
-  const position = toTreeSitterPosition(receiver.range.start);
-  const container = context.tree.rootNode.descendantForPosition(position, position).parent;
-  if (!targetModule || !container) return unproven;
   const report = { named: false, ambiguous: false };
-  let found = await resolveKeywordReceiverMember(
+  const found = await resolveKeywordReceiverMember(
     index,
     mod,
     use,
@@ -3739,19 +3732,6 @@ export async function findReceiverTypeMember(
     report,
     memberUse,
   );
-  if (!found && !report.named) {
-    found = await findReceiverMemberDefinition(
-      index,
-      targetModule.locals,
-      member,
-      receiver,
-      container,
-      context,
-      context.sup.normalizeIdentifier,
-      "any",
-      argumentCount,
-    );
-  }
   if (found) return { status: "member", member: found };
   if (report.named) return unproven;
   const anyName = normalizeKotlinIdentifier(member);
