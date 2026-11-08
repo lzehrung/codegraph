@@ -149,6 +149,7 @@ import {
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
+import { kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
 import {
   isPythonDottedImportBinding,
@@ -304,6 +305,12 @@ export async function goToDefinition(
     }
   }
 
+  // A lambda's receiver comes from its callee's declaration, which go-to-definition resolves at the callee.
+  const resolveLambdaCallee = async (callee: SyntaxNodeLike): Promise<SymbolDef | null> => {
+    const { line: calleeLine, column: calleeColumn } = toRange(callee).start;
+    const resolved = await goToDefinition(index, { file, line: calleeLine, column: calleeColumn }, context);
+    return resolved.status === "ok" ? resolved.definition : null;
+  };
   if (sup.supportsCrossModuleSymbols) {
     let memberAccessNode: SyntaxNodeLike | null = null;
     if (node.parent && isMemberAccessNode(sup, node.parent)) {
@@ -324,6 +331,20 @@ export async function goToDefinition(
     // it is a bare name, so the shared lookup (implicit members, imports, package) decides it.
     const receiverless = !!memberAccessNode && isReceiverlessMemberCall(sup, memberAccessNode);
     const scopeIndex = memberAccessNode ? getOrBuildScopeIndex(index, file, source, sup, mod, tree) : null;
+    if (sup.id === "kotlin" && scopeIndex && !receiverless) {
+      // `this` inside a lambda that has a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
+      const viaThis = await kotlinThisMemberResult(
+        {
+          index,
+          site: { mod, parsed: context, scopeIndex },
+          resolveCallee: resolveLambdaCallee,
+          resolveTypeName: resolveJvmTypeName,
+          classified: new Map(),
+        },
+        node,
+      );
+      if (viaThis) return viaThis;
+    }
     const memberAccessResult =
       !receiverless &&
       !isExplicitMethodCall(scopeNodesFor(sup.id), node) &&
@@ -417,12 +438,7 @@ export async function goToDefinition(
     const settled = await settleNameResolution(use, resolution, {
       recoverIncludedStar: (lookupName, cNamespace) =>
         recoverIncludedCallableStar(index, mod, sup.id, lookupName, cNamespace, node, source),
-      // A lambda's receiver comes from its callee's declaration, which go-to-definition resolves at the callee.
-      resolveCallee: async (callee) => {
-        const { line: calleeLine, column: calleeColumn } = toRange(callee).start;
-        const resolved = await goToDefinition(index, { file, line: calleeLine, column: calleeColumn }, context);
-        return resolved.status === "ok" ? resolved.definition : null;
-      },
+      resolveCallee: resolveLambdaCallee,
     });
     if (settled) return settled;
   }

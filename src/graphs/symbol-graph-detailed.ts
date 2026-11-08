@@ -9,7 +9,7 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
-import type { LambdaReceiverCache } from "../indexer/kotlin-lambda-receiver.js";
+import { kotlinThisMemberResult, type LambdaReceiverCache } from "../indexer/kotlin-lambda-receiver.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
@@ -662,6 +662,20 @@ export async function buildSymbolGraphDetailed(
         },
         resolveMemberAccessTarget: async (node: SyntaxNodeLike): Promise<SymbolDef | null> => {
           const useNode = tree.rootNode.descendantForIndex(node.startIndex, node.endIndex);
+          if (sup.id === "kotlin") {
+            // `this` inside a lambda with a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
+            const viaThis = await kotlinThisMemberResult(
+              {
+                index,
+                site: { mod: moduleEntry, parsed: moduleParsed, scopeIndex },
+                resolveCallee: resolveLambdaCallee,
+                resolveTypeName: resolveJvmTypeName,
+                classified: lambdaReceivers,
+              },
+              useNode,
+            );
+            if (viaThis) return viaThis.status === "ok" ? viaThis.definition : null;
+          }
           if (sup.id === "python" && !pythonReceiverResolutionCache) {
             pythonReceiverResolutionCache = createPythonReceiverResolutionCache();
           }

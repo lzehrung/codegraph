@@ -19,18 +19,24 @@
  */
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
-import { receiverConstructorExpression } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import {
+  memberContainerDef,
+  nearestMemberContainer,
+  receiverConstructorExpression,
+} from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON } from "./ambiguous-resolution.js";
 import { sliceText } from "../util/ast.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import { lookupReceiverTypeMember, memberAcceptsCallAt } from "./navigation-goto.js";
+import { okGoToResult } from "./navigation-provenance.js";
 import { getOrBuildScopeIndex } from "./navigation-local.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import type { ScopeIndex } from "./scope.js";
 import { bindsTypeParameter } from "./type-parameters.js";
-import { type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
+import { type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
 
 /** What a lambda literal's implicit receiver is. */
 export type LambdaReceiver =
@@ -100,8 +106,13 @@ const STDLIB_PLAIN_LAMBDA_NAMES = `
   takeWhile takeLastWhile dropWhile dropLastWhile indexOfFirst indexOfLast chunked windowed zip zipWithNext
   maxBy maxByOrNull maxOf maxOfOrNull minBy minByOrNull minOf minOfOrNull sortBy sortedBy sortedByDescending
   associate associateBy associateTo associateByTo associateWith associateWithTo groupBy groupByTo
-  Array ByteArray CharArray IntArray List MutableList generateSequence
+  Array ByteArray CharArray IntArray List MutableList generateSequence execute submit usePinned withScopedMemoryAllocator
 `;
+/**
+ * `execute` and `submit` are JDK executor methods (a lambda converted to a Java interface has no receiver). `usePinned`
+ * and `withScopedMemoryAllocator` are Kotlin/Native and Kotlin/Wasm functions that take `(T) -> R`, a type with no
+ * receiver; the JVM kotlinc cannot run those two. `memScoped` takes `MemScope.() -> R`, an external receiver: unproven.
+ */
 const STDLIB_PLAIN_LAMBDA_FUNCTIONS: Readonly<Record<string, true>> = Object.fromEntries(
   STDLIB_PLAIN_LAMBDA_NAMES.split(/\s+/)
     .filter(Boolean)
@@ -526,4 +537,94 @@ export async function kotlinLambdaReceiverVerdict(
     if (accepted) return { status: "member", member: found.member };
   }
   return NO_VERDICT;
+}
+
+/** A Kotlin `this` that may not be the enclosing type's: inside a lambda that may have a receiver, or labeled. */
+export function kotlinThisNeedsScopeProof(node: SyntaxNodeLike): boolean {
+  return node.type === "this_expression" && (!!node.namedChildren.length || !!enclosingLambdas(node).length);
+}
+
+const NO_MEMBER_REASON = "No matching receiver member definition";
+
+/** Whether `lambda` is the one `this@label` names: by its explicit label, else by the callee it is passed to. */
+function lambdaIsLabeled(lambda: SyntaxNodeLike, label: string): boolean {
+  const explicit = lambda.parent?.namedChildren.find((child) => child.type === "label");
+  if (explicit) return normalizeKotlinIdentifier(explicit.text.replace(/@$/, "")) === label;
+  const context = lambdaContext(lambda);
+  const callee = context.kind === "argument" ? context.argument.callee : null;
+  return !!callee && normalizeKotlinIdentifier(callee.text) === label;
+}
+
+/** What a plain `this` is: the closest lambda that has a receiver, or `enclosing` when none of the lambdas does. */
+async function innermostReceiver(
+  env: LambdaReceiverEnvironment,
+  access: SyntaxNodeLike,
+): Promise<LambdaReceiver | "enclosing"> {
+  for (const lambda of enclosingLambdas(access)) {
+    const receiver = await receiverOfLambda(env, lambda);
+    if (receiver.kind !== "none") return receiver;
+  }
+  return "enclosing";
+}
+
+/** What `this@label` names: a lambda by its label, else an enclosing named type; no such scope has no receiver. */
+async function labeledReceiver(
+  env: LambdaReceiverEnvironment,
+  access: SyntaxNodeLike,
+  label: string,
+): Promise<LambdaReceiver> {
+  const lambda = enclosingLambdas(access).find((candidate) => lambdaIsLabeled(candidate, label));
+  if (lambda) return receiverOfLambda(env, lambda);
+  for (let container = nearestMemberContainer(access); container; container = nearestMemberContainer(container)) {
+    const name = container.childForFieldName("name");
+    if (!name || normalizeKotlinIdentifier(name.text) !== label) continue;
+    const def = memberContainerDef(env.site.mod, container);
+    return def ? { kind: "type", def } : UNPROVEN;
+  }
+  return NONE;
+}
+
+/**
+ * The member `this.m` or `this@label.m` names when `this` is not the enclosing type's: a member of the closest lambda
+ * receiver, or of the lambda or type the label names. A receiver whose members cannot be searched leaves no target.
+ * Null leaves the access to the shared member lookup, which reads `this` as the enclosing type.
+ */
+export async function kotlinThisMemberResult(
+  env: LambdaReceiverEnvironment,
+  property: SyntaxNodeLike,
+): Promise<GoToResult | null> {
+  const access = property.parent;
+  const [subject, name, ...rest] = access?.type === "navigation_expression" ? access.namedChildren : [];
+  if (!access || subject?.type !== "this_expression" || name?.startIndex !== property.startIndex || rest.length) {
+    return null;
+  }
+  if (!kotlinThisNeedsScopeProof(subject)) return null;
+  const { index, site } = env;
+  const { source } = site.parsed;
+  const call = access.parent;
+  const callNode =
+    call?.type === "call_expression" && call.namedChildren[0]?.startIndex === access.startIndex ? call : null;
+  const argumentCount = callNode
+    ? (getCallArgumentCount({ languageId: "kotlin", source, call: callNode }) ?? undefined)
+    : undefined;
+  const label = subject.namedChildren[0];
+  const receiver = label
+    ? await labeledReceiver(env, access, normalizeKotlinIdentifier(label.text))
+    : await innermostReceiver(env, access);
+  if (receiver === "enclosing") return null;
+  if (receiver.kind === "none") return { status: "not_found", reason: NO_MEMBER_REASON };
+  if (receiver.kind === "unproven") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
+  const member = sliceText(property, source);
+  const found = await lookupReceiverTypeMember(index, site.mod, property, receiver.def, member, argumentCount);
+  if (found.status === "member") {
+    return okGoToResult(index, found.member, {
+      via: { exportedName: member },
+      resolution: "member-access",
+      confidence: "medium",
+    });
+  }
+  return {
+    status: "not_found",
+    reason: found.status === "unproven" ? UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON : NO_MEMBER_REASON,
+  };
 }

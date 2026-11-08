@@ -88,6 +88,7 @@ const ANON = [
   "            fun stamp(tag: String) {}",
   '            override fun run() { build { stamp("anonBuild") } }',
   '            fun anonPlainCaller() { plain { b -> stamp("anonPlain") } }',
+  '            fun anonThisCaller() { build { this.stamp("anonThis") } }',
   "        }",
   "        task.run()",
   "    }",
@@ -112,17 +113,50 @@ const UNPROVEN = [
   '    fun viaExternalSupertype() { extern { ping("viaExternalSupertype") } }',
   '    fun viaUnseenCall() { build().apply { ping("viaUnseenCall") } }',
   "    fun viaAny(b: Builder) { with(b) { toString() } }",
+  "    fun viaThisApplySb(sb: StringBuilder) { sb.apply { this.append(3) } }",
+  "    fun viaThisBuildString() { buildString { this.append(4) } }",
+  '    fun viaThisUnknown() { Thread { this.ping("viaThisUnknown") } }',
   "}",
   "",
 ].join("\n");
 
-const FILES = { "app/Dsl.kt": DSL, "app/Owner.kt": OWNER, "app/Anon.kt": ANON, "app/Careful.kt": UNPROVEN };
+const THIS = [
+  "package app",
+  "",
+  "class Holder {",
+  "    fun stamp(tag: String) {}",
+  "",
+  '    fun viaThis() { build { this.stamp("viaThis") } }',
+  '    fun viaThisApply(b: Builder) { b.apply { this.stamp("viaThisApply") } }',
+  '    fun viaThisNested() { with(Other()) { build { this.stamp("viaThisNested") } } }',
+  '    fun viaThisNestedOther() { build { with(Other()) { this.stamp("viaThisNestedOther") } } }',
+  '    fun viaLabeledCallee() { build { this@build.stamp("viaLabeledCallee") } }',
+  '    fun viaLabeledApply(b: Builder) { b.apply { this@apply.stamp("viaLabeledApply") } }',
+  '    fun viaLabeledWith(b: Builder) { with(b) { this@with.stamp("viaLabeledWith") } }',
+  '    fun viaLabeledExplicit() { build lbl@{ this@lbl.stamp("viaLabeledExplicit") } }',
+  '    fun viaLabeledOuter() { build { with(Other()) { this@build.stamp("viaLabeledOuter") } } }',
+  '    fun viaLabeledHolder() { build { this@Holder.stamp("viaLabeledHolder") } }',
+  '    fun viaThisPlain() { plain { b -> this.stamp("viaThisPlain") } }',
+  '    fun viaThisForEach() { listOf(1).forEach { this.stamp("viaThisForEach") } }',
+  '    fun viaThisOutside() { this.stamp("viaThisOutside") }',
+  "}",
+  "",
+].join("\n");
+
+const FILES = {
+  "app/Dsl.kt": DSL,
+  "app/Owner.kt": OWNER,
+  "app/Anon.kt": ANON,
+  "app/Careful.kt": UNPROVEN,
+  "app/This.kt": THIS,
+};
 
 const BUILDER_STAMP = { file: "app/Dsl.kt", line: lineOf(DSL, "class Builder {") + 1, token: "stamp(" };
 const OTHER_STAMP = { file: "app/Dsl.kt", line: lineOf(DSL, "class Other {") + 1, token: "stamp(" };
 const OWNER_STAMP = { file: "app/Owner.kt", line: lineOf(OWNER, "fun stamp"), token: "stamp(" };
 const OWNER_OWN = { file: "app/Owner.kt", line: lineOf(OWNER, "fun own"), token: "own(" };
 const ANON_STAMP = { file: "app/Anon.kt", line: lineOf(ANON, "fun stamp"), token: "stamp(" };
+const HOLDER_STAMP = { file: "app/This.kt", line: lineOf(THIS, "fun stamp"), token: "stamp(" };
 
 let fixture: ConsumerAgreementFixture;
 
@@ -290,6 +324,55 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
         expected: { file: "app/Careful.kt", line: lineOf(UNPROVEN, "fun helper") },
         edges: [{ label: "calls", from: { file: "app/Careful.kt", name: "viaUnknownTrailingTopLevel" } }],
       });
+    });
+  });
+});
+
+describe("an explicit this inside a lambda", () => {
+  const cases: Array<[string, string, Target, Target]> = [
+    ["viaThis", "a DSL lambda", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaThisApply", "apply on a typed parameter", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaThisNested", "a DSL lambda inside with(Other()): the closest receiver", BUILDER_STAMP, OTHER_STAMP],
+    ["viaThisNestedOther", "with(Other()) inside a DSL lambda", OTHER_STAMP, BUILDER_STAMP],
+    ["viaLabeledCallee", "this@build, named by the callee", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaLabeledApply", "this@apply", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaLabeledWith", "this@with", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaLabeledExplicit", "this@lbl, named by an explicit label", BUILDER_STAMP, HOLDER_STAMP],
+    ["viaLabeledOuter", "this@build reaches past the closer with(Other())", BUILDER_STAMP, OTHER_STAMP],
+    ["viaLabeledHolder", "this@Holder names the enclosing type from inside a lambda", HOLDER_STAMP, BUILDER_STAMP],
+    ["viaThisPlain", "a lambda with no receiver leaves this as the enclosing type", HOLDER_STAMP, BUILDER_STAMP],
+    ["viaThisForEach", "forEach", HOLDER_STAMP, BUILDER_STAMP],
+    ["viaThisOutside", "no lambda at all", HOLDER_STAMP, BUILDER_STAMP],
+  ];
+  it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
+    await expectCall("app/This.kt", THIS, caller, caller, target, decoy);
+  });
+
+  it("an anonymous object enclosing the lambda has its member passed over", async () => {
+    await expectCall("app/Anon.kt", ANON, "anonThis", "anonThisCaller", BUILDER_STAMP, ANON_STAMP);
+  });
+
+  describe("stays unproven when the receiver's members are unknown", () => {
+    const decoyAppend = { file: "app/Careful.kt", line: lineOf(UNPROVEN, "fun append"), token: "append(" };
+    const decoyPing = { file: "app/Careful.kt", line: lineOf(UNPROVEN, "fun ping"), token: "ping(" };
+
+    it("apply on a receiver of an external type", async () => {
+      await expectUnproven("app/Careful.kt", UNPROVEN, "viaThisApplySb", "viaThisApplySb", "append(", decoyAppend);
+    });
+
+    it("buildString, whose receiver is a StringBuilder", async () => {
+      await expectUnproven(
+        "app/Careful.kt",
+        UNPROVEN,
+        "viaThisBuildString",
+        "viaThisBuildString",
+        "append(",
+        decoyAppend,
+      );
+    });
+
+    it("a trailing lambda of a callee the project does not declare", async () => {
+      await expectUnproven("app/Careful.kt", UNPROVEN, '"viaThisUnknown"', "viaThisUnknown", "ping(", decoyPing);
     });
   });
 });

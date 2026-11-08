@@ -42,6 +42,7 @@ import {
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
 import { selectMember } from "../../indexer/member-selection.js";
+import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
 import {
   isSwiftConstrainedExtension,
@@ -1576,6 +1577,12 @@ export async function emitFunctionBodyEdges(
           !context.aliasTableAnswers(sliceText(access.receiver, context.source), access.receiver);
         if (scopedCsharpAlias) {
           // Let the shared member resolver select the alias in scope, not a file-wide receiver type.
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
+        // A Kotlin `this` inside a lambda that may have a receiver, or `this@label`, names a receiver or type that only
+        // the shared member lookup can prove, as navigation does.
+        if (context.sup.id === "kotlin" && kotlinThisNeedsScopeProof(access.receiver)) {
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
