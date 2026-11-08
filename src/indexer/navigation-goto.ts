@@ -1871,8 +1871,17 @@ async function resolveQualifiedMemberContainer(
   return undefined;
 }
 
+/**
+ * A dotted Kotlin type (`Outer.Nested`) names its base through a qualifier that the base lookups here do not resolve,
+ * so the clause cannot prove which declaration it inherits from.
+ */
+function isKotlinQualifiedType(node: SyntaxNodeLike): boolean {
+  if (node.type !== "user_type") return false;
+  return node.namedChildren.filter((child) => child.type === "identifier").length > 1;
+}
+
 function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
-  if (isUnprovenHeritageExpression(node)) return true;
+  if (isUnprovenHeritageExpression(node) || isKotlinQualifiedType(node)) return true;
   // A type argument names a type in its own scope; it never decides which base the clause names.
   return node.namedChildren.some((child) => child.type !== "type_arguments" && nodeContainsUnprovenHeritage(child));
 }

@@ -2654,5 +2654,55 @@ describe("Kotlin base classes named without a constructor call", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps references partial when a qualified base leaves a super call unproven", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-super-"));
+    try {
+      const lines = [
+        "class Outer {",
+        "    open class Nested {",
+        "        open fun ping(): Int = 1",
+        "    }",
+        "",
+        "    class Local : Nested {",
+        "        constructor() : super()",
+        "",
+        "        fun local(): Int = super.ping()",
+        "    }",
+        "}",
+        "",
+        "class Qualified : Outer.Nested {",
+        "    constructor() : super()",
+        "",
+        "    fun qualified(): Int = super.ping()",
+        "}",
+        "",
+        "class Invoked : Outer.Nested() {",
+        "    fun invoked(): Int = super.ping()",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Main.kt": lines.join("\n") });
+      const file = files["Main.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const superCall = async (line: number) =>
+        await goToDefinition(index, { file, line, column: columnInLines(lines, line, "ping") });
+      // The bare nested base proves its class, so its super call resolves; a qualified base is not resolved here.
+      const local = await superCall(9);
+      expect(local.status).toBe("ok");
+      if (local.status === "ok") expect(local.definition.range.start.line).toBe(3);
+      expect((await superCall(16)).status).toBe("not_found");
+      expect((await superCall(20)).status).toBe("not_found");
+      // The two open calls may still reach `ping`, so the omission proof must not rule them out and coverage must not
+      // claim to be complete.
+      const refs = await findReferences(index, { file, line: 3, column: columnInLines(lines, 3, "ping") });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([3, 9]);
+      expect(refs.referenceCoverage?.state).toBe("partial");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 describeTypeParameterReceiverRows("kotlin", "Kotlin type parameter beside a same-named class");
