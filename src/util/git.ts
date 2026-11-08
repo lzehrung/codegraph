@@ -22,6 +22,8 @@ export type GitDiscoveryCache = {
   ignoredRoots: Map<string, Promise<boolean>>;
   excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
   untrackedFiles: Map<string, Promise<string[]>>;
+  indexedBlobs: Map<string, Promise<IndexedBlob[]>>;
+  workingTreeDiffs: Map<string, Promise<string[]>>;
 };
 
 export function createGitDiscoveryCache(): GitDiscoveryCache {
@@ -30,6 +32,8 @@ export function createGitDiscoveryCache(): GitDiscoveryCache {
     ignoredRoots: new Map(),
     excludeFiles: new Map(),
     untrackedFiles: new Map(),
+    indexedBlobs: new Map(),
+    workingTreeDiffs: new Map(),
   };
 }
 
@@ -371,6 +375,15 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
   }
 }
 
+/** Git's empty tree is the comparison base before the first commit, in the repository's object format. */
+export async function getGitHeadOrEmptyTree(projectRoot: string, cache?: GitDiscoveryCache): Promise<string | null> {
+  const head = await getGitHead(projectRoot);
+  if (head) return head;
+  if (!(await isGitRepo(projectRoot, cache))) return null;
+  const { stdout } = await runGit(projectRoot, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
+  return stdout.trim() || null;
+}
+
 export async function isGitRepo(projectRoot: string, cache?: GitDiscoveryCache): Promise<boolean> {
   const resolvedRoot = path.resolve(projectRoot);
   const cached = cache?.repositories.get(resolvedRoot);
@@ -439,8 +452,8 @@ type IndexedBlob = {
 const GIT_LISTING_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * Tracked files among `relFileSet`, in index order, with the blob id for each file whose worktree content Git
- * already knows to match its index entry. `trustIndex` is false when the caller needs every file read again.
+ * Tracked files, optionally restricted to `relFileSet`, in index order, with the blob id for each file whose
+ * worktree content Git already knows to match its index entry. `trustIndex` is false to read every file again.
  *
  * An entry is reusable when it is a plain cached regular file (not flagged assume-unchanged or skip-worktree, which
  * hide edits from Git, and not unmerged) and `git ls-files --modified` does not list it. That is the check
@@ -451,14 +464,14 @@ const GIT_LISTING_MAX_BUFFER = 64 * 1024 * 1024;
  */
 async function listIndexedBlobs(
   projectRoot: string,
-  relFileSet: ReadonlySet<string>,
+  relFileSet: ReadonlySet<string> | undefined,
   trustIndex: boolean,
 ): Promise<IndexedBlob[]> {
   if (!trustIndex) {
     const { stdout } = await runGit(projectRoot, ["ls-files", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER });
     return stdout
       .split("\0")
-      .filter((rel) => rel && relFileSet.has(rel))
+      .filter((rel) => rel && (!relFileSet || relFileSet.has(rel)))
       .map((rel) => ({ rel, blob: undefined }));
   }
   const [staged, modified] = await Promise.all([
@@ -472,7 +485,7 @@ async function listIndexedBlobs(
     const tab = record.indexOf("\t");
     if (tab < 0) continue;
     const rel = record.slice(tab + 1);
-    if (!relFileSet.has(rel)) continue;
+    if (relFileSet && !relFileSet.has(rel)) continue;
     const previous = entries.get(rel);
     if (previous) {
       // An unmerged path is listed once per stage.
@@ -487,6 +500,19 @@ async function listIndexedBlobs(
   return [...entries.values()];
 }
 
+/** Tracked paths and reusable worktree blob ids, shared only within one discovery operation. */
+export async function listGitIndexedBlobs(
+  projectRoot: string,
+  discoveryCache?: GitDiscoveryCache,
+): Promise<IndexedBlob[]> {
+  const root = path.resolve(projectRoot);
+  const cached = discoveryCache?.indexedBlobs.get(root);
+  if (cached) return await cached;
+  const listing = listIndexedBlobs(projectRoot, undefined, true);
+  discoveryCache?.indexedBlobs.set(root, listing);
+  return await listing;
+}
+
 /**
  * Blob ids of the tracked files among `files`, keyed by normalized absolute path. A tracked file whose worktree
  * content matches its index entry reuses the index's blob id; the others are hashed with `git hash-object`.
@@ -495,7 +521,7 @@ async function listIndexedBlobs(
 export async function getGitBlobHashes(
   projectRoot: string,
   files: string[],
-  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; strict?: boolean },
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel; strict?: boolean; discoveryCache?: GitDiscoveryCache },
 ): Promise<Map<string, string>> {
   const gitAvailable = opts?.gitAvailable ?? true;
   if (!gitAvailable) return new Map();
@@ -513,7 +539,15 @@ export async function getGitBlobHashes(
     // memory costs a little extra parsing but stays correct at any repo size.
     // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
     // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
-    const indexed = await listIndexedBlobs(projectRoot, relFileSet, !opts?.strict);
+    const cachedListing = opts?.discoveryCache?.indexedBlobs.get(path.resolve(projectRoot));
+    let indexed: IndexedBlob[];
+    if (opts?.strict) {
+      indexed = await listIndexedBlobs(projectRoot, relFileSet, false);
+    } else if (cachedListing) {
+      indexed = (await cachedListing).filter((entry) => relFileSet.has(entry.rel));
+    } else {
+      indexed = await listIndexedBlobs(projectRoot, relFileSet, true);
+    }
     if (!indexed.length) return new Map();
     const rehashedRel = indexed.filter((entry) => entry.blob === undefined).map((entry) => entry.rel);
     const hashes = await hashGitPaths(projectRoot, rehashedRel);
@@ -586,22 +620,36 @@ async function hashGitPaths(projectRoot: string, trackedRel: string[]): Promise<
   return hashes;
 }
 
+type GitChangedFileOptions = {
+  changedSince?: string | undefined;
+  base?: string | undefined;
+  head?: string | undefined;
+  discoveryCache?: GitDiscoveryCache;
+  /** @internal Retain deleted rename sources when recording incremental worktree history. */
+  includeRenameSources?: boolean;
+};
+
 /**
  * List files changed in Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
  *   WORKTREE compares base to the working tree, and STAGED/INDEX compares base to the index.
  * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
  */
-export async function listChangedFiles(
-  projectRoot: string,
-  opts: {
-    changedSince?: string | undefined;
-    base?: string | undefined;
-    head?: string | undefined;
-  },
-): Promise<string[]> {
+export async function listChangedFiles(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
+  const cache = opts.discoveryCache?.workingTreeDiffs;
+  if (opts.head !== "WORKTREE" || !opts.base || !cache) return await listChangedFilesUncached(projectRoot, opts);
+  const key = `${path.resolve(projectRoot)}\0${opts.base}\0${opts.includeRenameSources ? 1 : 0}`;
+  const cached = cache.get(key);
+  if (cached) return await cached;
+  const diff = listChangedFilesUncached(projectRoot, opts);
+  cache.set(key, diff);
+  return await diff;
+}
+
+async function listChangedFilesUncached(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
   let args = [
     "diff",
+    "--relative",
     "--no-ext-diff",
     "--no-textconv",
     "--find-renames",
@@ -611,11 +659,17 @@ export async function listChangedFiles(
   ];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
+    args = gitDiffArgs(opts.base, head, ["--relative", "--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return [];
+  }
+  // --name-only coalesces a rename into its destination; dirty history must also retain the deleted source.
+  if (opts.includeRenameSources) {
+    const renameFlagIndex = args.indexOf("--find-renames");
+    if (renameFlagIndex < 0) throw new Error("Git diff arguments are missing the rename policy.");
+    args[renameFlagIndex] = "--no-renames";
   }
   args.push("--");
   try {

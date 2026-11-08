@@ -6,6 +6,7 @@ import { gitDiffArgs, getUnifiedDiff, listChangedFiles, listUntrackedFiles } fro
 import { decodeGitPath, runGit, setGitExecutableForTests } from "../src/util/git.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 function makeGitTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -127,6 +128,51 @@ describe("git diff semantics", () => {
       expect(diff).toContain("diff --git a/b.ts b/b.ts");
       expect(diff).not.toContain("+export const a = 2;");
     } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it.each([false, true])("confines changed paths to a nested project root (alias=%s)", async (alias) => {
+    const root = await makeGitTempDir("codegraph-git-nested-diff-");
+    const aliasParent = await makeGitTempDir("codegraph-git-nested-diff-alias-");
+    const project = path.join(root, "project");
+    let scanRoot = project;
+    try {
+      await fs.mkdir(path.join(project, "nested"), { recursive: true });
+      const inside = path.join(project, "nested", "inside.ts");
+      const outside = path.join(root, "outside.ts");
+      await fs.writeFile(inside, "export const inside = 1;\n");
+      await fs.writeFile(outside, "export const outside = 1;\n");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const base = git(root, ["rev-parse", "HEAD"]);
+      await fs.writeFile(inside, "export const inside = 2;\n");
+      await fs.writeFile(outside, "export const outside = 2;\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+      if (alias) {
+        scanRoot = path.join(aliasParent, "project");
+        try {
+          await fs.symlink(project, scanRoot, "dir");
+        } catch (error) {
+          if (isSymlinkUnavailable(error)) return;
+          throw error;
+        }
+      }
+      for (const options of [
+        { base, head: "HEAD" },
+        { base, head: "WORKTREE" },
+        { base, head: "STAGED" },
+        { changedSince: base },
+      ]) {
+        expect(await listChangedFiles(scanRoot, options)).toEqual([
+          path.join(scanRoot, "nested", "inside.ts").replace(/\\/g, "/"),
+        ]);
+      }
+    } finally {
+      if (scanRoot !== project) await fs.unlink(scanRoot).catch(() => {});
+      await removeGitTempDir(aliasParent);
       await removeGitTempDir(root);
     }
   });

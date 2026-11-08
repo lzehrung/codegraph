@@ -4,10 +4,11 @@ import {
   diffBuildOptions,
   loadManifest,
   sanitizeManifestEntriesForRoot,
+  type FileSignature,
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { listChangedFiles, listGitIndexedBlobs, listUntrackedFiles } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
 import { fileIdentityKey, normalizePath, pathExists } from "../util/paths.js";
@@ -429,16 +430,50 @@ export async function filterIncrementalDiscoveryCandidates(
   return files.filter((file) => Object.hasOwn(trackedEntries, file) || discoveredFiles.has(file));
 }
 
+/** Prefer Git content identity; an unchanged untracked file can gain its first Git signature after staging. */
+export function manifestFileSignatureMatches(
+  entry: ManifestFileEntry | undefined,
+  signature: FileSignature,
+  strict?: boolean,
+): boolean {
+  if (!entry) return false;
+  const hasGitIdentities = !!entry.gitSig && !!signature.gitSig;
+  if (hasGitIdentities) return entry.gitSig === signature.gitSig;
+  if (entry.sig === signature.sig) return true;
+  const gainedGitIdentity = !entry.gitSig && !!signature.gitSig;
+  if (!gainedGitIdentity || strict) return false;
+  return entry.sig.startsWith(`${signature.sig}:`);
+}
+
+/**
+ * Previously dirty tracked paths stay candidates after restoration or reversion makes Git's diff empty.
+ * New manifests record those paths, so a clean indexed state needs no blob listing. Older or invalid metadata
+ * falls back to comparing reusable index blob ids; entries without one still need signature validation.
+ */
+export async function collectGitManifestChangeCandidates(
+  projectRoot: string,
+  trackedEntries: Record<string, ManifestFileEntry>,
+  discoveryContext: ProjectDiscoveryContext,
+  gitDirtyFiles?: string[],
+): Promise<string[]> {
+  if (gitDirtyFiles !== undefined) return gitDirtyFiles;
+  const indexed = await listGitIndexedBlobs(projectRoot, discoveryContext.git);
+  const candidates: string[] = [];
+  for (const { rel, blob } of indexed) {
+    const file = normalizePath(path.isAbsolute(rel) ? rel : path.resolve(projectRoot, rel));
+    const entry = trackedEntries[file];
+    if (!entry || !blob || entry.gitSig !== blob) candidates.push(file);
+  }
+  return candidates;
+}
+
 /**
  * List new, untracked files that Git sees but the manifest does not yet know about,
  * filtered to the same discovery patterns/ignores a full scan would apply.
  *
- * This is the one piece a manifest-plus-git-diff reconciliation cannot otherwise cover:
- * modified and deleted tracked files are already detected cheaply via git diff and
- * per-file signature checks, but a file that was just created and never committed or
- * staged has no tracked entry and no diff record. Errors are not swallowed here;
- * callers decide whether a failure should fall back to a full scan or be treated as a
- * best-effort miss.
+ * Modified and deleted tracked files are detected via Git diffs, manifest/blob reconciliation and per-file
+ * signature checks. A file that was just created and never committed or staged has none of those signals.
+ * Errors are not swallowed here; callers decide whether a failure should fall back to a full scan.
  *
  * When `discovery.useGitignore` is `false`, Git's `--exclude-standard` is dropped too:
  * that mode explicitly wants gitignored files included, so filtering untracked
@@ -507,6 +542,7 @@ export async function resolveIncrementalFilePlan(
     return null;
 
   if (opts?.cacheStrict) return null;
+  if (!manifest.lastCommit) return null;
 
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
@@ -520,13 +556,28 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const [diffFiles, untrackedFiles] = await Promise.all([
-      manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
+    const [diffResult, untrackedResult, candidatesResult] = await Promise.allSettled([
+      manifest.lastCommit
+        ? listChangedFiles(projectRoot, {
+            base: manifest.lastCommit,
+            head: "WORKTREE",
+            includeRenameSources: true,
+            discoveryCache: context.git,
+          })
+        : [],
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
+      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context, manifest.gitDirtyFiles),
     ]);
+    // A failed Git probe must not leave another child holding the project directory open.
+    if (diffResult.status === "rejected") throw diffResult.reason;
+    if (untrackedResult.status === "rejected") throw untrackedResult.reason;
+    if (candidatesResult.status === "rejected") throw candidatesResult.reason;
+    const diffFiles = diffResult.value;
+    const untrackedFiles = untrackedResult.value;
+    const manifestCandidates = candidatesResult.value;
     const workingTreeDiffFiles = await filterIncrementalDiscoveryCandidates(
       projectRoot,
-      diffFiles,
+      [...new Set([...diffFiles, ...manifestCandidates])],
       trackedEntries,
       opts,
       context,

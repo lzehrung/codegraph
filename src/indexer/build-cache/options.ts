@@ -122,8 +122,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * clause from its own declaration instead of a nested type's.
  * Epoch 131 rebuilds symbols that mark a generic type parameter and the detailed graphs whose receiver calls resolved a
  * type-parameter receiver to a same-named class.
+ * Epoch 132 records dirty source paths against each manifest's commit or the empty tree before the first commit.
+ * Older manifests rebuild before using the clean-state shortcut; missing or invalid metadata uses blob reconciliation.
  */
-export const CORE_ALGORITHM_EPOCH = 131;
+export const CORE_ALGORITHM_EPOCH = 132;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

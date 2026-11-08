@@ -172,6 +172,8 @@ import {
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
+  collectGitManifestChangeCandidates,
+  manifestFileSignatureMatches,
   filterIncrementalDiscoveryCandidates,
   partitionTrackedManifestFiles,
   probePathExistence,
@@ -560,17 +562,18 @@ function primeReusedFileFacts(file: string, mod: ModuleIndex, opts: BuildOptions
 }
 
 /**
- * Declaration-language files that have a cached row, are not in the build, and no longer exist.
- * A deleted file leaves no cache miss, so importers that it satisfied would stay stale.
+ * Files that have a cached row, are not in the build, and no longer exist.
+ * A deleted file leaves no cache miss, so a later restoration could look like a hit instead of an addition.
  * The existence probe separates deleted files from files outside the build scope.
  * The manifest path does not need this: the manifest lists the previous files.
  */
-async function collectNoManifestDeletedDeclarationFiles(args: {
+async function collectNoManifestDeletedFiles(args: {
   files: readonly string[];
   projectRoot: string;
   opts: BuildOptions | undefined;
   concurrency: number;
-}): Promise<Array<{ file: string; languageId: string; mod: ModuleIndex | null }>> {
+  includeNonDeclarationFiles: boolean;
+}): Promise<Array<{ file: string; languageId: string | undefined; mod: ModuleIndex | null }>> {
   const live = new Set(args.files.map(fileIdentityKey));
   const rows = new Map<string, string>();
   for (const file of listMemoryCachedModuleFiles(args.projectRoot)) rows.set(fileIdentityKey(file), file);
@@ -585,11 +588,13 @@ async function collectNoManifestDeletedDeclarationFiles(args: {
       }
     }
   }
-  const candidates: Array<{ file: string; languageId: string }> = [];
+  const candidates: Array<{ file: string; languageId: string | undefined }> = [];
   for (const [key, file] of rows) {
     if (live.has(key)) continue;
     const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
-    if (languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId)) candidates.push({ file, languageId });
+    const isDeclarationFile = languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(languageId);
+    if (!args.includeNonDeclarationFiles && !isDeclarationFile) continue;
+    candidates.push({ file, languageId });
   }
   if (!candidates.length) return [];
   const existence = await probePathExistence(
@@ -1116,6 +1121,7 @@ type BuildIndexHelperOptions = {
   confineReads?: boolean;
   configHash?: { hash: string; error?: string };
   discoveryContext?: ProjectDiscoveryContext;
+  completeProjectScope?: boolean;
 };
 
 type IndexBuildRunState = {
@@ -1401,11 +1407,23 @@ async function collectStaleCachedModules(args: {
   opts: BuildOptions | undefined;
   loadMatchPathForFile: (file: string) => Promise<MatchPathFn | undefined>;
   concurrency: number;
+  canRetireDeletedFiles: boolean;
   confinedRoot?: string | undefined;
   trustedSources?: ReadonlyMap<string, string> | undefined;
-}): Promise<{ stale: Set<string>; deletedDeclarationFiles: string[] }> {
+}): Promise<{ stale: Set<string>; deletedFiles: string[] }> {
   const { cachedModules, manifestFiles } = args;
-  if (!cachedModules.size) return { stale: new Set<string>(), deletedDeclarationFiles: [] };
+  if (!cachedModules.size && !args.canRetireDeletedFiles) return { stale: new Set<string>(), deletedFiles: [] };
+  const deletedRows = manifestFiles
+    ? []
+    : await collectNoManifestDeletedFiles({
+        files: args.files,
+        projectRoot: args.projectRoot,
+        opts: args.opts,
+        concurrency: args.concurrency,
+        includeNonDeclarationFiles: args.canRetireDeletedFiles,
+      });
+  const deletedFiles = deletedRows.map(({ file }) => file);
+  if (!cachedModules.size) return { stale: new Set<string>(), deletedFiles };
   const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
   for (const [file, { mod }] of cachedModules) {
     if (mod.importLookupIncomplete) stale.add(file);
@@ -1416,9 +1434,6 @@ async function collectStaleCachedModules(args: {
     );
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
-  // Deleted declaration files. Only the no-manifest path fills this list.
-  // The manifest path retires deletions when it rewrites the manifest.
-  const deletedDeclarationFiles: string[] = [];
   if (manifestFiles) {
     const currentKeys = new Set(args.files.map(fileIdentityKey));
     // A cache miss proves a change, even when a non-strict manifest signature (mtime:size) matches.
@@ -1429,8 +1444,7 @@ async function collectStaleCachedModules(args: {
       if (!entry) added.push(file);
       const sigInfo = args.signatures.get(file);
       if (!sigInfo) continue;
-      const matchesGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
-      if (!entry || !(matchesGitSig || entry.sig === sigInfo.sig)) changed.add(file);
+      if (!manifestFileSignatureMatches(entry, sigInfo, args.opts?.cacheStrict)) changed.add(file);
     }
     // Cache hits do not hold the declarations of added or changed files.
     // Add the C++ module declarations of those files before the comparison.
@@ -1544,16 +1558,10 @@ async function collectStaleCachedModules(args: {
     // Cache hits cancel out of the comparison. Only stale rows, deleted files, and misses change it.
     const cppPrevious = previousCppDeclaredContainers(args.previousModules);
     const unknownDeclarationLanguages = new Set<string>();
-    for (const deleted of await collectNoManifestDeletedDeclarationFiles({
-      files: args.files,
-      projectRoot: args.projectRoot,
-      opts: args.opts,
-      concurrency: args.concurrency,
-    })) {
-      deletedDeclarationFiles.push(deleted.file);
+    for (const deleted of deletedRows) {
       if (deleted.languageId === "cpp" && deleted.mod && deleted.mod.declaredContainers) {
         mergeDeclaredContainers(cppPrevious, deleted.file, deleted.mod.declaredContainers);
-      } else {
+      } else if (deleted.languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(deleted.languageId)) {
         unknownDeclarationLanguages.add(declarationLanguageGroup(deleted.languageId));
       }
     }
@@ -1665,7 +1673,7 @@ async function collectStaleCachedModules(args: {
       if (changed[index]) stale.add(file);
     });
   }
-  return { stale, deletedDeclarationFiles };
+  return { stale, deletedFiles };
 }
 
 /** Files a cached module depends on, including every JVM wildcard package file. */
@@ -1739,6 +1747,7 @@ async function buildIndexFromFileListInProbeCache(
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
   const projectFiles = helperOpts?.projectFiles;
+  const canRetireDeletedFiles = projectFiles !== undefined || !!helperOpts?.completeProjectScope;
   initManifestReport(report, useManifest, false);
   const confinedRoot = helperOpts?.confineReads ? await fsp.realpath(projectRoot) : undefined;
   const [trustedSources, normalizedFiles] = [
@@ -1979,7 +1988,7 @@ async function buildIndexFromFileListInProbeCache(
           else previousUnavailable.push(file);
         } else cacheMissesByState.added.push(file);
       }
-      const { stale: staleCachedModules, deletedDeclarationFiles: retiredDeletions } = await collectStaleCachedModules({
+      const { stale: staleCachedModules, deletedFiles: retiredDeletions } = await collectStaleCachedModules({
         files: normalizedFiles,
         cachedModules,
         cacheMisses: cacheMissesByState,
@@ -1998,6 +2007,7 @@ async function buildIndexFromFileListInProbeCache(
         opts,
         loadMatchPathForFile,
         concurrency: conc,
+        canRetireDeletedFiles,
         ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
       });
       retiredDeletionFiles = retiredDeletions;
@@ -2229,9 +2239,9 @@ async function buildIndexFromFileListInProbeCache(
     if (opts?.cache === "memory" && projectFiles !== undefined) {
       settleMemoryCacheEvictions(projectRoot, evictionSerialAtStart);
     }
-    // Delete the rows of confirmed-deleted declaration files, so the next unchanged build is fully warm.
-    // Only a full-discovery build does this. A build over a file list can omit importers that still need the deletion.
-    if (!manifest && projectFiles !== undefined && retiredDeletionFiles.length && !staleRowRemovalFailed) {
+    // Retire confirmed-deleted rows so restored files count as additions and re-resolve their importers.
+    // A declared whole-project scope also covers every importer; arbitrary file lists cannot retire rows.
+    if (!manifest && canRetireDeletedFiles && retiredDeletionFiles.length && !staleRowRemovalFailed) {
       removeModulesFromCache(projectRoot, retiredDeletionFiles, opts);
     }
     const workspaceManifestEdges = await timeIndexBuildPhase({
@@ -2560,6 +2570,7 @@ async function buildDeclaredScopeIndex(
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     return await buildIndexFromFileListShared(projectRoot, [...scopeFiles], opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
+      completeProjectScope: true,
       ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
     });
   } finally {
@@ -2758,22 +2769,18 @@ async function buildProjectIndexIncrementalInProbeCache(
         sourceDiscoveryMs += performance.now() - start;
       }
     };
-    let manifestDiffFiles: string[] = [];
-    if (shouldDiffAgainstWorkingTree) {
+    const reconciledWorkingTreeDiffFiles = canReuseReconciliation ? opts?.reconciledWorkingTreeDiffFiles : undefined;
+    let manifestDiffFiles = reconciledWorkingTreeDiffFiles ?? [];
+    if (shouldDiffAgainstWorkingTree && reconciledWorkingTreeDiffFiles === undefined) {
       try {
-        const reconciledWorkingTreeDiffFiles = canReuseReconciliation
-          ? opts?.reconciledWorkingTreeDiffFiles
-          : undefined;
-        if (reconciledWorkingTreeDiffFiles !== undefined) {
-          manifestDiffFiles = reconciledWorkingTreeDiffFiles;
-        } else {
-          manifestDiffFiles = await measureSourceDiscovery(() =>
-            listChangedFiles(projectRoot, {
-              base: manifest.lastCommit,
-              head: "WORKTREE",
-            }),
-          );
-        }
+        manifestDiffFiles = await measureSourceDiscovery(() =>
+          listChangedFiles(projectRoot, {
+            base: manifest.lastCommit,
+            head: "WORKTREE",
+            includeRenameSources: true,
+            discoveryCache: discoveryContext.git,
+          }),
+        );
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
         if (manifestReport) {
@@ -2853,6 +2860,7 @@ async function buildProjectIndexIncrementalInProbeCache(
     // silently produce an incomplete index, so it falls back to a full rebuild instead,
     // the same way a stale manifest commit does above.
     let untrackedFiles: string[] = [];
+    let gitManifestCandidates: string[] = [];
     // Without that cheap Git signal -- no repository at all, or `--cache-strict` asking for
     // maximum certainty over speed -- the manifest file list cannot prove that no new file
     // appeared, so rediscover the project instead of trusting it. Per-file signature checks
@@ -2871,6 +2879,11 @@ async function buildProjectIndexIncrementalInProbeCache(
             listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext),
           );
         }
+        if (!canReuseReconciliation || opts?.reconciledWorkingTreeDiffFiles === undefined) {
+          gitManifestCandidates = await measureSourceDiscovery(() =>
+            collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest.gitDirtyFiles),
+          );
+        }
       } catch (error) {
         if (manifestReport) {
           manifestReport.reason = "gitUntrackedScanFailed";
@@ -2879,7 +2892,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         logWithLevel(
           opts?.logLevel,
           "warn",
-          "Warning: Failed to list untracked project files via Git; rebuilding full index.",
+          "Warning: Failed to reconcile project files via Git; rebuilding full index.",
           error,
         );
         return await buildProjectIndexFromExport(projectRoot, opts, {
@@ -2910,6 +2923,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         }),
       );
     }
+    manifestDiffFiles = [...new Set([...manifestDiffFiles, ...gitManifestCandidates])];
     const projectCandidates = new Set(
       await filterIncrementalDiscoveryCandidates(
         projectRoot,
@@ -3062,16 +3076,11 @@ async function buildProjectIndexIncrementalInProbeCache(
       return snapshot;
     };
 
-    // A file can only hide from the incremental scan by being genuinely unseen: absent from
-    // both the manifest and any git diff signal. An untracked file that already has a
-    // manifest entry (a build artifact or scratch file indexed once and never committed, for
-    // example) is not automatically "unknown" -- but unlike a tracked file, git has no diff
-    // history for it, so its manifest signature cannot be trusted without independent proof
-    // it is still current. `entry.sig` always starts with `${mtimeMs}:${size}` (see
-    // `fileStatSignature` in build-cache/module-cache.ts), so a single cheap `stat()` per
-    // already-known untracked file proves freshness without reading its content. Unseen files
-    // (no manifest entry) and files whose stat no longer matches both still block the fast
-    // path, exactly as before; only "already indexed and provably unchanged" now qualifies.
+    // The manifest/blob reconciliation above covers tracked files even when their current bytes match HEAD.
+    // Untracked files have no Git content identity, so independently check their manifest metadata.
+    // An already indexed untracked file (a build artifact or scratch file, for example) can reuse its snapshot
+    // when its stat still matches; an unseen or changed file must pass ordinary signature validation.
+    // `entry.sig` starts with `${mtimeMs}:${size}` (`fileStatSignature` in build-cache/module-cache.ts).
     const hasStaleOrUnseenUntrackedFile = untrackedFiles.length
       ? (
           await Promise.all(
@@ -3127,6 +3136,7 @@ async function buildProjectIndexIncrementalInProbeCache(
       const gitSigMap = useGitSignatures
         ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
             gitAvailable,
+            discoveryCache: discoveryContext.git,
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(opts?.cacheStrict ? { strict: true } : {}),
           })
@@ -3151,10 +3161,9 @@ async function buildProjectIndexIncrementalInProbeCache(
         const sigInfo = fileSignatures.get(file);
         if (!sigInfo) continue;
         const entry = trackedEntries[file];
-        const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
-        const hasMatchingSig = entry?.sig === sigInfo.sig;
+        const hasMatchingSignature = manifestFileSignatureMatches(entry, sigInfo, opts?.cacheStrict);
         if (!entry) addedFiles.push(file);
-        if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+        if (!entry || !hasMatchingSignature) {
           changedFiles.add(file);
         }
       }
@@ -3753,7 +3762,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   let gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
   const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
-  const gitAvailable = await isGitRepo(projectRoot);
+  const gitAvailable = await isGitRepo(projectRoot, discoveryContext.git);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
   const manifestCommitMismatch =
@@ -3775,10 +3784,17 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
+  const [manifestCandidates, untrackedFiles] = await Promise.all([
+    gitAvailable
+      ? collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest?.gitDirtyFiles)
+      : [],
+    listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext),
+  ]);
+  const reconciliationCandidates = [...new Set([...manifestCandidates, ...untrackedFiles])];
   const projectCandidates = new Set(
     await filterIncrementalDiscoveryCandidates(
       projectRoot,
-      [...manifestDiffFiles, ...gitFiles],
+      [...manifestDiffFiles, ...gitFiles, ...reconciliationCandidates],
       trackedEntries,
       opts,
       discoveryContext,
@@ -3786,8 +3802,9 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   );
   manifestDiffFiles = manifestDiffFiles.filter((file) => projectCandidates.has(file));
   gitFiles = gitFiles.filter((file) => projectCandidates.has(file));
+  const reconciliationFiles = reconciliationCandidates.filter((file) => projectCandidates.has(file));
   const candidateExistence = await probePathExistence(
-    [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles],
+    [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles, ...reconciliationFiles],
     buildConcurrency(opts),
   );
   const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
@@ -3799,6 +3816,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       }),
     normalizedManifestDiffFiles = normalizeChangedFiles(manifestDiffFiles),
     normalizedGitFiles = normalizeChangedFiles(gitFiles),
+    normalizedReconciliationFiles = normalizeChangedFiles(reconciliationFiles),
     existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
   const existingAdditionalFiles = additionalFiles.filter(existsInCandidateSnapshot);
 
@@ -3808,6 +3826,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     ...existingAdditionalFiles,
     ...normalizedManifestDiffFiles.filter((_, index) => existsInCandidateSnapshot(manifestDiffFiles[index]!)),
     ...normalizedGitFiles.filter((_, index) => existsInCandidateSnapshot(gitFiles[index]!)),
+    ...normalizedReconciliationFiles.filter((_, index) => existsInCandidateSnapshot(reconciliationFiles[index]!)),
   ]);
   const changedFiles = new Set<string>();
   const changedFileKeys = new Set<string>();
@@ -3840,9 +3859,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     for (const file of allFiles) {
       const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file));
       const entry = trackedEntries[file];
-      const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
-      const hasMatchingSig = entry?.sig === sigInfo.sig;
-      if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+      if (!manifestFileSignatureMatches(entry, sigInfo, opts?.cacheStrict)) {
         addChangedFile(file);
       }
     }

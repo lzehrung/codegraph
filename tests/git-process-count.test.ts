@@ -1,7 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { createGitDiscoveryCache, isGitRepo, listGitExcludeFiles, listUntrackedFiles } from "../src/util/git.js";
+import {
+  createGitDiscoveryCache,
+  isGitRepo,
+  listChangedFiles,
+  listGitExcludeFiles,
+  listUntrackedFiles,
+} from "../src/util/git.js";
 import { runGit } from "./helpers/git.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 
@@ -132,5 +138,42 @@ describe("Git process reuse", () => {
     const freshCache = createGitDiscoveryCache();
     const afterAdd = await listUntrackedFiles(root, { discoveryCache: freshCache });
     expect(afterAdd.map((file) => path.basename(file)).sort()).toEqual(["first.txt", "second.txt"]);
+  });
+  it("shares working-tree diffs within an operation without retaining them across updates", async () => {
+    const root = await temps.create("codegraph-git-working-diff-");
+    await fsp.writeFile(path.join(root, "tracked.ts"), "export const tracked = 1;\n");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "tracked.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    const traceFile = path.join(root, "git-trace.log");
+    const originalGitTrace = process.env.GIT_TRACE;
+    process.env.GIT_TRACE = traceFile;
+    const cache = createGitDiscoveryCache();
+    const options = { base: "HEAD", head: "WORKTREE", discoveryCache: cache };
+    try {
+      expect(await Promise.all([listChangedFiles(root, options), listChangedFiles(root, options)])).toEqual([[], []]);
+      await fsp.writeFile(path.join(root, "tracked.ts"), "export const tracked = 2;\n");
+      expect(await listChangedFiles(root, options)).toEqual([]);
+      const fresh = await listChangedFiles(root, { ...options, discoveryCache: createGitDiscoveryCache() });
+      expect(fresh.map((file) => path.basename(file))).toEqual(["tracked.ts"]);
+    } finally {
+      if (originalGitTrace === undefined) delete process.env.GIT_TRACE;
+      else process.env.GIT_TRACE = originalGitTrace;
+    }
+    const trace = await fsp.readFile(traceFile, "utf8");
+    expect(trace.match(/git diff [^\r\n]*--name-only/g)).toHaveLength(2);
+  });
+  it("keeps complete rename history separate from destination-only working-tree diffs", async () => {
+    const root = await temps.create("codegraph-git-rename-history-");
+    await fsp.writeFile(path.join(root, "before.ts"), "export const value = 1;\n");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "before.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    runGit(root, ["mv", "before.ts", "after.ts"]);
+    const options = { base: "HEAD", head: "WORKTREE", discoveryCache: createGitDiscoveryCache() };
+    const destinations = await listChangedFiles(root, options);
+    expect(destinations.map((file) => path.basename(file))).toEqual(["after.ts"]);
+    const history = await listChangedFiles(root, { ...options, includeRenameSources: true });
+    expect(history.map((file) => path.basename(file)).sort()).toEqual(["after.ts", "before.ts"]);
   });
 });

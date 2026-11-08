@@ -10,6 +10,7 @@ import {
   tsconfigAliasMappedTails,
   listUntrackedProjectFiles,
   resolveIncrementalFileList,
+  resolveIncrementalFilePlan,
 } from "../src/indexer/incremental-plan.js";
 import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
 import { buildProjectIndex, buildProjectIndexIncremental, buildGraphDelta } from "../src/indexer/build-index.js";
@@ -17,6 +18,7 @@ import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import type { Edge } from "../src/types.js";
 import * as projectFilesModule from "../src/util/project-files.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 
 function fileEdge(from: string, to: string): Edge {
@@ -322,6 +324,181 @@ describe("resolveIncrementalFileList", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it.each([
+    { unborn: true, explicitRange: false },
+    { unborn: false, explicitRange: true },
+  ])(
+    "keeps reconciled restoration candidates (unborn=$unborn, explicitRange=$explicitRange)",
+    async ({ unborn, explicitRange }) => {
+      const root = await mkTmpDir("cg-reconciled-restoration-");
+      const options = {
+        cache: "disk" as const,
+        threads: 1,
+        logLevel: "silent" as const,
+        ...(explicitRange ? { gitBase: "HEAD", gitHead: "WORKTREE" } : {}),
+      };
+      const target = path.join(root, "target.ts");
+      const main = path.join(root, "main.ts");
+      const update = async () => {
+        const context = projectFilesModule.createProjectDiscoveryContext(root);
+        const plan = await resolveIncrementalFilePlan(root, options, context);
+        if (!plan) throw new Error("expected a reusable file plan");
+        return buildProjectIndexIncremental(root, {
+          ...options,
+          files: plan.files,
+          filesAreProjectScope: true,
+          discoveryContext: context,
+          reconciledManifestUpdatedAt: plan.manifestUpdatedAt,
+          reconciledWorkingTreeDiffFiles: plan.workingTreeDiffFiles,
+          reconciledUntrackedFiles: plan.untrackedFiles,
+        });
+      };
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        await fs.writeFile(target, "export function value() { return 1; }\n");
+        await fs.writeFile(main, 'import { value } from "./target";\nexport const run = value();\n');
+        await fs.mkdir(path.join(root, "other"));
+        await fs.writeFile(path.join(root, "other", "target.ts"), "export function value() { return 99; }\n");
+        git(root, ["add", "."]);
+        if (!unborn) git(root, ["commit", "-qm", "base"]);
+        await buildProjectIndex(root, options);
+        await fs.unlink(target);
+        expect((await update()).byFile.has(fileIdentityKey(target))).toBe(false);
+        git(root, ["checkout", "--", "target.ts"]);
+        const restored = await update();
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(restored.byFile.has(fileIdentityKey(target))).toBe(true);
+        expect(restored.byFile.get(fileIdentityKey(main))?.imports[0]?.resolved).toBe(normalizePath(target));
+        expect([...restored.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        expect(new Set(restored.graph.edges)).toEqual(new Set(cold.graph.edges));
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["missing", "invalid", "older epoch"] as const)(
+    "restores tracked files from a manifest with %s dirty-path metadata",
+    async (metadata) => {
+      const root = await mkTmpDir("cg-incremental-restored-migration-");
+      const options: BuildOptions = { cache: "disk", threads: 1, logLevel: "silent" };
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        const target = path.join(root, "restored.ts");
+        await fs.writeFile(target, "export const restored = 1;\n");
+        await fs.writeFile(path.join(root, "main.ts"), 'import { restored } from "./restored";\n');
+        git(root, ["add", "."]);
+        git(root, ["commit", "-qm", "base"]);
+        await buildProjectIndex(root, options);
+        await fs.unlink(target);
+        await buildProjectIndexIncremental(root, options);
+        git(root, ["checkout", "--", "restored.ts"]);
+        const manifestPath = manifestPathFor(root);
+        const stored = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+          gitDirtyFiles?: unknown;
+          buildOptions: { coreAlgorithmEpoch: number };
+        };
+        if (metadata === "invalid") stored.gitDirtyFiles = ["../outside.ts"];
+        else delete stored.gitDirtyFiles;
+        if (metadata === "older epoch") stored.buildOptions.coreAlgorithmEpoch -= 1;
+        await fs.writeFile(manifestPath, JSON.stringify(stored));
+        const plan = await resolveIncrementalFilePlan(root, options);
+        if (metadata === "older epoch") {
+          expect(plan).toBeNull();
+        } else {
+          expect(plan?.files.some((file) => file.endsWith("/restored.ts"))).toBe(true);
+        }
+        const incremental = await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect([...incremental.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        expect(new Set(incremental.graph.edges)).toEqual(new Set(cold.graph.edges));
+        expect(incremental.byFile.size).toBe(2);
+        const upgraded = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { gitDirtyFiles?: string[] };
+        expect(upgraded.gitDirtyFiles).toEqual([]);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { subdirectory: false, alias: false },
+    { subdirectory: true, alias: false },
+    { subdirectory: false, alias: true },
+    { subdirectory: true, alias: true },
+  ])(
+    "rediscovers restored tracked files (subdirectory=$subdirectory, alias=$alias)",
+    async ({ subdirectory, alias }) => {
+      const root = await mkTmpDir("cg-incremental-restored-plan-");
+      const aliasParent = await mkTmpDir("cg-incremental-restored-plan-alias-");
+      const project = subdirectory ? path.join(root, "project") : root;
+      let scanRoot = project;
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        await fs.mkdir(path.join(project, "src", "nested"), { recursive: true });
+        await fs.mkdir(path.join(project, "src", "excluded"), { recursive: true });
+        await fs.writeFile(path.join(project, "src", "nested", "restored.ts"), "export const restored = 1;\n");
+        await fs.writeFile(path.join(project, "src", "main.ts"), 'import { restored } from "./nested/restored";\n');
+        await fs.writeFile(path.join(project, "src", "excluded", "decoy.ts"), "export const restored = 99;\n");
+        await fs.writeFile(path.join(root, "outside.ts"), "export const restored = 100;\n");
+        git(root, ["add", "."]);
+        git(root, ["commit", "-qm", "base"]);
+        if (alias) {
+          scanRoot = path.join(aliasParent, "project");
+          try {
+            await fs.symlink(project, scanRoot, "dir");
+          } catch (error) {
+            if (isSymlinkUnavailable(error)) return;
+            throw error;
+          }
+        }
+        const options: BuildOptions = {
+          cache: "disk",
+          threads: 1,
+          logLevel: "silent",
+          discovery: { includeGlobs: ["src/**/*.ts"], ignoreGlobs: ["src/excluded/**"] },
+        };
+        await buildProjectIndex(scanRoot, options);
+        await fs.unlink(path.join(project, "src", "nested", "restored.ts"));
+        const deleted = await buildProjectIndexIncremental(scanRoot, options);
+        expect([...deleted.byFile.keys()].some((file) => file.endsWith("/restored.ts"))).toBe(false);
+        git(project, ["checkout", "--", "src/nested/restored.ts"]);
+        const context = projectFilesModule.createProjectDiscoveryContext(scanRoot);
+        const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+        const plan = await resolveIncrementalFilePlan(scanRoot, options, context);
+        expect(plan).not.toBeNull();
+        if (!plan) throw new Error("expected a Git-backed file plan");
+        const relative = (files: Iterable<string>): string[] =>
+          Array.from(files, (file) => path.relative(scanRoot, file).replace(/\\/g, "/")).sort();
+        expect(relative(plan.files)).toEqual(["src/main.ts", "src/nested/restored.ts"]);
+        expect(relative(plan.workingTreeDiffFiles)).toEqual(["src/nested/restored.ts"]);
+        expect(scanSpy).not.toHaveBeenCalled();
+        const incremental = await buildProjectIndexIncremental(scanRoot, {
+          ...options,
+          files: plan.files,
+          filesAreProjectScope: true,
+          discoveryContext: context,
+          reconciledManifestUpdatedAt: plan.manifestUpdatedAt,
+          reconciledWorkingTreeDiffFiles: plan.workingTreeDiffFiles,
+          reconciledUntrackedFiles: plan.untrackedFiles,
+        });
+        const cold = await buildProjectIndex(scanRoot, { ...options, cache: "off" });
+        expect(relative(incremental.byFile.keys())).toEqual(relative(cold.byFile.keys()));
+        expect(new Set(incremental.graph.edges)).toEqual(new Set(cold.graph.edges));
+      } finally {
+        vi.restoreAllMocks();
+        if (scanRoot !== project) await fs.unlink(scanRoot).catch(() => {});
+        await fs.rm(aliasParent, { recursive: true, force: true });
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("added-file specifier stems", () => {
