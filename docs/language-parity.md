@@ -104,6 +104,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Private base methods are not inherited, and a static context has no target.
 - A same-name use with several candidates or an unproven receiver makes coverage `partial`; an unbound name does not.
 - A classified receiver (`new Widget()`, a type name, `this`) excludes a use only when its type and every supertype resolve.
+- A generic type parameter (Kotlin, C#, Go) is a type variable, never a class: a receiver typed by `T` beside a class `T` gives no member target, and a constructed `T()` outside its scope still resolves to the class. Bounds are not solved.
 
 ### Calls and call compatibility
 

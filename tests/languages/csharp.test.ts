@@ -65,6 +65,11 @@ import {
 } from "../helpers/duplicate-declaration-import-fixture.js";
 import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 import { CSHARP_SCOPE_READ_FILES, CSHARP_SCOPE_READ_LINES } from "../helpers/scope-binding-read-fixtures.js";
+import {
+  expectTypeParameterReceiverRow,
+  TYPE_PARAMETER_RECEIVER_CACHE_MODES,
+  TYPE_PARAMETER_RECEIVER_ROWS,
+} from "../helpers/type-parameter-receiver-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -5822,4 +5827,16 @@ describe("C# interface inheritance", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("C# type parameter beside a same-named class", () => {
+  const rows = TYPE_PARAMETER_RECEIVER_ROWS.filter((row) => row.language === "csharp");
+  for (const mode of TYPE_PARAMETER_RECEIVER_CACHE_MODES) {
+    it.each(rows.map((row, position) => ({ row, position })))(
+      `never selects the class's members through a type-parameter receiver (${mode}, row $position)`,
+      async ({ row }) => {
+        await expectTypeParameterReceiverRow(row, mode);
+      },
+    );
+  }
 });

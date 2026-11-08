@@ -55,6 +55,8 @@ export type SymbolDef = {
    * no type itself, so symbol listings and handle lookups skip it while the graph keeps it as the member owner.
    */
   swiftExtensionOwner?: boolean;
+  /** Generic type parameter (`<T>`, `[T any]`): it names a type variable and declares no members. */
+  typeParameter?: boolean;
   docstring?: string;
   lineSpan?: number;
   complexity?: number;

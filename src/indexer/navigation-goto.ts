@@ -82,6 +82,7 @@ import {
   csharpLookupName,
   csharpQualifiedThroughGenericOwner,
   csharpQualifiedNameNode,
+  bindsTypeParameter,
   findClosestScopeBinding,
   getOrBuildScopeIndex,
   resolveNamedDefinition,
@@ -3309,6 +3310,7 @@ async function resolveReceiverDefinition(
       }
     }
     const typeName = sliceText(constructor, source);
+    if (bindsTypeParameter(getScopeIndex(), typeName, constructor, sup)) return null;
     const typedLocals = memberDeclaringLocals(mod, typeName, sup.normalizeIdentifier);
     if (typedLocals.length === 1) {
       return {

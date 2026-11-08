@@ -46,6 +46,10 @@ import {
   JVM_INCOMPLETE_WILDCARD_REFERENCES,
 } from "./helpers/jvm-incomplete-wildcard-fixture.js";
 import {
+  expectTypeParameterReceiverRow,
+  TYPE_PARAMETER_RECEIVER_ROWS,
+} from "./helpers/type-parameter-receiver-fixture.js";
+import {
   CSHARP_ALIAS_SHADOW_FILES,
   CSHARP_ALIAS_BOUNDARIES,
   csharpAliasBoundaryFixture,
@@ -4364,4 +4368,13 @@ nativeDescribe("PHP path-fallback native graph parity", () => {
       },
     );
   }
+});
+
+nativeDescribe("Type-parameter receiver native parity", () => {
+  it.each(TYPE_PARAMETER_RECEIVER_ROWS.map((row, position) => ({ row, position })))(
+    "keeps goto, references, and graph edges on the class for $row.language row $position",
+    async ({ row }) => {
+      await expectTypeParameterReceiverRow(row, "off");
+    },
+  );
 });

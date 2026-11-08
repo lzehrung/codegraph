@@ -19,6 +19,7 @@ import {
   closestContainingScope,
   typeOnlyName,
   isValueNamespaceBinding,
+  isTypeParameterName,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cachedParsedContextForIndexSync, cachedScopeIndexForIndex, retainScopeIndexForIndex } from "./parsed-cache.js";
@@ -325,6 +326,17 @@ export function findClosestScopeBinding(
   }
 
   return null;
+}
+
+/** Whether `name` at `node` binds a generic type parameter, which is a type variable and never a nominal type. */
+export function bindsTypeParameter(
+  scopeIndex: ScopeIndex,
+  name: string,
+  node: SyntaxNodeLike,
+  support: LanguageSupport,
+): boolean {
+  const binding = findClosestScopeBinding(scopeIndex, name, node, support);
+  return !!binding?.node && isTypeParameterName(support.id, binding.node);
 }
 
 /** A later or not-yet-bound local can make an earlier outer-name read invalid. */

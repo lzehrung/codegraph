@@ -7,6 +7,11 @@ import { normalizePath } from "../../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import {
+  expectTypeParameterReceiverRow,
+  TYPE_PARAMETER_RECEIVER_CACHE_MODES,
+  TYPE_PARAMETER_RECEIVER_ROWS,
+} from "../helpers/type-parameter-receiver-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 
 const definition: LanguageTestDefinition = {
@@ -492,4 +497,16 @@ describe("Go same-package peer visibility", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Go type parameter beside a same-named type", () => {
+  const rows = TYPE_PARAMETER_RECEIVER_ROWS.filter((row) => row.language === "go");
+  for (const mode of TYPE_PARAMETER_RECEIVER_CACHE_MODES) {
+    it.each(rows.map((row, position) => ({ row, position })))(
+      `never selects the type's methods through a type-parameter receiver (${mode}, row $position)`,
+      async ({ row }) => {
+        await expectTypeParameterReceiverRow(row, mode);
+      },
+    );
+  }
 });

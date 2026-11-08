@@ -565,6 +565,12 @@ export function scopeNodesFor(languageId: string): ScopeNodeRow {
   return SCOPE_NODE_ROWS[languageId] ?? EMPTY_SCOPE_NODES;
 }
 
+/** Whether `node` is the name a generic type-parameter declaration introduces. */
+export function isTypeParameterName(languageId: string, node: SyntaxNodeLike): boolean {
+  const parentType = node.parent?.type;
+  return !!parentType && !!scopeNodesFor(languageId).typeParameterTypes?.has(parentType);
+}
+
 /** Preserve sigils on variable nodes so they cannot collide with import, type, or function names. */
 export function scopeIdentifierKey(
   row: ScopeNodeRow,

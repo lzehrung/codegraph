@@ -19,6 +19,7 @@ import { swiftExtensionOwnerType } from "../util/swift-tree.js";
 import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
+import { isTypeParameterName } from "./scope-nodes.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
@@ -878,6 +879,7 @@ export function collectLocalsAndExportsFromSource(
       if (tagRole) base.cTag = tagRole;
     }
     if (support.id === "swift" && node && swiftExtensionOwnerType(node)) base.swiftExtensionOwner = true;
+    if (kind === SymbolKind.TypeAlias && node && isTypeParameterName(support.id, node)) base.typeParameter = true;
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;
