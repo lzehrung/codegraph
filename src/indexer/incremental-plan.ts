@@ -515,12 +515,19 @@ export async function listUntrackedProjectFiles(
 
 /**
  * What the untracked listing's Git child reports about tracked files: those Git cannot compare, and each path's
- * spelling. Both are read on first use.
+ * spelling. Each is read on first use.
  */
 export type GitWorktreeSignals = {
   flaggedFiles: () => readonly string[];
   isCurrentSpelling: (file: string) => boolean;
+  /** Every tracked and untracked path as the listing spells it. */
+  listedFiles: () => Iterable<string>;
 };
+
+function* listedPaths(tracked: ReadonlySet<string> | undefined, untracked: ReadonlySet<string>): Generator<string> {
+  if (tracked) yield* tracked;
+  yield* untracked;
+}
 
 /**
  * Tracked files whose worktree Git cannot compare with the index, and the spelling Git records for each tracked or
@@ -539,7 +546,8 @@ export async function listGitWorktreeSignals(
   const untracked = new Set(listing.untracked);
   return {
     flaggedFiles: () => listing.flaggedFiles?.() ?? [],
-    isCurrentSpelling: (file) => untracked.has(file) || !!listing.trackedPaths?.().has(file),
+    isCurrentSpelling: (file) => !!listing.trackedPaths?.().has(file) || untracked.has(file),
+    listedFiles: () => listedPaths(listing.trackedPaths?.(), untracked),
   };
 }
 
@@ -643,7 +651,10 @@ async function findExistingFiles(
 
 /** Changes Git's diff and index listings cannot show, found by comparing files with the manifest. */
 export type GitHiddenChanges = {
-  /** Files for a signature check: the submodule and flagged files whose stat differs from the manifest, or that it has not seen. */
+  /**
+   * Files for a signature check: the submodule, flagged and respelled files whose stat differs from the manifest, or
+   * that it has not seen.
+   */
   files: string[];
   /** Manifest paths retired because Git now spells their file differently (a case-only rename). */
   retiredTrackedFiles: string[];
@@ -663,6 +674,9 @@ export type GitHiddenChanges = {
  *   a file that differs from `lastCommit` in the diff, but one that matches it nowhere. A flagged file the manifest
  *   has is compared by stat. One it lacks is a file that was absent, or is not discovered; it is indexed when it now
  *   exists and discovery accepts it.
+ * - Git's diff names no file when a case-only rename arrives through the index's spelling alone (a branch switch,
+ *   `git reset --hard`, `git checkout -f`), so every manifest key is compared with the spelling of the listing the update
+ *   already read (`findRespelledTrackedFiles`).
  *
  * `args.trackedEntries` loses the manifest keys retired for a case-only rename, so the candidates that follow see the
  * file's new spelling as unseen.
@@ -692,20 +706,22 @@ export async function reconcileGitHiddenChanges(args: {
   });
   let submoduleSpellings: Set<string> | undefined;
   const isCurrentSpelling = (file: string): boolean => {
+    if (args.signals.isCurrentSpelling(file)) return true;
     submoduleSpellings ??= new Set(submoduleFiles);
-    return submoduleSpellings.has(file) || args.signals.isCurrentSpelling(file);
+    return submoduleSpellings.has(file);
   };
   const respelled = findRespelledTrackedFiles(
     args.trackedEntries,
-    [...args.gitCandidates, ...submoduleFiles],
+    chainPaths(args.signals.listedFiles(), submoduleFiles),
     isCurrentSpelling,
+    args.gitCandidates,
   );
-  for (const file of respelled.retiredTrackedFiles) delete args.trackedEntries[file];
+  for (const key of respelled.retiredTrackedFiles) delete args.trackedEntries[key];
 
   const verified = new Set(
     await filterIncrementalDiscoveryCandidates(
       args.projectRoot,
-      submoduleFiles,
+      [...submoduleFiles, ...respelled.respelledFiles],
       args.trackedEntries,
       args.opts,
       args.context,
@@ -733,36 +749,75 @@ export async function reconcileGitHiddenChanges(args: {
   };
 }
 
+function* chainPaths(...sources: Iterable<string>[]): Generator<string> {
+  for (const source of sources) yield* source;
+}
+
 /**
  * On a case-insensitive file system a rename that only changes case leaves the manifest key spelled the old way, and an
  * existence probe still finds the file. Both spellings then index one file: the stale key's edges outlive the rename and
- * which spelling a module carries depends on processing order. Git's listing spells the file one way, so a manifest key
- * that the listing no longer spells is retired. `droppedSpellings` are the paths callers remove from their candidates:
- * the retired keys, which a diff still names as deleted, and the candidates the listing does not spell.
+ * which spelling a module carries depends on processing order. Git's listing spells each file one way, and a cold build
+ * keeps that spelling, so the update does too:
+ *
+ * - A manifest key that the listing does not spell, or that a later listed spelling of the same file replaces, is retired
+ *   when the listing spells that file another way. A listed spelling the manifest does not hold is `respelledFiles`, which
+ *   an update indexes as new.
+ * - A candidate the manifest does not hold, which names a spelling the listing does not use for that file (a diff names
+ *   both spellings of a renamed file), is dropped. `droppedSpellings` holds those and the retired keys, which a diff still
+ *   names as deleted.
+ *
+ * An index can hold one path in two spellings at once (after a conflicted stash pop, or `git checkout HEAD -- <old
+ * spelling>` following a staged case rename). A cold build then keeps the last spelling it lists
+ * (`normalizeIndexedFileInputs`), and so does this.
+ *
+ * The comparison is in memory, with no Git child and no stat. It case-folds every listed path once; keys and candidates
+ * the listing spells itself are settled by an exact lookup.
  */
 export function findRespelledTrackedFiles(
   trackedEntries: Record<string, ManifestFileEntry>,
-  candidates: readonly string[],
-  isCurrentSpelling: (file: string) => boolean,
-): { retiredTrackedFiles: string[]; droppedSpellings: Set<string> } {
-  const retiredTrackedFiles = new Set<string>();
-  const droppedSpellings = new Set<string>();
-  if (!isFileIdentityCaseInsensitive()) return { retiredTrackedFiles: [], droppedSpellings };
-  let keyByIdentity: Map<string, string> | undefined;
-  for (const candidate of new Set(candidates)) {
-    if (Object.hasOwn(trackedEntries, candidate)) continue;
-    keyByIdentity ??= new Map(Object.keys(trackedEntries).map((key) => [fileIdentityKey(key), key]));
-    const key = keyByIdentity.get(fileIdentityKey(candidate));
-    if (!key || key === candidate) continue;
-    const candidateIsCurrent = isCurrentSpelling(candidate);
-    if (candidateIsCurrent && !isCurrentSpelling(key)) {
-      retiredTrackedFiles.add(key);
-      droppedSpellings.add(key);
-    } else if (!candidateIsCurrent && isCurrentSpelling(key)) {
-      droppedSpellings.add(candidate);
-    }
+  listedFiles: Iterable<string>,
+  isListed: (file: string) => boolean,
+  candidates: readonly string[] = [],
+): { retiredTrackedFiles: string[]; respelledFiles: string[]; droppedSpellings: Set<string> } {
+  if (!isFileIdentityCaseInsensitive()) {
+    return { retiredTrackedFiles: [], respelledFiles: [], droppedSpellings: new Set() };
   }
-  return { retiredTrackedFiles: Array.from(retiredTrackedFiles), droppedSpellings };
+  const spellingByIdentity = new Map<string, string>();
+  // Listed spellings that a later listed spelling of the same file replaces.
+  const outranked = new Set<string>();
+  for (const file of listedFiles) {
+    const identity = fileIdentityKey(file);
+    const earlier = spellingByIdentity.get(identity);
+    if (earlier !== undefined && earlier !== file) outranked.add(earlier);
+    spellingByIdentity.set(identity, file);
+  }
+  const isListedSpelling = (file: string): boolean => isListed(file) && !outranked.has(file);
+  const retired = new Set<string>();
+  const respelledFiles = new Set<string>();
+  const replacedBy = (file: string): string | undefined => {
+    const spelling = spellingByIdentity.get(fileIdentityKey(file));
+    return spelling === file ? undefined : spelling;
+  };
+  for (const key of Object.keys(trackedEntries)) {
+    if (isListedSpelling(key)) continue;
+    const spelling = replacedBy(key);
+    if (spelling === undefined) continue;
+    retired.add(key);
+    if (!Object.hasOwn(trackedEntries, spelling)) respelledFiles.add(spelling);
+  }
+  const droppedSpellings = new Set(retired);
+  for (const candidate of new Set(candidates)) {
+    if (Object.hasOwn(trackedEntries, candidate) || isListedSpelling(candidate)) continue;
+    const spelling = replacedBy(candidate);
+    if (spelling === undefined) continue;
+    droppedSpellings.add(candidate);
+    if (!Object.hasOwn(trackedEntries, spelling)) respelledFiles.add(spelling);
+  }
+  return {
+    retiredTrackedFiles: Array.from(retired),
+    respelledFiles: Array.from(respelledFiles),
+    droppedSpellings,
+  };
 }
 
 /**

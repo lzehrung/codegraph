@@ -29,6 +29,7 @@ import { readConfinedUtf8FileWithSize } from "../src/util/confined-file.js";
 import {
   createGitDiscoveryCache,
   listChangedFileEntries,
+  listFlaggedTrackedFiles,
   listUntrackedAndFlaggedFiles,
   setGitExecutableForTests,
 } from "../src/util/git.js";
@@ -352,6 +353,18 @@ describe("tracked files flagged assume-unchanged or skip-worktree", () => {
     expect(relative(listing.flaggedFiles?.())).toEqual(["src/both.ts", "src/nested/left.ts", "src/nested/right.ts"]);
     expect(listing.trackedPaths?.().has(normalizePath(path.join(root, "src/main.ts")))).toBe(true);
     expect(listing.trackedPaths?.().has(normalizePath(path.join(root, "fresh.ts")))).toBe(false);
+  });
+
+  it("names every tracked and untracked path of the listing, in Git's spelling, for the spelling comparison", async () => {
+    const root = await createRepo(SOURCES);
+    await fsp.writeFile(path.join(root, "fresh.ts"), "export const fresh = 1;\n");
+    const signals = await listGitWorktreeSignals(root, undefined, createProjectDiscoveryContext(root));
+    const listed = [...signals.listedFiles()];
+    expect(listed.map((file) => path.relative(root, file).replace(/\\/g, "/")).sort()).toEqual(
+      [...Object.keys(SOURCES), "fresh.ts"].sort(),
+    );
+    for (const file of listed) expect(signals.isCurrentSpelling(file)).toBe(true);
+    expect(signals.isCurrentSpelling(normalizePath(path.join(root, "src/MAIN.ts")))).toBe(false);
   });
 
   it("records every flagged tracked file in the manifest, indexed or absent, relative to the project root", async () => {
@@ -871,27 +884,193 @@ describe("a case-only rename on a case-insensitive file system", () => {
     }
   });
 
-  it("retires a manifest spelling that Git no longer lists and drops candidates it does not list", () => {
-    resetFileIdentityCaseSensitivityForTests(true);
+  /**
+   * Leaves the manifest as an update at `HEAD` wrote it, but with the keys it had before: Git's diff against the recorded
+   * commit, and the recorded dirty files, name nothing. A branch switch or `git reset --hard` between commits that spell a
+   * path differently arrives at that state, and only the spelling of Git's listing says the keys are old.
+   */
+  async function recordHeadWithOldKeys(root: string): Promise<void> {
+    const stored = JSON.parse(await fsp.readFile(manifestPathOf(root), "utf8")) as Record<string, unknown>;
+    stored.lastCommit = runGit(root, ["rev-parse", "HEAD"]);
+    stored.gitDirtyFiles = [];
+    await fsp.writeFile(manifestPathOf(root), JSON.stringify(stored));
+  }
+
+  it.each(["disk", "session"] as const)(
+    "retires the old spelling of a file when only the index's spelling changed (%s)",
+    async (mode) => {
+      if (!(await fileSystemIgnoresCase())) return;
+      const root = await createRepo(FOO_SOURCES, { "core.ignorecase": "true" });
+      const updater = createUpdater(root, mode);
+      try {
+        await updater.update();
+        runGit(root, ["mv", "src/Foo.ts", "src/foo.ts"]);
+        runGit(root, ["commit", "-qm", "rename"]);
+        await recordHeadWithOldKeys(root);
+        expect(runGit(root, ["diff", "--name-only", "HEAD"])).toBe("");
+        const respelled = await updater.update();
+        expect(spellings(respelled, root)).toEqual(["src/foo.ts", "src/main.ts", "src/other.ts"]);
+        await expectMatchesCold(root, respelled);
+        // The old key is gone from the manifest, so the next update has nothing to settle.
+        const written = (await readStoredManifest(root)).updatedAt;
+        await expectMatchesCold(root, await updater.update());
+        expect((await readStoredManifest(root)).updatedAt).toBe(written);
+      } finally {
+        updater.close();
+      }
+    },
+  );
+
+  it("retires every file below a directory whose spelling only the index changed", async () => {
+    if (!(await fileSystemIgnoresCase())) return;
+    const root = await createRepo(
+      {
+        "src/main.ts": 'import { b } from "./Nested/b";\nexport function run() { return b; }\n',
+        "src/Nested/a.ts": "export const a = 1;\n",
+        "src/Nested/b.ts": 'import { a } from "./a";\nexport const b = a;\n',
+      },
+      { "core.ignorecase": "true" },
+    );
+    const updater = createUpdater(root, "disk");
+    try {
+      await updater.update();
+      runGit(root, ["mv", "src/Nested", "src/__case_tmp"]);
+      runGit(root, ["mv", "src/__case_tmp", "src/nested"]);
+      runGit(root, ["commit", "-qm", "rename the directory"]);
+      await recordHeadWithOldKeys(root);
+      const respelled = await updater.update();
+      expect(spellings(respelled, root)).toEqual(["src/main.ts", "src/nested/a.ts", "src/nested/b.ts"]);
+      await expectMatchesCold(root, respelled);
+    } finally {
+      updater.close();
+    }
+  });
+
+  it("follows an untracked file that is renamed in case, which Git's diff never names", async () => {
+    if (!(await fileSystemIgnoresCase())) return;
+    const root = await createRepo(FOO_SOURCES, { "core.ignorecase": "true" });
+    const updater = createUpdater(root, "disk");
+    try {
+      await fsp.writeFile(path.join(root, "src/Scratch.ts"), "export const scratch = 1;\n");
+      await updater.update();
+      await fsp.rename(path.join(root, "src/Scratch.ts"), path.join(root, "src/scratch.ts"));
+      const renamed = await updater.update();
+      expect(spellings(renamed, root)).toEqual(["src/Foo.ts", "src/main.ts", "src/other.ts", "src/scratch.ts"]);
+      await expectMatchesCold(root, renamed);
+    } finally {
+      updater.close();
+    }
+  });
+
+  it("keeps the spelling a cold build lists while the index holds a path twice, and after one entry is removed", async () => {
+    if (!(await fileSystemIgnoresCase())) return;
+    const root = await createRepo(FOO_SOURCES, { "core.ignorecase": "true" });
+    const updater = createUpdater(root, "disk");
+    try {
+      await updater.update();
+      runGit(root, ["mv", "src/Foo.ts", "src/foo.ts"]);
+      await expectMatchesCold(root, await updater.update());
+      // The index now names `Foo.ts` and `foo.ts`: one file, two spellings. A cold build lists both and keeps the last.
+      runGit(root, ["checkout", "HEAD", "--", "src/Foo.ts"]);
+      expect(runGit(root, ["ls-files"]).split("\n")).toEqual([
+        "src/Foo.ts",
+        "src/foo.ts",
+        "src/main.ts",
+        "src/other.ts",
+      ]);
+      const doubled = await updater.update();
+      expect(spellings(doubled, root)).toEqual(["src/foo.ts", "src/main.ts", "src/other.ts"]);
+      await expectMatchesCold(root, doubled);
+      runGit(root, ["rm", "-q", "--cached", "src/foo.ts"]);
+      const single = await updater.update();
+      expect(spellings(single, root)).toEqual(["src/Foo.ts", "src/main.ts", "src/other.ts"]);
+      await expectMatchesCold(root, single);
+    } finally {
+      updater.close();
+    }
+  });
+
+  describe("compared in memory with Git's listing", () => {
     const entry = { sig: "1:1", edges: [] } satisfies ManifestFileEntry;
-    const entries = { "/p/src/Foo.ts": entry, "/p/src/keep.ts": entry };
-    const listed = new Set(["/p/src/foo.ts", "/p/src/keep.ts"]);
-    const current = (file: string): boolean => listed.has(file);
-    expect(findRespelledTrackedFiles(entries, ["/p/src/Foo.ts", "/p/src/foo.ts"], current)).toEqual({
-      retiredTrackedFiles: ["/p/src/Foo.ts"],
-      droppedSpellings: new Set(["/p/src/Foo.ts"]),
+    const respell = (
+      entries: Record<string, ManifestFileEntry>,
+      listed: readonly string[],
+      candidates: readonly string[] = [],
+    ) => findRespelledTrackedFiles(entries, listed, (file) => listed.includes(file), candidates);
+    const none = { retiredTrackedFiles: [], respelledFiles: [], droppedSpellings: new Set() };
+
+    it("retires a key the listing spells differently and names the listed spelling", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const entries = { "/p/src/Foo.ts": entry, "/p/src/keep.ts": entry, "/p/src/gone.ts": entry };
+      expect(respell(entries, ["/p/src/foo.ts", "/p/src/keep.ts", "/p/src/new.ts"])).toEqual({
+        retiredTrackedFiles: ["/p/src/Foo.ts"],
+        respelledFiles: ["/p/src/foo.ts"],
+        droppedSpellings: new Set(["/p/src/Foo.ts"]),
+      });
     });
-    // A candidate that Git does not spell is dropped when the manifest already holds the listed spelling.
-    const respelled = { "/p/src/foo.ts": entry };
-    expect(findRespelledTrackedFiles(respelled, ["/p/src/Foo.ts"], current)).toEqual({
-      retiredTrackedFiles: [],
-      droppedSpellings: new Set(["/p/src/Foo.ts"]),
+
+    it("retires every key below a respelled directory", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const entries = { "/p/src/Nested/c.ts": entry, "/p/src/Nested/d.ts": entry, "/p/src/NESTED/e.ts": entry };
+      const listed = ["/p/src/nested/c.ts", "/p/src/nested/d.ts", "/p/src/nested/e.ts"];
+      const respelled = respell(entries, listed);
+      expect(respelled.retiredTrackedFiles.sort()).toEqual(Object.keys(entries).sort());
+      expect(respelled.respelledFiles.sort()).toEqual(listed);
     });
-    // Unrelated candidates and an unknown listing change nothing.
-    expect(findRespelledTrackedFiles(entries, ["/p/src/other.ts"], current).retiredTrackedFiles).toEqual([]);
-    expect(findRespelledTrackedFiles(entries, ["/p/src/foo.ts"], () => false).retiredTrackedFiles).toEqual([]);
-    resetFileIdentityCaseSensitivityForTests(false);
-    expect(findRespelledTrackedFiles(entries, ["/p/src/foo.ts"], current).retiredTrackedFiles).toEqual([]);
+
+    it("retires the old key that the manifest holds beside the listed spelling", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const entries = { "/p/src/util/Util.ts": entry, "/p/src/util/util.ts": entry };
+      expect(respell(entries, ["/p/src/util/Util.ts"])).toEqual({
+        retiredTrackedFiles: ["/p/src/util/util.ts"],
+        respelledFiles: [],
+        droppedSpellings: new Set(["/p/src/util/util.ts"]),
+      });
+    });
+
+    it("keeps the last spelling a path is listed in, as a cold build does", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const listed = ["/p/src/Nested/c.ts", "/p/src/nested/c.ts"];
+      // The manifest holds the earlier spelling: the later one replaces it.
+      expect(respell({ "/p/src/Nested/c.ts": entry }, listed)).toEqual({
+        retiredTrackedFiles: ["/p/src/Nested/c.ts"],
+        respelledFiles: ["/p/src/nested/c.ts"],
+        droppedSpellings: new Set(["/p/src/Nested/c.ts"]),
+      });
+      // The manifest holds the later one: the earlier spelling a diff names is not a new file.
+      expect(respell({ "/p/src/nested/c.ts": entry }, listed, ["/p/src/Nested/c.ts"])).toEqual({
+        retiredTrackedFiles: [],
+        respelledFiles: [],
+        droppedSpellings: new Set(["/p/src/Nested/c.ts"]),
+      });
+    });
+
+    it("drops a candidate that names a spelling the listing does not use, and names the spelling it uses", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const candidates = ["/p/src/Foo.ts", "/p/src/foo.ts", "/p/src/other.ts"];
+      expect(respell({ "/p/src/foo.ts": entry }, ["/p/src/foo.ts"], candidates)).toEqual({
+        ...none,
+        droppedSpellings: new Set(["/p/src/Foo.ts"]),
+      });
+      // The manifest has neither spelling: the listed one must still be verified.
+      expect(respell({}, ["/p/src/foo.ts"], ["/p/src/Foo.ts"])).toEqual({
+        retiredTrackedFiles: [],
+        respelledFiles: ["/p/src/foo.ts"],
+        droppedSpellings: new Set(["/p/src/Foo.ts"]),
+      });
+    });
+
+    it("leaves keys, files and candidates that the listing does not spell in another case", () => {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const entries = { "/p/src/Foo.ts": entry, "/p/src/gone.ts": entry };
+      expect(respell(entries, ["/p/src/foo2.ts"], ["/p/src/other.ts"])).toEqual(none);
+      expect(respell({ "/p/a.ts": entry }, ["/p/a.ts"], ["/p/a.ts", "/p/b.ts"])).toEqual(none);
+    });
+
+    it("compares nothing on a case-sensitive file system", () => {
+      resetFileIdentityCaseSensitivityForTests(false);
+      expect(respell({ "/p/src/Foo.ts": entry }, ["/p/src/foo.ts"], ["/p/src/FOO.ts"])).toEqual(none);
+    });
   });
 });
 
@@ -938,21 +1117,77 @@ describe("Git children spawned by incremental updates", () => {
     expect(flaggedCalls.filter((args) => args[0] === "hash-object")).toEqual([]);
   });
 
-  it("a manifest write lists the flagged files with one more Git child, next to the diff", async () => {
+  it.each(["disk", "session"] as const)(
+    "a one-file update records the flagged files from its own listing and spawns no further Git child for them (%s)",
+    async (mode) => {
+      const root = await createRepo(SOURCES);
+      runGit(root, ["update-index", "--assume-unchanged", "src/nested/left.ts"]);
+      runGit(root, ["update-index", "--skip-worktree", "src/other/value.ts"]);
+      await fsp.unlink(path.join(root, "src/other/value.ts"));
+      const updater = createUpdater(root, mode);
+      try {
+        await updater.update();
+        await updater.update();
+        await fsp.writeFile(path.join(root, "src/nested/right.ts"), "export function right() { return 3; }\n");
+        const log = await recordGitCalls();
+        const updated = await updater.update();
+        const calls = await readCalls(log);
+        const listings = calls.filter((args) => args[0] === "ls-files" && args.includes("-v") && !args.includes("-s"));
+        // One child lists the untracked and the flagged files for the update, and the manifest write reuses it.
+        expect(listings).toHaveLength(1);
+        expect(listings[0]).toContain("--others");
+        // The start of the update and the manifest write each take a diff: an edit made in between is recorded.
+        expect(calls.filter((args) => args[0] === "diff")).toHaveLength(2);
+        expect([...((await readStoredManifest(root)).gitFlaggedFiles ?? [])].sort()).toEqual([
+          "src/nested/left.ts",
+          "src/other/value.ts",
+        ]);
+        await expectMatchesCold(root, updated);
+      } finally {
+        updater.close();
+      }
+    },
+  );
+
+  it.each([
+    ["default discovery", {}],
+    ["discovery that includes ignored files", { discovery: { useGitignore: false } }],
+  ] as const)("a full build lists the flagged files once, with the untracked ones (%s)", async (_name, extra) => {
     const root = await createRepo(SOURCES);
-    const options = { cache: "disk", threads: 1, logLevel: "silent" } as const;
+    runGit(root, ["update-index", "--skip-worktree", "src/nested/left.ts"]);
+    const options = { cache: "disk", threads: 1, logLevel: "silent", ...extra } as const;
     try {
-      await buildProjectIndex(root, options);
-      await fsp.writeFile(path.join(root, "src/nested/right.ts"), "export function right() { return 3; }\n");
       const log = await recordGitCalls();
-      await buildProjectIndexIncremental(root, options);
+      await buildProjectIndex(root, options);
       const calls = await readCalls(log);
       const listings = calls.filter((args) => args[0] === "ls-files" && args.includes("-v") && !args.includes("-s"));
-      // The manifest write lists the flagged files on its own; the update's combined listing is the other `-v` child.
-      expect(listings.filter((args) => !args.includes("--others"))).toEqual([["ls-files", "-v", "-z"]]);
+      expect(listings).toHaveLength(1);
+      expect(listings[0]).toContain("--others");
+      expect((await readStoredManifest(root)).gitFlaggedFiles).toEqual(["src/nested/left.ts"]);
     } finally {
       closeDiskCacheDatabase(root, options);
     }
+  });
+
+  it("reads the flagged files of a cached listing in either ignore mode, and spawns one child only without one", async () => {
+    const root = await createRepo(SOURCES);
+    runGit(root, ["update-index", "--skip-worktree", "src/nested/left.ts"]);
+    const flagged = [normalizePath(path.join(root, "src/nested/left.ts"))];
+    const log = await recordGitCalls();
+    for (const respectGitignore of [true, false]) {
+      const cache = createGitDiscoveryCache();
+      await listUntrackedAndFlaggedFiles(root, { respectGitignore, discoveryCache: cache });
+      const listed = (await readCalls(log)).length;
+      expect(await listFlaggedTrackedFiles(root, { discoveryCache: cache })).toEqual(flagged);
+      expect(await readCalls(log)).toHaveLength(listed);
+    }
+    const before = (await readCalls(log)).length;
+    expect(await listFlaggedTrackedFiles(root, { discoveryCache: createGitDiscoveryCache() })).toEqual(flagged);
+    expect(await listFlaggedTrackedFiles(root)).toEqual(flagged);
+    expect((await readCalls(log)).slice(before)).toEqual([
+      ["ls-files", "-v", "-z"],
+      ["ls-files", "-v", "-z"],
+    ]);
   });
 });
 

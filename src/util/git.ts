@@ -1037,7 +1037,7 @@ async function listWorktreeListing(
 ): Promise<GitWorktreeListing> {
   const respectGitignore = opts?.respectGitignore ?? true;
   const cache = opts?.discoveryCache?.untrackedFiles;
-  const cacheKey = `${path.resolve(projectRoot)}\0${respectGitignore ? 1 : 0}`;
+  const cacheKey = worktreeListingCacheKey(projectRoot, respectGitignore);
   const cached = cache?.get(cacheKey);
   if (cached) {
     if (!includeTracked) return await cached;
@@ -1047,6 +1047,10 @@ async function listWorktreeListing(
   const pending = listWorktreeListingUncached(projectRoot, respectGitignore, includeTracked);
   cache?.set(cacheKey, pending);
   return await pending;
+}
+
+function worktreeListingCacheKey(projectRoot: string, respectGitignore: boolean): string {
+  return `${path.resolve(projectRoot)}\0${respectGitignore ? 1 : 0}`;
 }
 
 /** Whether a `git ls-files -v` tag marks a tracked entry Git cannot compare with the worktree: assume-unchanged or skip-worktree. */
@@ -1106,15 +1110,19 @@ async function listWorktreeListingUncached(
 }
 
 /**
- * The tracked files flagged assume-unchanged or skip-worktree, from a `git ls-files -v` that no other listing shares.
- * A manifest records them as it records the dirty files Git's diff names, from a listing made when it is written, so
- * an edit made while an update ran is not left out.
+ * The tracked files flagged assume-unchanged or skip-worktree. A manifest records them beside the dirty files Git's diff
+ * names. The update that writes the manifest has already listed them, with the untracked files, in its discovery
+ * cache's listing, which is reused whichever ignore mode it used because the flagged files do not depend on it. A flag
+ * set after that listing is not in the record: the next update verifies the files flagged then. One Git child lists
+ * them only when the operation made no listing.
  */
 export async function listFlaggedTrackedFiles(
   projectRoot: string,
-  opts?: { gitAvailable?: boolean },
-): Promise<string[]> {
+  opts?: { gitAvailable?: boolean; discoveryCache?: GitDiscoveryCache },
+): Promise<readonly string[]> {
   if (!(opts?.gitAvailable ?? true)) return [];
+  const listed = await flaggedFilesOfCachedListing(projectRoot, opts?.discoveryCache);
+  if (listed) return listed;
   const args = ["ls-files", "-v", "-z"];
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
@@ -1127,6 +1135,20 @@ export async function listFlaggedTrackedFiles(
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+/** The flagged files of a listing that read tracked entries, or undefined when the cache holds none (or a failed one). */
+async function flaggedFilesOfCachedListing(
+  projectRoot: string,
+  cache: GitDiscoveryCache | undefined,
+): Promise<readonly string[] | undefined> {
+  if (!cache) return undefined;
+  for (const respectGitignore of [true, false]) {
+    const pending = cache.untrackedFiles.get(worktreeListingCacheKey(projectRoot, respectGitignore));
+    const listing = await pending?.catch(() => undefined);
+    if (listing?.flaggedFiles) return listing.flaggedFiles();
+  }
+  return undefined;
 }
 
 /**

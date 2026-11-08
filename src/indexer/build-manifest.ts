@@ -86,8 +86,11 @@ export async function writeIndexManifestSnapshot(args: {
   let gitFlaggedFiles: string[] | undefined;
   if (lastCommit) {
     try {
-      // Neither listing is shared with the update that precedes this write: an edit or a flag made while that update ran
-      // must be recorded, or the next update would trust a state older than the one it indexed.
+      // The diff is not shared with the update that precedes this write: an edit made while that update ran must be
+      // recorded, or the next update would trust a state older than the one it indexed. The flagged files come from that
+      // update's own listing, so no further Git child runs; a flag set after the listing is verified by the next update
+      // only while it is still set.
+      const flaggedListingOptions = args.discoveryContext ? { discoveryCache: args.discoveryContext.git } : {};
       const [changedResult, flaggedResult] = await Promise.allSettled([
         listChangedFileEntries(args.projectRoot, {
           base: lastCommit,
@@ -95,7 +98,7 @@ export async function writeIndexManifestSnapshot(args: {
           includeRenameSources: true,
           includeHiddenSubmoduleChanges: true,
         }),
-        listFlaggedTrackedFiles(args.projectRoot),
+        listFlaggedTrackedFiles(args.projectRoot, flaggedListingOptions),
       ]);
       // A failed Git child must not leave the other holding the project directory open.
       if (changedResult.status === "rejected") throw changedResult.reason;
