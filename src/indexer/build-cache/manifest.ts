@@ -102,6 +102,7 @@ export type IndexManifest = {
   version: number;
   projectRoot: string;
   updatedAt: number;
+  /** Commit or tree used as the diff base; an unborn repository records Git's empty tree. */
   lastCommit?: string;
   /**
    * Tracked paths whose indexed worktree differed from `lastCommit`, stored project-relative.

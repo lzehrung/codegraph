@@ -61,6 +61,7 @@ describe("git revision safety", () => {
       const listArgs = JSON.parse(await fsp.readFile(capturePath, "utf8")) as string[];
       expect(listArgs).toEqual([
         "diff",
+        "--relative",
         "--no-ext-diff",
         "--no-textconv",
         "--find-renames",

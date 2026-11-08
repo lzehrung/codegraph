@@ -48,6 +48,41 @@ describe("Graph delta export", () => {
     expect(hasFileEdge(delta.removed, "a.ts", "b.ts", "./b")).toBe(true);
   });
 
+  it.each(["restored", "untracked"] as const)(
+    "reports edges from a %s source file discovered during reconciliation",
+    async (kind) => {
+      const root = await mkTmpDir("dg-graph-delta-reconciled-");
+      const options = { cache: "disk" as const, threads: 1, logLevel: "silent" as const };
+      const source = path.join(root, "a.ts");
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "tests@example.com"]);
+        runGit(root, ["config", "user.name", "Tests"]);
+        await fsp.writeFile(path.join(root, "dep.ts"), "export const dep = 1;\n");
+        await fsp.mkdir(path.join(root, "other"));
+        await fsp.writeFile(path.join(root, "other", "dep.ts"), "export const dep = 99;\n");
+        if (kind === "restored") await fsp.writeFile(source, 'import "./dep";\n');
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-qm", "base"]);
+        await buildProjectIndex(root, options);
+        if (kind === "restored") {
+          await fsp.unlink(source);
+          await buildGraphDelta(root, options);
+          runGit(root, ["checkout", "--", "a.ts"]);
+        } else {
+          await fsp.writeFile(source, 'import "./dep";\n');
+        }
+        const delta = await buildGraphDelta(root, options);
+        expect(delta.changedFiles).toEqual(["a.ts"]);
+        expect(delta.added).toEqual([{ from: "a.ts", to: { type: "file", path: "dep.ts" }, raw: "./dep" }]);
+        expect(delta.removed).toEqual([]);
+        expect((await buildGraphDelta(root, options)).changedFiles).toEqual([]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reports removed edges for deleted manifest files when the manifest commit is stale", async () => {
     const root = await mkTmpDir("dg-graph-delta-stale-commit-deleted-");
     runGit(root, ["init"]);

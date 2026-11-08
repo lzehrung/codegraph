@@ -375,6 +375,15 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
   }
 }
 
+/** Git's empty tree is the comparison base before the first commit, in the repository's object format. */
+export async function getGitHeadOrEmptyTree(projectRoot: string, cache?: GitDiscoveryCache): Promise<string | null> {
+  const head = await getGitHead(projectRoot);
+  if (head) return head;
+  if (!(await isGitRepo(projectRoot, cache))) return null;
+  const { stdout } = await runGit(projectRoot, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
+  return stdout.trim() || null;
+}
+
 export async function isGitRepo(projectRoot: string, cache?: GitDiscoveryCache): Promise<boolean> {
   const resolvedRoot = path.resolve(projectRoot);
   const cached = cache?.repositories.get(resolvedRoot);
@@ -657,7 +666,11 @@ async function listChangedFilesUncached(projectRoot: string, opts: GitChangedFil
     return [];
   }
   // --name-only coalesces a rename into its destination; dirty history must also retain the deleted source.
-  if (opts.includeRenameSources) args[args.indexOf("--find-renames")] = "--no-renames";
+  if (opts.includeRenameSources) {
+    const renameFlagIndex = args.indexOf("--find-renames");
+    if (renameFlagIndex < 0) throw new Error("Git diff arguments are missing the rename policy.");
+    args[renameFlagIndex] = "--no-renames";
+  }
   args.push("--");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);

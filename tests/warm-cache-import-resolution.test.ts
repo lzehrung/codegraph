@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -2165,6 +2165,72 @@ describe("tracked file restoration matches cold builds", () => {
     expect(warmEdges).toContain(`${normalizePath(main)}::run|calls|${normalizePath(target)}::value`);
     expect(warmEdges.some((edge) => edge.includes(`|${normalizePath(decoy)}::value`))).toBe(false);
   }
+
+  it.each([
+    { session: false, allMisses: true },
+    { session: true, allMisses: false },
+    { session: true, allMisses: true },
+  ])("restores memory imports with session=$session and allMisses=$allMisses", async ({ session, allMisses }) => {
+    const root = await mkTmpDir("cg-memory-restored-scope-");
+    const options = { cache: "memory" as const, threads: 1, logLevel: "silent" as const };
+    const agentSession = session
+      ? createAgentSession({ root, buildOptions: options, freshness: { policy: "auto" } })
+      : undefined;
+    const load = async (): Promise<ProjectIndex> => {
+      if (!agentSession) return buildProjectIndexIncremental(root, options);
+      agentSession.invalidate();
+      return (await agentSession.loadProject({ symbolGraph: "skip" })).index;
+    };
+    try {
+      const target = await writeFixtureFile(root, "src/nested/value.ts", original);
+      const files = [
+        await writeFixtureFile(root, "src/main.ts", mainSource),
+        await writeFixtureFile(root, "src/nested/left.ts", "export function left() { return 1; }\n"),
+        await writeFixtureFile(root, "src/nested/right.ts", "export function right() { return 2; }\n"),
+        await writeFixtureFile(root, "src/other/value.ts", "export function value() { return 99; }\n"),
+      ];
+      git(root, ["init", "-q"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      git(root, ["add", "src"]);
+      git(root, ["commit", "-qm", "base"]);
+      await load();
+      await fsp.unlink(target);
+      if (allMisses)
+        await Promise.all(files.map((file) => fsp.appendFile(file, "// edited while target is deleted\n")));
+      const deleted = await load();
+      expect(deleted.byFile.has(fileIdentityKey(target))).toBe(false);
+      expect(edgeTargets(deleted, files[0]!)).toEqual(["external:./nested/value"]);
+      git(root, ["checkout", "--", "src/nested/value.ts"]);
+      await expectRestoredMatchesCold(root, await load());
+    } finally {
+      agentSession?.invalidate();
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not probe non-declaration rows omitted by a memory subset build", async () => {
+    const root = await mkTmpDir("cg-memory-subset-probes-");
+    const options = { cache: "memory" as const, threads: 1, logLevel: "silent" as const };
+    try {
+      const main = await writeFixtureFile(root, "main.ts", "export const value = 1;\n");
+      const omitted = [
+        await writeFixtureFile(root, "a.ts", "export const value = 2;\n"),
+        await writeFixtureFile(root, "b.ts", "export const value = 3;\n"),
+      ];
+      await buildProjectIndex(root, options);
+      const access = vi.spyOn(fsp, "access");
+      const subset = await buildProjectIndexFromFiles(root, [main], options);
+      expect([...subset.byFile.keys()]).toEqual([fileIdentityKey(main)]);
+      const probed = access.mock.calls.map(([file]) => normalizePath(String(file)));
+      for (const file of omitted) expect(probed).not.toContain(normalizePath(file));
+    } finally {
+      vi.restoreAllMocks();
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it.each(cases)("$scenario ($cache cache, Git=$repository)", async ({ cache, scenario, repository }) => {
     const root = await mkTmpDir("cg-tracked-restore-");

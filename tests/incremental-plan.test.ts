@@ -18,6 +18,7 @@ import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import type { Edge } from "../src/types.js";
 import * as projectFilesModule from "../src/util/project-files.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 
 function fileEdge(from: string, to: string): Edge {
@@ -323,6 +324,61 @@ describe("resolveIncrementalFileList", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it.each([
+    { unborn: true, explicitRange: false },
+    { unborn: false, explicitRange: true },
+  ])(
+    "keeps reconciled restoration candidates (unborn=$unborn, explicitRange=$explicitRange)",
+    async ({ unborn, explicitRange }) => {
+      const root = await mkTmpDir("cg-reconciled-restoration-");
+      const options = {
+        cache: "disk" as const,
+        threads: 1,
+        logLevel: "silent" as const,
+        ...(explicitRange ? { gitBase: "HEAD", gitHead: "WORKTREE" } : {}),
+      };
+      const target = path.join(root, "target.ts");
+      const main = path.join(root, "main.ts");
+      const update = async () => {
+        const context = projectFilesModule.createProjectDiscoveryContext(root);
+        const plan = await resolveIncrementalFilePlan(root, options, context);
+        if (!plan) throw new Error("expected a reusable file plan");
+        return buildProjectIndexIncremental(root, {
+          ...options,
+          files: plan.files,
+          filesAreProjectScope: true,
+          discoveryContext: context,
+          reconciledManifestUpdatedAt: plan.manifestUpdatedAt,
+          reconciledWorkingTreeDiffFiles: plan.workingTreeDiffFiles,
+          reconciledUntrackedFiles: plan.untrackedFiles,
+        });
+      };
+      try {
+        git(root, ["init", "-q"]);
+        git(root, ["config", "user.email", "tests@example.com"]);
+        git(root, ["config", "user.name", "Tests"]);
+        await fs.writeFile(target, "export function value() { return 1; }\n");
+        await fs.writeFile(main, 'import { value } from "./target";\nexport const run = value();\n');
+        await fs.mkdir(path.join(root, "other"));
+        await fs.writeFile(path.join(root, "other", "target.ts"), "export function value() { return 99; }\n");
+        git(root, ["add", "."]);
+        if (!unborn) git(root, ["commit", "-qm", "base"]);
+        await buildProjectIndex(root, options);
+        await fs.unlink(target);
+        expect((await update()).byFile.has(fileIdentityKey(target))).toBe(false);
+        git(root, ["checkout", "--", "target.ts"]);
+        const restored = await update();
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(restored.byFile.has(fileIdentityKey(target))).toBe(true);
+        expect(restored.byFile.get(fileIdentityKey(main))?.imports[0]?.resolved).toBe(normalizePath(target));
+        expect([...restored.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        expect(new Set(restored.graph.edges)).toEqual(new Set(cold.graph.edges));
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["missing", "invalid", "older epoch"] as const)(
     "restores tracked files from a manifest with %s dirty-path metadata",
     async (metadata) => {

@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { getGitHead, listChangedFiles } from "../util/git.js";
+import { getGitHeadOrEmptyTree, listChangedFiles } from "../util/git.js";
 import { logWithLevel } from "../logging.js";
 import {
   computeConfigHash,
@@ -15,7 +15,12 @@ import {
 } from "./build-cache.js";
 import { cacheRelativePath, pruneDiskModuleCache } from "./build-cache/module-cache.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
-import type { ProjectDiscoveryContext } from "../util/project-files.js";
+import {
+  createDiscoveredFileMatcher,
+  DEFAULT_PROJECT_PATTERNS,
+  type ProjectDiscoveryContext,
+} from "../util/project-files.js";
+import { languageExtensionPatterns } from "../languages.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 
 export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {
@@ -73,17 +78,23 @@ export async function writeIndexManifestSnapshot(args: {
   if (!Object.keys(files).length && !args.allowEmpty) return;
   const writeManifestStart = performance.now();
   const gitHeadStartedAt = performance.now();
-  const lastCommit = await getGitHead(args.projectRoot);
+  const lastCommit = await getGitHeadOrEmptyTree(args.projectRoot, args.discoveryContext?.git);
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
   let gitDirtyFiles: string[] | undefined;
   if (lastCommit) {
     try {
-      gitDirtyFiles = await listChangedFiles(args.projectRoot, {
+      const changed = await listChangedFiles(args.projectRoot, {
         base: lastCommit,
         head: "WORKTREE",
         includeRenameSources: true,
-        ...(args.discoveryContext ? { discoveryCache: args.discoveryContext.git } : {}),
       });
+      const matchesDiscovery = createDiscoveredFileMatcher(
+        args.projectRoot,
+        args.opts?.discovery?.globRoot ?? args.projectRoot,
+        [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(args.opts?.languageExtensions)],
+        args.opts?.discovery,
+      );
+      gitDirtyFiles = changed.filter((file) => Object.hasOwn(files, file) || matchesDiscovery(file));
     } catch (error) {
       logWithLevel(
         args.opts?.logLevel,

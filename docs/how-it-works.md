@@ -110,7 +110,16 @@ Caching avoids repeated work; it does not change extraction or resolution semant
 
 Disk loads reuse unchanged files and update changed ones. Codegraph validates file, configuration, build, and available Git state before reuse; incompatible or corrupt data is rebuilt. Strict mode hashes content, while non-strict mode accepts the documented metadata speed tradeoff. Graph resolution options (`--resolve-node-modules`, `--resolution-hint`, and `graph.resolutionHints`) are part of that validated state, so changing them invalidates cached modules and edges instead of mixing resolutions from different runs.
 
-`buildProjectIndexIncremental` records the tracked paths that differed from the manifest's commit, so a restored deletion or reverted edit stays a candidate even when Git's current diff is empty. A clean indexed state skips tracked blob listings; changed candidates reuse Git index blob ids without hashing unchanged regular files, and a manifest with missing or invalid dirty-path metadata falls back to full tracked blob reconciliation. Older cache epochs rebuild before using this shortcut; restored files and their importers match cold builds on disk and memory caches. `listChangedFiles` confines Git changes to the requested project root, including nested roots and directory aliases.
+`buildProjectIndexIncremental` records indexed or discovery-matching tracked paths that differ from its commit, or from Git's empty tree before the first commit. A manifest rewrite takes a fresh Git diff after file reads; clean recorded state skips signature blob listings, while missing or invalid dirty-path metadata falls back to tracked blob reconciliation. Direct disk/memory builds and whole-project agent sessions refresh restored modules and importers; arbitrary file-list builds do not retire rows outside their scope. `listChangedFiles` confines Git changes to the requested project root, including nested roots and directory aliases.
+
+Git fast-path blind spots remain:
+
+- Reverts hidden by `assume-unchanged` or `skip-worktree` index flags.
+- Changes to files inside submodules when Git reports only the gitlink.
+- EOL-only rewrites normalized away by `core.autocrlf`.
+- Case-only rename-back sequences that retain stale path spelling in the disk cache.
+
+Index builds are not atomic filesystem snapshots. If files change during a build, repeat the update; use `buildProjectIndex(root, { cache: "off" })` when the Git blind spots above apply.
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 
