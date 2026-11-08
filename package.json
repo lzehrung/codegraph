@@ -53,7 +53,7 @@
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "check": "npm run security:production && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean && npm run bench:fixtures:check",
+    "check": "npm run security:production && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test:native && npm run test:coverage && npm run fixtures:check-clean && npm run bench:fixtures:check && npm run graph:snapshot:check",
     "build": "npm run clean && node ./scripts/build-native-if-available.mjs && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "generate:duplicate-identifier-ranges": "node ./scripts/generate-duplicate-identifier-ranges.mjs",
@@ -87,6 +87,8 @@
     "bench:docs:check": "node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --check",
     "bench:fixtures": "node ./scripts/benchmarks/generate-fixture-matrix.mjs",
     "bench:fixtures:check": "node ./scripts/benchmarks/generate-fixture-matrix.mjs --check",
+    "graph:snapshot": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/graph-edge-snapshot.mjs",
+    "graph:snapshot:check": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/graph-edge-snapshot.mjs --check",
     "bench:query": "node ./scripts/benchmarks/measure-query-substrate.mjs",
     "build:standalone": "node ./scripts/standalone/build-standalone.mjs",
     "smoke:onboarding": "node ./scripts/onboarding/run-funnel-smoke.mjs",

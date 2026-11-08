@@ -44,6 +44,17 @@ Results are not universal latency claims; compare the same root, revision, query
 
 [`fixture-snapshot.md`](./fixture-snapshot.md) shows per-language status and test counts generated directly from `tests/languages/*.test.ts` runs. Regenerate with `npm run bench:fixtures`; verify it is current with `npm run bench:fixtures:check`. This, and the rest of the automated test suite, is also what release certification checks: there is no separate hand-authored golden corpus.
 
+## Graph edge snapshot
+
+`tests/snapshots/graph-edges/` holds one text file per `tests/samples` directory and one per `tests/edge-corpus` language. Each file lists the resolved file-level edges (`index.graph.edges`) and the detailed symbol graph edges (`buildSymbolGraphDetailed`) of that corpus, so a change in resolved edges is a reviewable diff.
+
+- Regenerate with `npm run graph:snapshot` after a change alters edges, then review and commit the diff.
+- `npm run graph:snapshot:check`, part of `npm run check`, fails with the added and removed lines per file when the committed files are stale.
+- Every edge kind is recorded, `member_of` included. The graphs have no separate `contains` edges.
+- Lines are sorted by UTF-16 code unit. Paths are project-relative with `/`, and positions are 1-based `line:column`. No absolute paths, timestamps, or versions are recorded.
+- Corpora are indexed with `cache: "off"`, one file at a time, and no native worker pool. The text must not depend on the machine, so a platform-only difference is a bug to fix, not a snapshot to regenerate.
+- Each `tests/edge-corpus` scenario is indexed as its own project, as `tests/edge-corpus.test.ts` does. The script fails when the corpora leave a registered language without an indexed file.
+
 ## Workflow definitions
 
 Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and exact steps for the required baseline and cold CLI variants. It may also declare the warm CLI and warm MCP variants, which use the same query steps.

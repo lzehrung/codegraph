@@ -15,3 +15,5 @@ A marker goes in a line comment immediately above its code site or at the end of
 The harness requires 25-80 assertions per selected language. The upper bound keeps each language small enough to review; past review findings take priority over new ordinary forms.
 
 Multiple markers may share a comment. Example: `// @def value @coverage value complete`.
+
+`tests/snapshots/graph-edges/edge-corpus-<language>.txt` records the resolved graph edges of every scenario. After changing a scenario, regenerate it with `npm run graph:snapshot` and review the diff.
