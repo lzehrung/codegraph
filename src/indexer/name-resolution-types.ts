@@ -5,20 +5,9 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import type { ParsedFileContext } from "./parse-context.js";
+import type { ParsedFileProvider } from "./parsed-cache.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import type { GoToResult, ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
-
-/** Synchronous access to parsed files. A miss is recorded so an async caller can load and retry. */
-export type ParsedFileProvider = {
-  get(file: FileId): ParsedFileContext | null;
-};
-
-/** A provider that parses on demand between synchronous resolution passes. */
-export type LoadingParsedFileProvider = ParsedFileProvider & {
-  /** Files requested since the last call, which were not loaded. */
-  takeMisses(): FileId[];
-  load(files: readonly FileId[]): Promise<void>;
-};
 
 /** A lookup step that needs async member resolution before its answer is known. */
 export type DeferredNameRequest =

@@ -9,6 +9,8 @@ export const AMBIGUOUS_CPP_USING_DECLARATION_REASON = "No unique C++ using-decla
 export const AMBIGUOUS_CPP_USING_DIRECTIVE_REASON = "No unique C++ using-directive target";
 /** The name may bind through its qualifier, but a bare import cannot decide it. */
 export const UNRESOLVED_QUALIFIED_TYPE_REASON = "Unresolved qualified type";
+/** A proven namespace is not a reference to a same-spelled type or member. */
+export const CSHARP_NAMESPACE_NAME_REASON = "C# name denotes a namespace, not an indexed symbol";
 /**
  * A project base or partial type cannot be inspected, so an enclosing member may hide a using alias.
  */

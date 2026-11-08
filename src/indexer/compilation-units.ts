@@ -257,8 +257,9 @@ export function csharpNamespaceAt(index: ProjectIndex, filePath: string, positio
   return regions ? csharpNamespaceAtIndex(regions, position) : null;
 }
 
+type CsharpDeclaredNameKind = "namespace" | "type" | "ambiguous";
 /** The names a project's C# files declare, and whether every one of those files recorded its declarations. */
-type CsharpProjectDeclarations = { names: ReadonlySet<string>; complete: boolean };
+type CsharpProjectDeclarations = { names: ReadonlyMap<string, CsharpDeclaredNameKind>; complete: boolean };
 
 type CsharpDeclaredNames = {
   source: ProjectIndex["byFile"];
@@ -278,12 +279,18 @@ const csharpDeclaredNameCaches = new WeakMap<ProjectIndex, CsharpDeclaredNames>(
  */
 function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string): CsharpProjectDeclarations {
   const boundaryPrefix = boundaryKey.endsWith("/") ? boundaryKey : `${boundaryKey}/`;
-  const names = new Set<string>();
+  const names = new Map<string, CsharpDeclaredNameKind>();
   let complete = true;
   // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
-  const addDeclaredName = (name: string): void => {
-    for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) names.add(name.slice(0, dot));
-    names.add(name);
+  const addName = (name: string, kind: CsharpDeclaredNameKind): void => {
+    const previous = names.get(name);
+    names.set(name, previous && previous !== kind ? "ambiguous" : kind);
+  };
+  const addDeclaredName = (name: string, kind: CsharpDeclaredNameKind): void => {
+    for (let dot = name.indexOf("."); dot >= 0; dot = name.indexOf(".", dot + 1)) {
+      addName(name.slice(0, dot), "namespace");
+    }
+    addName(name, kind);
   };
   for (const moduleEntry of index.byFile.values()) {
     if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
@@ -294,10 +301,10 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string):
       continue;
     }
     for (const region of facts.regions) {
-      if (region.name) addDeclaredName(region.name);
+      if (region.name) addDeclaredName(region.name, "namespace");
     }
     for (const type of facts.types) {
-      if (!type.startsWith(CSHARP_FILE_LOCAL_PREFIX)) addDeclaredName(type);
+      if (!type.startsWith(CSHARP_FILE_LOCAL_PREFIX)) addDeclaredName(type, "type");
     }
   }
   return { names, complete };
@@ -333,6 +340,18 @@ function csharpProjectDeclaredNames(index: ProjectIndex, file: FileId): CsharpPr
     cached.names.set(boundaryKey, names);
   }
   return names;
+}
+/** A namespace's own member, before its using directives, from the project declaration table. */
+export function csharpNamespaceMemberKind(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  namespaceName: string,
+  name: string,
+): CsharpDeclaredNameKind | "unavailable" | null {
+  const declared = namespaceName ? `${namespaceName}.${name}` : name;
+  const declarations = csharpProjectDeclaredNames(index, mod.file);
+  if (mod.csharpNamespaceFacts?.types.includes(CSHARP_FILE_LOCAL_PREFIX + declared)) return "type";
+  return declarations.names.get(declared) ?? (declarations.complete ? null : "unavailable");
 }
 
 /**

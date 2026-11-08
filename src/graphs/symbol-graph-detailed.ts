@@ -31,6 +31,7 @@ import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 import {
   createPythonReceiverResolutionCache,
   csharpAliasTableAnswers,
+  resolveCsharpNameRoot,
   csharpAliasUsesHiddenByMembers,
   innermostNamespaceImport,
   pythonDottedPhraseAtUse,
@@ -581,6 +582,12 @@ export async function buildSymbolGraphDetailed(
       ): boolean => {
         if (isQualifiedTypeSuffix(sup, node)) return false;
         if (sup.id === "csharp") {
+          const root = resolveCsharpNameRoot(index, moduleEntry, node, src, resolutionFiles);
+          if (root.kind === "namespace" || root.kind === "ambiguous" || root.kind === "unavailable") return false;
+          if (root.kind === "resolved") {
+            const imported = aliasToTargetDef.get(aliasKey(name));
+            if (imported && defNodeId(imported) !== defNodeId(root.definition)) return false;
+          }
           return csharpAliasTableAnswers(moduleEntry, name, node) && unshadowedModuleAlias(name, node);
         }
         if (sup.id !== "kotlin") return true;

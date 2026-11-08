@@ -41,7 +41,9 @@ import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } f
 import {
   effectiveExplicitBinding,
   isExpandedStarBinding,
+  decideStarImportCandidates,
   resolveStarImportedDefinition,
+  type StarImportCandidate,
   resolveStarImportedName,
   resolveStarImportedNamespace,
   starImportPrecedence,
@@ -78,6 +80,7 @@ import {
 import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
 import {
   csharpNamespaceChainDeclares,
+  csharpNamespaceMemberKind,
   csharpProjectDeclarationsUnknown,
   csharpUsingTargetShadowed,
   getCompilationUnitPeers,
@@ -92,7 +95,15 @@ import {
 } from "./declaration-visibility.js";
 import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, ignoreQueryParseFailure, rethrowStaleQuerySource } from "./parsed-cache.js";
+import {
+  createLoadingParsedFileProvider,
+  ensureParsedContextForIndex,
+  ignoreQueryParseFailure,
+  rethrowStaleQuerySource,
+  withParsedFiles,
+  type LoadingParsedFileProvider,
+  type ParsedFileProvider,
+} from "./parsed-cache.js";
 import {
   csharpLookupName,
   csharpQualifiedThroughGenericOwner,
@@ -104,9 +115,12 @@ import {
   resolveNamedDefinition,
 } from "./navigation-local.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
+import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-using-static.js";
 import { csharpTypeOnlyName } from "./scope-nodes.js";
 import { bindsTypeParameter, typeParameterNamesInScope } from "./type-parameters.js";
 import {
+  AMBIGUOUS_STAR_IMPORT_REASON,
+  CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
@@ -118,6 +132,7 @@ import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.j
 import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
 import {
   cjsRequireValueBinding,
+  csharpShadowedImports,
   csharpShadowedStarsMayHold,
   memberContainerForDefinition,
   resolveCsharpQualifiedName,
@@ -446,8 +461,6 @@ function importScopeAt(root: SyntaxNodeLike, start: number): SyntaxNodeLike | nu
 const CSHARP_SHADOWED_ALIAS_REASON = "C# alias is shadowed by an enclosing namespace member";
 const CSHARP_SHADOWED_TARGET_REASON = "C# alias target is shadowed by a member of an enclosing namespace";
 const CSHARP_INCOMPLETE_ALIAS_REASON = "C# namespace alias may name a type in a project file that could not be read";
-const CSHARP_SHADOWED_USING_REASON =
-  "C# using directive is shadowed by an enclosing namespace that may declare the name";
 
 export function isCsharpAliasQualifier(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
   return (
@@ -528,22 +541,86 @@ export function csharpAliasUnprovenReason(
     : null;
 }
 
+export type CsharpNameRoot =
+  | { kind: "none" | "ambiguous" | "unavailable" }
+  | { kind: "namespace"; name: string }
+  | { kind: "resolved"; definition: SymbolDef };
+
 /**
- * Why a dotted name led by `qualifier` (`B` of `B.Type`) is unproven because a `using N;` may bring `B` in, or `null`.
- * An enclosing namespace shadows such a directive, so no lookup resolves it, and a namespace named `B` that the project
- * declares must not stand in for what `B` may name there. An alias in scope binds the name first, and `B::Type` reaches
- * aliases only, so neither is this reason.
+ * C# searches each enclosing namespace's own members, then its directives, before moving
+ * outward. Global members therefore precede compilation-unit directives. Explicit aliases
+ * keep their existing positioned lookup; unread project members never become namespace guesses.
  */
-export function csharpShadowedUsingReason(
+export function resolveCsharpNameRoot(
   index: ProjectIndex,
   mod: ModuleIndex,
   qualifier: SyntaxNodeLike,
   source: string,
-): string | null {
-  if (qualifier.parent?.type === "alias_qualified_name") return null;
+  files?: ParsedFileProvider,
+): CsharpNameRoot {
+  if (qualifier.parent?.type === "alias_qualified_name") return { kind: "none" };
   const name = sliceText(qualifier, source);
-  if (!csharpShadowedStarsMayHold(index, mod, name) || csharpAliasAt(mod, name, qualifier)) return null;
-  return CSHARP_SHADOWED_USING_REASON;
+  if (csharpAliasAt(mod, name, qualifier)) return { kind: "none" };
+  const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
+  const regions = mod.csharpNamespaceFacts?.regions;
+  let namespace = regions ? csharpNamespaceAtIndex(regions, qualifier.startIndex) : "";
+  for (;;) {
+    const member = csharpNamespaceMemberKind(index, mod, namespace, normalized);
+    const qualified = namespace ? `${namespace}.${normalized}` : normalized;
+    if (member === "namespace") return { kind: "namespace", name: qualified };
+    if (member === "type") {
+      const resolved =
+        resolveExport(index, mod.file, normalized, { referenceIndex: qualifier.startIndex }) ??
+        resolveCsharpQualifiedName(index, mod, `global::${qualified}`, qualifier.startIndex);
+      return resolved?.kind === "resolved" ? { kind: "resolved", definition: resolved.def } : { kind: "unavailable" };
+    }
+    if (member) return { kind: "unavailable" };
+    if (!namespace) {
+      // Global-directory peers also include types whose file has no namespace regions.
+      const peer = resolveExport(index, mod.file, normalized, { referenceIndex: qualifier.startIndex });
+      if (peer?.kind === "resolved" && declaresMembers(peer.def)) return { kind: "resolved", definition: peer.def };
+    }
+    const candidates: StarImportCandidate[] = [];
+    let unavailable = false;
+    for (const imp of mod.imports) {
+      if (imp.kind !== "star") continue;
+      const region = regions && csharpNamespaceRegionAtIndex(regions, imp.csharpDirectiveStartIndex);
+      if ((region?.name ?? "") !== namespace) continue;
+      if (region && (qualifier.startIndex < region.start || qualifier.startIndex >= region.end)) continue;
+      if (imp.staticMembersOf) {
+        const use = { index, mod, ...(files ? { files } : {}) };
+        const types = csharpUsingStaticTypeCandidates(use, imp, name);
+        if (!types) unavailable = true;
+        for (const def of types ?? []) candidates.push({ imp, def });
+      } else {
+        const def = resolveStarImportedDefinition(index, imp, name, "csharp");
+        if (def) candidates.push({ imp, def });
+        const shadowedRoot = csharpShadowedImports(index).has(imp) && csharpShadowedStarsMayHold(index, mod, name);
+        if (shadowedRoot) unavailable = true;
+      }
+    }
+    if (unavailable) return { kind: "unavailable" };
+    const imported = decideStarImportCandidates(index, "csharp", candidates, mod.file);
+    if (imported.status === "ambiguous") return { kind: "ambiguous" };
+    if (imported.status === "resolved") return { kind: "resolved", definition: imported.definition };
+    if (!namespace) return { kind: "none" };
+    const separator = namespace.lastIndexOf(".");
+    namespace = separator < 0 ? "" : namespace.slice(0, separator);
+  }
+}
+
+/** An unresolved type root, including an ambiguous using, must not become a namespace. */
+export function csharpNamespaceFallbackReason(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  qualifier: SyntaxNodeLike,
+  source: string,
+  files?: ParsedFileProvider,
+): string | null {
+  const root = resolveCsharpNameRoot(index, mod, qualifier, source, files);
+  if (root.kind === "ambiguous") return AMBIGUOUS_STAR_IMPORT_REASON;
+  if (root.kind === "resolved" || root.kind === "unavailable") return UNRESOLVED_QUALIFIED_TYPE_REASON;
+  return null;
 }
 
 /**
@@ -679,10 +756,7 @@ export function resolveCsharpQualifiedReceiverType(
   if (!qualified || csharpQualifiedThroughGenericOwner(qualified)) return null;
   const lead = csharpChainQualifier(qualified, source);
   if (!lead) return null;
-  const unproven =
-    csharpAliasUnprovenReason(index, mod, lead.qualifier, source) ??
-    csharpShadowedUsingReason(index, mod, lead.qualifier, source);
-  if (unproven) return null;
+  if (csharpAliasUnprovenReason(index, mod, lead.qualifier, source)) return null;
   const rootName = CSHARP_SUPPORT.normalizeIdentifier(sliceText(lead.qualifier, source));
   const aliasQualified = lead.qualifier.parent?.type === "alias_qualified_name";
   if (!aliasQualified && !csharpNameUnshadowed(scopeIndex, lead.qualifier, rootName)) {
@@ -706,23 +780,13 @@ export function resolveCsharpQualifiedReceiverType(
   if (alias && alias.kind !== "namespace") return null;
   const name = csharpAliasQualifiedLookupName(typeNode, source, sliceText(qualified, source), mod.imports);
   if (!alias && !aliasQualified) {
-    const regions = mod.csharpNamespaceFacts?.regions;
-    let namespace = regions ? csharpNamespaceAtIndex(regions, typeNode.startIndex) : "";
-    while (namespace) {
-      const separator = namespace.lastIndexOf(".");
-      const parent = separator < 0 ? "" : namespace.slice(0, separator);
-      if (csharpNamespaceChainDeclares(index, mod, namespace, rootName, parent)) {
-        if (csharpProjectDeclarationsUnknown(index, mod)) return null;
-        const relative = `global::${namespace}.${name}`;
-        const resolved = resolveCsharpQualifiedName(index, mod, relative, typeNode.startIndex);
-        // A nearer binding that has no such type must not fall back to a global namesake.
-        return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
-      }
-      namespace = parent;
+    const root = resolveCsharpNameRoot(index, mod, lead.qualifier, source);
+    if (root.kind === "namespace") {
+      const suffix = lead.names.toReversed().join(".");
+      const resolved = resolveCsharpQualifiedName(index, mod, `global::${root.name}.${suffix}`, typeNode.startIndex);
+      return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
     }
-    const root = resolveExport(index, mod.file, rootName, { referenceIndex: typeNode.startIndex });
-    // A type from another file requires nested-member lookup, not namespace export lookup.
-    if (root?.kind === "resolved") return null;
+    if (root.kind !== "none") return null;
   }
   const resolved = resolveCsharpQualifiedName(index, mod, name, typeNode.startIndex);
   return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
@@ -1489,6 +1553,14 @@ export async function resolveMemberAccessDefinition(params: {
     }
     return lookup;
   };
+  let csharpRootFiles: LoadingParsedFileProvider | undefined;
+  const hasCsharpStaticImports =
+    sup.id === "csharp" && mod.imports.some((imp) => imp.kind === "star" && imp.staticMembersOf);
+  const csharpNameRoot = async (expr: SyntaxNodeLike): Promise<CsharpNameRoot> => {
+    if (!hasCsharpStaticImports) return resolveCsharpNameRoot(index, mod, expr, source);
+    csharpRootFiles ??= createLoadingParsedFileProvider(index, { file: mod.file, parsed: { source, tree, sup } });
+    return withParsedFiles(csharpRootFiles, () => resolveCsharpNameRoot(index, mod, expr, source, csharpRootFiles));
+  };
   /** `::` and closer lexical bindings bypass enclosing-member alias lookup. */
   const aliasBindsExpressionName = (expr: SyntaxNodeLike, exprName: string): boolean => {
     if (isCsharpAliasQualifier(expr, sup)) return false;
@@ -1625,11 +1697,18 @@ export async function resolveMemberAccessDefinition(params: {
       }
 
       if (sup.id === "csharp") {
-        const local = resolveExport(index, mod.file, exprName, { referenceIndex: expr.startIndex });
-        if (local) return local;
-        // An explicit alias in scope binds before any type a `using N;` imports, so one that names no indexed type stays
-        // unresolved. An alias in another namespace block is not selected above and leaves the imported type to answer.
         if (imp) return null;
+        if (csharpPartialOwnerTypeRoot(expr)) {
+          const enclosing = await aliasMemberLookup(expr, exprName);
+          if (enclosing.status === "unproven") return null;
+          if (enclosing.status === "member") {
+            return enclosing.member && declaresMembers(enclosing.member)
+              ? { kind: "resolved", def: enclosing.member }
+              : null;
+          }
+        }
+        const root = await csharpNameRoot(expr);
+        return root.kind === "resolved" ? { kind: "resolved", def: root.definition } : null;
       } else {
         // JVM locals must come from the positioned scope lookup above, not an unrelated method's parameter.
         const positionedJvmLookup = !!resolveLexicalBinding && (sup.id === "java" || sup.id === "kotlin");
@@ -1700,27 +1779,28 @@ export async function resolveMemberAccessDefinition(params: {
           if (qualified) return qualified;
         }
         const memberName = sliceText(subProp, source);
-        // `P.Mix` in `P.Mix.M()`: when the leftmost name binds nothing, a C# dotted name is a
-        // namespace-qualified type, which qualified export lookup resolves across every file that
-        // declares the namespace. An alias in scope binds the name, resolved or not, and so may a
-        // `using N;` that an enclosing namespace shadows, so neither falls back to a namespace of that name.
+        // An unresolved type root, including an ambiguous using, cannot become a namespace.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
+        const qualifiedRoot =
+          !base && !dottedRoot && sup.id === "csharp" ? csharpChainQualifier(expr, source)?.qualifier : null;
+        const globalQualified =
+          qualifiedRoot?.parent?.type === "alias_qualified_name" && sliceText(qualifiedRoot, source) === "global";
+        let namespaceName = globalQualified ? sliceText(expr, source).replace(/\s+/gu, "") : null;
         if (dottedRoot) {
           const rootName = sliceText(dottedRoot, source);
-          const unshadowedNamespaceRoot =
-            !resolveLexicalBinding?.(dottedRoot) &&
-            csharpNameUnshadowed(ensureScopeIndex(), dottedRoot, rootName) &&
-            !csharpAliasAt(mod, rootName, dottedRoot) &&
-            !csharpShadowedUsingReason(index, mod, dottedRoot, source);
-          if (unshadowedNamespaceRoot) {
-            return resolveCsharpQualifiedName(
-              index,
-              mod,
-              sliceText(expr, source).replace(/\s+/gu, ""),
-              expr.startIndex,
-            );
+          const lexicalRoot =
+            !!resolveLexicalBinding?.(dottedRoot) || !csharpNameUnshadowed(ensureScopeIndex(), dottedRoot, rootName);
+          if (!lexicalRoot && !csharpAliasAt(mod, rootName, dottedRoot)) {
+            const root = await csharpNameRoot(dottedRoot);
+            if (root.kind === "namespace") {
+              const suffix = source.slice(dottedRoot.endIndex, expr.endIndex).replace(/\s+/gu, "");
+              namespaceName = `global::${root.name}${suffix}`;
+            } else if (root.kind === "none") {
+              namespaceName = sliceText(expr, source).replace(/\s+/gu, "");
+            }
           }
         }
+        if (namespaceName) return resolveCsharpQualifiedName(index, mod, namespaceName, expr.startIndex);
         if (base?.kind === "namespace") {
           if (!isGoExportedMemberName(sup.id, memberName)) return null;
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
@@ -1822,6 +1902,20 @@ export async function resolveMemberAccessDefinition(params: {
     ((receiverProof?.kind === "own-type" && obj?.type === "identifier" && sliceText(obj, source) === "self") ||
       (receiverProof?.kind === "named-type" && receiverProof.proof !== "static-type"));
   const chain = await resolveExpression(memberNode);
+  if (!chain && csharpLead) {
+    const qualifier = csharpLead.qualifier;
+    const name = sliceText(qualifier, source);
+    const lexical = resolveLexicalBinding?.(qualifier) || !csharpNameUnshadowed(ensureScopeIndex(), qualifier, name);
+    if (!lexical) {
+      const root = await csharpNameRoot(qualifier);
+      if (root.kind === "namespace") {
+        const qualified = `${root.name}.${csharpLead.names.toReversed().join(".")}`;
+        if (csharpNamespaceMemberKind(index, mod, "", qualified) === "namespace") {
+          return { status: "not_found", reason: CSHARP_NAMESPACE_NAME_REASON };
+        }
+      }
+    }
+  }
   if (chain && prop && node.id === prop.id) {
     if (chain.kind === "resolved" && !pythonInstanceReceiver) {
       return okGoToResult(index, chain.def, {
@@ -3536,6 +3630,22 @@ function isCsharpAliasSimpleName(sup: LanguageSupport, node: SyntaxNodeLike): bo
   return !access || getMemberAccessParts(sup, access).property?.id !== node.id;
 }
 
+/** A simple type root whose enclosing partial owner can supply declarations from another file. */
+export function csharpPartialOwnerTypeRoot(node: SyntaxNodeLike): boolean {
+  if (node.parent?.type === "alias_qualified_name") return false;
+  const qualified = csharpQualifiedNameNode(node);
+  if (qualified && qualified.startIndex < node.startIndex) return false;
+  const dotted = node.parent && csharpDottedNameRoot(node.parent);
+  const typeRoot = csharpTypeOnlyName(node, true) || dotted?.id === node.id;
+  if (!typeRoot) return false;
+  let owner = nearestMemberContainer(node);
+  while (owner) {
+    if (owner.namedChildren.some((child) => child.type === "modifier" && child.text === "partial")) return true;
+    owner = nearestMemberContainer(owner);
+  }
+  return false;
+}
+
 /**
  * Positioned alias uses hidden by enclosing members, with their shared lookup results. The graph reads these facts
  * synchronously, including nested types in type positions, after this one async pass per module.
@@ -3548,7 +3658,12 @@ export async function csharpAliasUsesHiddenByMembers(
 ): Promise<ReadonlyMap<number, CsharpAliasMemberLookup>> {
   const hidden = new Map<number, CsharpAliasMemberLookup>();
   const aliasTable = csharpAliasTable(mod);
-  if (!aliasTable.types.size && !aliasTable.namespaces.size) return hidden;
+  const hasPartialOwner = mod.locals.some((def) => {
+    if (!declaresMembers(def)) return false;
+    const declaration = nameNodeForDef(parsed, def)?.parent;
+    return declaration?.namedChildren.some((child) => child.type === "modifier" && child.text === "partial");
+  });
+  if (!aliasTable.types.size && !aliasTable.namespaces.size && !hasPartialOwner) return hidden;
   const { sup, source, tree } = parsed;
   const namesAlias = (node: SyntaxNodeLike): boolean => {
     if (node.type !== "identifier") return false;
@@ -3557,16 +3672,22 @@ export async function csharpAliasUsesHiddenByMembers(
   };
   const uses: SyntaxNodeLike[] = [];
   const collect = (node: SyntaxNodeLike): void => {
-    if (namesAlias(node) && isCsharpAliasSimpleName(sup, node)) uses.push(node);
+    const root = node.type === "identifier" && hasPartialOwner && csharpPartialOwnerTypeRoot(node);
+    if ((namesAlias(node) || root) && isCsharpAliasSimpleName(sup, node)) uses.push(node);
     for (const child of node.namedChildren) collect(child);
   };
   collect(tree.rootNode);
   const lookups = new Map<string, CsharpAliasMemberLookup>();
   for (const node of uses) {
     const name = sliceText(node, source);
-    // A closer binding hides the alias on its own, and an alias that is not in scope here is not hidden by a member.
     const closest = findClosestScopeBinding(scopeIndex, name, node, sup);
-    if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) continue;
+    const partialRoot = hasPartialOwner && csharpPartialOwnerTypeRoot(node);
+    if (partialRoot) {
+      const lexicalRoot = closest?.kind === "local" || closest?.kind === "param" || closest?.kind === "type";
+      if (lexicalRoot) continue;
+    } else if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) {
+      continue;
+    }
     const typeOnly = csharpTypeOnlyName(node, true);
     const call = implicitSelfCallee("csharp", node.parent ?? node)?.id === node.id;
     const argumentCount = call ? getCallArgumentCount({ languageId: "csharp", source, call: node.parent ?? node }) : "";

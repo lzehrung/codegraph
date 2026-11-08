@@ -70,6 +70,7 @@ import {
   expectInheritedAliasCallConsumers,
   expectInheritedTypeConsumers,
 } from "./helpers/csharp-inherited-alias-assertions.js";
+import { CSHARP_DOTTED_USING_CASES, expectDottedUsingGoto } from "./helpers/csharp-dotted-using-fixture.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
   csharpNearerReceiverFixture,
@@ -3223,6 +3224,17 @@ describe("Go to Definition", () => {
           expect(result.definition.file).toBe(form.aliasUse ? files["Second.cs"] : files["Use.cs"]);
           expect(result.definition.localName).toBe(form.aliasUse ? "Second" : "B");
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_DOTTED_USING_CASES)("navigates C# dotted roots on $name", async (testCase) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-dotted-using-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, testCase.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectDottedUsingGoto(index, files, testCase);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

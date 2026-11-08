@@ -17,12 +17,13 @@ import { csharpNamespaceAt } from "../compilation-units.js";
 import { isCsharpAccessibleOutsideType } from "../declaration-visibility.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { BareNameUse, NameResolution } from "../name-resolution-types.js";
+import type { ParsedFileProvider } from "../parsed-cache.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { FileId } from "../../types.js";
-import type { GoToResult, ModuleIndex, SymbolDef } from "../types.js";
+import type { GoToResult, ImportBinding, ModuleIndex, SymbolDef } from "../types.js";
 
 /** A `using static` target: the declaring file and the owner's namespace and simple name. */
-type UsingStaticImport = { file: FileId; namespace: string; typeName: string };
+type UsingStaticImport = { file: FileId; namespace: string; typeName: string; binding: ImportBinding };
 
 function usingStaticImports(mod: ModuleIndex): UsingStaticImport[] {
   const imports: UsingStaticImport[] = [];
@@ -31,6 +32,7 @@ function usingStaticImports(mod: ModuleIndex): UsingStaticImport[] {
     const separator = imp.staticMembersOf.lastIndexOf(".");
     imports.push({
       file: imp.resolved,
+      binding: imp,
       namespace: imp.staticMembersOf.slice(0, separator),
       typeName: imp.staticMembersOf.slice(separator + 1),
     });
@@ -71,7 +73,7 @@ function isExtensionMethod(declaration: SyntaxNodeLike): boolean {
  * names. One file can declare `P.Util` and `Q.Util`, so the owner's namespace must match too.
  */
 function importsMember(
-  use: BareNameUse,
+  use: Pick<BareNameUse, "index">,
   parsed: ParsedFileContext,
   declaration: SyntaxNodeLike,
   imp: UsingStaticImport,
@@ -96,26 +98,42 @@ type Candidate = { def: SymbolDef; declaration: SyntaxNodeLike; source: string }
  * Members named `name` imported by the module's `using static` directives, or `null` when a
  * declaring file is not parsed yet (the provider records the miss for a retry).
  */
-function usingStaticCandidates(use: BareNameUse, name: string): Candidate[] | null {
+function usingStaticCandidates(
+  use: Pick<BareNameUse, "index" | "mod"> & { files?: ParsedFileProvider },
+  name: string,
+  binding?: ImportBinding,
+  typesOnly = false,
+): Candidate[] | null {
   const candidates: Candidate[] = [];
   let complete = true;
   for (const imp of usingStaticImports(use.mod)) {
+    if (binding && imp.binding !== binding) continue;
     const target = use.index.byFile.get(fileIdentityKey(imp.file));
     const matches = target?.locals.filter((local) => local.localName === name) ?? [];
     if (!matches.length) continue;
-    const parsed = use.files.get(imp.file);
+    const parsed = use.files?.get(imp.file);
     if (!parsed) {
       complete = false;
       continue;
     }
     for (const def of matches) {
       const declaration = declarationOf(parsed, def);
+      if (typesOnly && (!declaration || !NESTED_TYPE_DECLARATIONS.has(declaration.type))) continue;
       if (declaration && importsMember(use, parsed, declaration, imp)) {
         candidates.push({ def, declaration, source: parsed.source });
       }
     }
   }
   return complete ? candidates : null;
+}
+
+/** Nested types imported by one static directive, using the same owner and accessibility proof as bare lookup. */
+export function csharpUsingStaticTypeCandidates(
+  use: Pick<BareNameUse, "index" | "mod"> & { files?: ParsedFileProvider },
+  binding: ImportBinding,
+  name: string,
+): SymbolDef[] | null {
+  return usingStaticCandidates(use, name, binding, true)?.map((candidate) => candidate.def) ?? null;
 }
 
 /** One candidate, or the unique one whose parameters accept the call's argument count. */
