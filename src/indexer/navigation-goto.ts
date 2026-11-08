@@ -1882,6 +1882,9 @@ function isKotlinQualifiedType(node: SyntaxNodeLike): boolean {
 
 function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
   if (isUnprovenHeritageExpression(node) || isKotlinQualifiedType(node)) return true;
+  if (node.type === "constructor_invocation") {
+    return node.namedChildren.some((child) => child.type !== "value_arguments" && nodeContainsUnprovenHeritage(child));
+  }
   // A type argument names a type in its own scope; it never decides which base the clause names.
   return node.namedChildren.some((child) => child.type !== "type_arguments" && nodeContainsUnprovenHeritage(child));
 }

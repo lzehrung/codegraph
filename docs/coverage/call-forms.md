@@ -75,7 +75,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | Swift      | 15    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 247 cells across 15 languages, 0 known gaps.
+Total: 248 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

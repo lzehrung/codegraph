@@ -2671,6 +2671,19 @@ describe("Kotlin base classes named without a constructor call", () => {
         "    }",
         "}",
         "",
+        "open class Base(val arg: Any?, val block: () -> Any? = { null }) {",
+        "    open fun ping(): Int = 2",
+        "}",
+        "",
+        "class ArgumentCast : Base(null as Outer.Nested?, { val local: Outer.Nested? = null; local }) {",
+        "    fun call(): Int = super.ping()",
+        "    fun text(): String = super.toString()",
+        "}",
+        "",
+        "class Other {",
+        '    override fun toString(): String = "other"',
+        "}",
+        "",
         "class Qualified : Outer.Nested {",
         "    constructor() : super()",
         "",
@@ -2691,10 +2704,31 @@ describe("Kotlin base classes named without a constructor call", () => {
       const local = await superCall(9);
       expect(local.status).toBe("ok");
       if (local.status === "ok") expect(local.definition.range.start.line).toBe(3);
-      expect((await superCall(16)).status).toBe("not_found");
-      expect((await superCall(20)).status).toBe("not_found");
+      const plainBase = await superCall(18);
+      expect(plainBase.status).toBe("ok");
+      if (plainBase.status === "ok") expect(plainBase.definition.range.start.line).toBe(14);
+      expect((await superCall(29)).status).toBe("not_found");
+      expect((await superCall(33)).status).toBe("not_found");
+      // A qualified type inside constructor value arguments or a lambda argument does not make a plain base unproven:
+      // `ArgumentCast` still proves `Base` omits `toString`, so `Other.toString` stays complete.
+      const otherRefs = await findReferences(index, {
+        file,
+        line: 23,
+        column: columnInLines(lines, 23, "toString"),
+      });
+      expect(otherRefs.status).toBe("ok");
+      if (otherRefs.status !== "ok") return;
+      expect(otherRefs.references.map((reference) => reference.range.start.line)).toEqual([23]);
+      expect(otherRefs.referenceCoverage?.state).toBe("complete");
       // The two open calls may still reach `ping`, so the omission proof must not rule them out and coverage must not
       // claim to be complete.
+      const baseRefs = await findReferences(index, { file, line: 14, column: columnInLines(lines, 14, "ping") });
+      expect(baseRefs.status).toBe("ok");
+      if (baseRefs.status !== "ok") return;
+      expect(baseRefs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+        14, 18,
+      ]);
+      expect(baseRefs.referenceCoverage?.state).toBe("partial");
       const refs = await findReferences(index, { file, line: 3, column: columnInLines(lines, 3, "ping") });
       expect(refs.status).toBe("ok");
       if (refs.status !== "ok") return;
