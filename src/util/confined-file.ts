@@ -80,9 +80,22 @@ export async function openConfinedReadableFile(
   return { handle, realPath, displayPath, size };
 }
 export async function readConfinedUtf8File(realRoot: string, root: string, filePath: string): Promise<string> {
+  return (await readConfinedUtf8FileWithSize(realRoot, root, filePath)).source;
+}
+
+/**
+ * Like {@link readConfinedUtf8File}, with the byte length of the file as read. The decoded text cannot give it back:
+ * a byte sequence that is not UTF-8 decodes to replacement characters of another length.
+ */
+export async function readConfinedUtf8FileWithSize(
+  realRoot: string,
+  root: string,
+  filePath: string,
+): Promise<{ source: string; size: number }> {
   const confined = await openConfinedReadableFile(realRoot, root, filePath);
   try {
-    return await confined.handle.readFile({ encoding: "utf8" });
+    const bytes = await confined.handle.readFile();
+    return { source: bytes.toString("utf8"), size: bytes.length };
   } finally {
     await confined.handle.close();
   }

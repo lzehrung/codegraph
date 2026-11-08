@@ -114,14 +114,23 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 `buildProjectIndexIncremental` records indexed or discovery-matching tracked paths that differ from its commit, or from Git's empty tree before the first commit. A manifest rewrite takes a fresh Git diff after file reads; clean recorded state skips signature blob listings, while missing or invalid dirty-path metadata falls back to tracked blob reconciliation. Direct disk/memory builds and whole-project agent sessions refresh restored modules and importers; arbitrary file-list builds do not retire rows outside their scope. `listChangedFiles` confines Git changes to the requested project root, including nested roots and directory aliases.
 
-Git's diff omits some changes, so an update compares these files' `mtime:size` signatures with the manifest instead:
+Git's diff omits some changes, so an update verifies these files against the manifest instead:
 
-- **Flagged files.** A tracked file marked `assume-unchanged` or `skip-worktree` never appears in a diff. The Git child that lists untracked files also names flagged tracked files, so every update verifies them without another child.
-- **Submodules.** A diff names one gitlink per submodule. An update lists the tracked and untracked files of each changed submodule, and of each submodule the manifest recorded as dirty (`gitDirtySubmodules`), as full discovery does. This costs up to three Git children per such submodule.
+- **Flagged files.** A tracked file marked `assume-unchanged` or `skip-worktree` never appears in a diff, and clearing the flag (`git sparse-checkout add` does) shows the file only if it differs from the indexed commit. The Git child that lists untracked files also names flagged tracked files, and the manifest records every flagged file (`gitFlaggedFiles`) when it is written. An update verifies the files flagged now and those recorded. It compares a flagged file the manifest has by its `mtime:size` signature. It indexes one the manifest lacks (absent, or deleted while flagged) once the file exists and discovery accepts it, probing parent directories first so each directory a sparse checkout leaves out costs one probe.
+- **Submodules.** A diff names one gitlink per submodule. An update lists the tracked and untracked files of each changed submodule, and of each submodule the manifest recorded as dirty (`gitDirtySubmodules`), as full discovery does, and compares them by `mtime:size`. This costs up to three Git children per such submodule.
 - **Line endings.** With `core.autocrlf` set to `true` or `input`, or a `text`/`eol` attribute, Git reports an eol-only rewrite as clean. Each Git signature carries the file's raw size, so any update that compares signatures (an edited, flagged or submodule file, `--cache-strict`, a memory-cache build) reuses no module or graph entry extracted from other bytes. A clean update does not stat tracked files: an eol-only rewrite of an otherwise unchanged file is noticed when that file changes again or on a cold build.
-- **Case-only renames.** On a case-insensitive file system, a manifest key that Git's listing no longer spells that way (`Foo.ts` renamed to `foo.ts`) is retired, so one file never holds two spellings.
+- **Case-only renames.** On a case-insensitive file system, a manifest key that Git's listing no longer spells that way (`Foo.ts` renamed to `foo.ts`, or its directory renamed) is retired, so one file never holds two spellings. Inside a submodule, the submodule's own listing says how Git spells a file.
 
-An update in a repository without flagged files or submodules spawns no further Git child. Known limits: a flag set in a submodule's own index is not seen, and an eol-only rewrite waits for the next change to its file or a cold build.
+An update in a repository without flagged files or submodules spawns no further Git child. A manifest write adds one `git ls-files -v` child, which records the flagged files beside the dirty ones, and a manifest without that record (from an older build) compares tracked blob ids instead.
+
+Known limits:
+
+- A flag set in a submodule's own index is not seen.
+- An eol-only rewrite of an otherwise unchanged file waits for the next change to that file or a cold build.
+- A case-only respelling that Git's diff does not report keeps the manifest's spelling until the file changes: moving HEAD (`git switch`, `git reset --hard`) between commits that spell a path differently, or `git checkout HEAD -- <old spelling>` after a staged case rename. A cold build lists Git's current spelling.
+- A flagged file that is absent from a directory that exists, as with `git update-index --skip-worktree` on files of a kept directory, costs one existence probe per update: about 0.9 s for 95,000 such files. A sparse checkout that removes whole directories costs one probe per removed top directory.
+
+`cache: "off"` (CLI `--cache off`) builds cold and has none of these limits. `cacheStrict: true` (CLI `--cache-strict`) hashes content and rediscovers every file, which also settles the first two.
 
 Index builds are not atomic filesystem snapshots. If files change during a build, repeat the update.
 

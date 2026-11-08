@@ -467,6 +467,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
               reconciledWorkingTreeDiffFiles: incrementalPlan.workingTreeDiffFiles,
               reconciledUntrackedFiles: incrementalPlan.untrackedFiles,
               reconciledRetiredTrackedFiles: incrementalPlan.retiredTrackedFiles,
+              reconciledHiddenChangeFiles: incrementalPlan.hiddenChangeFiles,
             }
           : {}),
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),

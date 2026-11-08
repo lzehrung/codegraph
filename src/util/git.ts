@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
-import { normalizePath } from "./paths.js";
+import { createRootPathMapper, normalizePath } from "./paths.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 
 /**
@@ -18,12 +18,13 @@ type GitExcludeFile = { file: string; baseDir: string; priority: number };
 
 /**
  * One `git ls-files` listing of a repository. A listing that asked for tracked entries too also records the tracked
- * paths Git cannot compare with the worktree, and every tracked spelling.
+ * paths Git cannot compare with the worktree, and every tracked spelling. Both are read on first use: an update with
+ * no flagged file resolves no flagged path, and one that never compares spellings resolves no tracked path.
  */
 export type GitWorktreeListing = {
   untracked: string[];
   /** Tracked files flagged assume-unchanged or skip-worktree. Undefined when the listing did not read tracked entries. */
-  flagged: string[] | undefined;
+  flaggedFiles: (() => readonly string[]) | undefined;
   /** Tracked path spellings as Git records them. Undefined when the listing did not read tracked entries. */
   trackedPaths: (() => ReadonlySet<string>) | undefined;
 };
@@ -1041,11 +1042,17 @@ async function listWorktreeListing(
   if (cached) {
     if (!includeTracked) return await cached;
     const listing = await cached;
-    if (listing.flagged) return listing;
+    if (listing.flaggedFiles) return listing;
   }
   const pending = listWorktreeListingUncached(projectRoot, respectGitignore, includeTracked);
   cache?.set(cacheKey, pending);
   return await pending;
+}
+
+/** Whether a `git ls-files -v` tag marks a tracked entry Git cannot compare with the worktree: assume-unchanged or skip-worktree. */
+function isFlaggedTag(tag: string): boolean {
+  const isAssumeUnchanged = tag >= "a" && tag <= "z";
+  return tag === "S" || isAssumeUnchanged;
 }
 
 async function listWorktreeListingUncached(
@@ -1061,38 +1068,62 @@ async function listWorktreeListingUncached(
     // empty string, not a filename, so filter it out without trimming (a leading or
     // trailing whitespace character can be a legitimate part of a real filename).
     const records = stdout.split("\0");
+    const toAbsolute = createRootPathMapper(projectRoot).toAbsolute;
     const untracked = new Set<string>();
     if (!includeTracked) {
       for (const rel of records) {
-        const abs = rel ? resolveGitListedPath(projectRoot, rel) : "";
-        if (abs) untracked.add(abs);
+        if (rel) untracked.add(toAbsolute(rel));
       }
-      return { untracked: Array.from(untracked), flagged: undefined, trackedPaths: undefined };
+      return { untracked: Array.from(untracked), flaggedFiles: undefined, trackedPaths: undefined };
     }
     // `-v` prefixes each record with `<tag> `: `?` for an untracked path, otherwise the tracked entry's state. A
-    // lowercase tag marks an assume-unchanged entry and `S` a skip-worktree entry.
-    const flagged: string[] = [];
+    // lowercase tag marks an assume-unchanged entry and `S` a skip-worktree entry. Flagged paths stay as Git lists
+    // them until a caller asks: a sparse checkout flags most of a large repository.
+    const flaggedListed: string[] = [];
     for (const record of records) {
       const tag = record.charAt(0);
       if (!tag || tag === "H") continue;
-      const abs = resolveGitListedPath(projectRoot, record.slice(2));
-      if (!abs) continue;
-      if (tag === "?") untracked.add(abs);
-      else if (tag === "S" || (tag >= "a" && tag <= "z")) flagged.push(abs);
+      if (tag === "?") untracked.add(toAbsolute(record.slice(2)));
+      else if (isFlaggedTag(tag)) flaggedListed.push(record.slice(2));
     }
+    let flaggedFiles: readonly string[] | undefined;
     let trackedPaths: Set<string> | undefined;
     return {
       untracked: Array.from(untracked),
-      flagged,
+      flaggedFiles: () => (flaggedFiles ??= flaggedListed.map(toAbsolute)),
       trackedPaths: () => {
         if (trackedPaths) return trackedPaths;
         trackedPaths = new Set<string>();
         for (const record of records) {
-          if (record && !record.startsWith("?")) trackedPaths.add(resolveGitListedPath(projectRoot, record.slice(2)));
+          if (record && !record.startsWith("?")) trackedPaths.add(toAbsolute(record.slice(2)));
         }
         return trackedPaths;
       },
     };
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
+ * The tracked files flagged assume-unchanged or skip-worktree, from a `git ls-files -v` that no other listing shares.
+ * A manifest records them as it records the dirty files Git's diff names, from a listing made when it is written, so
+ * an edit made while an update ran is not left out.
+ */
+export async function listFlaggedTrackedFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const args = ["ls-files", "-v", "-z"];
+  try {
+    const stdout = await runGitCollectStdout(projectRoot, args);
+    const toAbsolute = createRootPathMapper(projectRoot).toAbsolute;
+    const flagged = new Set<string>();
+    for (const record of stdout.split("\0")) {
+      if (isFlaggedTag(record.charAt(0))) flagged.add(toAbsolute(record.slice(2)));
+    }
+    return Array.from(flagged);
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }

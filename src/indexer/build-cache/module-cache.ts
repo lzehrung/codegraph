@@ -402,12 +402,16 @@ export async function fileSignature(
   return { sig, cacheSig: contentHash ?? sig, ...(contentHash ? { contentHash } : {}) };
 }
 
-export function fileSignatureFromSource(source: string, blobId?: string): FileSignature {
+/**
+ * The signature of a file whose text was read as `source`. `rawSize` is the byte length of the file as read, which
+ * differs from the length of `source` encoded again when the file holds bytes that are not UTF-8: it must agree with
+ * the size `fileSignature` takes from `stat`, or one cache would hold the same file under two Git signatures.
+ */
+export function fileSignatureFromSource(source: string, rawSize: number, blobId?: string): FileSignature {
   const contentHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
-  const size = Buffer.byteLength(source, "utf8");
-  const sig = `${size}:${contentHash}`;
+  const sig = `${rawSize}:${contentHash}`;
   if (!blobId) return { sig, cacheSig: contentHash, contentHash };
-  const gitSig = qualifyGitSignature(blobId, size);
+  const gitSig = qualifyGitSignature(blobId, rawSize);
   return { sig, cacheSig: gitSig, contentHash, gitSig };
 }
 

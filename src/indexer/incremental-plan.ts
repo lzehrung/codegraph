@@ -7,6 +7,7 @@ import {
   loadManifest,
   sanitizeManifestEntriesForRoot,
   type FileSignature,
+  type IndexManifest,
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
@@ -457,14 +458,18 @@ export function manifestFileSignatureMatches(
  * Previously dirty tracked paths stay candidates after restoration or reversion makes Git's diff empty.
  * New manifests record those paths, so a clean indexed state needs no blob listing. Older or invalid metadata
  * falls back to comparing reusable index blob ids; entries without one still need signature validation.
+ *
+ * The dirty record is trusted only beside the flagged record written with it. A manifest without that one predates
+ * the record of the files a flag hid, so its dirty record says nothing about them: only the blob ids do.
  */
 export async function collectGitManifestChangeCandidates(
   projectRoot: string,
   trackedEntries: Record<string, ManifestFileEntry>,
   discoveryContext: ProjectDiscoveryContext,
-  gitDirtyFiles?: string[],
+  recorded?: Pick<IndexManifest, "gitDirtyFiles" | "gitFlaggedFiles">,
 ): Promise<string[]> {
-  if (gitDirtyFiles !== undefined) return gitDirtyFiles;
+  const { gitDirtyFiles, gitFlaggedFiles } = recorded ?? {};
+  if (gitDirtyFiles && gitFlaggedFiles) return gitDirtyFiles;
   const indexed = await listGitIndexedBlobs(projectRoot, discoveryContext.git);
   const candidates: string[] = [];
   for (const { rel, blob } of indexed) {
@@ -508,8 +513,14 @@ export async function listUntrackedProjectFiles(
   });
 }
 
-/** What the untracked listing's Git child reports about tracked files: those Git cannot compare, and each path's spelling. */
-export type GitWorktreeSignals = { flagged: string[]; isCurrentSpelling: (file: string) => boolean };
+/**
+ * What the untracked listing's Git child reports about tracked files: those Git cannot compare, and each path's
+ * spelling. Both are read on first use.
+ */
+export type GitWorktreeSignals = {
+  flaggedFiles: () => readonly string[];
+  isCurrentSpelling: (file: string) => boolean;
+};
 
 /**
  * Tracked files whose worktree Git cannot compare with the index, and the spelling Git records for each tracked or
@@ -527,7 +538,7 @@ export async function listGitWorktreeSignals(
   });
   const untracked = new Set(listing.untracked);
   return {
-    flagged: listing.flagged ?? [],
+    flaggedFiles: () => listing.flaggedFiles?.() ?? [],
     isCurrentSpelling: (file) => untracked.has(file) || !!listing.trackedPaths?.().has(file),
   };
 }
@@ -557,53 +568,169 @@ export async function findStaleOrUnseenManifestFiles(
 }
 
 /**
- * Candidates for the changes Git's diff and index listings cannot show: those a signature check must find. Each is a
- * file an update verifies against the manifest by stat, because Git has nothing to say about it.
- *
- * - A changed submodule is one path (its gitlink) in the superproject's diff. Its own tracked and untracked files are
- *   listed as cold discovery lists them. The submodules are the diff's changed gitlinks plus the ones the manifest
- *   recorded as dirty, so a submodule restored since is reconciled once. A manifest that recorded none (absent or
- *   invalid) reconciles every submodule.
- * - A tracked file flagged assume-unchanged or skip-worktree is omitted from every Git diff.
+ * The submodules an update lists, and their files as Git spells them. A changed submodule is one path (its gitlink) in
+ * the superproject's diff, so its own tracked and untracked files are listed as cold discovery lists them. The
+ * submodules are the diff's changed gitlinks plus the ones the manifest recorded as dirty, so a submodule restored
+ * since is reconciled once. A manifest that recorded none (absent or invalid) reconciles every submodule.
  */
-export async function collectGitHiddenChangeCandidates(args: {
+async function listReconciledSubmoduleFiles(args: {
   projectRoot: string;
-  trackedEntries: Record<string, ManifestFileEntry>;
   changedSubmodules: readonly string[];
   /** Submodules the manifest recorded as dirty, or undefined when it recorded none. */
   recordedSubmodules: readonly string[] | undefined;
-  flaggedFiles: readonly string[];
   opts: BuildOptions | undefined;
   context: ProjectDiscoveryContext;
-  concurrency?: number;
+  concurrency: number;
 }): Promise<string[]> {
-  const concurrency = args.concurrency ?? PATH_EXISTS_PROBE_CONCURRENCY;
   const directories = new Set([...args.changedSubmodules, ...(args.recordedSubmodules ?? [])]);
   if (args.recordedSubmodules === undefined) {
     for (const directory of await listGitSubmoduleDirectories(args.projectRoot)) directories.add(directory);
   }
-  const initialized = await mapLimit([...directories], concurrency, async (directory) =>
+  const initialized = await mapLimit([...directories], args.concurrency, async (directory) =>
     (await pathExists(path.join(directory, ".git"))) ? directory : null,
   );
   const respectGitignore = args.opts?.discovery?.useGitignore !== false;
-  const submoduleFiles = await mapLimit(
+  const listings = await mapLimit(
     initialized.filter((directory): directory is string => directory !== null),
-    concurrency,
+    args.concurrency,
     (directory) => listSubmoduleFiles(directory, { respectGitignore, discoveryCache: args.context.git }),
   );
-  const verified = new Set(
-    submoduleFiles.length
-      ? await filterIncrementalDiscoveryCandidates(
-          args.projectRoot,
-          submoduleFiles.flat(),
-          args.trackedEntries,
-          args.opts,
-          args.context,
-        )
-      : [],
+  return listings.flat();
+}
+
+function parentDirectory(file: string): string {
+  const separator = file.lastIndexOf("/");
+  if (separator < 0) return ".";
+  return file.slice(0, separator);
+}
+
+/**
+ * The files among `files` that exist. A directory is probed only once its parent is known to exist, so the files of an
+ * absent directory tree cost one probe at its top: a sparse checkout flags every file it leaves out, and most of those
+ * directories are absent. A file is probed only when its directory exists.
+ */
+async function findExistingFiles(
+  projectRoot: string,
+  files: readonly string[],
+  concurrency: number,
+): Promise<string[]> {
+  if (!files.length) return [];
+  const root = normalizePath(path.resolve(projectRoot));
+  const rootPrefix = root.endsWith("/") ? root : `${root}/`;
+  const directoryProbes = new Map<string, Promise<boolean>>();
+  const directoryExists = (directory: string): Promise<boolean> => {
+    let probe = directoryProbes.get(directory);
+    if (!probe) {
+      probe = probeDirectory(directory);
+      directoryProbes.set(directory, probe);
+    }
+    return probe;
+  };
+  const probeDirectory = async (directory: string): Promise<boolean> => {
+    // The root, and anything outside it, is not probed: callers pass files inside the root.
+    if (!directory.startsWith(rootPrefix)) return true;
+    return (await directoryExists(parentDirectory(directory))) && (await pathExists(directory));
+  };
+  const directories = new Set(files.map(parentDirectory));
+  const existingDirectories = new Set<string>();
+  await mapLimit([...directories], concurrency, async (directory) => {
+    if (await directoryExists(directory)) existingDirectories.add(directory);
+  });
+  const inExistingDirectory = files.filter((file) => existingDirectories.has(parentDirectory(file)));
+  const existence = await probePathExistence(inExistingDirectory, concurrency);
+  return inExistingDirectory.filter((file) => existence.get(file));
+}
+
+/** Changes Git's diff and index listings cannot show, found by comparing files with the manifest. */
+export type GitHiddenChanges = {
+  /** Files for a signature check: the submodule and flagged files whose stat differs from the manifest, or that it has not seen. */
+  files: string[];
+  /** Manifest paths retired because Git now spells their file differently (a case-only rename). */
+  retiredTrackedFiles: string[];
+  /** Paths a caller removes from its own candidates: the retired keys, and candidates Git does not spell that way. */
+  droppedSpellings: Set<string>;
+};
+
+/**
+ * Reconciles the changes Git's diff and index listings cannot show. Each file it names is one an update verifies
+ * against the manifest by stat, because Git has nothing to say about it.
+ *
+ * - A changed submodule is one path (its gitlink) in the superproject's diff, so its own files are listed
+ *   (`listReconciledSubmoduleFiles`). Inside a submodule only that listing says how Git spells a file, so it also
+ *   settles a case-only rename there.
+ * - A tracked file flagged assume-unchanged or skip-worktree is omitted from every Git diff. The files flagged now and
+ *   those the manifest recorded as flagged are both verified: clearing a flag (`git sparse-checkout add` does) shows
+ *   a file that differs from `lastCommit` in the diff, but one that matches it nowhere. A flagged file the manifest
+ *   has is compared by stat. One it lacks is a file that was absent, or is not discovered; it is indexed when it now
+ *   exists and discovery accepts it.
+ *
+ * `args.trackedEntries` loses the manifest keys retired for a case-only rename, so the candidates that follow see the
+ * file's new spelling as unseen.
+ */
+export async function reconcileGitHiddenChanges(args: {
+  projectRoot: string;
+  trackedEntries: Record<string, ManifestFileEntry>;
+  /** Files Git's diff, the manifest's dirty record or the untracked listing already named. */
+  gitCandidates: readonly string[];
+  /** The gitlinks Git's diff reports as changed. */
+  changedSubmodules: readonly string[];
+  /** What the manifest recorded about submodules and flags; undefined when there is no manifest. */
+  manifest: Pick<IndexManifest, "gitDirtySubmodules" | "gitFlaggedFiles"> | undefined;
+  signals: GitWorktreeSignals;
+  opts: BuildOptions | undefined;
+  context: ProjectDiscoveryContext;
+  concurrency?: number;
+}): Promise<GitHiddenChanges> {
+  const concurrency = args.concurrency ?? PATH_EXISTS_PROBE_CONCURRENCY;
+  const submoduleFiles = await listReconciledSubmoduleFiles({
+    projectRoot: args.projectRoot,
+    changedSubmodules: args.changedSubmodules,
+    recordedSubmodules: args.manifest?.gitDirtySubmodules,
+    opts: args.opts,
+    context: args.context,
+    concurrency,
+  });
+  let submoduleSpellings: Set<string> | undefined;
+  const isCurrentSpelling = (file: string): boolean => {
+    submoduleSpellings ??= new Set(submoduleFiles);
+    return submoduleSpellings.has(file) || args.signals.isCurrentSpelling(file);
+  };
+  const respelled = findRespelledTrackedFiles(
+    args.trackedEntries,
+    [...args.gitCandidates, ...submoduleFiles],
+    isCurrentSpelling,
   );
-  for (const file of args.flaggedFiles) if (Object.hasOwn(args.trackedEntries, file)) verified.add(file);
-  return await findStaleOrUnseenManifestFiles([...verified], args.trackedEntries, concurrency);
+  for (const file of respelled.retiredTrackedFiles) delete args.trackedEntries[file];
+
+  const verified = new Set(
+    await filterIncrementalDiscoveryCandidates(
+      args.projectRoot,
+      submoduleFiles,
+      args.trackedEntries,
+      args.opts,
+      args.context,
+    ),
+  );
+  const flagged = new Set([...args.signals.flaggedFiles(), ...(args.manifest?.gitFlaggedFiles ?? [])]);
+  const unindexedFlagged: string[] = [];
+  for (const file of flagged) {
+    if (respelled.droppedSpellings.has(file)) continue;
+    if (Object.hasOwn(args.trackedEntries, file)) verified.add(file);
+    else unindexedFlagged.push(file);
+  }
+  const reappeared = await filterIncrementalDiscoveryCandidates(
+    args.projectRoot,
+    await findExistingFiles(args.projectRoot, unindexedFlagged, concurrency),
+    args.trackedEntries,
+    args.opts,
+    args.context,
+  );
+  for (const file of reappeared) verified.add(file);
+  return {
+    files: await findStaleOrUnseenManifestFiles([...verified], args.trackedEntries, concurrency),
+    retiredTrackedFiles: respelled.retiredTrackedFiles,
+    droppedSpellings: respelled.droppedSpellings,
+  };
 }
 
 /**
@@ -666,6 +793,8 @@ export type IncrementalFilePlan = {
   untrackedFiles: string[];
   /** Manifest paths retired because Git now spells their file differently (a case-only rename). */
   retiredTrackedFiles: string[];
+  /** The part of `workingTreeDiffFiles` Git cannot report on: submodule and flagged files, verified by stat. */
+  hiddenChangeFiles: string[];
 };
 
 export async function resolveIncrementalFilePlan(
@@ -704,7 +833,7 @@ export async function resolveIncrementalFilePlan(
         discoveryCache: context.git,
       }),
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
-      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context, manifest.gitDirtyFiles),
+      collectGitManifestChangeCandidates(projectRoot, trackedEntries, context, manifest),
       listGitWorktreeSignals(projectRoot, opts?.discovery, context),
     ]);
     // A failed Git probe must not leave another child holding the project directory open.
@@ -716,32 +845,25 @@ export async function resolveIncrementalFilePlan(
     const untrackedFiles = untrackedResult.value;
     const manifestCandidates = candidatesResult.value;
     const signals = signalsResult.value;
-    const { retiredTrackedFiles, droppedSpellings } = findRespelledTrackedFiles(
-      trackedEntries,
-      [...diff.files, ...manifestCandidates, ...untrackedFiles],
-      signals.isCurrentSpelling,
-    );
-    for (const file of retiredTrackedFiles) {
-      trackedFiles.delete(file);
-      delete trackedEntries[file];
-    }
-    const gitDiffFiles = await filterIncrementalDiscoveryCandidates(
-      projectRoot,
-      [...new Set([...diff.files, ...manifestCandidates])].filter((file) => !droppedSpellings.has(file)),
-      trackedEntries,
-      opts,
-      context,
-    );
-    const hiddenChangeFiles = await collectGitHiddenChangeCandidates({
+    const hidden = await reconcileGitHiddenChanges({
       projectRoot,
       trackedEntries,
+      gitCandidates: [...diff.files, ...manifestCandidates, ...untrackedFiles],
       changedSubmodules: diff.gitlinks,
-      recordedSubmodules: manifest.gitDirtySubmodules,
-      flaggedFiles: signals.flagged,
+      manifest,
+      signals,
       opts,
       context,
     });
-    const workingTreeDiffFiles = [...new Set([...gitDiffFiles, ...hiddenChangeFiles])];
+    for (const file of hidden.retiredTrackedFiles) trackedFiles.delete(file);
+    const gitDiffFiles = await filterIncrementalDiscoveryCandidates(
+      projectRoot,
+      [...new Set([...diff.files, ...manifestCandidates])].filter((file) => !hidden.droppedSpellings.has(file)),
+      trackedEntries,
+      opts,
+      context,
+    );
+    const workingTreeDiffFiles = [...new Set([...gitDiffFiles, ...hidden.files])];
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
     const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();
@@ -753,7 +875,8 @@ export async function resolveIncrementalFilePlan(
       manifestUpdatedAt: manifest.updatedAt,
       workingTreeDiffFiles,
       untrackedFiles,
-      retiredTrackedFiles,
+      retiredTrackedFiles: hidden.retiredTrackedFiles,
+      hiddenChangeFiles: hidden.files,
     };
   } catch {
     // Any failure here (stale/missing manifest commit, transient Git error, ...) means
