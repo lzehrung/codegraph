@@ -7,6 +7,7 @@ import { CSHARP_SUPPORT, type LanguageExtensionMap } from "../../src/languages.j
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
 import { clearMemoryCache } from "../../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import { findImplementations, findTypeHierarchy } from "../../src/indexer/type-hierarchy.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import {
   buildProjectIndex,
@@ -5517,4 +5518,146 @@ describe("C# lowercase and keyword-verbatim type alias calls", () => {
       }
     },
   );
+});
+
+describe("C# interface inheritance", () => {
+  async function withGraph<T>(
+    files: Readonly<Record<string, string>>,
+    run: (graph: SymbolGraph, index: ProjectIndex) => T | Promise<T>,
+  ): Promise<T> {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-interface-inheritance-"));
+    try {
+      await writeFixtureFiles(root, files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      return await run(await buildSymbolGraphDetailed(index), index);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  const relations = (graph: SymbolGraph): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+
+  const implementationsOf = (index: ProjectIndex, graph: SymbolGraph, name: string): string[] => {
+    const target = [...graph.nodes.values()].find((node) => node.name === name && node.kind === "interface");
+    if (!target) throw new Error(`Expected the ${name} interface`);
+    const result = findImplementations(index, graph, target.id);
+    if (result.status !== "ok") throw new Error(`Expected implementations of ${name}`);
+    return result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name ?? "").sort();
+  };
+
+  const hierarchyOf = (graph: SymbolGraph, name: string, direction: "super" | "sub", depth: number): string[] => {
+    const target = [...graph.nodes.values()].find((node) => node.name === name && node.kind === "interface");
+    if (!target) throw new Error(`Expected the ${name} interface`);
+    const result = findTypeHierarchy(graph, target.id, direction, { depth });
+    if (result.status !== "ok") throw new Error(`Expected ${direction}types of ${name}`);
+    return result.relations.map((entry) => `${graph.nodes.get(entry.targetId)?.name}:${entry.relation}@${entry.depth}`);
+  };
+
+  it("records IChild : IParent as extends and returns only Widget for IParent, in separate files and in one file", async () => {
+    const separateFiles = {
+      "Parent.cs": "public interface IParent { }\n",
+      "Child.cs": "public interface IChild : IParent { }\n",
+      "Widget.cs": "public class Widget : IChild { }\n",
+    };
+    const oneFile = {
+      "All.cs": [
+        "public interface IParent { }",
+        "public interface IChild : IParent { }",
+        "public class Widget : IChild { }",
+        "public struct Gadget : IChild { }",
+        "",
+      ].join("\n"),
+    };
+    await withGraph(separateFiles, (graph, index) => {
+      expect(relations(graph)).toEqual(["IChild:extends:IParent", "Widget:implements:IChild"]);
+      expect(implementationsOf(index, graph, "IParent")).toEqual(["Widget"]);
+      expect(implementationsOf(index, graph, "IChild")).toEqual(["Widget"]);
+      expect(hierarchyOf(graph, "IChild", "super", 3)).toEqual(["IParent:extends@1"]);
+      expect(hierarchyOf(graph, "IParent", "sub", 3)).toEqual(["IChild:extends@1", "Widget:implements@2"]);
+    });
+    await withGraph(oneFile, (graph, index) => {
+      expect(relations(graph)).toEqual([
+        "Gadget:implements:IChild",
+        "IChild:extends:IParent",
+        "Widget:implements:IChild",
+      ]);
+      expect(implementationsOf(index, graph, "IParent")).toEqual(["Gadget", "Widget"]);
+      expect(implementationsOf(index, graph, "IChild")).toEqual(["Gadget", "Widget"]);
+    });
+  });
+
+  it("records every interface of a list as extends and keeps each implementer behind its own interface", async () => {
+    await withGraph(
+      {
+        "All.cs": [
+          "public interface IA { }",
+          "public interface IB { }",
+          "public interface IC : IA, IB { }",
+          "public class W : IC { }",
+          "public class X : IA, IB { }",
+          "",
+        ].join("\n"),
+      },
+      (graph, index) => {
+        expect(relations(graph)).toEqual([
+          "IC:extends:IA",
+          "IC:extends:IB",
+          "W:implements:IC",
+          "X:implements:IA",
+          "X:implements:IB",
+        ]);
+        expect(implementationsOf(index, graph, "IA")).toEqual(["W", "X"]);
+        expect(implementationsOf(index, graph, "IB")).toEqual(["W", "X"]);
+        expect(implementationsOf(index, graph, "IC")).toEqual(["W"]);
+      },
+    );
+  });
+
+  it("follows a partial interface and a generic parent to the types that implement the child", async () => {
+    await withGraph(
+      {
+        "P.cs": "namespace N { public interface IParent<T> { T Run(); } }\n",
+        "C1.cs": "using N;\nnamespace M { public partial interface IChild : IParent<int> { } }\n",
+        "C2.cs": "namespace M { public partial interface IChild { int Extra(); } }\n",
+        "W.cs": [
+          "using N;",
+          "using M;",
+          "namespace K { public class Widget : IChild { public int Run() { return 1; } public int Extra() { return 2; } } }",
+          "",
+        ].join("\n"),
+      },
+      (graph, index) => {
+        expect(relations(graph)).toEqual(["IChild:extends:IParent", "Widget:implements:IChild"]);
+        expect(implementationsOf(index, graph, "IParent")).toEqual(["Widget"]);
+      },
+    );
+  });
+
+  it("reads the first base-list entry as the class only when it resolves to one, wherever it is declared", async () => {
+    await withGraph(
+      {
+        "IFoo.cs": "public interface IFoo { }\n",
+        "Base.cs": "public class Base { }\n",
+        "D1.cs": "public class D1 : IFoo { }\n",
+        "D2.cs": "public class D2 : Base, IFoo { }\n",
+        "D3.cs": "public struct D3 : IFoo { }\n",
+        "D4.cs": "public class D4 : Base { }\n",
+      },
+      (graph, index) => {
+        // An interface listed first implements; a class listed first extends, in other files as in the same one.
+        expect(relations(graph)).toEqual([
+          "D1:implements:IFoo",
+          "D2:extends:Base",
+          "D2:implements:IFoo",
+          "D3:implements:IFoo",
+          "D4:extends:Base",
+        ]);
+        expect(implementationsOf(index, graph, "IFoo")).toEqual(["D1", "D2", "D3"]);
+      },
+    );
+  });
 });

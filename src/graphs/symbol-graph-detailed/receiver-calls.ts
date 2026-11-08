@@ -208,6 +208,8 @@ const HIERARCHY_LABELS: Record<string, true> = {
 const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
   "binary_expression",
   "call_expression",
+  // A TypeScript namespace-qualified type (`ns.Contract`) names a member of that namespace; its bare name would bind elsewhere.
+  "nested_type_identifier",
   "new_expression",
   "subscript_expression",
   "ternary_expression",

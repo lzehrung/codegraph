@@ -3,7 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
-import { findReferences, goToDefinition, listSymbols } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+} from "../../src/index.js";
+import type { SymbolGraph } from "../../src/graphs/symbol-graph.js";
+import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer/locals-and-exports.js";
@@ -11,6 +19,7 @@ import { collectImportsForFile } from "../../src/indexer/imports.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import { TS_SUPPORT } from "../../src/languages.js";
 import { createTestIndex, createTestIndexFromFiles } from "../test-utils.js";
+import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -620,6 +629,126 @@ describe("TypeScript cyclic barrel consumers", () => {
             .sort(),
         ).toEqual(file === "def.ts" ? [1, 2] : []);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("TypeScript interface inheritance", () => {
+  const relationsOf = (graph: SymbolGraph): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+
+  it("records a list of parents, a class parent, and a generic parent as extends and finds implementers through them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-interface-inheritance-"));
+    try {
+      await writeFixtureFiles(root, {
+        "all.ts": [
+          "export interface A {",
+          "  a(): void;",
+          "}",
+          "export interface B {",
+          "  b(): void;",
+          "}",
+          "export class K {",
+          "  k(): void {}",
+          "}",
+          "export interface C extends A, B, K {}",
+          "export interface G<T> {",
+          "  g(): T;",
+          "}",
+          "export interface H extends G<number> {}",
+          "export class W implements C {",
+          "  a(): void {}",
+          "  b(): void {}",
+          "  k(): void {}",
+          "}",
+          "export class V implements H {",
+          "  g(): number {",
+          "    return 1;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(relationsOf(graph)).toEqual([
+        "C:extends:A",
+        "C:extends:B",
+        "C:extends:K",
+        "H:extends:G",
+        "V:implements:H",
+        "W:implements:C",
+      ]);
+      const implementationsOf = (name: string): string[] => {
+        const target = [...graph.nodes.values()].find((node) => node.name === name && node.kind === "type");
+        if (!target) throw new Error(`Expected the ${name} interface`);
+        const result = findImplementations(index, graph, target.id);
+        if (result.status !== "ok") throw new Error(`Expected implementations of ${name}`);
+        return result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name ?? "").sort();
+      };
+      expect(implementationsOf("A")).toEqual(["W"]);
+      expect(implementationsOf("B")).toEqual(["W"]);
+      expect(implementationsOf("C")).toEqual(["W"]);
+      expect(implementationsOf("G")).toEqual(["V"]);
+      expect(implementationsOf("H")).toEqual(["V"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a member a child interface inherits for navigation, references, and call edges alike", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-interface-members-"));
+    try {
+      const parent = ["export interface Parent {", "  run(): number;", "}", ""];
+      const use = [
+        'import { Child } from "./child";',
+        "",
+        "export function f(c: Child): number {",
+        "  return c.run();",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "parent.ts": parent.join("\n"),
+        "child.ts": ['import { Parent } from "./parent";', "", "export interface Child extends Parent {}", ""].join(
+          "\n",
+        ),
+        "use.ts": use.join("\n"),
+        "decoy.ts": ["export class Decoy {", "  run(): number {", "    return 0;", "  }", "}", ""].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+
+      const call = await goToDefinition(index, {
+        file: files["use.ts"]!,
+        line: 4,
+        column: columnOf(use, 4, "run"),
+      });
+      expect(call.status).toBe("ok");
+      if (call.status !== "ok") return;
+      expect(call.definition.file).toBe(files["parent.ts"]);
+      expect(call.definition.range.start.line).toBe(2);
+
+      const refs = await findReferences(index, {
+        file: files["parent.ts"]!,
+        line: 2,
+        column: columnOf(parent, 2, "run"),
+      });
+      if (refs.status !== "ok") throw new Error("Expected references to Parent.run");
+      expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refs.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`).sort(),
+      ).toEqual(["parent.ts:2", "use.ts:4"]);
+
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${path.basename(graph.nodes.get(edge.to)?.file ?? "")}`);
+      expect(calls).toEqual(["f->parent.ts"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

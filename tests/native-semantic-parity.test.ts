@@ -21,6 +21,7 @@ import { defNodeId } from "../src/graphs/symbol-graph.js";
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { findImplementations } from "../src/indexer/type-hierarchy.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
+import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
 import {
   KOTLIN_QUOTED_BOUNDARY_FILES,
   KOTLIN_QUOTED_BOUNDARY_LINES,
@@ -3617,6 +3618,28 @@ nativeDescribe("native semantic coverage", () => {
       expect(call.definition.range.start.line, phase).toBe(3);
     }
   });
+
+  it.each(INTERFACE_INHERITANCE_FIXTURES)(
+    "keeps $language interface inheritance identical across a native disk-cache reload",
+    async (fixture) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-interface-inheritance-"));
+      const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-interface-inheritance-cache-"));
+      tempDirs.push(root, cacheDir);
+      await writeFixtureFiles(root, fixture.files);
+      const options = { cache: "disk", cacheDir, threads: 1 } as const;
+      const cold = await buildProjectIndex(root, options);
+      clearMemoryCache();
+      const warm = await buildProjectIndex(root, options);
+      for (const [phase, index] of [
+        ["cold", cold],
+        ["warm", warm],
+      ] as const) {
+        for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+        const graph = await buildSymbolGraphDetailed(index);
+        expectInterfaceInheritance(root, index, graph, fixture, phase);
+      }
+    },
+  );
 
   it("keeps quoted Swift names and source ranges stable across a native disk-cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-"));

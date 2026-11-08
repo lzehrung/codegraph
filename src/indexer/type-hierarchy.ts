@@ -304,9 +304,10 @@ function collectTypeImplementations(
 ): ImplementationMatch[] {
   const matches = new Map<string, ImplementationMatch>();
   const queue: string[] = [];
-  // A contract that extends the target (Swift `protocol Child: Parent`, PHP `interface Child extends Parent`) is
-  // not an implementation of it, but whatever implements that contract does. Walk such contracts as intermediate
-  // nodes, each with the roots that count as implementing it.
+  // A contract that extends the target (`interface Child extends Parent`, C# and Kotlin `interface Child : Parent`,
+  // Swift `protocol Child: Parent`, a Go interface embedding another) is not an implementation of it, but whatever
+  // implements that contract does. Walk such contracts as intermediate nodes, each with the roots that count as
+  // implementing it.
   const contracts: ImplementedContract[] = [{ id: targetId, roots: acceptedRootRelations }];
   const walked = new Set<string>([targetId]);
   for (let cursor = 0; cursor < contracts.length; cursor += 1) {

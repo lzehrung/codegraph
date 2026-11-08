@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { defNodeId } from "../../src/graphs/symbol-graph.js";
+import { defNodeId, type SymbolGraph } from "../../src/graphs/symbol-graph.js";
 import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import type { ImportBinding, ProjectIndex } from "../../src/indexer/types.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
@@ -2224,4 +2225,107 @@ it("resolves a package-qualified Kotlin type despite a value parameter", async (
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
+});
+
+describe("Kotlin interface inheritance", () => {
+  const relationsOf = (graph: SymbolGraph): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+  const nodeNamed = (graph: SymbolGraph, name: string) => {
+    const node = [...graph.nodes.values()].find((candidate) => candidate.name === name);
+    if (!node) throw new Error(`Expected the ${name} node`);
+    return node;
+  };
+  const implementationsOf = (index: ProjectIndex, graph: SymbolGraph, name: string): string[] => {
+    const result = findImplementations(index, graph, nodeNamed(graph, name).id);
+    if (result.status !== "ok") throw new Error(`Expected implementations of ${name}, got ${result.status}`);
+    return result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name ?? "").sort();
+  };
+
+  it("records sealed and fun interfaces as extends, and every interface as an interface symbol", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-interface-inheritance-"));
+    try {
+      await writeFixtureFiles(root, {
+        "Forms.kt": [
+          "interface P {",
+          "    fun run()",
+          "}",
+          "",
+          "sealed interface S : P",
+          "",
+          "fun interface F : P",
+          "",
+          "class W : S {",
+          "    override fun run() {}",
+          "}",
+          "",
+          "interface Lonely : P",
+          "",
+          "class K : Lonely {",
+          "    override fun run() {}",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(relationsOf(graph)).toEqual([
+        "F:extends:P",
+        "K:implements:Lonely",
+        "Lonely:extends:P",
+        "S:extends:P",
+        "W:implements:S",
+      ]);
+      // The Kotlin grammar shares class_declaration between classes and interfaces; the interface keyword decides.
+      expect(["P", "S", "F", "Lonely"].map((name) => nodeNamed(graph, name).kind)).toEqual([
+        "interface",
+        "interface",
+        "interface",
+        "interface",
+      ]);
+      expect(["W", "K"].map((name) => nodeNamed(graph, name).kind)).toEqual(["class", "class"]);
+      // Implementers found through each child interface, and a valid empty answer for an interface nobody implements.
+      expect(implementationsOf(index, graph, "P")).toEqual(["K", "W"]);
+      expect(implementationsOf(index, graph, "S")).toEqual(["W"]);
+      expect(implementationsOf(index, graph, "Lonely")).toEqual(["K"]);
+      expect(implementationsOf(index, graph, "F")).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves super.run() in an interface default method unresolved in go-to-definition and the graph alike", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-interface-super-"));
+    try {
+      const lines = [
+        "interface Parent {",
+        "    fun run(): Int = 1",
+        "}",
+        "",
+        "interface Child : Parent {",
+        "    override fun run(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Super.kt": lines.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // `super` follows class ancestors only; an interface that extends an interface gains no super target, so the
+      // relabeled edge cannot make the graph resolve a call that navigation leaves open.
+      const call = await goToDefinition(index, {
+        file: files["Super.kt"]!,
+        line: 7,
+        column: columnInLines(lines, 7, "run"),
+      });
+      expect(call.status).toBe("not_found");
+      expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
+      expect(relationsOf(graph)).toEqual(["Child:extends:Parent"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

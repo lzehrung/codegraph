@@ -117,8 +117,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 127 rebuilds detailed graphs where a member of an enclosing C# type, or an unresolved base, binds a using alias's name.
  * Epoch 128 rebuilds imports and symbol bindings that incremental builds left stale when a deleted, renamed, or
  * newly duplicated declaration changed which files declare an imported name.
+ * Epoch 130 rebuilds detailed graphs that record interface inheritance as `extends` (now also for Java and TypeScript),
+ * C# interfaces declared in other files as `implements`, Kotlin interfaces as interface symbols, and each type's base
+ * clause from its own declaration instead of a nested type's.
  */
-export const CORE_ALGORITHM_EPOCH = 128;
+export const CORE_ALGORITHM_EPOCH = 130;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
