@@ -24,6 +24,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -314,7 +315,7 @@ export async function settleNameResolution(
       }
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
       // A member hides the name but none is a unique, reachable target (static context, ambiguity).
-      if (member === null) return { status: "not_found", reason: "No unique member through the implicit receiver" };
+      if (member === null) return { status: "not_found", reason: AMBIGUOUS_IMPLICIT_MEMBER_REASON };
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
       if (settled) return settled;

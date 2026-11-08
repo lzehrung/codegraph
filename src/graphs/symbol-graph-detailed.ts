@@ -24,8 +24,12 @@ import {
   typescriptOverloadImplementationAcceptsCount,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import { isGoExportedMemberName, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { inheritsMemberOverloads } from "../indexer/member-selection.js";
+import {
+  isExportedDeclaration,
+  isGoExportedMemberName,
+  languageHasDeclarationVisibility,
+} from "../indexer/declaration-visibility.js";
+import { inheritsMemberOverloads, kotlinPropertyInvocationArity } from "../indexer/member-selection.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
@@ -35,6 +39,7 @@ import {
   csharpAliasUsesHiddenByMembers,
   csharpTypeRootName,
   innermostNamespaceImport,
+  isDirectKeywordMemberDeclaration,
   peekCsharpOuterMember,
   pythonDottedPhraseAtUse,
   pythonImportAtUse,
@@ -54,7 +59,7 @@ import {
   tryEnsureParsedContextForIndex,
 } from "../indexer/parsed-cache.js";
 
-import type { CallableIdentity } from "../languages/callable-arity.js";
+import type { CallableArity, CallableIdentity } from "../languages/callable-arity.js";
 import {
   SymbolKind,
   type ModuleIndex,
@@ -82,6 +87,7 @@ import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js"
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
 import {
   emitReceiverCallEdges,
+  nearestMemberContainer,
   inheritedReceiverMemberSignatures,
   type ReceiverCallCandidate,
   type ReceiverMemberScope,
@@ -704,6 +710,42 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
+  const kotlinPropertyArities = new Map<string, CallableArity | null>();
+  const kotlinPropertyMembers = new Map<string, Set<string>>();
+  const kotlinCallNames = new Set(
+    receiverCalls
+      .filter((candidate) => supportForIndexedFile(candidate.site.file)?.id === "kotlin")
+      .map((candidate) => candidate.memberName),
+  );
+  if (kotlinCallNames.size) {
+    for (const module of index.byFile.values()) {
+      if (supportForIndexedFile(module.file)?.id !== "kotlin") continue;
+      for (const def of module.locals) {
+        if (def.kind !== SymbolKind.Variable || !kotlinCallNames.has(def.localName)) continue;
+        const parsed = await loadParsedFile(def.file);
+        const start = def.range.start.index;
+        if (!parsed || start === undefined) continue;
+        const nameNode = parsed.tree.rootNode.descendantForIndex(start, start);
+        const arity = kotlinPropertyInvocationArity(nameNode);
+        if (arity === undefined) continue;
+        const container = nearestMemberContainer(nameNode);
+        if (!container || !isDirectKeywordMemberDeclaration(nameNode, container)) continue;
+        const ownerName =
+          container.childForFieldName("name") ?? container.namedChildren.find((child) => child.type === "identifier");
+        const owner = module.locals.find(
+          (local) => local.kind === SymbolKind.Class && local.range.start.index === ownerName?.startIndex,
+        );
+        if (!owner) continue;
+        const ownerId = defNodeId(owner);
+        const members = kotlinPropertyMembers.get(ownerId) ?? new Set<string>();
+        members.add(defNodeId(def));
+        kotlinPropertyMembers.set(ownerId, members);
+        kotlinPropertyArities.set(defNodeId(def), arity);
+        if (!isExportedDeclaration("kotlin", nameNode)) fileHiddenMemberIds.add(defNodeId(def));
+        noteCallableName(def.localName);
+      }
+    }
+  }
   // Function-valued bindings are proven while each file is processed. Apply the callable-name
   // prefilter only after that pass so receiver calls do not depend on file iteration order.
   const callableReceiverCalls = receiverCalls.filter(hasCallableNamed);
@@ -809,6 +851,8 @@ export async function buildSymbolGraphDetailed(
     receiverMemberScopes,
     nodeAliases,
     receiverMemberArities,
+    kotlinPropertyArities,
+    kotlinPropertyMembers,
     sharedOwnerAnchors,
     sharedOwnerAccessibleMembers,
     fileHiddenMemberIds,

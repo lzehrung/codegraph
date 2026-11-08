@@ -89,12 +89,17 @@ const namesCallee = (use: BareNameUse): boolean =>
   implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id === use.node.id;
 const isImplicitSelfCall = ({ use }: NameLookupState): boolean => namesCallee(use);
 
-/** Reference forms name a method without calling it (Java `this::size`, Kotlin `::size`). */
-const METHOD_REFERENCE_TYPES: Record<string, true> = { method_reference: true, callable_reference: true };
+/** A Kotlin callable reference can name either a member function or a property. */
+const namesKotlinMemberReference = (use: BareNameUse): boolean =>
+  use.parsed.sup.id === "kotlin" &&
+  use.node.parent?.type === "callable_reference" &&
+  use.node.parent.namedChildren.at(-1)?.id === use.node.id;
 
-/** A plain read: not a call, a method reference, or a declaration name. */
+/** A plain read: not a call, a callable reference, or a declaration name. */
 const namesValue = (use: BareNameUse): boolean =>
-  !use.parsed.sup.isDeclarationName(use.node) && !METHOD_REFERENCE_TYPES[use.node.parent?.type ?? ""];
+  !use.parsed.sup.isDeclarationName(use.node) &&
+  !namesKotlinMemberReference(use) &&
+  use.node.parent?.type !== "method_reference";
 
 /** Whether the same scope declared a variable, field, or property before this function binding. */
 function hasEarlierValueBinding(binding: Binding): boolean {
@@ -304,6 +309,12 @@ export const jvmLookupPolicy: NameLookupPolicy = {
   },
   fromClosestBinding: ownOverloadDeclaration,
   onLocal(state, local) {
+    if (state.use.parsed.sup.id === "kotlin" && (namesCallee(state.use) || namesKotlinMemberReference(state.use))) {
+      const declaration = state.closestBinding?.node?.parent;
+      const container = declaration ? nearestMemberContainer(declaration) : null;
+      if (declaration && container && isDirectKeywordMemberDeclaration(declaration, container))
+        return implicitSelf(state, lexical(state, local));
+    }
     if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;
     if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;
     return implicitSelf(state, lexical(state, local));

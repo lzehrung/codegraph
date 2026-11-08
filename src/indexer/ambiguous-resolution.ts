@@ -17,6 +17,10 @@ export const CSHARP_NAMESPACE_NAME_REASON = "C# name denotes a namespace, not an
 export const UNPROVEN_CSHARP_ALIAS_MEMBER_REASON = "C# alias may be hidden by a member of an unresolved base type";
 /** Enclosing members hide the alias, but arity and visibility do not prove one applicable declaration. */
 export const AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON = "No unique applicable C# member before using alias";
+/** An implicit receiver has multiple viable or unproven same-name member candidates. */
+export const AMBIGUOUS_IMPLICIT_MEMBER_REASON = "No unique member through the implicit receiver";
+/** A known receiver declares the name, but no unique member can be selected. */
+export const AMBIGUOUS_RECEIVER_MEMBER_REASON = "No unique receiver member";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -24,6 +28,8 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_CPP_USING_DECLARATION_REASON,
   AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
+  AMBIGUOUS_IMPLICIT_MEMBER_REASON,
+  AMBIGUOUS_RECEIVER_MEMBER_REASON,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
 ]);
 

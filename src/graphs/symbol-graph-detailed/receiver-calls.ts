@@ -9,6 +9,7 @@ import {
 } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
+import type { CallableArity, CallableIdentity } from "../../languages/callable-arity.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { rootNodeOf, sliceText } from "../../util/ast.js";
@@ -1883,11 +1884,13 @@ export function emitReceiverCallEdges(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
+  kotlinPropertyArities: ReadonlyMap<string, CallableArity | null> = new Map(),
+  kotlinPropertyMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
   acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
-  callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
+  callableIdentities: ReadonlyMap<string, CallableIdentity> = new Map(),
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
@@ -1918,9 +1921,12 @@ export function emitReceiverCallEdges(
   for (const [ownerId, memberIds] of accessibleMembers) {
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
+  for (const [ownerId, memberIds] of kotlinPropertyMembers) {
+    for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
+  }
 
   let activeCandidate: ReceiverCallCandidate;
-  const facts = new Map<string, import("../../languages/callable-arity.js").CallableIdentity>();
+  const facts = new Map<string, CallableIdentity>();
   for (const [ownerId, ids] of membersByOwner) {
     for (const id of ids) {
       const canonicalId = canonicalMemberId(id, nodeAliases);
@@ -1954,12 +1960,14 @@ export function emitReceiverCallEdges(
     },
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
-    callable: (id) => facts.get(id),
+    callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
+    invocationArity: (id) => kotlinPropertyArities.get(canonicalMemberId(id, nodeAliases)),
     scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
     visible: (id, useFile) => {
       const canonicalId = canonicalMemberId(id, nodeAliases);
       const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
-      if (!node || (node.kind !== "function" && !node.callable)) return false;
+      if (!node || (node.kind !== "function" && !node.callable && !kotlinPropertyArities.has(canonicalId)))
+        return false;
       if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
       if (
         (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
@@ -2010,6 +2018,7 @@ export function emitReceiverCallEdges(
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
       normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
+      callSite: languageId === "kotlin",
       separateMemberScopes: hasSeparateMemberScopes(languageId),
       startAtAncestor: candidate.viaSupertypes,
       inheritOverloads: inheritsMemberOverloads(languageId),

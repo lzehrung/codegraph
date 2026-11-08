@@ -1448,7 +1448,17 @@ export async function emitFunctionBodyEdges(
               return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
             })
           : [];
-        if (declared.length === 1) {
+        const hasKotlinPropertyCollision =
+          context.sup.id === "kotlin" &&
+          !!container &&
+          context.moduleEntry.locals.some((local) => {
+            if (local.kind !== SymbolKind.Variable || local.localName !== memberName) return false;
+            const start = local.range.start.index;
+            if (start === undefined || start < container.startIndex || start >= container.endIndex) return false;
+            const nameNode = context.tree.rootNode.descendantForIndex(start, start);
+            return isDirectKeywordMemberDeclaration(nameNode, container);
+          });
+        if (declared.length === 1 && !hasKotlinPropertyCollision) {
           const unique = declared[0]!;
           recordDefEdge(context, fromId, unique.def, "calls", access.property);
           // File-hidden Swift members stay off cross-file shared owners. Skipping the

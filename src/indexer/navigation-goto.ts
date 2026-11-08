@@ -84,7 +84,7 @@ import {
   unwrapNamedType,
   type PhpObjectCreationKeyword,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
+import { getCallArgumentCount, memberLookupBinding, type CallableArity } from "../languages/callable-arity.js";
 import {
   csharpNamespaceChainDeclares,
   csharpNamespaceMemberKind,
@@ -130,6 +130,7 @@ import {
   AMBIGUOUS_STAR_IMPORT_REASON,
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
+  AMBIGUOUS_RECEIVER_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -158,6 +159,7 @@ import {
 import {
   hasSeparateMemberScopes,
   inheritsMemberOverloads,
+  kotlinPropertyInvocationArity,
   selectMember,
   type MemberModel,
 } from "./member-selection.js";
@@ -2051,6 +2053,7 @@ export async function resolveMemberAccessDefinition(params: {
     const keywordScope =
       receiverProof?.kind === "own-type" || receiverProof?.kind === "supertype" ? receiverProof.memberScope : "any";
     if (receiverProof?.kind === "own-type") {
+      const report = { named: false, ambiguous: false };
       const memberDef = await resolveKeywordReceiverMember(
         index,
         mod,
@@ -2060,7 +2063,7 @@ export async function resolveMemberAccessDefinition(params: {
         false,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
         undefined,
-        undefined,
+        report,
         memberAccessUse(sup.id, memberNode),
       );
       if (memberDef) {
@@ -2070,6 +2073,7 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      if (sup.id === "kotlin" && report.named) return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
       const outOfLineOwnerPath = cppOutOfLineOwnerPath(node, source, sup);
       const outOfLineOwner = outOfLineOwnerPath
         ? await resolveCppQualifiedMemberContainer(index, mod, outOfLineOwnerPath)
@@ -2179,6 +2183,12 @@ export async function resolveMemberAccessDefinition(params: {
 
     if (receiver) {
       const objDef = receiver.def;
+      const kotlinTypeReference =
+        sup.id === "kotlin" &&
+        receiverProof?.kind === "named-type" &&
+        receiverProof.proof === "static-type" &&
+        navigationUsesDoubleColon(memberNode);
+      const memberScope = kotlinTypeReference ? "any" : receiver.memberScope;
       const targetContext = await ensureParsedContextForIndex(index, objDef.file);
       const start = objDef.range.start;
       const targetPosition = {
@@ -2201,9 +2211,9 @@ export async function resolveMemberAccessDefinition(params: {
         if (targetModule) {
           const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
           const memberPredicate =
-            receiver.memberScope === "any"
+            memberScope === "any"
               ? undefined
-              : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
+              : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
           const knownArgumentCount =
             getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
@@ -2223,13 +2233,13 @@ export async function resolveMemberAccessDefinition(params: {
               mod,
               node,
               member,
-              receiver.memberScope,
+              memberScope,
               false,
               knownArgumentCount,
               objDef,
               report,
             );
-            if (!memberDef && report.named) return { status: "not_found", reason: "No unique receiver member" };
+            if (!memberDef && report.named) return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
           }
           if (
             !memberDef &&
@@ -2244,7 +2254,7 @@ export async function resolveMemberAccessDefinition(params: {
               container,
               targetContext,
               normalizeIdentifier,
-              receiver.memberScope,
+              memberScope,
               knownArgumentCount,
             );
           } else if (!memberDef && (receiver.runtimeTypeOnly || targetContext.sup.id === "java")) {
@@ -2275,7 +2285,7 @@ export async function resolveMemberAccessDefinition(params: {
               container,
               targetContext,
               normalizeIdentifier,
-              receiver.memberScope,
+              memberScope,
               knownArgumentCount,
             );
           }
@@ -3140,6 +3150,10 @@ async function resolveKeywordReceiverMember(
   const membersByKey = new Map<string, SymbolDef[]>();
   const scopeByMember = new Map<SymbolDef, ReceiverMemberScope>();
   const visible = new Set<SymbolDef>();
+  const propertyInvocationArities =
+    memberUse === "call" && current.context.sup.id === "kotlin"
+      ? new Map<SymbolDef, CallableArity | null | undefined>()
+      : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
@@ -3203,6 +3217,13 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (propertyInvocationArities && !hit.callable) {
+          const start = hit.range.start.index;
+          if (start !== undefined) {
+            const nameNode = ref.context.tree.rootNode.descendantForIndex(start, start);
+            propertyInvocationArities.set(hit, kotlinPropertyInvocationArity(nameNode));
+          }
+        }
         if (!scopeByMember.has(hit)) {
           scopeByMember.set(hit, hasStaticModifier(hit, ref.context, ref.container) ? "static" : "instance");
         }
@@ -3261,6 +3282,7 @@ async function resolveKeywordReceiverMember(
       if (!facts || memberLookupBinding(current.context.sup.id) !== "unbound") return facts;
       return facts.unboundArity ? { ...facts, arity: facts.unboundArity } : facts;
     },
+    ...(propertyInvocationArities ? { invocationArity: (def: SymbolDef) => propertyInvocationArities.get(def) } : {}),
     scope: (def) => scopeByMember.get(def) ?? "any",
     visible: (def) => visible.has(def),
     sameSignature: (a, b) => sameSignatures.get(memberKey(a))?.has(memberKey(b)) ?? false,
@@ -3485,13 +3507,25 @@ export async function resolveImplicitSelfMember(
   languageId: string,
 ): Promise<SymbolDef | null | undefined> {
   const call = node.parent ?? node;
-  if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
+  const kotlinReference =
+    languageId === "kotlin" && call.type === "callable_reference" && call.namedChildren.at(-1)?.id === node.id;
+  if (languageId !== "swift" && !kotlinReference && implicitSelfCallee(languageId, call)?.id !== node.id)
+    return undefined;
   const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
   // An unnamed type body (`new Base() { ... }`) sees its own hierarchy first; a name that hierarchy lacks
   // belongs to the enclosing owner, innermost first, so each hop runs from the container it just left.
   let anchor = node;
   for (;;) {
-    const resolved = await resolveImplicitSelfAt(index, mod, anchor, name, source, languageId, argumentCount);
+    const resolved = await resolveImplicitSelfAt(
+      index,
+      mod,
+      anchor,
+      name,
+      source,
+      languageId,
+      argumentCount,
+      kotlinReference,
+    );
     if (resolved !== undefined) return resolved;
     const container = nearestMemberContainer(anchor);
     if (!container || !isAnonymousMemberContainer(languageId, container)) return undefined;
@@ -3513,9 +3547,10 @@ function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boo
 /** How the member access `memberNode` is used, where the language separates calls from value reads. */
 function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): "call" | "value" | undefined {
   if (languageId !== "java" && languageId !== "kotlin" && languageId !== "csharp") return undefined;
-  // A method reference (`this::size`) names the callable without calling it.
-  if (memberNode.type === "method_reference" || memberNode.type === "callable_reference") return "call";
-  if (languageId === "kotlin" && navigationUsesDoubleColon(memberNode)) return "call";
+  // Java method references name methods; Kotlin callable references may name properties too.
+  if (languageId === "java" && memberNode.type === "method_reference") return "call";
+  if (languageId === "kotlin" && (memberNode.type === "callable_reference" || navigationUsesDoubleColon(memberNode)))
+    return undefined;
   return memberAccessIsCall(languageId, memberNode) ? "call" : "value";
 }
 
@@ -3537,6 +3572,7 @@ async function resolveImplicitSelfAt(
   source: string,
   languageId: string,
   argumentCount: number | undefined,
+  kotlinReference = false,
 ): Promise<SymbolDef | null | undefined> {
   const jvm = languageId === "java" || languageId === "kotlin";
   const staticScoped = languageId === "csharp" || jvm;
@@ -3552,12 +3588,13 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     report,
-    languageId === "swift" ? undefined : "call",
+    languageId === "swift" || kotlinReference ? undefined : "call",
   );
   if (member) return member;
   // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
   // inherited method of that name hides imports even when none accepts the call.
-  if (report.ambiguous || (report.named && (languageId === "java" || languageId === "csharp"))) return null;
+  if (report.ambiguous || (report.named && (kotlinReference || languageId === "java" || languageId === "csharp")))
+    return null;
   if (memberScope !== "static" || !jvm) return undefined;
   // In a static context an inherited instance method still shadows a static import or package
   // function; the call is invalid, so it has no target.
@@ -3572,7 +3609,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     instanceReport,
-    "call",
+    kotlinReference ? undefined : "call",
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;

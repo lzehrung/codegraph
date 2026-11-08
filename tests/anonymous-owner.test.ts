@@ -957,6 +957,11 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         "package app",
         "",
         "import kotlin.reflect.KFunction0",
+        "import kotlin.reflect.KFunction1",
+        "import kotlin.reflect.KProperty0",
+        "import kotlin.reflect.KProperty1",
+        "",
+        "typealias IntTransform = (Int) -> Int",
         "",
         "class Adapter {",
         '    fun read(): String = "Adapter.read"',
@@ -988,12 +993,58 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         "    fun reference(): KFunction0<Int> = this::size",
         "",
         "    fun implicitReference(): KFunction0<Int> = ::size",
+        "",
+        "    fun propertyReference(): KProperty0<Int> = this::size",
+        "    fun implicitPropertyReference(): KProperty0<Int> = ::size",
+        "    fun typePropertyReference(): KProperty1<Named, Int> = Named::size",
+        "    fun typeFunctionReference(): KFunction1<Named, Int> = Named::size",
         "}",
         "",
         "class FieldOnly {",
         "    private val count = 1",
         "",
         "    fun twice(): Int = count + this.count",
+        "",
+        "    fun boundReference(): KProperty0<Int> = this::count",
+        "    fun bareReference(): KProperty0<Int> = ::count",
+        "    fun typeReference(): KProperty1<FieldOnly, Int> = FieldOnly::count",
+        "}",
+        "",
+        "class MethodOnly {",
+        "    fun count(): Int = 2",
+        "    fun boundReference(): KFunction0<Int> = this::count",
+        "    fun bareReference(): KFunction0<Int> = ::count",
+        "    fun typeReference(): KFunction1<MethodOnly, Int> = MethodOnly::count",
+        "}",
+        "",
+        "class Invokable {",
+        "    val action: (Int) -> Int = { it + 1 }",
+        "    fun action(): Int = 100",
+        "    fun bare(): Int = action(3)",
+        "    fun bound(): Int = this.action(3)",
+        "}",
+        "",
+        "class InferredLambda {",
+        "    val action = { value: Int -> value + 1 }",
+        "    fun action(): Int = 100",
+        "    fun lambdaBare(): Int = action(3)",
+        "    fun lambdaBound(): Int = this.action(3)",
+        "}",
+        "",
+        "class ReferencedFunction {",
+        "    fun apply(value: Int): Int = value + 1",
+        "    val action = ::apply",
+        "    fun action(): Int = 100",
+        "    fun referenceBare(): Int = action(3)",
+        "    fun referenceBound(): Int = this.action(3)",
+        "}",
+        "",
+        "class AliasedFunctionType {",
+        "    val action: IntTransform = make()",
+        "    private fun make(): IntTransform = { it + 1 }",
+        "    fun action(): Int = 100",
+        "    fun aliasBare(): Int = action(3)",
+        "    fun aliasBound(): Int = this.action(3)",
         "}",
         "",
         "class Left {",
@@ -1054,8 +1105,23 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
       const delegateField = { file, line: at(n.field) };
       const sizeField = { file, line: at(n.sizeField) };
       const leftRead = { file, line: at(n.leftRead) };
-      const implicitReferenceSites: ConsumerAgreementSite[] =
-        ext === "kt" ? [{ file, line: at(needles.kt.implicitReference), token: "size", expected: sizeMethod }] : [];
+      const referenceSites: ConsumerAgreementSite[] =
+        ext === "java"
+          ? [{ file, line: at(n.reference), token: "size", expected: sizeMethod }]
+          : [
+              "fun reference()",
+              "fun implicitReference()",
+              "fun propertyReference()",
+              "fun implicitPropertyReference()",
+              "fun typePropertyReference()",
+              "fun typeFunctionReference()",
+            ].flatMap((needle): ConsumerAgreementSite[] => {
+              const site = { file, line: at(needle), token: "size", expected: "not_found" as const };
+              return [
+                { ...site, sameNameDeclaration: { ...sizeMethod, token: "size" } },
+                { ...site, sameNameDeclaration: { ...sizeField, token: "size" } },
+              ];
+            });
       await assertSites(fixture, [
         // A call names the method, never the field or property beside it, in an anonymous body and a named class.
         {
@@ -1092,9 +1158,8 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         { file, line: at(n.calls), token: "delegate", occurrence: 3, expected: delegateField },
         { file, line: at(n.total), token: "size", occurrence: 3, expected: sizeField },
         { file, line: at(n.total), token: "size", occurrence: 4, expected: sizeField },
-        // A method reference keeps naming the callable.
-        { file, line: at(n.reference), token: "size", expected: sizeMethod },
-        ...implicitReferenceSites,
+        // Java method references select methods; Kotlin callable references can name either kind.
+        ...referenceSites,
         // A field of one type beside a method of another never lends the call its type.
         { file, line: at(n.both), token: "read", expected: "not_found" },
         { file, line: at(n.both), token: "read", occurrence: 2, expected: leftRead },
@@ -1103,6 +1168,68 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         { file, line: at(n.twice), token: "count", expected: countField },
         { file, line: at(n.twice), token: "count", occurrence: 2, expected: countField },
       ]);
+      if (ext === "kt") {
+        for (const siteLine of new Set(referenceSites.map((site) => site.line))) {
+          const falseMemberEdges = fixture.graph.edges.filter(
+            (edge) =>
+              edge.site?.file === fixture.paths[file] &&
+              edge.site.range.start.line === siteLine &&
+              (edge.label === "uses" || edge.label === "calls") &&
+              fixture.graph.nodes.get(edge.to)?.name === "size",
+          );
+          expect(falseMemberEdges, `ambiguous Kotlin callable reference on line ${siteLine}`).toEqual([]);
+        }
+        const property = { file, line: at("private val count = 1") };
+        const method = { file, line: at("fun count(): Int = 2") };
+        for (const [prefix, expected] of [
+          ["fun boundReference()", property],
+          ["fun bareReference()", property],
+          ["fun typeReference(): KProperty1", property],
+          ["fun boundReference(): KFunction0", method],
+          ["fun bareReference(): KFunction0", method],
+          ["fun typeReference(): KFunction1", method],
+        ] as const) {
+          await assertConsumerAgreement(fixture, {
+            file,
+            line: at(prefix),
+            token: "count",
+            expected,
+          });
+        }
+        for (const [propertyNeedle, callers] of [
+          ["val action: (Int) -> Int", ["bare", "bound"]],
+          ["val action = { value: Int", ["lambdaBare", "lambdaBound"]],
+          ["val action = ::apply", ["referenceBare", "referenceBound"]],
+        ] as const) {
+          const action = { file, line: at(propertyNeedle) };
+          for (const caller of callers) {
+            await assertConsumerAgreement(fixture, {
+              file,
+              line: at(`fun ${caller}(): Int`),
+              token: "action",
+              expected: action,
+              edges: [{ label: "calls", from: { file, name: caller } }],
+            });
+          }
+        }
+        const aliasProperty = { file, line: at("val action: IntTransform"), token: "action" };
+        const aliasMethod = { file, line: lineOf(files, file, "fun action(): Int", 4), token: "action" };
+        for (const caller of ["aliasBare", "aliasBound"]) {
+          const site = { file, line: at(`fun ${caller}(): Int`), token: "action", expected: "not_found" as const };
+          await assertSites(fixture, [
+            { ...site, sameNameDeclaration: aliasProperty },
+            { ...site, sameNameDeclaration: aliasMethod },
+          ]);
+          expect(
+            fixture.graph.edges.filter(
+              (edge) =>
+                edge.label === "calls" &&
+                edge.site?.file === fixture.paths[file] &&
+                edge.site.range.start.line === site.line,
+            ),
+          ).toEqual([]);
+        }
+      }
       expect(callTargets(fixture, file, "fetch").filter((name) => name === "delegate")).toEqual([
         "delegate",
         "delegate",

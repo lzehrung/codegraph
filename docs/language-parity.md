@@ -101,6 +101,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Star imports exposing one name: Python's last wins; Java, Kotlin, and Rust prefer an explicit import; any other overlap is ambiguous (`goToDefinition` `not_found`, references `partial`).
 - Java and Kotlin order: explicit import, same-package class, wildcard; inside a class, an inherited non-private method beats all three and same-file top-level functions.
 - Java, Kotlin, and C# choose overloads across the whole class hierarchy; two survivors or an unknown-length spread are ambiguous.
+- Kotlin `::name`, `this::name`, and `Type::name` name either a property or a function; when both exist, navigation returns `not_found` and references are `partial` unless one kind is absent. Java method references remain method-only. Kotlin calls to a property with a declared function type or callable initializer use its proven argument count beside a same-named method; an unproven property type and an incompatible method leave the call unresolved.
 - Private base methods are not inherited, and a static context has no target.
 - A same-name use with several candidates or an unproven receiver makes coverage `partial`; an unbound name does not.
 - A classified receiver (`new Widget()`, a type name, `this`) excludes a use only when its type and every supertype resolve.
