@@ -753,4 +753,66 @@ describe("TypeScript interface inheritance", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps a qualified type argument in a heritage clause from making the inherited members' references partial", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-heritage-type-argument-"));
+    try {
+      const base = ["export class Gen<T> {", "  run(): void {}", "}", ""];
+      const files = await writeFixtureFiles(root, {
+        "contracts.ts": "export interface Opts {}\n",
+        "base.ts": base.join("\n"),
+        "use.ts": [
+          'import * as ns from "./contracts";',
+          'import { Gen } from "./base";',
+          "export class Widget extends Gen<ns.Opts> {}",
+          "export function f(w: Widget): void {",
+          "  w.run();",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      // `ns.Opts` is a type argument: it never decides which base the clause names, so `Gen` stays proven.
+      const refs = await findReferences(index, { file: files["base.ts"]!, line: 2, column: columnOf(base, 2, "run") });
+      if (refs.status !== "ok") throw new Error("Expected references to Gen.run");
+      expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+      expect(
+        refs.references.map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`).sort(),
+      ).toEqual(["base.ts:2", "use.ts:5"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never reports an interface that extends an abstract class as an implementation of it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-interface-extends-class-"));
+    try {
+      await writeFixtureFiles(root, {
+        "all.ts": [
+          "export abstract class Abs {",
+          "  abstract go(): void;",
+          "}",
+          "export class Impl extends Abs {",
+          "  go(): void {}",
+          "}",
+          "export interface IAbs extends Abs {}",
+          "export class ViaInterface implements IAbs {",
+          "  go(): void {}",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(relationsOf(graph)).toEqual(["IAbs:extends:Abs", "Impl:extends:Abs", "ViaInterface:implements:IAbs"]);
+      const target = [...graph.nodes.values()].find((node) => node.name === "Abs" && node.kind === "class");
+      if (!target) throw new Error("Expected the Abs class");
+      const result = findImplementations(index, graph, target.id);
+      if (result.status !== "ok") throw new Error("Expected implementations of Abs");
+      // The interface is no subclass, and the class implementing it is not one either.
+      expect(result.implementations.map((match) => graph.nodes.get(match.symbolId)?.name)).toEqual(["Impl"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

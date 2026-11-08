@@ -366,4 +366,32 @@ export const tsCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.ts", fromName: "nested" },
   },
+  {
+    id: "ts/inherited-member-interface",
+    language: "ts",
+    callForm: "inherited-member",
+    files: {
+      "contract.ts": [
+        "export interface Parent {",
+        "  run(): number;",
+        "}",
+        "",
+        "export interface Child extends Parent {}",
+        "",
+      ].join("\n"),
+      "decoy-iface.ts": ["export class Decoy {", "  run(): number {", "    return -1;", "  }", "}", ""].join("\n"),
+      "use-iface.ts": [
+        'import { Child } from "./contract";',
+        "export function callChild(c: Child): number {",
+        "  return c.run();",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    use: { file: "use-iface.ts", line: 3, token: "run" },
+    expected: { file: "contract.ts", line: 2, token: "run" },
+    decoy: { file: "decoy-iface.ts", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "use-iface.ts", fromName: "callChild" },
+  },
 ];

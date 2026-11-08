@@ -1891,7 +1891,18 @@ async function resolveQualifiedMemberContainer(
 
 function nodeContainsUnprovenHeritage(node: SyntaxNodeLike): boolean {
   if (isUnprovenHeritageExpression(node)) return true;
-  return node.namedChildren.some((child) => nodeContainsUnprovenHeritage(child));
+  // A type argument names a type in its own scope; it never decides which base the clause names.
+  return node.namedChildren.some((child) => child.type !== "type_arguments" && nodeContainsUnprovenHeritage(child));
+}
+
+/** A Java interface's static method is reachable through that interface alone; sub-interfaces and classes never inherit it. */
+function isUninheritedJavaInterfaceStaticMethod(
+  hit: SymbolDef,
+  owner: KeywordClassRef,
+  scope: ReceiverMemberScope | undefined,
+): boolean {
+  if (owner.context.sup.id !== "java" || owner.container.type !== "interface_declaration") return false;
+  return hit.kind === SymbolKind.Function && scope === "static";
 }
 
 /** A heritage or mixin clause whose type expression is not a resolvable name. */
@@ -2272,6 +2283,7 @@ async function resolveKeywordReceiverMember(
         if (spansHierarchy && (startAtAncestor || depth) && (await isUninheritedPrivateMember(index, mod, node, hit))) {
           continue;
         }
+        if (depth && isUninheritedJavaInterfaceStaticMethod(hit, ref, scopeByMember.get(hit))) continue;
         visible.add(hit);
         nameFound = true;
       }

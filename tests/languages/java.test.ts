@@ -2425,4 +2425,74 @@ describe("Java interface inheritance", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("never inherits a static interface method into a sub-interface for navigation or call edges", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-interface-static-"));
+    try {
+      const use = [
+        "package c;",
+        "",
+        "import a.IParent;",
+        "import b.IChild;",
+        "",
+        "public class Use {",
+        "    public int f() {",
+        "        return IChild.helper();",
+        "    }",
+        "",
+        "    public int g() {",
+        "        return IParent.helper();",
+        "    }",
+        "}",
+        "",
+      ];
+      // javac rejects `IChild.helper()` (cannot find symbol): a static interface method belongs to its interface alone.
+      const files = await writeFixtureFiles(root, {
+        "a/IParent.java": [
+          "package a;",
+          "",
+          "public interface IParent {",
+          "    static int helper() {",
+          "        return 1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "b/IChild.java": [
+          "package b;",
+          "",
+          "import a.IParent;",
+          "",
+          "public interface IChild extends IParent {",
+          "}",
+          "",
+        ].join("\n"),
+        "c/Use.java": use.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const inherited = await goToDefinition(index, {
+        file: files["c/Use.java"]!,
+        line: 8,
+        column: columnOf(use, 8, "helper"),
+      });
+      expect(inherited.status).toBe("not_found");
+      const declared = await goToDefinition(index, {
+        file: files["c/Use.java"]!,
+        line: 12,
+        column: columnOf(use, 12, "helper"),
+      });
+      expect(declared.status).toBe("ok");
+      if (declared.status === "ok") {
+        expect(declared.definition.file).toBe(files["a/IParent.java"]);
+        expect(declared.definition.range.start.line).toBe(4);
+      }
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`);
+      expect(calls).toEqual(["g->helper"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -7461,3 +7461,14 @@ describe("PHP path-fallback import navigation", () => {
     );
   }
 });
+
+import { INTERFACE_MEMBER_FIXTURES, expectInterfaceMemberGoto } from "./helpers/interface-member-fixture.js";
+
+describe("members inherited through a child interface", () => {
+  it.each(INTERFACE_MEMBER_FIXTURES)(
+    "resolves a $language member declared in the parent interface from a child-interface receiver",
+    async (fixture) => {
+      await expectInterfaceMemberGoto(fixture);
+    },
+  );
+});

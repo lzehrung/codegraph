@@ -59,13 +59,13 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 
 | Language   | Cells | Known gaps |
 | ---------- | ----- | ---------- |
-| TypeScript | 14    | 0          |
+| TypeScript | 15    | 0          |
 | TSX        | 11    | 0          |
 | JavaScript | 10    | 0          |
 | Python     | 12    | 0          |
 | PHP        | 12    | 0          |
 | Go         | 8     | 0          |
-| Java       | 12    | 0          |
+| Java       | 13    | 0          |
 | C          | 1     | 0          |
 | C++        | 13    | 0          |
 | C#         | 82    | 0          |
@@ -75,7 +75,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | Swift      | 14    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 234 cells across 15 languages, 0 known gaps.
+Total: 236 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

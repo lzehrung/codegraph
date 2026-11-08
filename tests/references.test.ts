@@ -9303,3 +9303,14 @@ describe("PHP path-fallback import references", () => {
     );
   }
 });
+
+import { INTERFACE_MEMBER_FIXTURES, expectInterfaceMemberReferences } from "./helpers/interface-member-fixture.js";
+
+describe("references to members inherited through a child interface", () => {
+  it.each(INTERFACE_MEMBER_FIXTURES)(
+    "includes the child-interface call of a $language parent member and excludes a same-named decoy",
+    async (fixture) => {
+      await expectInterfaceMemberReferences(fixture);
+    },
+  );
+});
