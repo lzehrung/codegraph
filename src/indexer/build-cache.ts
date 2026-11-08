@@ -21,6 +21,7 @@ export {
   diskModuleCacheExists,
   fileSignature,
   fileSignatureFromSource,
+  gitSignatureBlobId,
   listDiskCachedModuleFiles,
   listMemoryCachedModuleFiles,
   loadModuleFromCache,

@@ -1436,8 +1436,9 @@ describe("agent session", () => {
       else process.env.GIT_TRACE = previousTrace;
     }
     const trace = await fs.readFile(traceFile, "utf8");
-    expect(trace.match(/git diff [^\r\n]*--name-only/g)).toHaveLength(1);
-    expect(trace.match(/git ls-files --others -z --exclude-standard/g)).toHaveLength(1);
+    expect(trace.match(/git diff [^\r\n]*--raw/g)).toHaveLength(1);
+    // The untracked listing also reports tracked files Git cannot compare, so it is still one Git child.
+    expect(trace.match(/git ls-files --cached --others -v -z --exclude-standard/g)).toHaveLength(1);
   });
 
   it("reuses the fast discovery path for checkFreshness on an unchanged Git-backed project", async () => {

@@ -138,8 +138,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * binds a call to the method, and a plain read to the field or property, that share a name.
  * Epoch 138 persists per-file AngularJS registrations and references in module records and assembles their
  * cross-file framework edges from all indexed modules, including unchanged files, at graph-build time.
+ * Epoch 139 qualifies each Git signature with the file's raw size, so an eol-only rewrite that Git reports clean no
+ * longer reuses a module or graph entry extracted from other bytes, and records dirty submodules and Git's line-ending
+ * conversion in each manifest. Older manifests and cache entries rebuild.
  */
-export const CORE_ALGORITHM_EPOCH = 138;
+export const CORE_ALGORITHM_EPOCH = 139;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

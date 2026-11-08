@@ -1,17 +1,25 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { languageExtensionPatterns } from "../languages.js";
 import {
   diffBuildOptions,
+  gitSignatureBlobId,
   loadManifest,
   sanitizeManifestEntriesForRoot,
   type FileSignature,
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { listChangedFiles, listGitIndexedBlobs, listUntrackedFiles } from "../util/git.js";
+import {
+  listChangedFileEntries,
+  listGitIndexedBlobs,
+  listGitSubmoduleDirectories,
+  listSubmoduleFiles,
+  listUntrackedAndFlaggedFiles,
+} from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { IMPORT_RESOLUTION_ROWS, type ExternalSpecifierSeparator } from "./import-resolution-tables.js";
-import { fileIdentityKey, normalizePath, pathExists } from "../util/paths.js";
+import { fileIdentityKey, isFileIdentityCaseInsensitive, normalizePath, pathExists } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
 import {
@@ -462,7 +470,7 @@ export async function collectGitManifestChangeCandidates(
   for (const { rel, blob } of indexed) {
     const file = normalizePath(path.isAbsolute(rel) ? rel : path.resolve(projectRoot, rel));
     const entry = trackedEntries[file];
-    if (!entry || !blob || entry.gitSig !== blob) candidates.push(file);
+    if (!entry?.gitSig || !blob || gitSignatureBlobId(entry.gitSig) !== blob) candidates.push(file);
   }
   return candidates;
 }
@@ -489,16 +497,151 @@ export async function listUntrackedProjectFiles(
 ): Promise<string[]> {
   if (!gitAvailable) return [];
   const context = discoveryContext ?? createProjectDiscoveryContext(projectRoot);
-  const respectGitignore = discovery?.useGitignore !== false;
-  const candidates = await listUntrackedFiles(projectRoot, {
-    gitAvailable,
-    respectGitignore,
+  // The same Git child also names the tracked files Git cannot compare; see `listGitWorktreeSignals`.
+  const { untracked } = await listUntrackedAndFlaggedFiles(projectRoot, {
+    respectGitignore: discovery?.useGitignore !== false,
     discoveryCache: context.git,
   });
-  return filterDiscoveredProjectFileCandidates(projectRoot, candidates, DEFAULT_PROJECT_PATTERNS, {
+  return filterDiscoveredProjectFileCandidates(projectRoot, untracked, DEFAULT_PROJECT_PATTERNS, {
     ...discovery,
     discoveryContext: context,
   });
+}
+
+/** What the untracked listing's Git child reports about tracked files: those Git cannot compare, and each path's spelling. */
+export type GitWorktreeSignals = { flagged: string[]; isCurrentSpelling: (file: string) => boolean };
+
+/**
+ * Tracked files whose worktree Git cannot compare with the index, and the spelling Git records for each tracked or
+ * untracked path. Both come from the listing `listUntrackedProjectFiles` reads, so a caller that lists untracked files
+ * first (or at the same time) spawns no further Git child.
+ */
+export async function listGitWorktreeSignals(
+  projectRoot: string,
+  discovery: ProjectFileDiscoveryOptions | undefined,
+  discoveryContext: ProjectDiscoveryContext,
+): Promise<GitWorktreeSignals> {
+  const listing = await listUntrackedAndFlaggedFiles(projectRoot, {
+    respectGitignore: discovery?.useGitignore !== false,
+    discoveryCache: discoveryContext.git,
+  });
+  const untracked = new Set(listing.untracked);
+  return {
+    flagged: listing.flagged ?? [],
+    isCurrentSpelling: (file) => untracked.has(file) || !!listing.trackedPaths?.().has(file),
+  };
+}
+
+/**
+ * Files the manifest has not seen, or whose current stat differs from the manifest's `mtime:size` signature. A file
+ * that cannot be read counts as stale. Non-strict signatures are `${mtimeMs}:${size}`; strict ones append the content
+ * hash, so either form matches when the stat prefix does.
+ */
+export async function findStaleOrUnseenManifestFiles(
+  files: readonly string[],
+  trackedEntries: Record<string, ManifestFileEntry>,
+  concurrency: number = PATH_EXISTS_PROBE_CONCURRENCY,
+): Promise<string[]> {
+  const stale = await mapLimit([...files], concurrency, async (file) => {
+    const entry = trackedEntries[file];
+    if (!entry?.sig) return true;
+    try {
+      const stat = await fsp.stat(file);
+      const prefix = `${stat.mtimeMs}:${stat.size}`;
+      return entry.sig !== prefix && !entry.sig.startsWith(`${prefix}:`);
+    } catch {
+      return true;
+    }
+  });
+  return files.filter((_, index) => stale[index]);
+}
+
+/**
+ * Candidates for the changes Git's diff and index listings cannot show: those a signature check must find. Each is a
+ * file an update verifies against the manifest by stat, because Git has nothing to say about it.
+ *
+ * - A changed submodule is one path (its gitlink) in the superproject's diff. Its own tracked and untracked files are
+ *   listed as cold discovery lists them. The submodules are the diff's changed gitlinks plus the ones the manifest
+ *   recorded as dirty, so a submodule restored since is reconciled once. A manifest that recorded none (absent or
+ *   invalid) reconciles every submodule.
+ * - A tracked file flagged assume-unchanged or skip-worktree is omitted from every Git diff.
+ * - When Git may rewrite line endings (`verifyTrackedFiles`), an eol-only rewrite leaves its blob id unchanged, so every
+ *   tracked file's stat is compared. Callers set it only when no other candidate already forces a signature pass.
+ */
+export async function collectGitHiddenChangeCandidates(args: {
+  projectRoot: string;
+  trackedEntries: Record<string, ManifestFileEntry>;
+  /** Manifest files that exist now. */
+  trackedFiles: ReadonlySet<string>;
+  changedSubmodules: readonly string[];
+  /** Submodules the manifest recorded as dirty, or undefined when it recorded none. */
+  recordedSubmodules: readonly string[] | undefined;
+  flaggedFiles: readonly string[];
+  verifyTrackedFiles: boolean;
+  opts: BuildOptions | undefined;
+  context: ProjectDiscoveryContext;
+  concurrency?: number;
+}): Promise<string[]> {
+  const concurrency = args.concurrency ?? PATH_EXISTS_PROBE_CONCURRENCY;
+  const directories = new Set([...args.changedSubmodules, ...(args.recordedSubmodules ?? [])]);
+  if (args.recordedSubmodules === undefined) {
+    for (const directory of await listGitSubmoduleDirectories(args.projectRoot)) directories.add(directory);
+  }
+  const initialized = await mapLimit([...directories], concurrency, async (directory) =>
+    (await pathExists(path.join(directory, ".git"))) ? directory : null,
+  );
+  const respectGitignore = args.opts?.discovery?.useGitignore !== false;
+  const submoduleFiles = await mapLimit(
+    initialized.filter((directory): directory is string => directory !== null),
+    concurrency,
+    (directory) => listSubmoduleFiles(directory, { respectGitignore, discoveryCache: args.context.git }),
+  );
+  const verified = new Set(
+    submoduleFiles.length
+      ? await filterIncrementalDiscoveryCandidates(
+          args.projectRoot,
+          submoduleFiles.flat(),
+          args.trackedEntries,
+          args.opts,
+          args.context,
+        )
+      : [],
+  );
+  for (const file of args.flaggedFiles) if (Object.hasOwn(args.trackedEntries, file)) verified.add(file);
+  if (args.verifyTrackedFiles) for (const file of args.trackedFiles) verified.add(file);
+  return await findStaleOrUnseenManifestFiles([...verified], args.trackedEntries, concurrency);
+}
+
+/**
+ * On a case-insensitive file system a rename that only changes case leaves the manifest key spelled the old way, and an
+ * existence probe still finds the file. Both spellings then index one file: the stale key's edges outlive the rename and
+ * which spelling a module carries depends on processing order. Git's listing spells the file one way, so a manifest key
+ * that the listing no longer spells is retired. `droppedSpellings` are the paths callers remove from their candidates:
+ * the retired keys, which a diff still names as deleted, and the candidates the listing does not spell.
+ */
+export function findRespelledTrackedFiles(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  candidates: readonly string[],
+  isCurrentSpelling: (file: string) => boolean,
+): { retiredTrackedFiles: string[]; droppedSpellings: Set<string> } {
+  const retiredTrackedFiles = new Set<string>();
+  const droppedSpellings = new Set<string>();
+  if (!isFileIdentityCaseInsensitive()) return { retiredTrackedFiles: [], droppedSpellings };
+  let keyByIdentity: Map<string, string> | undefined;
+  for (const candidate of new Set(candidates)) {
+    if (Object.hasOwn(trackedEntries, candidate)) continue;
+    keyByIdentity ??= new Map(Object.keys(trackedEntries).map((key) => [fileIdentityKey(key), key]));
+    const key = keyByIdentity.get(fileIdentityKey(candidate));
+    if (!key || key === candidate) continue;
+    const candidateIsCurrent = isCurrentSpelling(candidate);
+    if (candidateIsCurrent && !isCurrentSpelling(key)) {
+      retiredTrackedFiles.add(key);
+      droppedSpellings.add(key);
+    } else if (!candidateIsCurrent && isCurrentSpelling(key)) {
+      droppedSpellings.add(candidate);
+    }
+  }
+  return { retiredTrackedFiles: Array.from(retiredTrackedFiles), droppedSpellings };
 }
 
 /**
@@ -527,6 +670,8 @@ export type IncrementalFilePlan = {
   manifestUpdatedAt: number;
   workingTreeDiffFiles: string[];
   untrackedFiles: string[];
+  /** Manifest paths retired because Git now spells their file differently (a case-only rename). */
+  retiredTrackedFiles: string[];
 };
 
 export async function resolveIncrementalFilePlan(
@@ -556,32 +701,55 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const [diffResult, untrackedResult, candidatesResult] = await Promise.allSettled([
-      manifest.lastCommit
-        ? listChangedFiles(projectRoot, {
-            base: manifest.lastCommit,
-            head: "WORKTREE",
-            includeRenameSources: true,
-            discoveryCache: context.git,
-          })
-        : [],
+    const [diffResult, untrackedResult, candidatesResult, signalsResult] = await Promise.allSettled([
+      listChangedFileEntries(projectRoot, {
+        base: manifest.lastCommit,
+        head: "WORKTREE",
+        includeRenameSources: true,
+        includeHiddenSubmoduleChanges: true,
+        discoveryCache: context.git,
+      }),
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true, context),
       collectGitManifestChangeCandidates(projectRoot, trackedEntries, context, manifest.gitDirtyFiles),
+      listGitWorktreeSignals(projectRoot, opts?.discovery, context),
     ]);
     // A failed Git probe must not leave another child holding the project directory open.
     if (diffResult.status === "rejected") throw diffResult.reason;
     if (untrackedResult.status === "rejected") throw untrackedResult.reason;
     if (candidatesResult.status === "rejected") throw candidatesResult.reason;
-    const diffFiles = diffResult.value;
+    if (signalsResult.status === "rejected") throw signalsResult.reason;
+    const diff = diffResult.value;
     const untrackedFiles = untrackedResult.value;
     const manifestCandidates = candidatesResult.value;
-    const workingTreeDiffFiles = await filterIncrementalDiscoveryCandidates(
+    const signals = signalsResult.value;
+    const { retiredTrackedFiles, droppedSpellings } = findRespelledTrackedFiles(
+      trackedEntries,
+      [...diff.files, ...manifestCandidates, ...untrackedFiles],
+      signals.isCurrentSpelling,
+    );
+    for (const file of retiredTrackedFiles) {
+      trackedFiles.delete(file);
+      delete trackedEntries[file];
+    }
+    const gitDiffFiles = await filterIncrementalDiscoveryCandidates(
       projectRoot,
-      [...new Set([...diffFiles, ...manifestCandidates])],
+      [...new Set([...diff.files, ...manifestCandidates])].filter((file) => !droppedSpellings.has(file)),
       trackedEntries,
       opts,
       context,
     );
+    const hiddenChangeFiles = await collectGitHiddenChangeCandidates({
+      projectRoot,
+      trackedEntries,
+      trackedFiles,
+      changedSubmodules: diff.gitlinks,
+      recordedSubmodules: manifest.gitDirtySubmodules,
+      flaggedFiles: signals.flagged,
+      verifyTrackedFiles: (manifest.gitLineEndingConversion ?? true) && !gitDiffFiles.length,
+      opts,
+      context,
+    });
+    const workingTreeDiffFiles = [...new Set([...gitDiffFiles, ...hiddenChangeFiles])];
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
     const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();
@@ -593,6 +761,7 @@ export async function resolveIncrementalFilePlan(
       manifestUpdatedAt: manifest.updatedAt,
       workingTreeDiffFiles,
       untrackedFiles,
+      retiredTrackedFiles,
     };
   } catch {
     // Any failure here (stale/missing manifest commit, transient Git error, ...) means

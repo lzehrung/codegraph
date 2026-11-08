@@ -347,26 +347,17 @@ async function fileStatSignature(
   file: string,
   strict?: boolean,
   opts?: { includeContentHash?: boolean },
-): Promise<{ sig: string; contentHash?: string }> {
+): Promise<{ sig: string; size: number; contentHash?: string }> {
   try {
     const stat = await fsp.stat(file);
     const useStrict = strict ?? true;
     const shouldHash = useStrict || !!opts?.includeContentHash;
     const contentHash = shouldHash ? await fileContentHash(file) : undefined;
-    if (!useStrict) {
-      return contentHash
-        ? { sig: `${stat.mtimeMs}:${stat.size}`, contentHash }
-        : { sig: `${stat.mtimeMs}:${stat.size}` };
-    }
-    if (contentHash) {
-      return {
-        sig: `${stat.mtimeMs}:${stat.size}:${contentHash}`,
-        contentHash,
-      };
-    }
-    return { sig: `${stat.mtimeMs}:${stat.size}` };
+    const statSig = `${stat.mtimeMs}:${stat.size}`;
+    const sig = useStrict && contentHash ? `${statSig}:${contentHash}` : statSig;
+    return { sig, size: stat.size, ...(contentHash ? { contentHash } : {}) };
   } catch {
-    return { sig: "0:0" };
+    return { sig: "0:0", size: 0 };
   }
 }
 
@@ -377,34 +368,47 @@ export type FileSignature = {
   contentHash?: string;
 };
 
+/**
+ * A Git blob id names a file's bytes after Git's clean conversions, so one id can stand for worktree files whose raw
+ * bytes differ: a CRLF and an LF checkout of one blob, or an eol-only rewrite that Git reports clean. Every consumer of
+ * a Git signature (the manifest, module and graph caches, snapshots) compares it for equality, so the raw size
+ * qualifies the id: an eol rewrite changes the size, and a touch or a reverted edit does not.
+ */
+function qualifyGitSignature(blobId: string, size: number): string {
+  return `${blobId}:${size}`;
+}
+
+/** The Git blob id of a signature built by {@link fileSignature} or {@link fileSignatureFromSource}. */
+export function gitSignatureBlobId(gitSig: string): string {
+  const separator = gitSig.indexOf(":");
+  return separator < 0 ? gitSig : gitSig.slice(0, separator);
+}
+
 export async function fileSignature(
   file: string,
   strict?: boolean,
-  gitSig?: string,
+  blobId?: string,
   opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
-  const hasGitSignature = !!gitSig;
+  const hasGitSignature = !!blobId;
   const includeContentHash = !hasGitSignature && !!opts?.forceContentHash;
   const statOpts = includeContentHash ? { includeContentHash: true } : undefined;
   const signatureStrict = hasGitSignature ? strict === true : strict;
-  const { sig, contentHash } = await fileStatSignature(file, signatureStrict, statOpts);
-  const cacheSig = gitSig ?? contentHash ?? sig;
-  if (gitSig) {
-    return {
-      sig,
-      gitSig,
-      cacheSig,
-      ...(contentHash ? { contentHash } : {}),
-    };
+  const { sig, size, contentHash } = await fileStatSignature(file, signatureStrict, statOpts);
+  if (blobId) {
+    const gitSig = qualifyGitSignature(blobId, size);
+    return { sig, gitSig, cacheSig: gitSig, ...(contentHash ? { contentHash } : {}) };
   }
-  return { sig, cacheSig, ...(contentHash ? { contentHash } : {}) };
+  return { sig, cacheSig: contentHash ?? sig, ...(contentHash ? { contentHash } : {}) };
 }
 
-export function fileSignatureFromSource(source: string, gitSig?: string): FileSignature {
+export function fileSignatureFromSource(source: string, blobId?: string): FileSignature {
   const contentHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
-  const sig = `${Buffer.byteLength(source, "utf8")}:${contentHash}`;
-  const cacheSig = gitSig ?? contentHash;
-  return { sig, cacheSig, contentHash, ...(gitSig ? { gitSig } : {}) };
+  const size = Buffer.byteLength(source, "utf8");
+  const sig = `${size}:${contentHash}`;
+  if (!blobId) return { sig, cacheSig: contentHash, contentHash };
+  const gitSig = qualifyGitSignature(blobId, size);
+  return { sig, cacheSig: gitSig, contentHash, gitSig };
 }
 
 export async function cacheSignatureForFile(file: string, sigInfo: FileSignature): Promise<string> {

@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { getGitHeadOrEmptyTree, listChangedFiles } from "../util/git.js";
+import { getGitHeadOrEmptyTree, gitMayConvertLineEndings, listChangedFileEntries } from "../util/git.js";
 import { logWithLevel } from "../logging.js";
 import {
   computeConfigHash,
@@ -81,12 +81,17 @@ export async function writeIndexManifestSnapshot(args: {
   const lastCommit = await getGitHeadOrEmptyTree(args.projectRoot, args.discoveryContext?.git);
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
   let gitDirtyFiles: string[] | undefined;
+  let gitDirtySubmodules: string[] | undefined;
+  let gitLineEndingConversion: boolean | undefined;
   if (lastCommit) {
+    // Never rejects; runs beside the diff because the two Git children do not depend on each other.
+    const lineEndingProbe = gitMayConvertLineEndings(args.projectRoot);
     try {
-      const changed = await listChangedFiles(args.projectRoot, {
+      const changed = await listChangedFileEntries(args.projectRoot, {
         base: lastCommit,
         head: "WORKTREE",
         includeRenameSources: true,
+        includeHiddenSubmoduleChanges: true,
       });
       const matchesDiscovery = createDiscoveredFileMatcher(
         args.projectRoot,
@@ -94,7 +99,10 @@ export async function writeIndexManifestSnapshot(args: {
         [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(args.opts?.languageExtensions)],
         args.opts?.discovery,
       );
-      gitDirtyFiles = changed.filter((file) => Object.hasOwn(files, file) || matchesDiscovery(file));
+      gitDirtyFiles = changed.files.filter(
+        (file) => !changed.gitlinks.includes(file) && (Object.hasOwn(files, file) || matchesDiscovery(file)),
+      );
+      gitDirtySubmodules = changed.gitlinks;
     } catch (error) {
       logWithLevel(
         args.opts?.logLevel,
@@ -103,6 +111,7 @@ export async function writeIndexManifestSnapshot(args: {
         error,
       );
     }
+    gitLineEndingConversion = await lineEndingProbe;
   }
   const configHashStartedAt = performance.now();
   const configHashResult =
@@ -120,6 +129,10 @@ export async function writeIndexManifestSnapshot(args: {
     ...(gitDirtyFiles !== undefined
       ? { gitDirtyFiles: gitDirtyFiles.map((file) => cacheRelativePath(args.projectRoot, file)) }
       : {}),
+    ...(gitDirtySubmodules !== undefined
+      ? { gitDirtySubmodules: gitDirtySubmodules.map((directory) => cacheRelativePath(args.projectRoot, directory)) }
+      : {}),
+    ...(gitLineEndingConversion !== undefined ? { gitLineEndingConversion } : {}),
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),

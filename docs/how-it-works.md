@@ -114,14 +114,16 @@ Disk loads reuse unchanged files and update changed ones. Codegraph validates fi
 
 `buildProjectIndexIncremental` records indexed or discovery-matching tracked paths that differ from its commit, or from Git's empty tree before the first commit. A manifest rewrite takes a fresh Git diff after file reads; clean recorded state skips signature blob listings, while missing or invalid dirty-path metadata falls back to tracked blob reconciliation. Direct disk/memory builds and whole-project agent sessions refresh restored modules and importers; arbitrary file-list builds do not retire rows outside their scope. `listChangedFiles` confines Git changes to the requested project root, including nested roots and directory aliases.
 
-Git fast-path blind spots remain:
+Git's diff omits some changes, so an update compares these files' `mtime:size` signatures with the manifest instead:
 
-- Reverts hidden by `assume-unchanged` or `skip-worktree` index flags.
-- Changes to files inside submodules when Git reports only the gitlink.
-- EOL-only rewrites normalized away by `core.autocrlf`.
-- Case-only rename-back sequences that retain stale path spelling in the disk cache.
+- **Flagged files.** A tracked file marked `assume-unchanged` or `skip-worktree` never appears in a diff. The Git child that lists untracked files also names flagged tracked files, so every update verifies them without another child.
+- **Submodules.** A diff names one gitlink per submodule. An update lists the tracked and untracked files of each changed submodule, and of each submodule the manifest recorded as dirty (`gitDirtySubmodules`), as full discovery does. This costs up to three Git children per such submodule.
+- **Line endings.** With `core.autocrlf` set to `true` or `input`, or a `text`/`eol` attribute, Git reports an eol-only rewrite as clean. The manifest records that conversion (`gitLineEndingConversion`), and a clean update then stats every tracked file. Each Git signature also carries the file's raw size, so a rewrite never reuses a module or graph entry extracted from other bytes, in memory caches too.
+- **Case-only renames.** On a case-insensitive file system, a manifest key that Git's listing no longer spells that way (`Foo.ts` renamed to `foo.ts`) is retired, so one file never holds two spellings.
 
-Index builds are not atomic filesystem snapshots. If files change during a build, repeat the update; use `buildProjectIndex(root, { cache: "off" })` when the Git blind spots above apply.
+An update in a repository without flagged files, submodules or line-ending conversion spawns no further Git child. Known limits: a flag set in a submodule's own index is not seen, and a change to `core.autocrlf` or to attributes applies from the next manifest write.
+
+Index builds are not atomic filesystem snapshots. If files change during a build, repeat the update.
 
 Module and graph cache identities also include effective TypeScript `baseUrl`/`paths` (including `extends`) and workspace package names, locations, `main`, and `exports`. These inputs are checked even when `resolveNodeModules` is disabled, so configuration-only changes cannot leave cached import targets on the old files. Unchanged resolution inputs still permit reuse.
 

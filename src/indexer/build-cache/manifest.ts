@@ -109,6 +109,18 @@ export type IndexManifest = {
    * Empty proves no earlier dirty tracked state needs reconciliation; absent or invalid requires a blob scan.
    */
   gitDirtyFiles?: string[];
+  /**
+   * Submodule directories (gitlinks) that differed from `lastCommit` when the manifest was written, stored
+   * project-relative. Git reports one path per submodule, so the next update lists a recorded submodule's own files
+   * again even after it was restored. Absent or invalid requires reconciling every submodule.
+   */
+  gitDirtySubmodules?: string[];
+  /**
+   * Whether Git could rewrite line endings when it compared worktree files with the index (`core.autocrlf` or a
+   * `text`/`eol` attribute) as of the write. Git then reports an eol-only rewrite as clean, so a clean update checks
+   * every tracked file's stat signature. Absent or invalid is treated as true.
+   */
+  gitLineEndingConversion?: boolean;
   configHash?: string;
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
@@ -398,13 +410,20 @@ export async function loadManifest(
     const {
       declaredContainers: storedDeclaredContainers,
       gitDirtyFiles: storedGitDirtyFiles,
+      gitDirtySubmodules: storedGitDirtySubmodules,
+      gitLineEndingConversion: storedGitLineEndingConversion,
       ...parsedWithoutDerivedPaths
     } = parsed;
-    let gitDirtyFiles: string[] | undefined;
-    if (Array.isArray(storedGitDirtyFiles)) {
-      const sanitized = sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, storedGitDirtyFiles);
-      if (sanitized.length === storedGitDirtyFiles.length) gitDirtyFiles = sanitized;
-    }
+    // A recorded path list is usable only when every entry stays inside the project root.
+    const sanitizeRecordedPaths = (stored: unknown): string[] | undefined => {
+      if (!Array.isArray(stored)) return undefined;
+      const sanitized = sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, stored);
+      return sanitized.length === stored.length ? sanitized : undefined;
+    };
+    const gitDirtyFiles = sanitizeRecordedPaths(storedGitDirtyFiles);
+    const gitDirtySubmodules = sanitizeRecordedPaths(storedGitDirtySubmodules);
+    const gitLineEndingConversion =
+      typeof storedGitLineEndingConversion === "boolean" ? storedGitLineEndingConversion : undefined;
     const declaredContainers = resolveManifestDeclaredContainers(
       projectRoot,
       parsed.projectRoot,
@@ -419,6 +438,8 @@ export async function loadManifest(
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
       ...(declaredContainers !== undefined ? { declaredContainers } : {}),
       ...(gitDirtyFiles !== undefined ? { gitDirtyFiles } : {}),
+      ...(gitDirtySubmodules !== undefined ? { gitDirtySubmodules } : {}),
+      ...(gitLineEndingConversion !== undefined ? { gitLineEndingConversion } : {}),
     };
     return migrated;
   } catch (error) {

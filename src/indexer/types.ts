@@ -302,6 +302,8 @@ export type IncrementalBuildOptions = BuildOptions & {
   reconciledWorkingTreeDiffFiles?: string[];
   /** @internal Reuse untracked-file reconciliation already performed for `files`. */
   reconciledUntrackedFiles?: string[];
+  /** @internal Reuse the manifest paths retired for a case-only rename during reconciliation of `files`. */
+  reconciledRetiredTrackedFiles?: string[];
   changedSince?: string;
   gitBase?: string;
   gitHead?: string;
