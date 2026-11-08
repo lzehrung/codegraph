@@ -80,6 +80,7 @@ import {
   isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
+import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { ensureParsedContextForIndex, ignoreQueryParseFailure, rethrowStaleQuerySource } from "./parsed-cache.js";
 import {
@@ -938,6 +939,89 @@ export function resolveJvmPackageSymbol(
       }
       target = candidate;
     }
+  }
+  return target;
+}
+
+/** A nested classifier is proven only by its recorded direct owner and visible declaration. */
+function jvmNestedType(
+  index: ProjectIndex,
+  useFile: string,
+  consumerLanguage: "java" | "kotlin",
+  owner: SymbolDef,
+  name: string,
+): SymbolDef | undefined {
+  const module = index.byFile.get(fileIdentityKey(owner.file));
+  const support = supportForFileWithoutHeaderSample(owner.file, index.languageExtensions);
+  const ownerStart = owner.range.start.index;
+  if (!module || ownerStart === undefined || (support?.id !== "java" && support?.id !== "kotlin")) return undefined;
+  const samePackage =
+    getPackageDeclarationName(index, owner.file, support.id) ===
+    getPackageDeclarationName(index, useFile, consumerLanguage);
+  const normalized = support.normalizeIdentifier(normalizeKotlinIdentifier(name));
+  let result: SymbolDef | undefined;
+  for (const entry of module.exports) {
+    if (entry.type !== "local" || support.normalizeIdentifier(entry.exportedAs) !== normalized) continue;
+    if (!isJvmTypeWildcardMember(entry.target, ownerStart, support.id)) continue;
+    if (!isJvmPackageSymbolVisible(entry.target, support.id, consumerLanguage, samePackage)) continue;
+    if (result && result.range.start.index !== entry.target.range.start.index) return undefined;
+    result = entry.target;
+  }
+  return result;
+}
+
+function jvmNestedPath(
+  index: ProjectIndex,
+  useFile: string,
+  consumerLanguage: "java" | "kotlin",
+  owner: SymbolDef,
+  parts: readonly string[],
+  start: number,
+): SymbolDef | null {
+  let current = owner;
+  for (let position = start; position < parts.length; position += 1) {
+    const nested = jvmNestedType(index, useFile, consumerLanguage, current, parts[position]!);
+    if (!nested) return null;
+    current = nested;
+  }
+  return current;
+}
+
+/**
+ * The type a qualified JVM name reaches from its first segment: a type nested in `rootOwner`, the visible type that
+ * segment names, or, when the first segment binds no type (`rootOwner` null), a type of the package the leading
+ * segments spell. An ambiguous or unread package, and a nested type no declaration proves, reach nothing (null).
+ * Shared by the lookup of a qualified type name and by the base-clause readers, so a qualified base names the same
+ * type everywhere.
+ */
+export function resolveJvmQualifiedPath(
+  index: ProjectIndex,
+  useFile: string,
+  languageId: "java" | "kotlin",
+  rootOwner: SymbolDef | null,
+  parts: readonly string[],
+  typeOnly: boolean,
+): SymbolDef | null {
+  if (rootOwner) return jvmNestedPath(index, useFile, languageId, rootOwner, parts, 1);
+  let target: SymbolDef | null = null;
+  let packageName = normalizeKotlinIdentifier(parts[0]!);
+  for (let position = 1; position < parts.length; position += 1) {
+    const name = parts[position]!;
+    const hasNestedSuffix = position + 1 < parts.length;
+    const owner = resolveJvmPackageSymbol(index, packageName, name, languageId, useFile, typeOnly || hasNestedSuffix);
+    if (owner === null) return null;
+    const resolved = owner ? jvmNestedPath(index, useFile, languageId, owner, parts, position + 1) : null;
+    if (owner && !resolved) return null;
+    if (resolved) {
+      if (
+        target &&
+        (fileIdentityKey(target.file) !== fileIdentityKey(resolved.file) ||
+          target.range.start.index !== resolved.range.start.index)
+      )
+        return null;
+      target = resolved;
+    }
+    packageName += `.${normalizeKotlinIdentifier(name)}`;
   }
   return target;
 }
@@ -1986,6 +2070,15 @@ export async function resolveQualifiedMemberContainer(
   if (sup.id === "swift") {
     const owner = resolveNamedMemberContainer(index, mod, baseName, normalize);
     return owner ? await resolveSwiftNestedTypePath(index, owner, path) : undefined;
+  }
+  if (sup.id === "java" || sup.id === "kotlin") {
+    // The first segment names a visible type (the rest are nested types) or, when it names none, a package.
+    let root = resolveNamedMemberContainer(index, mod, baseName, normalize);
+    if (!root) {
+      const named = resolveNamedDefinition(index, mod, mod.file, sup, baseName);
+      if (named?.status === "ok" && declaresMembers(named.definition)) root = named.definition;
+    }
+    return resolveJvmQualifiedPath(index, mod.file, sup.id, root ?? null, [baseName, ...path], true) ?? undefined;
   }
   const dottedFile = sup.id === "python" ? pythonDottedImportFile(mod, [baseName, ...path.slice(0, -1)]) : undefined;
   if (dottedFile) {

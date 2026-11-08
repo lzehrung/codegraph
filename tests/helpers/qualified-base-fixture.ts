@@ -20,9 +20,9 @@ type ReferencesCase = Site & {
 /**
  * One language's qualified bases beside same-named decoys: a base reached through its qualifier, an ordinary
  * unqualified base, and a qualifier no project file declares. The Python sources were checked on CPython (class
- * resolution order and attribute lookup), the Kotlin sources on kotlinc (compiled and run, superclass by reflection),
- * and the JavaScript sources other than `ext.js`, which imports an unresolvable package on purpose, on Node. No Ruby,
- * Swift, or Go toolchain ran for these sources, which follow the language specifications.
+ * resolution order and attribute lookup), the Kotlin sources on kotlinc and the Java sources on javac (compiled and run,
+ * superclass by reflection), and the JavaScript sources other than `ext.js`, which imports an unresolvable package on
+ * purpose, on Node. No Ruby, Swift, or Go toolchain ran for these sources, which follow the language specifications.
  */
 export type QualifiedBaseFixture = {
   language: string;
@@ -367,7 +367,16 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       "app/P.kt": lines("package app", "", "import decoy.Base", "", "class P : Base()"),
       "app/N.kt": lines("package app", "", "import decoy.Base", "", "class N : Outer.Base()"),
       "app/X.kt": lines("package app", "", "import decoy.Base", "", "class X : kotlin.Exception()"),
-      "app/Caller.kt": lines("package app", "", "fun run() {", "    val w = W()", "    w.shared()", "}"),
+      "app/Caller.kt": lines(
+        "package app",
+        "",
+        "fun run() {",
+        "    val w = W()",
+        "    w.shared()",
+        "    val n = N()",
+        "    n.nested()",
+        "}",
+      ),
     },
     edges: [
       "N@app/N.kt -extends-> Base@app/Outer.kt",
@@ -383,8 +392,8 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
       { file: "app/W.kt", marker: "other.Base", offset: 6, expect: "Base@other/Base.kt" },
       { file: "app/N.kt", marker: "Outer.Base", offset: 6, expect: "Base@app/Outer.kt" },
       { file: "app/X.kt", marker: "kotlin.Exception", offset: 7, expect: null },
-      // Member navigation does not read a qualified Kotlin base: the call stays unproven instead of binding a decoy.
-      { file: "app/Caller.kt", marker: "shared()", expect: null },
+      { file: "app/Caller.kt", marker: "shared()", expect: "shared@other/Base.kt" },
+      { file: "app/Caller.kt", marker: "nested()", expect: "nested@app/Outer.kt" },
     ],
     references: [
       {
@@ -408,7 +417,86 @@ export const QUALIFIED_BASE_FIXTURES: readonly QualifiedBaseFixture[] = [
         excludes: ["app/W.kt:5", "app/P.kt:5"],
         coverage: "complete",
       },
-      { file: "other/Base.kt", marker: "shared()", includes: [], excludes: [], coverage: "partial" },
+      { file: "other/Base.kt", marker: "shared()", includes: ["app/Caller.kt:5"], excludes: [], coverage: "complete" },
+      { file: "decoy/Base.kt", marker: "shared()", includes: [], excludes: ["app/Caller.kt:5"], coverage: "complete" },
+      { file: "app/Outer.kt", marker: "nested()", includes: ["app/Caller.kt:7"], excludes: [], coverage: "complete" },
+    ],
+  },
+  {
+    language: "Java",
+    files: {
+      "other/Base.java": lines("package other;", "", "public class Base {", "    public void shared() {}", "}"),
+      "decoy/Base.java": lines("package decoy;", "", "public class Base {", "    public void shared() {}", "}"),
+      "app/Outer.java": lines(
+        "package app;",
+        "",
+        "public class Outer {",
+        "    public static class Base {",
+        "        public void nested() {}",
+        "    }",
+        "}",
+      ),
+      "app/W.java": lines("package app;", "", "import decoy.Base;", "", "public class W extends other.Base {}"),
+      "app/P.java": lines("package app;", "", "import decoy.Base;", "", "public class P extends Base {}"),
+      "app/N.java": lines("package app;", "", "import decoy.Base;", "", "public class N extends Outer.Base {}"),
+      "app/X.java": lines(
+        "package app;",
+        "",
+        "import decoy.Base;",
+        "",
+        "public class X extends java.lang.Exception {}",
+      ),
+      "app/Caller.java": lines(
+        "package app;",
+        "",
+        "public class Caller {",
+        "    public void run() {",
+        "        W w = new W();",
+        "        w.shared();",
+        "        N n = new N();",
+        "        n.nested();",
+        "    }",
+        "}",
+      ),
+    },
+    edges: [
+      "N@app/N.java -extends-> Base@app/Outer.java",
+      "P@app/P.java -extends-> Base@decoy/Base.java",
+      "W@app/W.java -extends-> Base@other/Base.java",
+    ],
+    subtypes: {
+      "Base@other/Base.java": ["W@app/W.java"],
+      "Base@decoy/Base.java": ["P@app/P.java"],
+      "Base@app/Outer.java": ["N@app/N.java"],
+    },
+    gotos: [
+      { file: "app/W.java", marker: "other.Base", offset: 6, expect: "Base@other/Base.java" },
+      { file: "app/N.java", marker: "Outer.Base", offset: 6, expect: "Base@app/Outer.java" },
+      { file: "app/Caller.java", marker: "shared()", expect: "shared@other/Base.java" },
+      { file: "app/Caller.java", marker: "nested()", expect: "nested@app/Outer.java" },
+    ],
+    references: [
+      {
+        file: "other/Base.java",
+        marker: "shared()",
+        includes: ["app/Caller.java:6"],
+        excludes: [],
+        coverage: "complete",
+      },
+      {
+        file: "decoy/Base.java",
+        marker: "shared()",
+        includes: [],
+        excludes: ["app/Caller.java:6"],
+        coverage: "complete",
+      },
+      {
+        file: "app/Outer.java",
+        marker: "nested()",
+        includes: ["app/Caller.java:8"],
+        excludes: [],
+        coverage: "complete",
+      },
     ],
   },
   {

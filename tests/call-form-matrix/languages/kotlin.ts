@@ -475,12 +475,6 @@ export const kotlinCells: MatrixCell[] = [
     decoy: { file: "decoy7.kt", line: 4, token: "run" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use9.kt", fromName: "callDerived" },
-    knownGap: {
-      reason: "qualified_base_member_navigation_unproven",
-      classification: "rare-form-miss",
-      repro:
-        "`class Derived : base.Base()` records the graph `extends` edge through the package qualifier, but member navigation does not read a qualified Kotlin base, so `d.run()` returns not_found (partial reference coverage) instead of `Base.run`. The imported decoy `Base` is never bound.",
-    },
   },
   {
     id: "kotlin/super-call",
