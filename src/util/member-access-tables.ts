@@ -226,7 +226,8 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     navigationFallbackLastChild: true,
     receiverKeywords: THIS_SUPER_RECEIVERS,
     receiverAncestry: {
-      clauses: [{ nodeType: "delegation_specifiers", relation: "superclass-first", supertype: "first-child" }],
+      // Kotlin does not require the class to come first (`class C : I, Base()`); the declaration keyword picks it.
+      clauses: [{ nodeType: "delegation_specifiers", relation: "superclass-first", supertype: "all" }],
     },
     memberCallNamesFreeFunction: true,
   },

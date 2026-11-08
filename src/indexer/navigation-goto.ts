@@ -45,17 +45,21 @@ import {
   declarationNodeIsStatic,
   declaredTypeNameNode,
   declaresMembers,
+  declaredSupertypeKind,
   hasStaticMemberDistinction,
   memberContainerDef,
   nearestMemberContainer,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
+  kotlinMayNameClassBare,
+  kotlinSupertypeEntry,
   csharpDottedNameRoot,
   nodeInStaticMemberContext,
   importTypeQuerySpecifier,
   rustImplSelfTypeNode,
   supportsStaticMemberScope,
   TRANSPARENT_MEMBER_CONTAINER_TYPES,
+  type KotlinSupertypeEntry,
   type ReceiverBinding,
   type ReceiverMemberScope,
   unwrapNamedType,
@@ -1633,8 +1637,8 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
 }
 
 type DeclaredBaseType =
-  | { kind: "simple"; name: string; invoked?: boolean }
-  | { kind: "qualified"; base: string; path: readonly string[]; invoked?: boolean };
+  | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
+  | { kind: "qualified"; base: string; path: readonly string[] };
 
 function peelTypeWrappers(node: SyntaxNodeLike): SyntaxNodeLike {
   let current: SyntaxNodeLike | null = node;
@@ -1691,27 +1695,27 @@ function collectDeclaredBaseTypes(
   const bases: DeclaredBaseType[] = [];
   const seen = new Set<string>();
   let usedFirstMatch = false;
-  const addSimple = (name: string, invoked: boolean): void => {
+  const addSimple = (name: string, node: SyntaxNodeLike): void => {
     if (!name || seen.has(name)) return;
     seen.add(name);
-    bases.push(invoked ? { kind: "simple", name, invoked } : { kind: "simple", name });
+    const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
+    bases.push(kotlinEntry ? { kind: "simple", name, kotlinEntry } : { kind: "simple", name });
   };
-  const addQualified = (base: string, path: string[], invoked: boolean): void => {
+  const addQualified = (base: string, path: string[]): void => {
     if (!base || path.length === 0) return;
     const key = `${base}.${path.join(".")}`;
 
     if (seen.has(key)) return;
     seen.add(key);
-    bases.push(invoked ? { kind: "qualified", base, path, invoked } : { kind: "qualified", base, path });
+    bases.push({ kind: "qualified", base, path });
   };
-  const collectType = (node: SyntaxNodeLike, invoked: boolean): void => {
+  const collectType = (node: SyntaxNodeLike): void => {
     const core = peelTypeWrappers(node);
     if (core.type === "constructor_invocation") {
-      // Kotlin writes the superclass as a constructor invocation (`Base()`); its callees are
-      // superclass entries, while bare types in the same base list are interfaces.
+      // Kotlin writes a superclass call as `Base(args)`: its callee is the base type, and its arguments are expressions.
       for (const child of core.namedChildren) {
         if (child.type === "value_arguments") continue;
-        collectType(child, true);
+        collectType(child);
       }
       return;
     }
@@ -1721,34 +1725,34 @@ function collectDeclaredBaseTypes(
     if (sup.id === "cpp" && core.type === "base_class_clause") {
       for (const child of core.namedChildren) {
         if (child.type === "access_specifier" || child.type === "virtual_specifier") continue;
-        collectType(child, invoked);
+        collectType(child);
       }
       return;
     }
     if (sup.id === "cpp") {
       const qualified = parseCppBaseType(core, source);
       if (qualified) {
-        if (qualified.path.length) addQualified(qualified.base, qualified.path, invoked);
-        else addSimple(qualified.base, invoked);
+        if (qualified.path.length) addQualified(qualified.base, qualified.path);
+        else addSimple(qualified.base, core);
         return;
       }
     }
     const unwrapped = unwrapNamedType(core, sup);
     if (unwrapped) {
-      addSimple(sliceText(unwrapped, source), invoked);
+      addSimple(sliceText(unwrapped, source), unwrapped);
       return;
     }
     if (isMemberAccessNode(sup, core)) {
       const chain = collectMemberAccessChain({ sup, source, chainNode: core });
       if (chain && isSimpleTypeNameNode(chain.base, sup) && chain.names.length) {
-        addQualified(sliceText(chain.base, source), [...chain.names].reverse(), invoked);
+        addQualified(sliceText(chain.base, source), [...chain.names].reverse());
       }
       return;
     }
     if (memberAccessTraversalTypes(sup).has(core.type)) return;
     for (const child of core.namedChildren) {
       if (child.type === "type_arguments") continue;
-      collectType(child, invoked);
+      collectType(child);
     }
   };
   const consider = (node: SyntaxNodeLike): void => {
@@ -1763,7 +1767,7 @@ function collectDeclaredBaseTypes(
       if (superclassOnly && rule.supertype === "first-child") {
         target = target.namedChildren[0] ?? target;
       }
-      collectType(target, false);
+      collectType(target);
     }
     if (superclassOnly || node.type !== "call" || !ancestry.mixinCalls?.length) return;
     if (node.childForFieldName("receiver")) return;
@@ -1771,7 +1775,7 @@ function collectDeclaredBaseTypes(
     const methodName = methodNode ? sliceText(methodNode, source) : undefined;
     if (!methodName || !ancestry.mixinCalls.includes(methodName)) return;
     const args = node.childForFieldName("arguments");
-    if (args) collectType(args, false);
+    if (args) collectType(args);
   };
   for (const child of container.namedChildren) {
     consider(child);
@@ -2153,11 +2157,14 @@ async function baseRefsFromContainer(
       ref.container.type === "trait_item" ||
       /^(?:interface|protocol|trait)\b/.test(sliceText(ref.container, ref.context.source).trimStart());
     if (superclassOnly && (def.kind !== SymbolKind.Class || interfaceLike)) continue;
-    // Kotlin classifies interfaces as SymbolKind.Class too, so the superclass is identified
-    // syntactically: `Base()` is a constructor invocation, while bare delegation-specifier
-    // entries (`Face`, `by` delegations) are interfaces. Interface-only super lookup stays
-    // unresolved, while an own receiver can inherit their default members.
-    if (superclassOnly && sup.id === "kotlin" && !base.invoked) continue;
+    // Kotlin classifies interfaces as SymbolKind.Class too, so its superclass is the entry written as a constructor
+    // call (`Base()`) or, in a class that declares only secondary constructors, a bare entry whose declaration is a
+    // class. Every other bare entry is an interface or not a whole type name: it never answers `super`, while an own
+    // receiver still inherits interface default members.
+    const kotlinEntry = base.kind === "simple" ? base.kotlinEntry : undefined;
+    const isBareKotlinClass =
+      kotlinEntry === "bare" && kotlinMayNameClassBare(container) && declaredSupertypeKind(ref.container) === "class";
+    if (superclassOnly && sup.id === "kotlin" && kotlinEntry !== "invoked" && !isBareKotlinClass) continue;
     const key = definitionIdentityKey(def);
     if (seen.has(key)) continue;
     seen.add(key);

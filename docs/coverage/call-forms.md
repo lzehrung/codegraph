@@ -69,7 +69,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | C          | 1     | 0          |
 | C++        | 15    | 0          |
 | C#         | 83    | 0          |
-| Kotlin     | 22    | 0          |
+| Kotlin     | 23    | 0          |
 | Ruby       | 8     | 0          |
 | Rust       | 10    | 0          |
 | Swift      | 15    | 0          |
