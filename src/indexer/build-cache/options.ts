@@ -126,7 +126,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Older manifests rebuild before using the clean-state shortcut; missing or invalid metadata uses blob reconciliation.
  * Epoch 133 scopes C++ template parameters to their declaration and rebuilds navigation, references, and edges.
  * Epoch 134 rebuilds Kotlin detailed graphs that recorded the base class of a class with only secondary constructors as
- * `implements`: a bare entry that resolves to a class is `extends`, and one whose kind is not proven records no edge.
+ * `implements`, or the parameter and return types of a function-type supertype as supertypes: a bare entry that
+ * resolves to a class is `extends`, and one whose kind is not proven, or a function type, records no edge.
  */
 export const CORE_ALGORITHM_EPOCH = 134;
 /**

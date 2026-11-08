@@ -240,10 +240,12 @@ nativeDescribe("type hierarchy language parity", () => {
         "class KotlinSecondary : KotlinWorker {",
         "  constructor() : super()",
         "}",
-        // A function type's parameter type is not a supertype of a class that declares only secondary constructors.
+        // A function type inherits a library function interface, so its parameter and return types are not supertypes.
         "class KotlinHandler : (KotlinWorker) -> Unit {",
-        "  constructor()",
         "  override fun invoke(worker: KotlinWorker) {}",
+        "}",
+        "class KotlinSuspending : suspend () -> KotlinWorker {",
+        "  override suspend fun invoke(): KotlinWorker = KotlinWorker()",
         "}",
       ].join("\n"),
       "Types.php": [

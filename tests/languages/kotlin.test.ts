@@ -2581,5 +2581,78 @@ describe("Kotlin base classes named without a constructor call", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("records no edge for a function-type supertype and keeps its parameter and return types out of member lookup", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-function-type-base-"));
+    try {
+      const lines = [
+        "package fn",
+        "",
+        "open class Event(val id: Int) {",
+        "    open fun tag(): Int = id",
+        "}",
+        "",
+        "fun tag(): Int = 7",
+        "",
+        "open class Base(val x: Int) {",
+        "    open fun run(): Int = x",
+        "}",
+        "",
+        "class Handler : (Event) -> Unit {",
+        "    override fun invoke(e: Event) {}",
+        "",
+        "    fun go(): Int {",
+        "        return tag()",
+        "    }",
+        "}",
+        "",
+        "class Suspending : suspend () -> Event {",
+        "    override suspend fun invoke(): Event = Event(1)",
+        "}",
+        "",
+        "class Mixed : (Event) -> Unit, Base(2) {",
+        "    override fun invoke(e: Event) {}",
+        "",
+        "    fun go(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Fn.kt": lines.join("\n") });
+      const file = files["Fn.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // A function type inherits a library function interface, so its parameter and return types are not supertypes:
+      // only the real class beside it is a base.
+      expect(relationsOf(graph)).toEqual(["Mixed:extends:Base"]);
+      const event = [...graph.nodes.values()].find((node) => node.name === "Event" && node.kind === "class");
+      expect(findImplementations(index, graph, event!.id).status).toBe("unsupported_target");
+      // `tag()` in Handler reaches the top-level function, never the `Event.tag` that a bound parameter type would add.
+      const topLevelTag = `${file}::tag::${lines.join("\n").indexOf("tag(): Int = 7")}`;
+      const call = await goToDefinition(index, { file, line: 17, column: columnInLines(lines, 17, "tag") });
+      expect(call.status).toBe("ok");
+      if (call.status === "ok") expect(call.definition.range.start.line).toBe(7);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && edge.site?.file === file && edge.site.range.start.line === 17)
+          .map((edge) => edge.to),
+      ).toEqual([topLevelTag]);
+      const referenceLines = async (line: number): Promise<number[]> => {
+        const refs = await findReferences(index, { file, line, column: columnInLines(lines, line, "tag") });
+        if (refs.status !== "ok") throw new Error(`Expected references at line ${line}`);
+        return refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b);
+      };
+      expect(await referenceLines(4)).toEqual([4]);
+      expect(await referenceLines(7)).toEqual([7, 17]);
+      // The class that shares a base list with a function type still answers `super`.
+      const superCall = await goToDefinition(index, { file, line: 29, column: columnInLines(lines, 29, "run") });
+      expect(superCall.status).toBe("ok");
+      if (superCall.status === "ok") expect(superCall.definition.range.start.line).toBe(10);
+      expect(callsAt(graph, file, 29)).toEqual([`run@${file}`]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 describeTypeParameterReceiverRows("kotlin", "Kotlin type parameter beside a same-named class");
