@@ -42,10 +42,11 @@ import {
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
-import type { NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
+import type { BareNameUse, NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
 import { isSwiftExtensionTypeName, isSwiftQualifiedExtensionSuffix } from "../../util/swift-tree.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
+import type { Binding } from "../scope-types.js";
 import { csharpTypeOnlyName } from "../scope-nodes.js";
 
 const implicitSelf = (state: NameLookupState, fallback: NameResolution | null): NameResolution => ({
@@ -84,8 +85,24 @@ function ownOverloadDeclaration({ use, closestBinding }: NameLookupState): GoToR
 }
 
 /** The use is the callee of a receiverless call (`f()`). */
-const isImplicitSelfCall = ({ use }: NameLookupState): boolean =>
+const namesCallee = (use: BareNameUse): boolean =>
   implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id === use.node.id;
+const isImplicitSelfCall = ({ use }: NameLookupState): boolean => namesCallee(use);
+
+/** Reference forms name a method without calling it (Java `this::size`, Kotlin `::size`). */
+const METHOD_REFERENCE_TYPES: Record<string, true> = { method_reference: true, callable_reference: true };
+
+/** A plain read: not a call, a method reference, or a declaration name. */
+const namesValue = (use: BareNameUse): boolean =>
+  !use.parsed.sup.isDeclarationName(use.node) && !METHOD_REFERENCE_TYPES[use.node.parent?.type ?? ""];
+
+/** Whether the same scope declared a variable, field, or property before this function binding. */
+function hasEarlierValueBinding(binding: Binding): boolean {
+  for (let earlier = binding.earlierSameScope; earlier; earlier = earlier.earlierSameScope) {
+    if (earlier.kind === "local" || earlier.kind === "param") return true;
+  }
+  return false;
+}
 
 /** A nominal type is not a member of its own declaration or extension. */
 function namesEnclosingSwiftType(state: NameLookupState, def: SymbolDef): boolean {
@@ -280,10 +297,11 @@ export const csharpLookupPolicy: NameLookupPolicy = {
 export const jvmLookupPolicy: NameLookupPolicy = {
   // Java methods and variables are separate namespaces: `int hit = 0; hit();` still calls the
   // method. A Kotlin local holding a function is callable, so Kotlin keeps the binding.
-  ignoresBinding: (use, binding) =>
-    use.parsed.sup.id === "java" &&
-    binding.kind !== "function" &&
-    implicitSelfCallee("java", use.node.parent ?? use.node)?.id === use.node.id,
+  ignoresBinding: (use, binding) => {
+    if (namesCallee(use)) return use.parsed.sup.id === "java" && binding.kind !== "function";
+    // A plain read names the variable, not a method declared after it (`delegate != null` beside `delegate()`).
+    return binding.kind === "function" && namesValue(use) && hasEarlierValueBinding(binding);
+  },
   fromClosestBinding: ownOverloadDeclaration,
   onLocal(state, local) {
     if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;

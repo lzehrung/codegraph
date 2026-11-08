@@ -135,7 +135,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * the non-generic types of the global namespace in each file's namespace facts.
  * Epoch 137 rebuilds detailed graphs and navigation where `super`, `this`, and bare member calls inside an anonymous
  * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
- * binds a call to the method that shares its name with a field or property.
+ * binds a call to the method, and a plain read to the field or property, that share a name.
  */
 export const CORE_ALGORITHM_EPOCH = 137;
 /**

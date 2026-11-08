@@ -204,11 +204,13 @@ export function resolveBareName(
   const lookupName = policy.lookupName?.(use) ?? use.name;
   const early = policy.beforeLexical?.(use, lookupName);
   if (early !== undefined) return early;
-  const found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
+  let found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
+  // A binding the language never reads at this use gives way to the earlier one declared in the same scope.
+  while (found && policy.ignoresBinding?.(use, found)) found = found.earlierSameScope ?? null;
   const state: NameLookupState = {
     use,
     lookupName,
-    closestBinding: found && policy.ignoresBinding?.(use, found) ? null : found,
+    closestBinding: found,
   };
   const fromBinding = policy.fromClosestBinding?.(state);
   if (fromBinding !== undefined) return fromBinding;

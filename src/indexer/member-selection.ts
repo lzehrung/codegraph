@@ -42,6 +42,12 @@ export type MemberSelectionOptions = {
    * not what a call invokes, so the callable members decide. Without a callable member the level is unchanged.
    */
   callSite?: boolean;
+  /**
+   * The use reads a value, not a call or a method reference. A method that shares a field's or property's
+   * name at one lookup level is not what the read names, so the non-callable members decide. Without a
+   * non-callable member the level is unchanged.
+   */
+  valueRead?: boolean;
 };
 
 /** Static and instance members have independent lookup chains in these languages. */
@@ -93,14 +99,15 @@ function distinctCandidates<Owner, Member>(
   return selected;
 }
 
-/** At a call site, drop same-named non-callable members of a level that also declares a callable one. */
-function preferCallables<Owner, Member>(
+/** A call decides among a level's callable members and a value read among its non-callable ones, when it has both. */
+function preferByUse<Owner, Member>(
   candidates: readonly Member[],
   model: MemberModel<Owner, Member>,
+  options: MemberSelectionOptions,
 ): readonly Member[] {
-  if (candidates.length < 2) return candidates;
-  const callables = candidates.filter((member) => model.callable(member));
-  return callables.length ? callables : candidates;
+  if (candidates.length < 2 || (!options.callSite && !options.valueRead)) return candidates;
+  const matching = candidates.filter((member) => !!model.callable(member) === !!options.callSite);
+  return matching.length ? matching : candidates;
 }
 
 function memberNameMatches<Owner, Member>(
@@ -182,7 +189,7 @@ export function selectMember<Owner, Member>(
       }
     }
     const distinct = distinctCandidates(candidates, model, options.argumentCount);
-    const unique = options.callSite ? preferCallables(distinct, model) : distinct;
+    const unique = preferByUse(distinct, model, options);
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;

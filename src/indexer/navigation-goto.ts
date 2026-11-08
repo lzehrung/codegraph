@@ -2061,7 +2061,7 @@ export async function resolveMemberAccessDefinition(params: {
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
         undefined,
         undefined,
-        memberAccessIsCall(sup.id, memberNode),
+        memberAccessUse(sup.id, memberNode),
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -2106,7 +2106,7 @@ export async function resolveMemberAccessDefinition(params: {
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
         undefined,
         undefined,
-        memberAccessIsCall(sup.id, memberNode),
+        memberAccessUse(sup.id, memberNode),
       );
       if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
@@ -3126,7 +3126,7 @@ async function resolveKeywordReceiverMember(
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
   report?: KeywordMemberReport,
-  callSite = false,
+  memberUse?: "call" | "value",
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -3272,7 +3272,8 @@ async function resolveKeywordReceiverMember(
     useFile: mod.file,
     startAtAncestor,
     keepUniqueArityMismatch: !startAtAncestor,
-    callSite,
+    callSite: memberUse === "call",
+    valueRead: memberUse === "value",
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
     normalizeIdentifier: current.context.sup.id === "swift" ? current.context.sup.normalizeIdentifier : undefined,
@@ -3509,6 +3510,24 @@ function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boo
   return false;
 }
 
+/** How the member access `memberNode` is used, where the language separates calls from value reads. */
+function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): "call" | "value" | undefined {
+  if (languageId !== "java" && languageId !== "kotlin" && languageId !== "csharp") return undefined;
+  // A method reference (`this::size`) names the callable without calling it.
+  if (memberNode.type === "method_reference" || memberNode.type === "callable_reference") return "call";
+  if (languageId === "kotlin" && navigationUsesDoubleColon(memberNode)) return "call";
+  return memberAccessIsCall(languageId, memberNode) ? "call" : "value";
+}
+
+/** Kotlin parses `this::size` as a navigation expression whose separator token is `::`. */
+function navigationUsesDoubleColon(node: SyntaxNodeLike): boolean {
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child) return false;
+    if (child.type === "::") return true;
+  }
+}
+
 /** The implicit-`this` member lookup in the owner that lexically encloses `anchor`; `undefined` leaves the name open. */
 async function resolveImplicitSelfAt(
   index: ProjectIndex,
@@ -3533,7 +3552,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     report,
-    languageId !== "swift",
+    languageId === "swift" ? undefined : "call",
   );
   if (member) return member;
   // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
@@ -3553,7 +3572,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     instanceReport,
-    true,
+    "call",
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;
@@ -4584,6 +4603,8 @@ async function resolveReceiverDefinition(
         false,
         undefined,
         owner.def,
+        undefined,
+        "value",
       );
       if (!field || field.kind !== SymbolKind.Variable || !field.isMember) return null;
       const fieldContext = await ensureParsedContextForIndex(index, field.file);

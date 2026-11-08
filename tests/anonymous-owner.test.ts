@@ -893,6 +893,8 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
       java: [
         "package app;",
         "",
+        "import java.util.function.IntSupplier;",
+        "",
         "public class Holder {",
         "    static class Adapter {",
         '        public String read() { return "Adapter.read"; }',
@@ -925,6 +927,8 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         "    int size() { return size + 1; }",
         "",
         "    int total() { return size() + this.size() + size + this.size; }",
+        "",
+        "    IntSupplier reference() { return this::size; }",
         "}",
         "",
         "class FieldOnly {",
@@ -932,9 +936,27 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         "",
         "    int twice() { return count + this.count; }",
         "}",
+        "",
+        "class Left {",
+        '    String read() { return "Left.read"; }',
+        "}",
+        "",
+        "class Right {",
+        '    String read() { return "Right.read"; }',
+        "}",
+        "",
+        "class Mixed {",
+        "    private Left delegate = new Left();",
+        "",
+        "    Right delegate() { return new Right(); }",
+        "",
+        "    String both() { return delegate().read() + delegate.read() + this.delegate.read(); }",
+        "}",
       ],
       kt: [
         "package app",
+        "",
+        "import kotlin.reflect.KFunction0",
         "",
         "class Adapter {",
         '    fun read(): String = "Adapter.read"',
@@ -962,12 +984,32 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         "    fun size(): Int = size + 1",
         "",
         "    fun total(): Int = size() + this.size() + size + this.size",
+        "",
+        "    fun reference(): KFunction0<Int> = this::size",
+        "",
+        "    fun implicitReference(): KFunction0<Int> = ::size",
         "}",
         "",
         "class FieldOnly {",
         "    private val count = 1",
         "",
         "    fun twice(): Int = count + this.count",
+        "}",
+        "",
+        "class Left {",
+        '    fun read(): String = "Left.read"',
+        "}",
+        "",
+        "class Right {",
+        '    fun read(): String = "Right.read"',
+        "}",
+        "",
+        "class Mixed {",
+        "    private val delegate: Left = Left()",
+        "",
+        "    fun delegate(): Right = Right()",
+        "",
+        "    fun both(): String = delegate().read() + delegate.read() + this.delegate.read()",
         "}",
       ],
     };
@@ -979,6 +1021,11 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         total: "int total()",
         countField: "private int count = 1;",
         twice: "int twice()",
+        field: "private Adapter delegate;",
+        sizeField: "private int size = 3;",
+        reference: "IntSupplier reference()",
+        leftRead: '"Left.read"',
+        both: "String both()",
       },
       kt: {
         calls: "fun fetch()",
@@ -987,6 +1034,12 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         total: "fun total()",
         countField: "private val count = 1",
         twice: "fun twice()",
+        field: "private val delegate = Adapter()",
+        sizeField: "private val size = 3",
+        reference: "fun reference()",
+        implicitReference: "fun implicitReference()",
+        leftRead: '"Left.read"',
+        both: "fun both()",
       },
     };
     for (const ext of ["java", "kt"] as const) {
@@ -998,6 +1051,11 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
       const delegateMethod = { file, line: at(n.method) };
       const sizeMethod = { file, line: at(n.sizeMethod) };
       const countField = { file, line: at(n.countField) };
+      const delegateField = { file, line: at(n.field) };
+      const sizeField = { file, line: at(n.sizeField) };
+      const leftRead = { file, line: at(n.leftRead) };
+      const implicitReferenceSites: ConsumerAgreementSite[] =
+        ext === "kt" ? [{ file, line: at(needles.kt.implicitReference), token: "size", expected: sizeMethod }] : [];
       await assertSites(fixture, [
         // A call names the method, never the field or property beside it, in an anonymous body and a named class.
         {
@@ -1030,6 +1088,17 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
           expected: sizeMethod,
           edges: [{ label: "calls", from: { file, name: "total" } }],
         },
+        // A plain read of the same name, with or without `this.`, still names the field or property.
+        { file, line: at(n.calls), token: "delegate", occurrence: 3, expected: delegateField },
+        { file, line: at(n.total), token: "size", occurrence: 3, expected: sizeField },
+        { file, line: at(n.total), token: "size", occurrence: 4, expected: sizeField },
+        // A method reference keeps naming the callable.
+        { file, line: at(n.reference), token: "size", expected: sizeMethod },
+        ...implicitReferenceSites,
+        // A field of one type beside a method of another never lends the call its type.
+        { file, line: at(n.both), token: "read", expected: "not_found" },
+        { file, line: at(n.both), token: "read", occurrence: 2, expected: leftRead },
+        { file, line: at(n.both), token: "read", occurrence: 3, expected: leftRead },
         // A name with no method beside it is unchanged.
         { file, line: at(n.twice), token: "count", expected: countField },
         { file, line: at(n.twice), token: "count", occurrence: 2, expected: countField },
