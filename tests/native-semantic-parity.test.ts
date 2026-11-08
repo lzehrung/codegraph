@@ -22,6 +22,7 @@ import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { findImplementations } from "../src/indexer/type-hierarchy.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
 import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
+import { QUALIFIED_BASE_FIXTURES, expectQualifiedBases } from "./helpers/qualified-base-fixture.js";
 import {
   KOTLIN_SECONDARY_CONSTRUCTOR_FILES,
   expectKotlinSecondaryConstructorHierarchy,
@@ -3666,6 +3667,30 @@ nativeDescribe("native semantic coverage", () => {
       expectKotlinSecondaryConstructorHierarchy(root, index, await buildSymbolGraphDetailed(index), phase);
     }
   });
+  it.each(QUALIFIED_BASE_FIXTURES)(
+    "keeps $language qualified bases identical across a native disk-cache reload",
+    async (fixture) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-"));
+      const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-qualified-base-cache-"));
+      tempDirs.push(root, cacheDir);
+      await writeFixtureFiles(root, fixture.files);
+      const options = { cache: "disk", cacheDir, threads: 1 } as const;
+      const cold = await buildProjectIndex(root, options);
+      clearMemoryCache();
+      const warm = await buildProjectIndex(root, options);
+      for (const [phase, index] of [
+        ["cold", cold],
+        ["warm", warm],
+      ] as const) {
+        // `go.mod` is a manifest, not a parsed source file, so it carries no native outcome.
+        for (const module of index.byFile.values()) {
+          if (!module.file.endsWith("go.mod")) expect(module.nativeOutcome, phase).toBe("used");
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        await expectQualifiedBases(root, index, graph, fixture, phase);
+      }
+    },
+  );
 
   it("keeps quoted Swift names and source ranges stable across a native disk-cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-"));
