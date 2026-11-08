@@ -30,6 +30,7 @@ function usage() {
     "Per project it records the file-level import graph (`index.graph.edges`) and the detailed",
     "symbol graph (`buildSymbolGraphDetailed`). No edge kind is dropped: the graphs have no separate",
     "`contains` edges, so `member_of` is the one structure edge, and it is recorded like the rest.",
+    "Characters outside printable ASCII are written as \\u{hex}, so each file is plain ASCII.",
     "",
     "Options:",
     `  --dir <path>  Snapshot directory (default: ${DEFAULT_SNAPSHOT_DIR})`,
@@ -121,9 +122,13 @@ function discoverRoots() {
   return roots;
 }
 
-// A record is one line, so a name or specifier must never carry a line break into it.
-function lineSafe(text) {
-  return text.replace(/[\r\n]/g, (character) => (character === "\n" ? "\\n" : "\\r"));
+// Source text can hold characters a reviewer cannot tell apart in a diff, such as a zero-width joiner or a
+// precomposed accent against a combining one. Every character outside printable ASCII is written as `\u{hex}`.
+// That also keeps a line break out of a record, so each snapshot file is plain ASCII with one record per line.
+const OUTSIDE_PRINTABLE_ASCII = /[^\x20-\x7e]/gu;
+
+function asciiText(text) {
+  return text.replace(OUTSIDE_PRINTABLE_ASCII, (character) => `\\u{${character.codePointAt(0).toString(16)}}`);
 }
 
 function projectRelativePath(bases, filePath) {
@@ -145,14 +150,14 @@ function symbolPositions(index, defNodeId) {
 }
 
 function fileEdgeLine(edge, place) {
-  const target = edge.to.type === "file" ? place(edge.to.path) : `external:${lineSafe(edge.to.name)}`;
+  const target = edge.to.type === "file" ? place(edge.to.path) : `external:${asciiText(edge.to.name)}`;
   const attributes = [];
   if (edge.typeOnly) attributes.push("type-only");
   if (edge.resolved) attributes.push(`resolved=${edge.resolved}`);
   if (typeof edge.confidence === "number") attributes.push(`confidence=${edge.confidence}`);
   if (edge.includeForm) attributes.push(`include=${edge.includeForm}`);
   // The specifier goes last: it may hold spaces, and nothing follows it.
-  attributes.push(`raw=${lineSafe(edge.raw)}`);
+  attributes.push(`raw=${asciiText(edge.raw)}`);
   return `file ${place(edge.from)} -> ${target} ${attributes.join(" ")}`;
 }
 
@@ -166,7 +171,7 @@ function describeSymbolNode(id, graph, positions, place) {
   const idHead = `${node.file.replaceAll("\\", "/")}::${node.name}::`;
   if (!id.startsWith(idHead)) throw new Error(`Symbol node id ${id} does not read as <file>::<name>::<suffix>.`);
   const suffix = id.slice(idHead.length);
-  const location = `${place(node.file)}::${lineSafe(node.name)}`;
+  const location = `${place(node.file)}::${asciiText(node.name)}`;
   const isImportAlias = suffix === "import" || suffix.startsWith("import:");
   if (isImportAlias) return `${location}@${suffix}`;
   const position = positions.get(id);
@@ -177,7 +182,7 @@ function describeSymbolNode(id, graph, positions, place) {
 function symbolEdgeLine(edge, graph, positions, place) {
   const from = describeSymbolNode(edge.from, graph, positions, place);
   const to = describeSymbolNode(edge.to, graph, positions, place);
-  const arrow = edge.label ? `-[${lineSafe(edge.label)}]->` : "->";
+  const arrow = edge.label ? `-[${asciiText(edge.label)}]->` : "->";
   let line = `symbol ${from} ${arrow} ${to}`;
   if (edge.site) {
     const { line: siteLine, column } = edge.site.range.start;
@@ -197,7 +202,7 @@ async function indexProjectRecords(codegraph, project, seenLanguages) {
     if (support) seenLanguages.add(support.id);
   }
   const bases = [...new Set([project.directory, fs.realpathSync(project.directory)])];
-  const place = (filePath) => `${project.prefix}${projectRelativePath(bases, filePath)}`;
+  const place = (filePath) => asciiText(`${project.prefix}${projectRelativePath(bases, filePath)}`);
   const records = index.graph.edges.map((edge) => fileEdgeLine(edge, place));
 
   const graph = await codegraph.buildSymbolGraphDetailed(index);
@@ -207,10 +212,11 @@ async function indexProjectRecords(codegraph, project, seenLanguages) {
 }
 
 // Neither the checkout location nor the machine may reach the snapshot, whichever separators or casing a path used.
+// The needles are escaped like the records, so a checkout path with non-ASCII characters is still found.
 function checkoutPathNeedles() {
   const directories = new Set([rootDir, fs.realpathSync(rootDir)]);
   const forms = [...directories].flatMap((directory) => [directory, directory.replaceAll("\\", "/")]);
-  return new Set(forms.map((form) => form.toLowerCase()));
+  return new Set(forms.map((form) => asciiText(form).toLowerCase()));
 }
 
 function assertNoCheckoutPaths(root, records, needles) {
@@ -230,8 +236,12 @@ function snapshotText(root, records) {
   ];
   // Plain `sort()` orders by UTF-16 code unit, so no locale or platform changes the order.
   const text = `${[...header, ...[...records].sort()].join("\n")}\n`;
-  // Written text is UTF-8: round-trip it so a lone surrogate reads back as the replacement character it was written as.
-  return Buffer.from(text, "utf8").toString("utf8");
+  const unescaped = /[^\x20-\x7e\n]/u.exec(text);
+  if (unescaped)
+    throw new Error(
+      `${root.name}: a record holds the unescaped character U+${unescaped[0].codePointAt(0).toString(16)}.`,
+    );
+  return text;
 }
 
 async function projectRecords(codegraph, project, seenLanguages) {

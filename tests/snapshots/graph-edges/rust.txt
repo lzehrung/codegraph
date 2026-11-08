@@ -15,18 +15,18 @@ file nested.rs -> nested_service.rs raw=nested_service
 file reexports.rs -> helpers.rs raw=helpers
 file reexports.rs -> utils.rs raw=utils
 file scoped-path-use.rs -> grouped_targets.rs raw=self::grouped_targets::grouped_bar
-symbol .regressions/unicode_consumer.rs::aliaś@import -[créer]-> .regressions/unicode_def.rs::créer@1:8
-symbol .regressions/unicode_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_def.rs::créer@1:8 site=6:5
-symbol .regressions/unicode_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_def.rs::créer@1:8
-symbol .regressions/unicode_consumer.rs::unicode_def@import -[créer]-> .regressions/unicode_def.rs::créer@1:8
-symbol .regressions/unicode_nfc_consumer.rs::café@import -[café]-> .regressions/unicode_nfc_def.rs::café@1:8
-symbol .regressions/unicode_nfc_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_nfc_def.rs::café@1:8 site=6:5
-symbol .regressions/unicode_nfc_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_nfc_def.rs::café@1:8
-symbol .regressions/unicode_nfc_consumer.rs::unicode_nfc_def@import -[café]-> .regressions/unicode_nfc_def.rs::café@1:8
-symbol .regressions/unicode_nfd_consumer.rs::café@import -[café]-> .regressions/unicode_nfd_def.rs::café@1:8
-symbol .regressions/unicode_nfd_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_nfd_def.rs::café@1:8 site=6:5
-symbol .regressions/unicode_nfd_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_nfd_def.rs::café@1:8
-symbol .regressions/unicode_nfd_consumer.rs::unicode_nfd_def@import -[café]-> .regressions/unicode_nfd_def.rs::café@1:8
+symbol .regressions/unicode_consumer.rs::alias\u{301}@import -[cr\u{e9}er]-> .regressions/unicode_def.rs::cr\u{e9}er@1:8
+symbol .regressions/unicode_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_def.rs::cr\u{e9}er@1:8 site=6:5
+symbol .regressions/unicode_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_def.rs::cr\u{e9}er@1:8
+symbol .regressions/unicode_consumer.rs::unicode_def@import -[cr\u{e9}er]-> .regressions/unicode_def.rs::cr\u{e9}er@1:8
+symbol .regressions/unicode_nfc_consumer.rs::cafe\u{301}@import -[cafe\u{301}]-> .regressions/unicode_nfc_def.rs::caf\u{e9}@1:8
+symbol .regressions/unicode_nfc_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_nfc_def.rs::caf\u{e9}@1:8 site=6:5
+symbol .regressions/unicode_nfc_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_nfc_def.rs::caf\u{e9}@1:8
+symbol .regressions/unicode_nfc_consumer.rs::unicode_nfc_def@import -[caf\u{e9}]-> .regressions/unicode_nfc_def.rs::caf\u{e9}@1:8
+symbol .regressions/unicode_nfd_consumer.rs::caf\u{e9}@import -[caf\u{e9}]-> .regressions/unicode_nfd_def.rs::cafe\u{301}@1:8
+symbol .regressions/unicode_nfd_consumer.rs::main@5:4 -[calls]-> .regressions/unicode_nfd_def.rs::cafe\u{301}@1:8 site=6:5
+symbol .regressions/unicode_nfd_consumer.rs::main@5:4 -[uses]-> .regressions/unicode_nfd_def.rs::cafe\u{301}@1:8
+symbol .regressions/unicode_nfd_consumer.rs::unicode_nfd_def@import -[cafe\u{301}]-> .regressions/unicode_nfd_def.rs::cafe\u{301}@1:8
 symbol aliased-use.rs::alias_example@7:4 -[calls]-> helpers.rs::helper_from_helpers@1:8 site=8:5
 symbol aliased-use.rs::alias_example@7:4 -[calls]-> utils.rs::helper_function@1:8 site=9:5
 symbol aliased-use.rs::alias_example@7:4 -[uses]-> helpers.rs::helper_from_helpers@1:8

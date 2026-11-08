@@ -15,7 +15,7 @@ file cs-static-import/AliasUse.cs -> cs-static-import/Point.cs raw=N.Point
 file cs-static-import/GlobalUsings.cs -> cs-static-import/Shared.cs raw=Shared.TextUtilities
 file jvm-java-static-qualified/app/Consumer.java -> jvm-java-static-qualified/geo/Point.java raw=geo.Point
 file jvm-java-static-qualified/app/Consumer.java -> jvm-java-static-qualified/helpers/Helpers.java raw=helpers.Helpers
-file jvm-java-static-qualified/app/Consumer.java -> jvm-java-static-qualified/unicode/Café.java raw=unicode.Café
+file jvm-java-static-qualified/app/Consumer.java -> jvm-java-static-qualified/unicode/Caf\u{e9}.java raw=unicode.Caf\u{e9}
 file jvm-java-static-qualified/app/Consumer.java -> jvm-java-static-qualified/utils/Utils.java raw=utils.Utils
 file jvm-kotlin-object-members/app/Consumer.kt -> jvm-kotlin-object-members/carrier/CompanionCarrier.kt raw=carrier
 file jvm-kotlin-object-members/app/Consumer.kt -> jvm-kotlin-object-members/factory/UtilityFactory.kt raw=factory
@@ -186,24 +186,24 @@ symbol js-function-expressions/expressions.js::outer@4:10 -[calls]-> js-function
 symbol js-function-expressions/members.js::bind@6:10 -[calls]-> js-function-expressions/members.js::check@2:10 site=8:53
 symbol js-function-expressions/members.js::getter@5:18 -[calls]-> js-function-expressions/members.js::check@2:10 site=5:40
 symbol js-function-expressions/members.js::once2@4:30 -[calls]-> js-function-expressions/members.js::check@2:10 site=4:41
-symbol jvm-java-static-qualified/app/Consumer.java::Café@import -[Café]-> jvm-java-static-qualified/unicode/Café.java::Café@3:14
+symbol jvm-java-static-qualified/app/Consumer.java::Caf\u{e9}@import -[Caf\u{e9}]-> jvm-java-static-qualified/unicode/Caf\u{e9}.java::Caf\u{e9}@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::Helpers@import -[Helpers]-> jvm-java-static-qualified/helpers/Helpers.java::Helpers@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::Point@import -[Point]-> jvm-java-static-qualified/geo/Point.java::Point@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::Utils@import -[Utils]-> jvm-java-static-qualified/utils/Utils.java::Utils@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[calls]-> jvm-java-static-qualified/helpers/Helpers.java::helperFromHelpers@4:22 site=11:13
-symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[calls]-> jvm-java-static-qualified/unicode/Café.java::value@4:22 site=12:10
+symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[calls]-> jvm-java-static-qualified/unicode/Caf\u{e9}.java::value@4:22 site=12:10
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[calls]-> jvm-java-static-qualified/utils/Utils.java::helperFunction@4:22 site=10:11
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[instantiates]-> jvm-java-static-qualified/geo/Point.java::Point@3:14 site=14:23
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[instantiates]-> jvm-java-static-qualified/utils/Utils.java::UtilityClass@6:23 site=13:15
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[member_of]-> jvm-java-static-qualified/app/Consumer.java::Consumer@8:14
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/geo/Point.java::Point@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/helpers/Helpers.java::Helpers@3:14
-symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/unicode/Café.java::Café@3:14
+symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/unicode/Caf\u{e9}.java::Caf\u{e9}@3:14
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/utils/Utils.java::UtilityClass@6:23
 symbol jvm-java-static-qualified/app/Consumer.java::run@9:21 -[uses]-> jvm-java-static-qualified/utils/Utils.java::Utils@3:14
 symbol jvm-java-static-qualified/decoy/Utils.java::helperFunction@4:22 -[member_of]-> jvm-java-static-qualified/decoy/Utils.java::Utils@3:14
 symbol jvm-java-static-qualified/helpers/Helpers.java::helperFromHelpers@4:22 -[member_of]-> jvm-java-static-qualified/helpers/Helpers.java::Helpers@3:14
-symbol jvm-java-static-qualified/unicode/Café.java::value@4:22 -[member_of]-> jvm-java-static-qualified/unicode/Café.java::Café@3:14
+symbol jvm-java-static-qualified/unicode/Caf\u{e9}.java::value@4:22 -[member_of]-> jvm-java-static-qualified/unicode/Caf\u{e9}.java::Caf\u{e9}@3:14
 symbol jvm-java-static-qualified/utils/Utils.java::helperFunction@4:22 -[member_of]-> jvm-java-static-qualified/utils/Utils.java::Utils@3:14
 symbol jvm-kotlin-object-members/app/Consumer.kt::CompanionCarrier@import -[CompanionCarrier]-> jvm-kotlin-object-members/carrier/CompanionCarrier.kt::CompanionCarrier@3:7
 symbol jvm-kotlin-object-members/app/Consumer.kt::UtilityFactory@import -[UtilityFactory]-> jvm-kotlin-object-members/factory/UtilityFactory.kt::UtilityFactory@3:8

@@ -27,8 +27,8 @@ file main.php -> external:App\Utils\UtilityClass raw=App\Utils\UtilityClass
 file main.php -> external:App\Utils\helper_function raw=App\Utils\helper_function
 file main.php -> helpers.php raw=./helpers.php
 file main.php -> utils.php raw=./utils.php
-file src/Collision/unicode_consumer.php -> src/Collision/unicode_def.php raw=App\Collision\Créer
-file src/Collision/unicode_nfd_consumer.php -> external:App\Collision\Café raw=App\Collision\Café
+file src/Collision/unicode_consumer.php -> src/Collision/unicode_def.php raw=App\Collision\Cr\u{e9}er
+file src/Collision/unicode_nfd_consumer.php -> external:App\Collision\Cafe\u{301} raw=App\Collision\Cafe\u{301}
 symbol EnumImplementation.php::EnumStatus@8:6 -[implements]-> EnumImplementation.php::EnumContract@3:11 site=8:28
 symbol EnumImplementation.php::dev_helper@import -[dev_helper]-> autoload/dev_helper.php::dev_helper@3:10
 symbol EnumImplementation.php::excluded_helper@import -[excluded_helper]-> classmap/Excluded/excluded_helper.php::excluded_helper@3:10
@@ -170,7 +170,7 @@ symbol src/Collision/Thing.php::global_helper@import -[global_helper]-> autoload
 symbol src/Collision/ThingFunction.php::dev_helper@import -[dev_helper]-> autoload/dev_helper.php::dev_helper@3:10
 symbol src/Collision/ThingFunction.php::excluded_helper@import -[excluded_helper]-> classmap/Excluded/excluded_helper.php::excluded_helper@3:10
 symbol src/Collision/ThingFunction.php::global_helper@import -[global_helper]-> autoload/global_helper.php::global_helper@3:10
-symbol src/Collision/unicode_consumer.php::créeŕ@import:function -[Créer]-> src/Collision/unicode_def.php::Créer@5:10
+symbol src/Collision/unicode_consumer.php::cr\u{e9}er\u{301}@import:function -[Cr\u{e9}er]-> src/Collision/unicode_def.php::Cr\u{e9}er@5:10
 symbol src/Collision/unicode_consumer.php::dev_helper@import -[dev_helper]-> autoload/dev_helper.php::dev_helper@3:10
 symbol src/Collision/unicode_consumer.php::excluded_helper@import -[excluded_helper]-> classmap/Excluded/excluded_helper.php::excluded_helper@3:10
 symbol src/Collision/unicode_consumer.php::global_helper@import -[global_helper]-> autoload/global_helper.php::global_helper@3:10

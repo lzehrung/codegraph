@@ -12,9 +12,9 @@ file interfaces.go -> utils.go raw=./utils
 file main.go -> helpers.go raw=./helpers
 file main.go -> utils.go raw=./utils
 file utils.go -> helpers.go raw=./helpers
-symbol .regressions/unicode_consumer.go::main@5:6 -[calls]-> .regressions/unicodepkg.go::Créer@3:6 site=6:2
-symbol .regressions/unicode_consumer.go::main@5:6 -[uses]-> .regressions/unicodepkg.go::Créer@3:6
-symbol .regressions/unicode_consumer.go::α@import -[Créer]-> .regressions/unicodepkg.go::Créer@3:6
+symbol .regressions/unicode_consumer.go::\u{3b1}@import -[Cr\u{e9}er]-> .regressions/unicodepkg.go::Cr\u{e9}er@3:6
+symbol .regressions/unicode_consumer.go::main@5:6 -[calls]-> .regressions/unicodepkg.go::Cr\u{e9}er@3:6 site=6:2
+symbol .regressions/unicode_consumer.go::main@5:6 -[uses]-> .regressions/unicodepkg.go::Cr\u{e9}er@3:6
 symbol aliased-imports.go::aliasExample@8:6 -[calls]-> helpers.go::HelperFromHelpers@3:6 site=10:7
 symbol aliased-imports.go::aliasExample@8:6 -[calls]-> utils.go::HelperFunction@5:6 site=9:7
 symbol aliased-imports.go::aliasExample@8:6 -[uses]-> helpers.go::HelperFromHelpers@3:6

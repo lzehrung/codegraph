@@ -13,9 +13,9 @@ file package_exports/__init__.py -> package_exports/values.py raw=.values
 file relative-imports.py -> helpers.py raw=.helpers
 file relative-imports.py -> utils.py raw=.utils
 file utils.py -> helpers.py raw=.helpers
-symbol .regressions/unicode_consumer.py::créer@import -[créer]-> .regressions/unicode_def.py::créer@2:5
-symbol .regressions/unicode_nfc_consumer.py::café@import -[café]-> .regressions/unicode_nfc_def.py::café@1:5
-symbol .regressions/unicode_nfd_consumer.py::café@import -[café]-> .regressions/unicode_nfd_def.py::café@1:5
+symbol .regressions/unicode_consumer.py::cr\u{e9}er@import -[cr\u{e9}er]-> .regressions/unicode_def.py::cr\u{e9}er@2:5
+symbol .regressions/unicode_nfc_consumer.py::cafe\u{301}@import -[cafe\u{301}]-> .regressions/unicode_nfc_def.py::caf\u{e9}@1:5
+symbol .regressions/unicode_nfd_consumer.py::caf\u{e9}@import -[caf\u{e9}]-> .regressions/unicode_nfd_def.py::cafe\u{301}@1:5
 symbol __init__.py::UtilityClass@import -[UtilityClass]-> utils.py::UtilityClass@5:7
 symbol __init__.py::another_helper@import -[another_helper]-> helpers.py::another_helper@5:5
 symbol __init__.py::helper_function@import -[helper_function]-> utils.py::helper_function@1:5

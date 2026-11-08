@@ -52,6 +52,7 @@ Results are not universal latency claims; compare the same root, revision, query
 - `npm run graph:snapshot:check`, part of `npm run check`, fails with the added and removed lines per file when the committed files are stale.
 - Every edge kind is recorded, `member_of` included. The graphs have no separate `contains` edges.
 - Lines are sorted by UTF-16 code unit. Paths are project-relative with `/`, and positions are 1-based `line:column`. No absolute paths, timestamps, or versions are recorded.
+- Characters outside printable ASCII are written as `\u{hex}`, so zero-width characters and precomposed versus combining accents are visible in the diff. Each file is plain ASCII.
 - Corpora are indexed with `cache: "off"`, one file at a time, and no native worker pool. The text must not depend on the machine, so a platform-only difference is a bug to fix, not a snapshot to regenerate.
 - Each `tests/edge-corpus` scenario is indexed as its own project, as `tests/edge-corpus.test.ts` does. The script fails when the corpora leave a registered language without an indexed file.
 
