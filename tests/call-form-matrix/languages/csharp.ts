@@ -22,6 +22,7 @@ import {
   CSHARP_INHERITED_ALIAS_CALL_CASES,
   csharpInheritedAliasCase,
 } from "../../helpers/csharp-inherited-alias-fixture.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
@@ -739,4 +740,5 @@ export const csharpCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "chain.cs", fromName: "Run" },
   },
+  typeParameterReceiverCell("csharp"),
 ];

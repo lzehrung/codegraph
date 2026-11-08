@@ -5,6 +5,7 @@ import {
   KOTLIN_QUALIFIED_TYPE_SOURCES,
 } from "../../helpers/qualified-type-import-fixture.js";
 import { KOTLIN_QUOTED_SCOPE_FILES, KOTLIN_QUOTED_SCOPE_SOURCES } from "../../helpers/kotlin-quoted-fixture.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const kotlinOmissions: readonly CallFormOmission[] = [];
@@ -505,4 +506,5 @@ export const kotlinCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "chain.kt", fromName: "run" },
   },
+  typeParameterReceiverCell("kotlin"),
 ];

@@ -3,6 +3,7 @@
  * `pythonOmissions` below states why one form has no cell.
  */
 import type { CallFormOmission, MatrixCell } from "../types.js";
+import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 
 export const pythonOmissions: readonly CallFormOmission[] = [
   {
@@ -292,4 +293,5 @@ export const pythonCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "use.py", fromName: "run" },
   },
+  typeParameterReceiverCell("python"),
 ];

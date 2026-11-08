@@ -120,8 +120,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 130 rebuilds detailed graphs that record interface inheritance as `extends` (now also for Java and TypeScript),
  * C# interfaces declared in other files as `implements`, Kotlin interfaces as interface symbols, and each type's base
  * clause from its own declaration instead of a nested type's.
- * Epoch 131 rebuilds symbols that mark a generic type parameter, so a same-named type parameter no longer stands for a
- * class or type that declares members.
+ * Epoch 131 rebuilds symbols that mark a generic type parameter and the detailed graphs whose receiver calls resolved a
+ * type-parameter receiver to a same-named class.
  */
 export const CORE_ALGORITHM_EPOCH = 131;
 /**

@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -343,3 +344,5 @@ describe("TSX named function expression self-binding", () => {
     }
   });
 });
+
+describeTypeParameterReceiverRows("tsx", "TSX type parameter beside a same-named class");

@@ -1,4 +1,5 @@
 import os from "node:os";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
@@ -2284,3 +2285,5 @@ describe("Python inherited and replaced property navigation", () => {
     expect(outcome.referenceLines).toEqual(expect.arrayContaining([2, 4]));
   });
 });
+
+describeTypeParameterReceiverRows("python", "Python PEP 695 type parameter beside a same-named class");

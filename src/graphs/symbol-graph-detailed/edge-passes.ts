@@ -25,11 +25,8 @@ import {
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
-import {
-  bindsTypeParameter,
-  csharpQualifiedNameNode,
-  findClosestScopeBinding,
-} from "../../indexer/navigation-local.js";
+import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/navigation-local.js";
+import { bindsTypeParameter } from "../../indexer/type-parameters.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
 import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
@@ -701,10 +698,10 @@ function resolveNamedType(
     const qualified = context.resolveMemberChainTarget(node);
     return qualified && declaresMembers(qualified) ? qualified : null;
   }
+  // A type parameter shadows a same-named class, and it declares no members.
+  if (bindsTypeParameter(name, node, context.source, context.sup)) return null;
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
-  // A type parameter shadows a same-named class, and it declares no members.
-  if (bindsTypeParameter(context.scopeIndex, name, node, context.sup)) return null;
   // A parameter/annotation type name is a closer scope binding than the class it names.
   const normalized = context.sup.normalizeIdentifier(name);
   const typed = context.moduleEntry.locals.filter(

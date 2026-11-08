@@ -26,11 +26,7 @@ import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
-import {
-  expectTypeParameterReceiverRow,
-  TYPE_PARAMETER_RECEIVER_CACHE_MODES,
-  TYPE_PARAMETER_RECEIVER_ROWS,
-} from "../helpers/type-parameter-receiver-fixture.js";
+import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
@@ -2334,15 +2330,4 @@ describe("Kotlin interface inheritance", () => {
     }
   });
 });
-
-describe("Kotlin type parameter beside a same-named class", () => {
-  const rows = TYPE_PARAMETER_RECEIVER_ROWS.filter((row) => row.language === "kotlin");
-  for (const mode of TYPE_PARAMETER_RECEIVER_CACHE_MODES) {
-    it.each(rows.map((row, position) => ({ row, position })))(
-      `resolves the class's members and never selects them through a type-parameter receiver (${mode}, row $position)`,
-      async ({ row }) => {
-        await expectTypeParameterReceiverRow(row, mode);
-      },
-    );
-  }
-});
+describeTypeParameterReceiverRows("kotlin", "Kotlin type parameter beside a same-named class");

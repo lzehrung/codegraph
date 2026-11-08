@@ -33,6 +33,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { SymbolKind, type ImportBinding, type SymbolDef } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
+import { declaredNameNodes } from "./type-parameters.js";
 
 export type { Binding, BindingKind, Scope, ScopeIndex };
 
@@ -1235,10 +1236,8 @@ export function buildScopeIndexFromSource(
 
     if (row.typeParameterTypes?.has(node.type)) {
       // Generic type parameters bind in the current type or function scope rather than
-      // skipping past it like field declarations do. Grammars without a `name` field
-      // (Kotlin) declare the parameter with its first identifier child.
-      const name = node.childForFieldName("name") ?? node.namedChildren.find((child) => idSet.has(child.type));
-      if (name) {
+      // skipping past it like field declarations do. One declaration can name several (Go `[K, V I]`).
+      for (const name of declaredNameNodes(node)) {
         addDecl(name, "type");
         preRegisteredNameSpans.add(nameSpanKey(name));
       }

@@ -82,13 +82,13 @@ import {
   csharpLookupName,
   csharpQualifiedThroughGenericOwner,
   csharpQualifiedNameNode,
-  bindsTypeParameter,
   findClosestScopeBinding,
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import { csharpTypeOnlyName } from "./scope-nodes.js";
+import { bindsTypeParameter, typeParameterNamesInScope } from "./type-parameters.js";
 import {
   isAmbiguousResolutionReason,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
@@ -163,29 +163,6 @@ function qualifiedDeclaredTypeText(typeName: SyntaxNodeLike, source: string): st
     text = text.replace(/<[^<>]*>/g, "");
   }
   return text;
-}
-
-/** Type-parameter list nodes across the TypeScript, Java, C#, and Kotlin grammars. */
-const TYPE_PARAMETER_LIST_TYPES: Readonly<Record<string, true>> = {
-  type_parameters: true,
-  type_parameter_list: true,
-};
-
-/** Names of the generic type parameters declared by `node` and its enclosing declarations. */
-function typeParameterNamesInScope(node: SyntaxNodeLike, source: string): Set<string> {
-  const names = new Set<string>();
-  for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
-    for (const list of current.namedChildren) {
-      if (!TYPE_PARAMETER_LIST_TYPES[list.type]) continue;
-      for (const parameter of list.namedChildren) {
-        const name =
-          parameter.childForFieldName("name") ??
-          parameter.namedChildren.find((child) => child.type === "identifier" || child.type === "type_identifier");
-        if (name) names.add(sliceText(name, source));
-      }
-    }
-  }
-  return names;
 }
 
 export function supportsDeclaredFieldChains(languageId: string): boolean {
@@ -3310,7 +3287,7 @@ async function resolveReceiverDefinition(
       }
     }
     const typeName = sliceText(constructor, source);
-    if (bindsTypeParameter(getScopeIndex(), typeName, constructor, sup)) return null;
+    if (bindsTypeParameter(typeName, constructor, source, sup)) return null;
     const typedLocals = memberDeclaringLocals(mod, typeName, sup.normalizeIdentifier);
     if (typedLocals.length === 1) {
       return {
