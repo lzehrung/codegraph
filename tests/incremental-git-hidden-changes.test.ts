@@ -1071,6 +1071,73 @@ describe("a case-only rename on a case-insensitive file system", () => {
       resetFileIdentityCaseSensitivityForTests(false);
       expect(respell({ "/p/src/Foo.ts": entry }, ["/p/src/foo.ts"], ["/p/src/FOO.ts"])).toEqual(none);
     });
+
+    describe("the exact-spelling check that precedes case folding", () => {
+      /** A listing that counts how often it is read: the exact-spelling check reads it once, the folding pass again. */
+      const countedListing = (files: readonly string[]) => {
+        const reads = { count: 0 };
+        const listing: Iterable<string> = {
+          [Symbol.iterator]() {
+            reads.count += 1;
+            return files[Symbol.iterator]();
+          },
+        };
+        return { listing, reads };
+      };
+      const settle = (
+        entries: Record<string, ManifestFileEntry>,
+        files: readonly string[],
+        candidates: string[] = [],
+      ) => {
+        const { listing, reads } = countedListing(files);
+        const found = findRespelledTrackedFiles(entries, listing, (file) => files.includes(file), candidates);
+        return { found, reads: reads.count };
+      };
+
+      it("finds nothing in one read of the listing when every key and candidate is listed and no spelling collides", () => {
+        resetFileIdentityCaseSensitivityForTests(true);
+        const listed = ["/p/README.md", "/p/src/Foo.ts", "/p/src/foo2.ts", "/p/src/main.ts"];
+        const entries = { "/p/src/Foo.ts": entry, "/p/src/main.ts": entry };
+        expect(settle(entries, listed, ["/p/src/Foo.ts", "/p/src/foo2.ts", "/p/README.md"])).toEqual({
+          found: none,
+          reads: 1,
+        });
+      });
+
+      it.each([
+        ["uppercase spelling first", ["/p/src/Foo.ts", "/p/src/foo.ts"], "/p/src/Foo.ts", "/p/src/foo.ts"],
+        ["lowercase spelling first", ["/p/src/foo.ts", "/p/src/Foo.ts"], "/p/src/foo.ts", "/p/src/Foo.ts"],
+        ["two uppercase spellings", ["/p/src/FOO.ts", "/p/src/Foo.ts"], "/p/src/FOO.ts", "/p/src/Foo.ts"],
+      ])("does not settle a listing that spells a path twice (%s)", (_name, listed, earlier, later) => {
+        resetFileIdentityCaseSensitivityForTests(true);
+        // Every key is listed verbatim, yet the later listed spelling replaces the earlier one, as in a cold build.
+        expect(settle({ [earlier]: entry }, listed)).toEqual({
+          found: {
+            retiredTrackedFiles: [earlier],
+            respelledFiles: [later],
+            droppedSpellings: new Set([earlier]),
+          },
+          reads: 2,
+        });
+        // A candidate that names the earlier spelling is dropped although the listing holds it.
+        expect(settle({ [later]: entry }, listed, [earlier]).found).toEqual({
+          ...none,
+          droppedSpellings: new Set([earlier]),
+        });
+      });
+
+      it("lowercases a listed path to the identity the folding pass keys it by", () => {
+        resetFileIdentityCaseSensitivityForTests(true);
+        for (const file of [
+          "/p/src/Nested/C.ts",
+          "C:/Proj/Src/Foo.ts",
+          "//server/Share/Dir/File.TS",
+          "/p/src/readme.md",
+        ]) {
+          expect(fileIdentityKey(file)).toBe(file.toLowerCase());
+        }
+      });
+    });
   });
 });
 

@@ -710,12 +710,14 @@ export async function reconcileGitHiddenChanges(args: {
     submoduleSpellings ??= new Set(submoduleFiles);
     return submoduleSpellings.has(file);
   };
-  const respelled = findRespelledTrackedFiles(
-    args.trackedEntries,
-    chainPaths(args.signals.listedFiles(), submoduleFiles),
-    isCurrentSpelling,
-    args.gitCandidates,
-  );
+  // Iterated more than once: the exact-spelling check reads it, and so does the folding pass.
+  const listedFiles: Iterable<string> = {
+    *[Symbol.iterator]() {
+      yield* args.signals.listedFiles();
+      yield* submoduleFiles;
+    },
+  };
+  const respelled = findRespelledTrackedFiles(args.trackedEntries, listedFiles, isCurrentSpelling, args.gitCandidates);
   for (const key of respelled.retiredTrackedFiles) delete args.trackedEntries[key];
 
   const verified = new Set(
@@ -749,8 +751,29 @@ export async function reconcileGitHiddenChanges(args: {
   };
 }
 
-function* chainPaths(...sources: Iterable<string>[]): Generator<string> {
-  for (const source of sources) yield* source;
+/**
+ * Whether the listing settles every spelling by exact lookups, so no path needs case folding: each manifest key and each
+ * candidate is listed verbatim, and no two listed paths differ only in case. Then no key is retired and no candidate
+ * dropped. Listed paths are `/`-separated, so lowercasing one is its `fileIdentityKey` on a case-insensitive file
+ * system. A path without an uppercase letter can collide only with one that has, which finds it by lookup; a listing
+ * without uppercase letters is checked by one lowercase pass and no allocation.
+ */
+function isSpellingSettled(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  listedFiles: Iterable<string>,
+  isListed: (file: string) => boolean,
+  candidates: readonly string[],
+): boolean {
+  if (!candidates.every((candidate) => isListed(candidate))) return false;
+  if (!Object.keys(trackedEntries).every((key) => isListed(key))) return false;
+  const lowercased = new Set<string>();
+  for (const file of listedFiles) {
+    const lowercase = file.toLowerCase();
+    if (lowercase === file) continue;
+    if (isListed(lowercase) || lowercased.has(lowercase)) return false;
+    lowercased.add(lowercase);
+  }
+  return true;
 }
 
 /**
@@ -770,8 +793,10 @@ function* chainPaths(...sources: Iterable<string>[]): Generator<string> {
  * spelling>` following a staged case rename). A cold build then keeps the last spelling it lists
  * (`normalizeIndexedFileInputs`), and so does this.
  *
- * The comparison is in memory, with no Git child and no stat. It case-folds every listed path once; keys and candidates
- * the listing spells itself are settled by an exact lookup.
+ * The comparison is in memory, with no Git child and no stat. An exact-spelling check (`isSpellingSettled`) settles the
+ * common update without case folding. Otherwise every listed path is case-folded once, and keys and candidates the
+ * listing spells itself are settled by an exact lookup. `listedFiles` is read twice then, so it must be re-iterable (a
+ * generator is not).
  */
 export function findRespelledTrackedFiles(
   trackedEntries: Record<string, ManifestFileEntry>,
@@ -779,9 +804,9 @@ export function findRespelledTrackedFiles(
   isListed: (file: string) => boolean,
   candidates: readonly string[] = [],
 ): { retiredTrackedFiles: string[]; respelledFiles: string[]; droppedSpellings: Set<string> } {
-  if (!isFileIdentityCaseInsensitive()) {
-    return { retiredTrackedFiles: [], respelledFiles: [], droppedSpellings: new Set() };
-  }
+  const unrespelled = { retiredTrackedFiles: [], respelledFiles: [], droppedSpellings: new Set<string>() };
+  if (!isFileIdentityCaseInsensitive()) return unrespelled;
+  if (isSpellingSettled(trackedEntries, listedFiles, isListed, candidates)) return unrespelled;
   const spellingByIdentity = new Map<string, string>();
   // Listed spellings that a later listed spelling of the same file replaces.
   const outranked = new Set<string>();
