@@ -153,7 +153,7 @@ export async function buildModuleRecord(input: ModuleRecordInput): Promise<Modul
       nativeQueries,
       ...logLevel,
     });
-    const angularJsFacts = extractAngularJsFileFacts(source);
+    const angularJsFacts = extractAngularJsFileFacts(source, tree);
     if (angularJsFacts) module.angularJsFacts = angularJsFacts;
     module.parseErrorRanges = collectParseErrorRanges(tree);
     module.nativeOutcome = "used";

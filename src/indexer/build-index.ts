@@ -850,7 +850,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     });
   }
   if (sup.id === "js" || sup.id === "ts" || sup.id === "tsx") {
-    const angularJsFacts = extractAngularJsFileFacts(source);
+    const angularJsFacts = extractAngularJsFileFacts(source, tree);
     if (angularJsFacts) mod.angularJsFacts = angularJsFacts;
   }
   mod.imports = imports;

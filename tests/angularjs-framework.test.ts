@@ -320,6 +320,13 @@ describe("AngularJS framework characterization", () => {
           edge.confidence === 0.8,
       ),
     ).toBe(true);
+    const injectedHttp = graph.edges.filter(
+      (edge) => edge.from === serviceFile && edge.resolved === "heuristic" && edge.raw === "$http",
+    );
+    expect(injectedHttp).toEqual([
+      expect.objectContaining({ to: { type: "external", name: "$http" }, confidence: 0.7 }),
+    ]);
+    expect(graph.edges.some((edge) => edge.raw === "$http: unknown")).toBe(false);
     expect(
       graph.edges.some(
         (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
@@ -503,6 +510,58 @@ describe("AngularJS framework characterization", () => {
     } finally {
       clearMemoryCache();
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { extension: "js", workers: false },
+    { extension: "ts", workers: false },
+    { extension: "tsx", workers: true },
+  ] as const)("reads .$extension injected names from syntax (workers=$workers)", async ({ extension, workers }) => {
+    const root = await mkTmpDir("cg-angularjs-parameters-");
+    const file = path.join(root, `injections.${extension}`);
+    const other = path.join(root, "other.js");
+    const cacheDir = `${root}-cache`;
+    const directParameters =
+      extension === "js"
+        ? "$http, opt, fallback = take(), { nested }, [ignored], ...rest"
+        : "this: Scope, $http: unknown, opt?: Service, fallback = take(), { nested }: Config, [ignored]: List, ...rest: unknown[]";
+    const componentParameters =
+      extension === "js"
+        ? "$scope, selected, defaulted = take()"
+        : "$scope: Scope, selected?: Choice, defaulted = take()";
+    const inlineParameter = extension === "js" ? "$q" : "$q: unknown";
+    const source = [
+      `angular.module('admin').service('example', function example(${directParameters}) {});`,
+      `angular.module('admin').component('card', { controller: function(${componentParameters}) {} });`,
+      `angular.module('admin').factory('inline', ['$q', function inline(${inlineParameter}) {}]);`,
+      "function Named() {}",
+      "Named.$inject = ['$timeout'];",
+      "angular.module('admin').controller('Named', Named);",
+      "",
+    ].join("\n");
+    const names = ["$http", "opt", "fallback", "rest", "$scope", "selected", "defaulted", "$q", "$timeout"];
+    const expected = names.map((name) => `injections.${extension} -> external:${name} raw=${name} confidence=0.7`);
+    const options: BuildOptions = { cache: "disk", cacheDir, useNativeWorkers: workers, nativeThreads: 1, threads: 1 };
+    try {
+      await fsp.writeFile(file, source);
+      await fsp.writeFile(other, "export const unrelated = 1;\n");
+      const cold = await buildProjectIndex(root, options);
+      const ownReferences = cold.byFile.get(fileIdentityKey(normalizePath(file)))?.angularJsFacts?.references ?? [];
+      expect(
+        ownReferences
+          .filter((reference) => reference.kind === "inject")
+          .map((reference) => reference.value)
+          .sort(),
+      ).toEqual([...names].sort());
+      await expectAngularJsGraph(root, cold, expected);
+      clearMemoryCache();
+      await fsp.writeFile(other, "export const unrelated = 2;\n");
+      await expectAngularJsGraph(root, await buildProjectIndexIncremental(root, options), expected);
+    } finally {
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
 });

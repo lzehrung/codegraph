@@ -1,3 +1,4 @@
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../util/identifiers.js";
 
 const ANGULAR_JS_IDENTIFIER_PATTERN = new RegExp(ECMASCRIPT_IDENTIFIER_SOURCE, "uy");
@@ -57,10 +58,10 @@ export function isAngularJsFileFacts(value: unknown): value is AngularJsFileFact
   return facts.registrations.every(isAngularJsRegistration) && facts.references.every(isAngularJsReference);
 }
 
-export function extractAngularJsFileFacts(source: string): AngularJsFileFacts | undefined {
+export function extractAngularJsFileFacts(source: string, tree?: SyntaxTreeLike): AngularJsFileFacts | undefined {
   if (!looksLikeAngularJsSource(source)) return undefined;
   const registrations = extractAngularJsRegistrations(source);
-  const references = extractAngularJsReferences(source);
+  const references = extractAngularJsReferences(source, tree);
   if (!registrations.length && !references.length) return undefined;
   return { registrations, references };
 }
@@ -390,12 +391,12 @@ const ANGULAR_JS_ARRAY_INJECTION_PATTERN = new RegExp(
 );
 
 const ANGULAR_JS_FUNCTION_INJECTION_PATTERN = new RegExp(
-  String.raw`\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"\x60]+)\2\s*,\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(([^)]*)\)`,
+  String.raw`\.\s*(controller|service|factory|directive|component|provider|filter)\s*\(\s*(['"])([^'"\x60]+)\2\s*,\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(`,
   "gsu",
 );
 
 const ANGULAR_JS_COMPONENT_CONTROLLER_PATTERN = new RegExp(
-  String.raw`\.\s*component\s*\(\s*(['"])([^'"\x60]+)\1\s*,\s*\{[\s\S]*?controller\s*:\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(([^)]*)\)`,
+  String.raw`\.\s*component\s*\(\s*(['"])([^'"\x60]+)\1\s*,\s*\{[\s\S]*?controller\s*:\s*function(?:\s+${ECMASCRIPT_IDENTIFIER_SOURCE})?\s*\(`,
   "gsu",
 );
 
@@ -408,7 +409,7 @@ const ANGULAR_JS_TEMPLATE_URL_PATTERN = /templateUrl\s*:\s*(['"`])([^'"`]+)\1/gs
 
 const ANGULAR_JS_CONTROLLER_REF_PATTERN = /controller\s*:\s*(['"])([^'"`]+)\1/gs;
 
-function looksLikeAngularJsSource(source: string): boolean {
+export function looksLikeAngularJsSource(source: string): boolean {
   // `angular.module(` (common) or `angular["module"](`/`angular['module'](` (bracket access,
   // e.g. from minified or lint-avoidance code) both register/retrieve an Angular module.
   return /angular\s*(?:\.\s*module|\[\s*(['"])module\1\s*\])\s*\(/.test(source);
@@ -437,15 +438,25 @@ function parseQuotedValues(value: string): string[] {
   return out;
 }
 
-function parseParameterNames(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => entry.replace(/^\.{3}/, ""))
-    .map((entry) => entry.replace(/\s*=.*$/, ""))
-    .map((entry) => entry.replace(/[\{\}\[\]]/g, "").trim())
-    .filter(Boolean);
+/** Use native parameter patterns, never the annotation or default-expression text, as injected names. */
+function functionParameterNames(match: RegExpMatchArray, tree: SyntaxTreeLike | undefined): string[] {
+  if (!tree || match.index === undefined) return [];
+  const functionStart = match.index + match[0].lastIndexOf("function");
+  const fn = tree.rootNode.descendantForIndex(functionStart, functionStart + "function".length);
+  if (fn.type !== "function_expression" || fn.startIndex !== functionStart) return [];
+  const parameters = fn.childForFieldName("parameters");
+  if (parameters?.type !== "formal_parameters") return [];
+  const names: string[] = [];
+  for (const parameter of parameters.namedChildren) {
+    let pattern: SyntaxNodeLike | null = parameter;
+    if (pattern.type === "required_parameter" || pattern.type === "optional_parameter") {
+      pattern = pattern.childForFieldName("pattern");
+    }
+    if (pattern?.type === "assignment_pattern") pattern = pattern.childForFieldName("left");
+    if (pattern?.type === "rest_pattern") pattern = pattern.namedChildren[0] ?? null;
+    if (pattern?.type === "identifier" && pattern.text !== "this") names.push(pattern.text);
+  }
+  return names;
 }
 
 function pushUnique(target: string[], seen: Set<string>, value: string): void {
@@ -470,7 +481,7 @@ export function extractAngularJsRegistrations(source: string): AngularJsRegistra
   return out;
 }
 
-export function extractAngularJsReferences(source: string): AngularJsReference[] {
+export function extractAngularJsReferences(source: string, tree?: SyntaxTreeLike): AngularJsReference[] {
   if (!looksLikeAngularJsSource(source)) return [];
 
   const out: AngularJsReference[] = [];
@@ -502,12 +513,12 @@ export function extractAngularJsReferences(source: string): AngularJsReference[]
     }
   }
   for (const match of source.matchAll(ANGULAR_JS_FUNCTION_INJECTION_PATTERN)) {
-    for (const value of parseParameterNames(match[4] ?? "")) {
+    for (const value of functionParameterNames(match, tree)) {
       pushUnique(injectionTokens, injectionSeen, value);
     }
   }
   for (const match of source.matchAll(ANGULAR_JS_COMPONENT_CONTROLLER_PATTERN)) {
-    for (const value of parseParameterNames(match[3] ?? "")) {
+    for (const value of functionParameterNames(match, tree)) {
       pushUnique(injectionTokens, injectionSeen, value);
     }
   }

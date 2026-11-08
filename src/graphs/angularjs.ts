@@ -1,13 +1,18 @@
 import fsp from "node:fs/promises";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import { extractAngularJsFileFacts, type AngularJsFileFacts } from "../frameworks/angularjs.js";
+import {
+  extractAngularJsFileFacts,
+  looksLikeAngularJsSource,
+  type AngularJsFileFacts,
+} from "../frameworks/angularjs.js";
 import type { ModuleIndex } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import { uniqueEdgePusher } from "../util/graph-edges.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { resolveSpecifier } from "../util/resolution.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
+import { parseSyntaxTree } from "../util/syntax-tree.js";
 
 type AngularJsFileContext = {
   file: string;
@@ -35,7 +40,8 @@ export async function collectAngularJsFrameworkEdges(
     for (const file of files) {
       const support = supportForFileWithoutHeaderSample(file);
       if (!support || !ANGULAR_JS_LANGUAGE_IDS.has(support.id)) continue;
-      let source = parsed?.get(fileIdentityKey(file))?.source;
+      const parsedFile = parsed?.get(fileIdentityKey(file));
+      let source = parsedFile?.source;
       if (source === undefined) {
         try {
           source = await fsp.readFile(file, "utf8");
@@ -43,7 +49,9 @@ export async function collectAngularJsFrameworkEdges(
           continue;
         }
       }
-      const facts = extractAngularJsFileFacts(source);
+      if (!looksLikeAngularJsSource(source)) continue;
+      const tree = parsedFile?.tree ?? parseSyntaxTree(source, support).tree ?? undefined;
+      const facts = extractAngularJsFileFacts(source, tree);
       if (facts) contexts.push({ file, facts });
     }
   }
