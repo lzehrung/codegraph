@@ -192,6 +192,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - `record` is a class-kind symbol with positional components as variable locals, not fields; renaming a constructor is a definition change.
 - A package-private member called from another package (a compile error) is not rejected.
+- `super` calls inside an anonymous class body (`new Base() { ... super.baseMethod() ... }`) do not resolve: go-to-definition returns `not_found`, the detailed graph records no call edge, and references to the base member omit them. The enclosing type is never read as the anonymous class's owner.
 - A top-level type without `public` is visible only in its own package.
 - Wildcard imports bind only top-level package types, never Kotlin functions, class methods, enum constants, or nested types.
 
@@ -258,6 +259,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ## Kotlin
 
 - The native grammar is a pinned fork of `tree-sitter-kotlin-ng` with upstream parser fixes, including multi-dollar strings (`$$"..."`, whose `$${name}` and `$$name` templates are references and whose shorter runs of dollars are text) and collection literals (`[]`). No Kotlin form that the corpus checks leave unparsed is known; a file that still ends in an `ERROR` declares only the names read before it, and its references stay `partial`.
+- `super` calls inside an anonymous object body (`object : Base(...) { ... super.member() ... }`) do not resolve: go-to-definition returns `not_found`, the detailed graph records no call edge, and references to the base member omit them. The enclosing type is never read as the anonymous object's owner.
 - Package and import lookups read each file's top-level names from its syntax tree. A function is declared under its own name, an extension or generic one included, never under its receiver type, and a name that two files declare stays unresolved. A file with an `ERROR` at the top of its tree is incomplete (see Same-package peers). A declaration the grammar misreads without an `ERROR` (one after `context(...)` receivers, or after a combining mark inside an identifier) is not a package name, so an import of it does not resolve to its file. Kotlin backticks do not change identifier identity: quoted and plain names match in package segments, imports, navigation, references, and graph edges, including Java imports of Kotlin classes. Stored source spelling and ranges stay unchanged.
 - Declared and constructed receiver proofs treat quoted and plain value names as one binding, so a value named like a class does not become its companion receiver.
 - `buildSymbolGraphDetailed` keeps imported type uses in `user_type` positions beside same-named value bindings. Expression aliases must survive positioned name lookup, including inherited-member lookup, before they create `uses` edges; type-only `goToDefinition` beside a value binding is not covered by this graph rule.
