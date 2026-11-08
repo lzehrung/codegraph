@@ -52,6 +52,9 @@ jobs:
       - name: Check fixture matrix snapshot
         run: npm run bench:fixtures:check
 
+      - name: Check graph edge snapshot
+        run: npm run graph:snapshot:check
+
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json
   build-and-test-source:

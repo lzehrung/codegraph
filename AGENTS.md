@@ -76,6 +76,8 @@ using syntax and facts proven from source. It must not emulate the full language
 - A fix for a call form adds or updates its cell in `tests/call-form-matrix/`, with the expected
   declaration and a same-named decoy. Regenerate `docs/coverage/call-forms.md` with
   `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
+- When a change alters resolved edges, regenerate `tests/snapshots/graph-edges` with
+  `npm run graph:snapshot` and review the diff. `npm run check` fails while the snapshot is stale.
 
 - Required in every language that claims a capability:
   - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members
