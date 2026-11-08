@@ -64,6 +64,8 @@ An index build answers the file, directory, and real-path questions of resolutio
 
 The resulting file nodes and typed edges are stored with forward and reverse adjacency indexes. That graph powers `graph`, `deps`, `rdeps`, `path`, `cycles`, unresolved-import checks, and the dependency portion of higher-level analysis. Mermaid, DOT, JSON, and SQLite are output views of the same graph model.
 
+For JavaScript, TypeScript, and TSX files using `angular.module(...)`, the index stores only each file's AngularJS registrations and references. Graph assembly resolves controller and dependency-injection names against registrations across all indexed files and resolves `templateUrl` paths then; cold builds, incremental updates, and `collectGraph` over the whole project therefore produce the same heuristic edges. A changed or deleted registration updates existing references without re-extracting their unchanged modules, and those framework edges are derived from module facts rather than retained in per-file manifest edges.
+
 ## Semantic navigation and impact
 
 The semantic index links definitions, scopes, exports, imports, and resolved calls. `goto`, `refs`, workspace symbols, call and type hierarchies, implementations, and impact read that index. Results use one snapshot and project-relative locations.

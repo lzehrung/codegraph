@@ -1,6 +1,7 @@
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import crypto from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
+import { isAngularJsFileFacts } from "../../frameworks/angularjs.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 
@@ -440,6 +441,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
     file?: unknown;
+    angularJsFacts?: unknown;
     csharpNamespaceFacts?: unknown;
     jvmFacts?: unknown;
     phpDeclarationNames?: unknown;
@@ -454,6 +456,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   };
   return (
     typeof mod.file === "string" &&
+    (mod.angularJsFacts === undefined || isAngularJsFileFacts(mod.angularJsFacts)) &&
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
     isOptionalNativeOutcome(mod.nativeOutcome) &&
     (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&

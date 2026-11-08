@@ -137,7 +137,7 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
  * binds a call to the method, and a plain read to the field or property, that share a name.
  */
-export const CORE_ALGORITHM_EPOCH = 137;
+export const CORE_ALGORITHM_EPOCH = 138;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

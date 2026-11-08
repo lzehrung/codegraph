@@ -26,6 +26,45 @@ export type AngularJsReference =
   | { kind: "controller"; value: string }
   | { kind: "inject"; value: string };
 
+/** Own-file AngularJS facts. Registration targets are resolved only when the project graph is assembled. */
+export type AngularJsFileFacts = {
+  registrations: AngularJsRegistration[];
+  references: AngularJsReference[];
+};
+
+function isAngularJsRegistration(value: unknown): value is AngularJsRegistration {
+  if (!value || typeof value !== "object") return false;
+  const registration = value as Partial<AngularJsRegistration>;
+  return (
+    typeof registration.kind === "string" &&
+    parseRegistrationKind(registration.kind) !== undefined &&
+    typeof registration.name === "string"
+  );
+}
+
+function isAngularJsReference(value: unknown): value is AngularJsReference {
+  if (!value || typeof value !== "object") return false;
+  const reference = value as Partial<AngularJsReference>;
+  const isKnownKind =
+    reference.kind === "templateUrl" || reference.kind === "controller" || reference.kind === "inject";
+  return isKnownKind && typeof reference.value === "string";
+}
+
+export function isAngularJsFileFacts(value: unknown): value is AngularJsFileFacts {
+  if (!value || typeof value !== "object") return false;
+  const facts = value as Partial<AngularJsFileFacts>;
+  if (!Array.isArray(facts.registrations) || !Array.isArray(facts.references)) return false;
+  return facts.registrations.every(isAngularJsRegistration) && facts.references.every(isAngularJsReference);
+}
+
+export function extractAngularJsFileFacts(source: string): AngularJsFileFacts | undefined {
+  if (!looksLikeAngularJsSource(source)) return undefined;
+  const registrations = extractAngularJsRegistrations(source);
+  const references = extractAngularJsReferences(source);
+  if (!registrations.length && !references.length) return undefined;
+  return { registrations, references };
+}
+
 type AngularJsTokenKind = "identifier" | "string" | "punctuation";
 
 type AngularJsToken = {

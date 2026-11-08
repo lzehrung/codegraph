@@ -45,6 +45,8 @@ import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { runWithProbeCache } from "../util/fs-probe-cache.js";
 import { logWithLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
+import { extractAngularJsFileFacts } from "../frameworks/angularjs.js";
+import { collectAngularJsFrameworkEdges } from "../graphs/angularjs.js";
 import { collectEdgesForFile, type FileEdgeSource } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
@@ -846,6 +848,10 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     });
+  }
+  if (sup.id === "js" || sup.id === "ts" || sup.id === "tsx") {
+    const angularJsFacts = extractAngularJsFileFacts(source);
+    if (angularJsFacts) mod.angularJsFacts = angularJsFacts;
   }
   mod.imports = imports;
   if (tree instanceof ProjectedSyntaxTree) {
@@ -2261,6 +2267,9 @@ async function buildIndexFromFileListInProbeCache(
         ),
     });
     appendUniqueGraphEdges(workspaceManifestEdges);
+    appendUniqueGraphEdges(
+      await collectAngularJsFrameworkEdges(projectRoot, normalizedFiles, workspaceConfig, undefined, modules.values()),
+    );
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
     for (const jsonPath of jsonDependencies.values()) {
       ensureJsonModule(modules, jsonPath);
@@ -3597,28 +3606,26 @@ async function buildProjectIndexIncrementalInProbeCache(
       }
       const filesList = Array.from(changedFiles);
       const graphStart = performance.now();
-      const graph =
-        !filesList.length && baseGraph
-          ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
-          : await collectGraph(projectRoot, filesList, {
-              parsed: parsedMap,
-              resolveNodeModules: !!graphOptions.resolveNodeModules,
-              dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-              ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-              threads: conc,
-              ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-              ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
-              allFiles: Array.from(allFiles),
-              fileSignatures,
-              cachedFileEdges: cachedGraphEntries,
-              ...(baseGraph ? { baseGraph } : {}),
-              replaceFiles: new Set<string>(changedFiles),
-              onFileEdges: (file, entry) => {
-                const manifestEntry = toManifestFileEntry(entry);
-                if (!manifestEntry) return;
-                manifestEntries.set(file, manifestEntry);
-              },
-            });
+      const graph = await collectGraph(projectRoot, filesList, {
+        parsed: parsedMap,
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        threads: conc,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+        allFiles: Array.from(allFiles),
+        fileSignatures,
+        cachedFileEdges: cachedGraphEntries,
+        ...(baseGraph ? { baseGraph } : {}),
+        replaceFiles: new Set<string>(changedFiles),
+        angularJsModules: modules.values(),
+        onFileEdges: (file, entry) => {
+          const manifestEntry = toManifestFileEntry(entry);
+          if (!manifestEntry) return;
+          manifestEntries.set(file, manifestEntry);
+        },
+      });
       if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
       for (const file of new Set([...changedFiles, ...transientFiles])) {
         const signature = fileSignatures.get(file);

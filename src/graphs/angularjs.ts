@@ -1,7 +1,8 @@
 import fsp from "node:fs/promises";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
-import { extractAngularJsReferences, extractAngularJsRegistrations } from "../frameworks/angularjs.js";
+import { extractAngularJsFileFacts, type AngularJsFileFacts } from "../frameworks/angularjs.js";
+import type { ModuleIndex } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 import { uniqueEdgePusher } from "../util/graph-edges.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -10,7 +11,7 @@ import { type WorkspaceConfig } from "../util/workspace.js";
 
 type AngularJsFileContext = {
   file: string;
-  source: string;
+  facts: AngularJsFileFacts;
 };
 
 // Languages whose source can hold AngularJS registrations. `.jsx`, `.mjs`, and `.cjs` resolve
@@ -23,32 +24,34 @@ export async function collectAngularJsFrameworkEdges(
   files: string[],
   workspaceConfig: WorkspaceConfig | undefined,
   parsed?: Map<string, ParsedFileContext>,
+  modules?: Iterable<Pick<ModuleIndex, "file" | "angularJsFacts">>,
 ): Promise<Edge[]> {
-  const jsFiles = files.filter((file) => {
-    const support = supportForFileWithoutHeaderSample(file);
-    return support !== undefined && ANGULAR_JS_LANGUAGE_IDS.has(support.id);
-  });
-  if (!jsFiles.length) return [];
-
   const contexts: AngularJsFileContext[] = [];
-  for (const file of jsFiles) {
-    const parsedSource = parsed?.get(fileIdentityKey(file))?.source;
-    if (parsedSource !== undefined) {
-      contexts.push({ file, source: parsedSource });
-      continue;
+  if (modules) {
+    for (const module of modules) {
+      if (module.angularJsFacts) contexts.push({ file: module.file, facts: module.angularJsFacts });
     }
-
-    try {
-      const source = await fsp.readFile(file, "utf8");
-      contexts.push({ file, source });
-    } catch {
-      continue;
+  } else {
+    for (const file of files) {
+      const support = supportForFileWithoutHeaderSample(file);
+      if (!support || !ANGULAR_JS_LANGUAGE_IDS.has(support.id)) continue;
+      let source = parsed?.get(fileIdentityKey(file))?.source;
+      if (source === undefined) {
+        try {
+          source = await fsp.readFile(file, "utf8");
+        } catch {
+          continue;
+        }
+      }
+      const facts = extractAngularJsFileFacts(source);
+      if (facts) contexts.push({ file, facts });
     }
   }
+  if (!contexts.length) return [];
 
   const registrationFilesByName = new Map<string, Set<string>>();
   for (const context of contexts) {
-    for (const registration of extractAngularJsRegistrations(context.source)) {
+    for (const registration of context.facts.registrations) {
       let filesForName = registrationFilesByName.get(registration.name);
       if (!filesForName) {
         filesForName = new Set<string>();
@@ -63,7 +66,7 @@ export async function collectAngularJsFrameworkEdges(
 
   for (const context of contexts) {
     const normalizedFile = context.file.replace(/\\/g, "/");
-    const references = extractAngularJsReferences(context.source);
+    const references = context.facts.references;
     for (const reference of references) {
       if (reference.kind === "templateUrl") {
         const resolved = await resolveSpecifier(context.file, reference.value, projectRoot, undefined, workspaceConfig);
