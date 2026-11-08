@@ -2883,8 +2883,22 @@ async function resolveDeclaredBase(
 }
 
 /**
+ * Whether a supertype outside the project, spelled `spelling` in `module`, is a known external type that lacks the
+ * member being looked up. A hierarchy walk that meets such a supertype keeps going instead of giving up.
+ */
+export type ExternalBaseOmits = (spelling: string, module: ModuleIndex) => boolean;
+
+/** The dotted source of a base an external type table may know; null for a base that names no type. */
+function declaredBaseSpelling(base: DeclaredBaseType): string | null {
+  if (base.kind === "simple") return base.name;
+  if (base.kind === "qualified") return [base.base, ...base.path].join(".");
+  return null;
+}
+
+/**
  * True when `def` and every resolved supertype lack a direct `memberName`. An unresolved
- * supertype, an unreadable declaration, or a declared member returns false.
+ * supertype, an unreadable declaration, or a declared member returns false, unless `externalBaseOmits` knows the
+ * unresolved supertype and says it lacks the name.
  */
 async function hierarchyOmitsMember(
   index: ProjectIndex,
@@ -2892,6 +2906,7 @@ async function hierarchyOmitsMember(
   memberName: string,
   memberScope: ReceiverMemberScope,
   seen: Set<string>,
+  externalBaseOmits?: ExternalBaseOmits,
 ): Promise<boolean> {
   const containerDef = asMemberContainer(index, def);
   if (!containerDef) return false;
@@ -2901,7 +2916,7 @@ async function hierarchyOmitsMember(
   seen.add(key);
   const ref = await keywordClassRefFromDef(index, containerDef);
   if (!ref) return false;
-  return containerOmitsMember(index, ref, memberName, memberScope, seen);
+  return containerOmitsMember(index, ref, memberName, memberScope, seen, externalBaseOmits);
 }
 
 /** `hierarchyOmitsMember` for a declaration body already in hand: its own members, then every base. */
@@ -2911,6 +2926,7 @@ async function containerOmitsMember(
   memberName: string,
   memberScope: ReceiverMemberScope,
   seen: Set<string>,
+  externalBaseOmits?: ExternalBaseOmits,
 ): Promise<boolean> {
   const normalize = ref.context.sup.normalizeIdentifier;
   const memberPredicate =
@@ -2939,10 +2955,61 @@ async function containerOmitsMember(
   const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, index, ref.module, false);
   for (const base of bases) {
     const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
-    if (!baseDef) return false;
-    if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
+    if (!baseDef) {
+      const spelling = declaredBaseSpelling(base);
+      if (spelling && externalBaseOmits?.(spelling, ref.module)) continue;
+      return false;
+    }
+    if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen, externalBaseOmits))) return false;
   }
   return true;
+}
+
+/**
+ * Whether the class-like declaration `from` is the one whose container starts at `target.containerStart` in
+ * `target.file`, or derives from it through supertypes the project resolves. "unknown" when a class on the way has a
+ * supertype that is not a project declaration, since the walk cannot say what that supertype extends.
+ */
+export async function declarationReaches(
+  index: ProjectIndex,
+  from: SymbolDef,
+  target: { file: string; containerStart: number },
+): Promise<"yes" | "no" | "unknown"> {
+  const targetFile = fileIdentityKey(target.file);
+  const seen = new Set<string>();
+  let unknown = false;
+  const reaches = async (def: SymbolDef): Promise<boolean> => {
+    const containerDef = asMemberContainer(index, def);
+    const ref = containerDef ? await keywordClassRefFromDef(index, containerDef) : null;
+    if (!ref) {
+      unknown = true;
+      return false;
+    }
+    if (fileIdentityKey(ref.file) === targetFile && ref.container.startIndex === target.containerStart) return true;
+    const key = keywordContainerKey(ref.file, ref.container);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) {
+      unknown = true;
+      return false;
+    }
+    const bases = collectDeclaredBaseTypes(
+      ref.container,
+      ref.context.source,
+      ref.context.sup,
+      index,
+      ref.module,
+      false,
+    );
+    for (const base of bases) {
+      const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
+      if (!baseDef) unknown = true;
+      else if (await reaches(baseDef)) return true;
+    }
+    return false;
+  };
+  if (await reaches(from)) return "yes";
+  return unknown ? "unknown" : "no";
 }
 
 /**
@@ -3638,15 +3705,19 @@ export type ReceiverTypeMember =
 /**
  * Looks `member` up on `receiver`, the type of an implicit receiver, the way an explicit receiver of that type is
  * looked up: the type's own and inherited members, then extensions declared beside it. A miss is `omitted` only when
- * the whole hierarchy is indexed and lacks the name, so the caller may continue to the next receiver.
+ * the whole hierarchy is indexed and lacks the name, so the caller may continue to the next receiver. Whether the
+ * member found is visible at `use` is the caller's question: an inaccessible member is still `member` here. `memberUse`
+ * tells a call, which prefers methods and invokable properties, from a read, as it does for an explicit receiver.
  */
-export async function lookupReceiverTypeMember(
+export async function findReceiverTypeMember(
   index: ProjectIndex,
   mod: ModuleIndex,
   use: SyntaxNodeLike,
   receiver: SymbolDef,
   member: string,
   argumentCount: number | undefined,
+  externalBaseOmits?: ExternalBaseOmits,
+  memberUse?: "call" | "value",
 ): Promise<ReceiverTypeMember> {
   const unproven: ReceiverTypeMember = { status: "unproven" };
   if (!declaresMembers(receiver)) return unproven;
@@ -3666,6 +3737,7 @@ export async function lookupReceiverTypeMember(
     argumentCount,
     receiver,
     report,
+    memberUse,
   );
   if (!found && !report.named) {
     found = await findReceiverMemberDefinition(
@@ -3680,18 +3752,13 @@ export async function lookupReceiverTypeMember(
       argumentCount,
     );
   }
-  if (found) {
-    const foundContext =
-      fileIdentityKey(found.file) === fileIdentityKey(receiver.file)
-        ? context
-        : await ensureParsedContextForIndex(index, found.file);
-    return crossFilePeerMemberHidden(mod.file, found, foundContext) ? unproven : { status: "member", member: found };
-  }
+  if (found) return { status: "member", member: found };
   if (report.named) return unproven;
   const anyName = normalizeKotlinIdentifier(member);
   const anyArity = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, anyName) ? KOTLIN_ANY_MEMBER_ARITY[anyName] : undefined;
   if (anyArity !== undefined && (argumentCount === undefined || argumentCount === anyArity)) return unproven;
-  return (await hierarchyOmitsMember(index, receiver, member, "any", new Set())) ? { status: "omitted" } : unproven;
+  const omits = await hierarchyOmitsMember(index, receiver, member, "any", new Set(), externalBaseOmits);
+  return omits ? { status: "omitted" } : unproven;
 }
 
 /**

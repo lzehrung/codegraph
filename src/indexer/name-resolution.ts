@@ -29,7 +29,7 @@ import {
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
-import { declaredInTypeBody, kotlinLambdaReceiverVerdict, type LambdaReceiverCache } from "./kotlin-lambda-receiver.js";
+import { kotlinLambdaReceiverVerdict, type LambdaReceiverCache } from "./kotlin-lambda-receiver.js";
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
@@ -286,12 +286,14 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
 /**
  * What the lambdas around a Kotlin bare call decide: a member of the closest receiver that declares the name, or
  * `undefined` when no receiver claims it and the lookup goes on. A receiver whose members are not indexed may declare
- * the name, which hides a member of the enclosing type, so such a call has no target. A file-level function stays the
- * answer: only a same-named member of the unseen receiver would hide it, and nothing indexed says whether one exists.
+ * the name, which hides a member of the enclosing type, so such a call has no target; a file-level function stays the
+ * answer, because only a same-named member of the unseen receiver would hide it and nothing indexed says whether one
+ * exists. A known external receiver that declares or extends the name hides every project declaration of it, and so
+ * does a project receiver's property that its type may make callable.
  */
 async function settleKotlinLambdaReceiver(
   use: BareNameUse,
-  lookupName: string,
+  request: { lookupName: string; lambdas: readonly SyntaxNodeLike[] },
   fallback: NameResolution | null,
   options: SettleNameOptions,
 ): Promise<GoToResult | null | undefined> {
@@ -304,18 +306,15 @@ async function settleKotlinLambdaReceiver(
       resolveTypeName: resolveJvmTypeName,
       classified: options.lambdaReceivers ?? new Map(),
     },
-    { node, name: lookupName },
+    { node, name: request.lookupName, lambdas: request.lambdas },
   );
   if (verdict.status === "none") return undefined;
   if (verdict.status === "member") {
-    // As for an implicit-self member, the graph records no edge for a call its target cannot accept.
-    const rejected =
-      options.requireAcceptedArity && !memberAcceptsCallAt(index, verdict.member, node, parsed.source, parsed.sup.id);
-    if (rejected) return null;
     return okGoToResult(index, verdict.member, { resolution: "member-access", confidence: "medium" });
   }
+  if (verdict.status === "shadowed") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
   const candidate = await settleNameResolution(use, fallback, options);
-  if (candidate?.status !== "ok" || !(await declaredInTypeBody(index, candidate.definition))) return candidate;
+  if (candidate?.status !== "ok" || !candidate.definition.isMember) return candidate;
   return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
 }
 
@@ -368,7 +367,7 @@ export async function settleNameResolution(
       const nested = await resolveSwiftNestedTypePath(index, request.owner, request.names);
       if (nested) return okGoToResult(index, nested, { resolution: "member-access", confidence: "medium" });
     } else if (request.kind === "kotlin-lambda-receiver-member") {
-      const settled = await settleKotlinLambdaReceiver(use, request.lookupName, fallback, options);
+      const settled = await settleKotlinLambdaReceiver(use, request, fallback, options);
       if (settled !== undefined) return settled;
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);

@@ -356,14 +356,15 @@ export const kotlinLookupPolicy: NameLookupPolicy = {
   ...jvmLookupPolicy,
   wrapRest(state, rest) {
     if (!isImplicitSelfCall(state) || !bindsBelowLambdaReceivers(state)) return rest();
-    if (!enclosingLambdas(state.use.node).length) return rest();
+    const lambdas = enclosingLambdas(state.use.node);
+    if (!lambdas.length) return rest();
     const resolution = rest();
     // A class or alias name is a constructor call, which no receiver's member can be.
     const named = definitionWithoutDeferredSteps(resolution);
     if (named && declaresMembers(named)) return resolution;
     return {
       status: "deferred",
-      request: { kind: "kotlin-lambda-receiver-member", lookupName: state.lookupName },
+      request: { kind: "kotlin-lambda-receiver-member", lookupName: state.lookupName, lambdas },
       fallback: resolution,
     };
   },

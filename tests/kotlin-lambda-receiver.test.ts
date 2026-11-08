@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   assertConsumerAgreement,
   buildConsumerAgreementFixture,
   disposeConsumerAgreementFixture,
+  findDetailedNode,
+  hasDetailedEdge,
   type ConsumerAgreementFixture,
 } from "./helpers/consumer-agreement.js";
 
@@ -30,7 +32,28 @@ const DSL = [
   "    fun stamp(tag: String) {}",
   "}",
   "",
-  "class Extern : java.util.ArrayList<String>()",
+  "class Extern : com.acme.Base()",
+  "",
+  "class Labeled {",
+  '    val label: String = "field"',
+  "    fun label(tag: String): String = tag",
+  "}",
+  "",
+  "class Sized { val size: Int = 1 }",
+  "class Literal { val size = 5 }",
+  "class CtorSized(val size: Int)",
+  "class LazySized { val size: Int by lazy { 1 } }",
+  "class Typed { val action: (String) -> String = { it } }",
+  "class CtorTyped(val action: (String) -> String)",
+  "class Converted { val transform: Transform = makeTransform() }",
+  "class Invoker { operator fun invoke(tag: String): String = tag }",
+  "class Operated { val operation: Invoker = Invoker() }",
+  "class Rendered { val render: Transform = makeTransform() }",
+  "class Formatted { val format: Invoker = Invoker() }",
+  "class Ringed { val ring: Int = 1 }",
+  "",
+  "typealias Transform = (String) -> String",
+  "fun makeTransform(): Transform = { it }",
   "",
   "typealias BuilderBlock = Builder.() -> Unit",
   "",
@@ -41,15 +64,36 @@ const DSL = [
   "fun plain(block: (Builder) -> Unit) { block(Builder()) }",
   "fun extern(block: Extern.() -> Unit) { Extern().block() }",
   "fun Builder.configure(block: Builder.() -> Unit) { block() }",
+  "fun labeled(block: Labeled.() -> Unit) { Labeled().block() }",
+  "fun sized(block: Sized.() -> Unit) { Sized().block() }",
+  "fun literal(block: Literal.() -> Unit) { Literal().block() }",
+  "fun ctorSized(block: CtorSized.() -> Unit) { CtorSized(1).block() }",
+  "fun lazySized(block: LazySized.() -> Unit) { LazySized().block() }",
+  "fun typed(block: Typed.() -> Unit) { Typed().block() }",
+  "fun ctorTyped(block: CtorTyped.() -> Unit) { CtorTyped { it }.block() }",
+  "fun converted(block: Converted.() -> Unit) { Converted().block() }",
+  "fun operated(block: Operated.() -> Unit) { Operated().block() }",
+  "fun rendered(block: Rendered.() -> Unit) { Rendered().block() }",
+  "fun formatted(block: Formatted.() -> Unit) { Formatted().block() }",
+  "fun ringed(block: Ringed.() -> Unit) { Ringed().block() }",
   "",
 ].join("\n");
 
 const OWNER = [
   "package app",
   "",
+  "fun render(tag: String): String = tag",
+  "fun format(tag: String): String = tag",
+  "fun ring(tag: String): Int = tag.length",
+  "",
   "class Owner {",
   "    fun stamp(tag: String) {}",
   "    fun own(tag: String) {}",
+  "    fun label(tag: String): String = tag",
+  "    fun size(tag: String): Int = tag.length",
+  "    fun action(tag: String): String = tag",
+  "    fun transform(tag: String): String = tag",
+  "    fun operation(tag: String): String = tag",
   "",
   '    fun viaBuild() { build { stamp("viaBuild") } }',
   '    fun viaBuildTwo() { buildTwo(1) { stamp("viaBuildTwo") } }',
@@ -65,6 +109,18 @@ const OWNER = [
   '    fun viaNestedRecv() { with(Other()) { build { stamp("viaNestedRecv") } } }',
   '    fun viaNestedOther() { build { with(Other()) { stamp("viaNestedOther") } } }',
   '    fun viaNestedPlain(b: Builder) { b.apply { plain { x -> stamp("viaNestedPlain") } } }',
+  '    fun viaLabeledCall() { labeled { label("viaLabeledCall") } }',
+  '    fun viaSizedProperty() { sized { size("viaSizedProperty") } }',
+  '    fun viaLiteralProperty() { literal { size("viaLiteralProperty") } }',
+  '    fun viaCtorSizedProperty() { ctorSized { size("viaCtorSizedProperty") } }',
+  '    fun viaLazySizedProperty() { lazySized { size("viaLazySizedProperty") } }',
+  '    fun viaTypedProperty() { typed { action("viaTypedProperty") } }',
+  '    fun viaCtorTypedProperty() { ctorTyped { action("viaCtorTypedProperty") } }',
+  '    fun viaConvertedProperty() { converted { transform("viaConvertedProperty") } }',
+  '    fun viaOperatedProperty() { operated { operation("viaOperatedProperty") } }',
+  '    fun viaRenderedProperty() { rendered { render("viaRenderedProperty") } }',
+  '    fun viaFormattedProperty() { formatted { format("viaFormattedProperty") } }',
+  '    fun viaRingedProperty() { ringed { ring("viaRingedProperty") } }',
   '    fun viaFallThrough(b: Builder) { b.apply { own("viaFallThrough") } }',
   '    fun viaLocal() { build { fun stamp(tag: String) {}; stamp("viaLocal") } }',
   '    fun viaPlain() { plain { b -> stamp("viaPlain") } }',
@@ -108,14 +164,14 @@ const UNPROVEN = [
   "",
   "    fun viaApplyStringBuilder(sb: StringBuilder) { sb.apply { append(1) } }",
   "    fun viaBuildString() { buildString { append(2) } }",
-  '    fun viaUnknownTrailing() { Thread { ping("viaUnknownTrailing") } }',
-  '    fun viaUnknownTrailingTopLevel() { Thread { helper("viaUnknownTrailingTopLevel") } }',
+  '    fun viaUnknownTrailing() { unknownBuilder { ping("viaUnknownTrailing") } }',
+  '    fun viaUnknownTrailingTopLevel() { unknownBuilder { helper("viaUnknownTrailingTopLevel") } }',
   '    fun viaExternalSupertype() { extern { ping("viaExternalSupertype") } }',
   '    fun viaUnseenCall() { build().apply { ping("viaUnseenCall") } }',
   "    fun viaAny(b: Builder) { with(b) { toString() } }",
   "    fun viaThisApplySb(sb: StringBuilder) { sb.apply { this.append(3) } }",
   "    fun viaThisBuildString() { buildString { this.append(4) } }",
-  '    fun viaThisUnknown() { Thread { this.ping("viaThisUnknown") } }',
+  '    fun viaThisUnknown() { unknownBuilder { this.ping("viaThisUnknown") } }',
   "}",
   "",
 ].join("\n");
@@ -125,8 +181,16 @@ const THIS = [
   "",
   "class Holder {",
   "    fun stamp(tag: String) {}",
+  "    fun label(tag: String): String = tag",
+  "    fun action(tag: String): String = tag",
+  "    fun transform(tag: String): String = tag",
+  "    fun operation(tag: String): String = tag",
   "",
   '    fun viaThis() { build { this.stamp("viaThis") } }',
+  '    fun viaThisLabeled() { labeled { this.label("viaThisLabeled") } }',
+  '    fun viaThisTypedProperty() { typed { this.action("viaThisTypedProperty") } }',
+  '    fun viaThisConvertedProperty() { converted { this.transform("viaThisConvertedProperty") } }',
+  '    fun viaThisOperatedProperty() { operated { this.operation("viaThisOperatedProperty") } }',
   '    fun viaThisApply(b: Builder) { b.apply { this.stamp("viaThisApply") } }',
   '    fun viaThisNested() { with(Other()) { build { this.stamp("viaThisNested") } } }',
   '    fun viaThisNestedOther() { build { with(Other()) { this.stamp("viaThisNestedOther") } } }',
@@ -157,6 +221,25 @@ const OWNER_STAMP = { file: "app/Owner.kt", line: lineOf(OWNER, "fun stamp"), to
 const OWNER_OWN = { file: "app/Owner.kt", line: lineOf(OWNER, "fun own"), token: "own(" };
 const ANON_STAMP = { file: "app/Anon.kt", line: lineOf(ANON, "fun stamp"), token: "stamp(" };
 const HOLDER_STAMP = { file: "app/This.kt", line: lineOf(THIS, "fun stamp"), token: "stamp(" };
+const LABELED_METHOD = { file: "app/Dsl.kt", line: lineOf(DSL, "fun label("), token: "label(" };
+const LABELED_FIELD = { file: "app/Dsl.kt", line: lineOf(DSL, "val label"), token: "label" };
+const OWNER_LABEL = { file: "app/Owner.kt", line: lineOf(OWNER, "fun label("), token: "label(" };
+const HOLDER_LABEL = { file: "app/This.kt", line: lineOf(THIS, "fun label("), token: "label(" };
+const SIZED_SIZE = { file: "app/Dsl.kt", line: lineOf(DSL, "class Sized"), token: "size" };
+const LITERAL_SIZE = { file: "app/Dsl.kt", line: lineOf(DSL, "class Literal"), token: "size" };
+const CTOR_SIZED_SIZE = { file: "app/Dsl.kt", line: lineOf(DSL, "class CtorSized"), token: "size" };
+const LAZY_SIZED_SIZE = { file: "app/Dsl.kt", line: lineOf(DSL, "class LazySized"), token: "size" };
+const TYPED_ACTION = { file: "app/Dsl.kt", line: lineOf(DSL, "class Typed"), token: "action" };
+const CTOR_TYPED_ACTION = { file: "app/Dsl.kt", line: lineOf(DSL, "class CtorTyped"), token: "action" };
+const OWNER_SIZE = { file: "app/Owner.kt", line: lineOf(OWNER, "fun size("), token: "size(" };
+const OWNER_ACTION = { file: "app/Owner.kt", line: lineOf(OWNER, "fun action("), token: "action(" };
+const HOLDER_ACTION = { file: "app/This.kt", line: lineOf(THIS, "fun action("), token: "action(" };
+const OWNER_TRANSFORM = { file: "app/Owner.kt", line: lineOf(OWNER, "fun transform("), token: "transform(" };
+const OWNER_OPERATION = { file: "app/Owner.kt", line: lineOf(OWNER, "fun operation("), token: "operation(" };
+const OWNER_RING = { file: "app/Owner.kt", line: lineOf(OWNER, "fun ring("), token: "ring(" };
+const RINGED_RING = { file: "app/Dsl.kt", line: lineOf(DSL, "class Ringed"), token: "ring" };
+const HOLDER_TRANSFORM = { file: "app/This.kt", line: lineOf(THIS, "fun transform("), token: "transform(" };
+const HOLDER_OPERATION = { file: "app/This.kt", line: lineOf(THIS, "fun operation("), token: "operation(" };
 
 let fixture: ConsumerAgreementFixture;
 
@@ -207,6 +290,23 @@ async function expectUnproven(
   });
 }
 
+/**
+ * A call beside a file-level function that a receiver's property of the name may take instead: goto finds nothing and
+ * the graph draws no edge to the function. Its references are not asserted, because a use in the function's own file
+ * is gathered by scope, not by navigation.
+ */
+async function expectFileLevelHidden(caller: string, token: string, functionName: string) {
+  await assertConsumerAgreement(fixture, {
+    file: "app/Owner.kt",
+    line: lineOf(OWNER, `"${caller}"`),
+    token,
+    expected: "not_found",
+  });
+  const from = findDetailedNode(fixture, "app/Owner.kt", caller);
+  const to = findDetailedNode(fixture, "app/Owner.kt", functionName);
+  expect(hasDetailedEdge(fixture, from.id, to.id, "calls"), `${caller} must not call ${functionName}`).toBe(false);
+}
+
 describe("a bare call inside a lambda with an implicit receiver", () => {
   describe("binds to the receiver's member, not the enclosing type's", () => {
     const cases: Array<[string, string, Target, Target]> = [
@@ -224,6 +324,14 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
       ["viaNestedRecv", "a DSL lambda inside with(Other())", BUILDER_STAMP, OTHER_STAMP],
       ["viaNestedOther", "with(Other()) inside a DSL lambda: the closest receiver", OTHER_STAMP, BUILDER_STAMP],
       ["viaNestedPlain", "a plain lambda between apply and the call", BUILDER_STAMP, OWNER_STAMP],
+      ["viaLabeledCall", "a call beside a same-named property of the receiver", LABELED_METHOD, OWNER_LABEL],
+      ["viaTypedProperty", "a function-typed property of the receiver", TYPED_ACTION, OWNER_ACTION],
+      [
+        "viaCtorTypedProperty",
+        "a function-typed constructor property of the receiver",
+        CTOR_TYPED_ACTION,
+        OWNER_ACTION,
+      ],
     ];
     it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
       await expectCall("app/Owner.kt", OWNER, caller, caller, target, decoy);
@@ -231,6 +339,17 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
 
     it("an anonymous object enclosing the lambda has its member passed over too", async () => {
       await expectCall("app/Anon.kt", ANON, "anonBuild", "run", BUILDER_STAMP, ANON_STAMP);
+    });
+
+    it("a call never binds the receiver's property of the same name", async () => {
+      await assertConsumerAgreement(fixture, {
+        file: "app/Owner.kt",
+        line: lineOf(OWNER, '"viaLabeledCall"'),
+        token: "label(",
+        mustNotMatch: LABELED_FIELD,
+        provablyNotAReference: true,
+        absentEdge: { label: "calls", from: { file: "app/Owner.kt", name: "viaLabeledCall" } },
+      });
     });
   });
 
@@ -245,6 +364,11 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
       ["viaBareApply", "apply with no receiver expression", OWNER_STAMP, BUILDER_STAMP],
       ["viaFails", "a generic standard-library call the grammar reads as comparisons", OWNER_OWN, BUILDER_STAMP],
       ["viaThreadParen", "a lambda in parentheses of an unknown callee", OWNER_OWN, BUILDER_STAMP],
+      ["viaSizedProperty", "a plain Int property of the receiver cannot be called", OWNER_SIZE, SIZED_SIZE],
+      ["viaLiteralProperty", "a property a literal initializes", OWNER_SIZE, LITERAL_SIZE],
+      ["viaCtorSizedProperty", "a plain constructor property", OWNER_SIZE, CTOR_SIZED_SIZE],
+      ["viaLazySizedProperty", "a delegated Int property", OWNER_SIZE, LAZY_SIZED_SIZE],
+      ["viaRingedProperty", "a plain property beside a file-level function", OWNER_RING, RINGED_RING],
     ];
     it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
       await expectCall("app/Owner.kt", OWNER, caller, caller, target, decoy);
@@ -325,6 +449,36 @@ describe("a bare call inside a lambda with an implicit receiver", () => {
         edges: [{ label: "calls", from: { file: "app/Careful.kt", name: "viaUnknownTrailingTopLevel" } }],
       });
     });
+
+    it("a property typed by an alias, which may be a function type", async () => {
+      await expectUnproven(
+        "app/Owner.kt",
+        OWNER,
+        '"viaConvertedProperty"',
+        "viaConvertedProperty",
+        "transform(",
+        OWNER_TRANSFORM,
+      );
+    });
+
+    it("a property typed by a class that may declare invoke", async () => {
+      await expectUnproven(
+        "app/Owner.kt",
+        OWNER,
+        '"viaOperatedProperty"',
+        "viaOperatedProperty",
+        "operation(",
+        OWNER_OPERATION,
+      );
+    });
+
+    it("a property typed by an alias hides a file-level function of its name", async () => {
+      await expectFileLevelHidden("viaRenderedProperty", "render(", "render");
+    });
+
+    it("a property typed by a class that may declare invoke hides a file-level function of its name", async () => {
+      await expectFileLevelHidden("viaFormattedProperty", "format(", "format");
+    });
   });
 });
 
@@ -343,6 +497,8 @@ describe("an explicit this inside a lambda", () => {
     ["viaThisPlain", "a lambda with no receiver leaves this as the enclosing type", HOLDER_STAMP, BUILDER_STAMP],
     ["viaThisForEach", "forEach", HOLDER_STAMP, BUILDER_STAMP],
     ["viaThisOutside", "no lambda at all", HOLDER_STAMP, BUILDER_STAMP],
+    ["viaThisLabeled", "a call beside a same-named property of the receiver", LABELED_METHOD, HOLDER_LABEL],
+    ["viaThisTypedProperty", "a function-typed property of the receiver", TYPED_ACTION, HOLDER_ACTION],
   ];
   it.each(cases)("%s: %s", async (caller, _form, target, decoy) => {
     await expectCall("app/This.kt", THIS, caller, caller, target, decoy);
@@ -373,6 +529,105 @@ describe("an explicit this inside a lambda", () => {
 
     it("a trailing lambda of a callee the project does not declare", async () => {
       await expectUnproven("app/Careful.kt", UNPROVEN, '"viaThisUnknown"', "viaThisUnknown", "ping(", decoyPing);
+    });
+
+    it("a property typed by an alias, which may be a function type", async () => {
+      await expectUnproven(
+        "app/This.kt",
+        THIS,
+        '"viaThisConvertedProperty"',
+        "viaThisConvertedProperty",
+        "transform(",
+        HOLDER_TRANSFORM,
+      );
+    });
+
+    it("a property typed by a class that may declare invoke", async () => {
+      await expectUnproven(
+        "app/This.kt",
+        THIS,
+        '"viaThisOperatedProperty"',
+        "viaThisOperatedProperty",
+        "operation(",
+        HOLDER_OPERATION,
+      );
+    });
+  });
+});
+
+/**
+ * A call cannot invoke a plain property (`val size: Int`), so the receiver's property is passed over for the enclosing
+ * type's function. An `operator fun Int.invoke` that makes it callable outranks that function only as a member of the
+ * receiver's own class: kotlinc 2.4.21 runs the enclosing function beside a top-level extension and the member
+ * extension beside a member one, so the member form leaves the call unproven.
+ */
+describe("a plain property of the receiver beside an invoke operator extension", () => {
+  const owner = [
+    "package app",
+    "",
+    "class Owner {",
+    "    fun size(tag: String): Int = tag.length",
+    '    fun viaSizedProperty() { sized { size("viaSizedProperty") } }',
+    "}",
+    "",
+  ].join("\n");
+  const topLevelDsl = [
+    "package app",
+    "",
+    "class Sized { val size: Int = 1 }",
+    "",
+    "fun sized(block: Sized.() -> Unit) { Sized().block() }",
+    "operator fun Int.invoke(tag: String): String = tag",
+    "",
+  ].join("\n");
+  const memberDsl = [
+    "package app",
+    "",
+    "class Sized {",
+    "    val size: Int = 1",
+    "    operator fun Int.invoke(tag: String): String = tag",
+    "}",
+    "",
+    "fun sized(block: Sized.() -> Unit) { Sized().block() }",
+    "",
+  ].join("\n");
+  const site = { file: "app/Owner.kt", line: lineOf(owner, '"viaSizedProperty"'), token: "size(" };
+  const ownerSize = { file: "app/Owner.kt", line: lineOf(owner, "fun size("), token: "size(" };
+  const edge = { label: "calls", from: { file: "app/Owner.kt", name: "viaSizedProperty" } };
+  let topLevel: ConsumerAgreementFixture;
+  let member: ConsumerAgreementFixture;
+
+  beforeAll(async () => {
+    topLevel = await buildConsumerAgreementFixture("cg-kotlin-lambda-invoke-top-", {
+      "app/Dsl.kt": topLevelDsl,
+      "app/Owner.kt": owner,
+    });
+    member = await buildConsumerAgreementFixture("cg-kotlin-lambda-invoke-member-", {
+      "app/Dsl.kt": memberDsl,
+      "app/Owner.kt": owner,
+    });
+  });
+
+  afterAll(async () => {
+    await disposeConsumerAgreementFixture(topLevel);
+    await disposeConsumerAgreementFixture(member);
+  });
+
+  it("a top-level extension ranks below the enclosing type's members and leaves the call there", async () => {
+    await assertConsumerAgreement(topLevel, {
+      ...site,
+      expected: { file: ownerSize.file, line: ownerSize.line },
+      requireCompleteCoverage: true,
+      edges: [edge],
+    });
+  });
+
+  it("a member extension may take the call, so it stays unproven", async () => {
+    await assertConsumerAgreement(member, {
+      ...site,
+      expected: "not_found",
+      sameNameDeclaration: ownerSize,
+      edges: [{ ...edge, absent: true }],
     });
   });
 });
