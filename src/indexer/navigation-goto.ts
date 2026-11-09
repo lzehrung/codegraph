@@ -38,7 +38,11 @@ import {
 } from "../util/member-access.js";
 import { definitionIdentityKey } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
-import { MEMBER_ACCESS_ROWS, supportsReceiverMemberNavigation } from "../util/member-access-tables.js";
+import {
+  anonymousOwnerForm,
+  MEMBER_ACCESS_ROWS,
+  supportsReceiverMemberNavigation,
+} from "../util/member-access-tables.js";
 import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } from "./ts-callables.js";
 import {
   effectiveExplicitBinding,
@@ -60,6 +64,7 @@ import {
   declaresMembers,
   declaredSupertypeKind,
   hasStaticMemberDistinction,
+  isAnonymousMemberContainer,
   memberContainerDef,
   nearestMemberContainer,
   isNonBaseHeritageArgument,
@@ -79,7 +84,7 @@ import {
   unwrapNamedType,
   type PhpObjectCreationKeyword,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { getCallArgumentCount, memberLookupBinding } from "../languages/callable-arity.js";
+import { getCallArgumentCount, memberLookupBinding, type CallableArity } from "../languages/callable-arity.js";
 import {
   csharpNamespaceChainDeclares,
   csharpNamespaceMemberKind,
@@ -125,6 +130,8 @@ import {
   AMBIGUOUS_STAR_IMPORT_REASON,
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
+  AMBIGUOUS_RECEIVER_MEMBER_REASON,
+  INAPPLICABLE_RECEIVER_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -153,6 +160,7 @@ import {
 import {
   hasSeparateMemberScopes,
   inheritsMemberOverloads,
+  kotlinPropertyInvocationArity,
   selectMember,
   type MemberModel,
 } from "./member-selection.js";
@@ -2046,6 +2054,7 @@ export async function resolveMemberAccessDefinition(params: {
     const keywordScope =
       receiverProof?.kind === "own-type" || receiverProof?.kind === "supertype" ? receiverProof.memberScope : "any";
     if (receiverProof?.kind === "own-type") {
+      const report = { named: false, ambiguous: false };
       const memberDef = await resolveKeywordReceiverMember(
         index,
         mod,
@@ -2054,6 +2063,9 @@ export async function resolveMemberAccessDefinition(params: {
         keywordScope,
         false,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
+        undefined,
+        report,
+        memberAccessUse(sup.id, memberNode),
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -2062,6 +2074,7 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      if (sup.id === "kotlin" && report.named) return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
       const outOfLineOwnerPath = cppOutOfLineOwnerPath(node, source, sup);
       const outOfLineOwner = outOfLineOwnerPath
         ? await resolveCppQualifiedMemberContainer(index, mod, outOfLineOwnerPath)
@@ -2096,6 +2109,9 @@ export async function resolveMemberAccessDefinition(params: {
         keywordScope,
         true,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
+        undefined,
+        undefined,
+        memberAccessUse(sup.id, memberNode),
       );
       if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
       return okGoToResult(index, memberDef, {
@@ -2168,6 +2184,12 @@ export async function resolveMemberAccessDefinition(params: {
 
     if (receiver) {
       const objDef = receiver.def;
+      const kotlinTypeReference =
+        sup.id === "kotlin" &&
+        receiverProof?.kind === "named-type" &&
+        receiverProof.proof === "static-type" &&
+        navigationUsesDoubleColon(memberNode);
+      const memberScope = kotlinTypeReference ? "any" : receiver.memberScope;
       const targetContext = await ensureParsedContextForIndex(index, objDef.file);
       const start = objDef.range.start;
       const targetPosition = {
@@ -2190,9 +2212,9 @@ export async function resolveMemberAccessDefinition(params: {
         if (targetModule) {
           const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
           const memberPredicate =
-            receiver.memberScope === "any"
+            memberScope === "any"
               ? undefined
-              : (local: SymbolDef) => matchesReceiverMemberScope(local, receiver.memberScope, targetContext, container);
+              : (local: SymbolDef) => matchesReceiverMemberScope(local, memberScope, targetContext, container);
           const knownArgumentCount =
             getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
@@ -2206,19 +2228,26 @@ export async function resolveMemberAccessDefinition(params: {
             targetContext.sup.id === "php" ||
             targetContext.sup.id === "swift";
           if (hierarchyLanguage && declaresMembers(objDef) && !receiver.runtimeTypeOnly) {
-            const report = { named: false, ambiguous: false };
+            const report: KeywordMemberReport = { named: false, ambiguous: false };
             memberDef = await resolveKeywordReceiverMember(
               index,
               mod,
               node,
               member,
-              receiver.memberScope,
+              memberScope,
               false,
               knownArgumentCount,
               objDef,
               report,
             );
-            if (!memberDef && report.named) return { status: "not_found", reason: "No unique receiver member" };
+            if (!memberDef && report.named) {
+              // Two members that both fit leave the target open. Named members that all reject the call hide the name
+              // from the rest of the hierarchy, so the use is no candidate for a hidden declaration.
+              const reason = report.inapplicable
+                ? INAPPLICABLE_RECEIVER_MEMBER_REASON
+                : AMBIGUOUS_RECEIVER_MEMBER_REASON;
+              return { status: "not_found", reason };
+            }
           }
           if (
             !memberDef &&
@@ -2233,7 +2262,7 @@ export async function resolveMemberAccessDefinition(params: {
               container,
               targetContext,
               normalizeIdentifier,
-              receiver.memberScope,
+              memberScope,
               knownArgumentCount,
             );
           } else if (!memberDef && (receiver.runtimeTypeOnly || targetContext.sup.id === "java")) {
@@ -2264,7 +2293,7 @@ export async function resolveMemberAccessDefinition(params: {
               container,
               targetContext,
               normalizeIdentifier,
-              receiver.memberScope,
+              memberScope,
               knownArgumentCount,
             );
           }
@@ -2311,10 +2340,11 @@ function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
 /**
  * One direct base a class declares. `unproven` is a base clause entry that names a type no reader can resolve (a
  * computed expression, a generic owner, a path without a constant root); it keeps the hierarchy from counting as
- * known, where dropping it would make an absent base look like no base.
+ * known, where dropping it would make an absent base look like no base. A `simple` base keeps the offset of its name
+ * (`at`), so a scope lookup can read the binding that spelling names.
  */
 type DeclaredBaseType =
-  | { kind: "simple"; name: string; kotlinEntry?: KotlinSupertypeEntry }
+  | { kind: "simple"; name: string; at: number; kotlinEntry?: KotlinSupertypeEntry }
   | {
       kind: "qualified";
       base: string;
@@ -2434,7 +2464,7 @@ function collectDeclaredBaseTypes(
     if (!name || seen.has(name)) return;
     seen.add(name);
     const kotlinEntry = sup.id === "kotlin" ? kotlinSupertypeEntry(node) : null;
-    bases.push(kotlinEntry ? { kind: "simple", name, kotlinEntry } : { kind: "simple", name });
+    bases.push({ kind: "simple", name, at: node.startIndex, ...(kotlinEntry ? { kotlinEntry } : {}) });
   };
   const addQualified = (base: string, path: string[], node: SyntaxNodeLike, nameNode: SyntaxNodeLike = node): void => {
     if (!base || path.length === 0) return;
@@ -2545,7 +2575,27 @@ function collectDeclaredBaseTypes(
     consider(child);
     for (const grand of child.namedChildren) consider(grand);
   }
+  const unnamedBase = unnamedTypeBase(container, sup);
+  if (unnamedBase?.proven) collectType(unnamedBase.node);
   return bases;
+}
+
+/**
+ * The base type an unnamed type names in its own header: Java `new Base() { ... }` has no clause node, so
+ * its creation's `type` field is the base. A creation that also names an enclosing instance
+ * (`outer.new Inner() { ... }`) resolves that type inside the instance's class, which a bare name cannot prove.
+ */
+function unnamedTypeBase(
+  container: SyntaxNodeLike,
+  sup: LanguageSupport,
+): { node: SyntaxNodeLike; proven: boolean } | null {
+  const field = anonymousOwnerForm(sup.id, container.type)?.baseField;
+  const node = field ? container.childForFieldName(field) : null;
+  if (!node) return null;
+  const namesEnclosingInstance = container.namedChildren.some(
+    (child) => child.endIndex <= node.startIndex && child.type !== "type_arguments",
+  );
+  return { node, proven: !namesEnclosingInstance };
 }
 
 function asMemberContainer(index: ProjectIndex, def: SymbolDef): SymbolDef | undefined {
@@ -2721,10 +2771,12 @@ function isUninheritedJavaInterfaceStaticMethod(
   return hit.kind === SymbolKind.Function && scope === "static";
 }
 
-/** A heritage or mixin clause whose type expression is not a resolvable name. */
+/** A heritage or mixin clause whose type expression is not a resolvable name, or a base that an enclosing instance qualifies. */
 function containerHeritageIsUnproven(container: SyntaxNodeLike, source: string, sup: LanguageSupport): boolean {
   const ancestry = MEMBER_ACCESS_ROWS[sup.id]?.receiverAncestry;
   if (!ancestry) return false;
+  const unnamedBase = unnamedTypeBase(container, sup);
+  if (unnamedBase && !unnamedBase.proven) return true;
   const clauseTypes = new Set(ancestry.clauses.map((rule) => rule.nodeType));
   const nodes: SyntaxNodeLike[] = [];
   for (const child of container.namedChildren) {
@@ -2771,14 +2823,48 @@ async function resolveReceiverTypeName(
   return resolveNamedMemberContainer(index, mod, trimmed, normalize);
 }
 
+/** The name that starts a base's spelling and the node that spells it: the base itself, or the root of a qualified one. */
+function heritageRoot(
+  parsed: ParsedFileContext,
+  base: DeclaredBaseType,
+): { name: string; node: SyntaxNodeLike } | null {
+  if (base.kind === "simple") {
+    return { name: base.name, node: parsed.tree.rootNode.descendantForIndex(base.at, base.at + base.name.length) };
+  }
+  if (base.kind !== "qualified") return null;
+  const chain = collectMemberAccessChain({ sup: parsed.sup, source: parsed.source, chainNode: base.node });
+  return chain ? { name: base.base, node: chain.base } : null;
+}
+
+/**
+ * A JavaScript or TypeScript heritage name can be a parameter or variable that holds the base class
+ * (`(Base) => class extends Base { ... }`), and a qualified one can hang off such a value
+ * (`(ns) => class extends ns.Base { ... }`). No declaration names that base, however a same-named class or
+ * namespace import elsewhere in the module resolves, so it stays unproven.
+ */
+function heritageNameBoundToValue(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  parsed: ParsedFileContext,
+  base: DeclaredBaseType,
+): boolean {
+  if (!isJsTsLanguage(parsed.sup.id)) return false;
+  const root = heritageRoot(parsed, base);
+  if (!root) return false;
+  const scope = getOrBuildScopeIndex(index, mod.file, parsed.source, parsed.sup, mod, parsed.tree);
+  const binding = findClosestScopeBinding(scope, root.name, root.node, parsed.sup);
+  return binding?.kind === "param" || binding?.kind === "local";
+}
+
 async function resolveDeclaredBase(
   index: ProjectIndex,
   mod: ModuleIndex,
-  sup: LanguageSupport,
-  base: DeclaredBaseType,
   parsed: ParsedFileContext,
+  base: DeclaredBaseType,
 ): Promise<SymbolDef | undefined> {
+  const sup = parsed.sup;
   if (base.kind === "unproven") return undefined;
+  if (heritageNameBoundToValue(index, mod, parsed, base)) return undefined;
   if (base.kind === "ruby-constant") {
     const constant = resolveRubyConstantReference(index, mod, base.reference);
     return constant ? asMemberContainer(index, constant) : undefined;
@@ -2815,6 +2901,17 @@ async function hierarchyOmitsMember(
   seen.add(key);
   const ref = await keywordClassRefFromDef(index, containerDef);
   if (!ref) return false;
+  return containerOmitsMember(index, ref, memberName, memberScope, seen);
+}
+
+/** `hierarchyOmitsMember` for a declaration body already in hand: its own members, then every base. */
+async function containerOmitsMember(
+  index: ProjectIndex,
+  ref: KeywordClassRef,
+  memberName: string,
+  memberScope: ReceiverMemberScope,
+  seen: Set<string>,
+): Promise<boolean> {
   const normalize = ref.context.sup.normalizeIdentifier;
   const memberPredicate =
     memberScope === "any"
@@ -2829,7 +2926,7 @@ async function hierarchyOmitsMember(
   if (ref.context.sup.id === "csharp" || ref.context.sup.id === "swift") {
     const shared = await findSharedOwnerMemberDefinitions({
       index,
-      ownerFile: containerDef.file,
+      ownerFile: ref.file,
       ownerContainer: ref.container,
       ownerSource: ref.context.source,
       languageId: ref.context.sup.id,
@@ -2841,7 +2938,7 @@ async function hierarchyOmitsMember(
   if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) return false;
   const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, index, ref.module, false);
   for (const base of bases) {
-    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context.sup, base, ref.context);
+    const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
     if (!baseDef) return false;
     if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
   }
@@ -2889,15 +2986,19 @@ export async function provenClassifiedReceiverOmitsMember(
     if (!bases.length) return false;
     const seen = new Set<string>();
     for (const base of bases) {
-      const baseDef = await resolveDeclaredBase(index, mod, parsed.sup, base, parsed);
+      const baseDef = await resolveDeclaredBase(index, mod, parsed, base);
       if (!baseDef) return false;
       if (!(await hierarchyOmitsMember(index, baseDef, memberName, receiver.memberScope, seen))) return false;
     }
     return true;
   }
   const def = definitionForContainer(mod, container);
-  if (!def) return false;
-  return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
+  if (def) return hierarchyOmitsMember(index, def, memberName, receiver.memberScope, new Set());
+  // An unnamed type body has no definition to start from: it omits the member when its own members and
+  // every base do.
+  if (!isAnonymousMemberContainer(parsed.sup.id, container)) return false;
+  const ref = { file: mod.file, container, context: parsed, module: mod };
+  return containerOmitsMember(index, ref, memberName, receiver.memberScope, new Set());
 }
 
 async function keywordClassRefFromDef(index: ProjectIndex, def: SymbolDef): Promise<KeywordClassRef | null> {
@@ -2966,9 +3067,11 @@ async function baseRefsFromContainer(
     const normalized = sup.normalizeIdentifier(name);
     return sup.id === "php" ? foldPhpIdentifierCase(normalized) : normalized;
   };
+  const parsed: ParsedFileContext = { source, tree, sup };
   for (const base of bases) {
     // An unreadable base contributes no members; the walk never substitutes another type for it.
     if (base.kind === "unproven") continue;
+    if (heritageNameBoundToValue(index, mod, parsed, base)) continue;
     let def: SymbolDef | undefined;
     if (base.kind === "simple") {
       def = resolveNamedMemberContainer(index, mod, base.name, normalize);
@@ -3029,7 +3132,7 @@ async function baseRefsFromContainer(
 }
 
 /** What a hierarchy member walk saw, for callers that must not fall back past it. */
-type KeywordMemberReport = { named: boolean; ambiguous: boolean };
+type KeywordMemberReport = { named: boolean; ambiguous: boolean; inapplicable?: boolean };
 
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
@@ -3041,6 +3144,7 @@ async function resolveKeywordReceiverMember(
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
   report?: KeywordMemberReport,
+  memberUse?: "call" | "value",
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -3054,6 +3158,10 @@ async function resolveKeywordReceiverMember(
   const membersByKey = new Map<string, SymbolDef[]>();
   const scopeByMember = new Map<SymbolDef, ReceiverMemberScope>();
   const visible = new Set<SymbolDef>();
+  const propertyInvocationArities =
+    memberUse === "call" && current.context.sup.id === "kotlin"
+      ? new Map<SymbolDef, CallableArity | null | undefined>()
+      : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
@@ -3117,6 +3225,13 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (propertyInvocationArities && !hit.callable) {
+          const start = hit.range.start.index;
+          if (start !== undefined) {
+            const nameNode = ref.context.tree.rootNode.descendantForIndex(start, start);
+            propertyInvocationArities.set(hit, kotlinPropertyInvocationArity(nameNode));
+          }
+        }
         if (!scopeByMember.has(hit)) {
           scopeByMember.set(hit, hasStaticModifier(hit, ref.context, ref.container) ? "static" : "instance");
         }
@@ -3175,6 +3290,7 @@ async function resolveKeywordReceiverMember(
       if (!facts || memberLookupBinding(current.context.sup.id) !== "unbound") return facts;
       return facts.unboundArity ? { ...facts, arity: facts.unboundArity } : facts;
     },
+    ...(propertyInvocationArities ? { invocationArity: (def: SymbolDef) => propertyInvocationArities.get(def) } : {}),
     scope: (def) => scopeByMember.get(def) ?? "any",
     visible: (def) => visible.has(def),
     sameSignature: (a, b) => sameSignatures.get(memberKey(a))?.has(memberKey(b)) ?? false,
@@ -3186,6 +3302,8 @@ async function resolveKeywordReceiverMember(
     useFile: mod.file,
     startAtAncestor,
     keepUniqueArityMismatch: !startAtAncestor,
+    callSite: memberUse === "call",
+    valueRead: memberUse === "value",
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
     normalizeIdentifier: current.context.sup.id === "swift" ? current.context.sup.normalizeIdentifier : undefined,
@@ -3194,6 +3312,7 @@ async function resolveKeywordReceiverMember(
   if (report) {
     report.named = selected.named;
     report.ambiguous = selected.status === "ambiguous";
+    report.inapplicable = selected.status === "ambiguous" && !!selected.inapplicable;
   }
   return selected.status === "unique" ? selected.member : undefined;
 }
@@ -3397,27 +3516,94 @@ export async function resolveImplicitSelfMember(
   languageId: string,
 ): Promise<SymbolDef | null | undefined> {
   const call = node.parent ?? node;
-  if (languageId !== "swift" && implicitSelfCallee(languageId, call)?.id !== node.id) return undefined;
+  const kotlinReference =
+    languageId === "kotlin" && call.type === "callable_reference" && call.namedChildren.at(-1)?.id === node.id;
+  if (languageId !== "swift" && !kotlinReference && implicitSelfCallee(languageId, call)?.id !== node.id)
+    return undefined;
+  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  // An unnamed type body (`new Base() { ... }`) sees its own hierarchy first; a name that hierarchy lacks
+  // belongs to the enclosing owner, innermost first, so each hop runs from the container it just left.
+  let anchor = node;
+  for (;;) {
+    const resolved = await resolveImplicitSelfAt(
+      index,
+      mod,
+      anchor,
+      name,
+      source,
+      languageId,
+      argumentCount,
+      kotlinReference,
+    );
+    if (resolved !== undefined) return resolved;
+    const container = nearestMemberContainer(anchor);
+    if (!container || !isAnonymousMemberContainer(languageId, container)) return undefined;
+    anchor = container;
+  }
+}
+
+/** Whether the member access `memberNode` is the callee of a call (`this.size()`), where the language marks it. */
+function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boolean {
+  if (languageId === "java") return memberNode.type === "method_invocation";
+  const call = memberNode.parent;
+  if (languageId === "kotlin") return call?.type === "call_expression" && call.namedChildren[0]?.id === memberNode.id;
+  if (languageId === "csharp") {
+    return call?.type === "invocation_expression" && call.childForFieldName("function")?.id === memberNode.id;
+  }
+  return false;
+}
+
+/** How the member access `memberNode` is used, where the language separates calls from value reads. */
+function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): "call" | "value" | undefined {
+  if (languageId !== "java" && languageId !== "kotlin" && languageId !== "csharp") return undefined;
+  // Java method references name methods; Kotlin callable references may name properties too.
+  if (languageId === "java" && memberNode.type === "method_reference") return "call";
+  if (languageId === "kotlin" && (memberNode.type === "callable_reference" || navigationUsesDoubleColon(memberNode)))
+    return undefined;
+  return memberAccessIsCall(languageId, memberNode) ? "call" : "value";
+}
+
+/** Kotlin parses `this::size` as a navigation expression whose separator token is `::`. */
+function navigationUsesDoubleColon(node: SyntaxNodeLike): boolean {
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child) return false;
+    if (child.type === "::") return true;
+  }
+}
+
+/** The implicit-`this` member lookup in the owner that lexically encloses `anchor`; `undefined` leaves the name open. */
+async function resolveImplicitSelfAt(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  anchor: SyntaxNodeLike,
+  name: string,
+  source: string,
+  languageId: string,
+  argumentCount: number | undefined,
+  kotlinReference = false,
+): Promise<SymbolDef | null | undefined> {
   const jvm = languageId === "java" || languageId === "kotlin";
   const staticScoped = languageId === "csharp" || jvm;
-  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(node, source) ? "static" : "any";
-  const argumentCount = getCallArgumentCount({ languageId, source, call }) ?? undefined;
+  const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(anchor, source) ? "static" : "any";
   const report = { named: false, ambiguous: false };
   const member = await resolveKeywordReceiverMember(
     index,
     mod,
-    node,
+    anchor,
     name,
     memberScope,
     false,
     argumentCount,
     undefined,
     report,
+    languageId === "swift" || kotlinReference ? undefined : "call",
   );
   if (member) return member;
   // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
   // inherited method of that name hides imports even when none accepts the call.
-  if (report.ambiguous || (report.named && (languageId === "java" || languageId === "csharp"))) return null;
+  if (report.ambiguous || (report.named && (kotlinReference || languageId === "java" || languageId === "csharp")))
+    return null;
   if (memberScope !== "static" || !jvm) return undefined;
   // In a static context an inherited instance method still shadows a static import or package
   // function; the call is invalid, so it has no target.
@@ -3425,13 +3611,14 @@ export async function resolveImplicitSelfMember(
   const instance = await resolveKeywordReceiverMember(
     index,
     mod,
-    node,
+    anchor,
     name,
     "any",
     false,
     argumentCount,
     undefined,
     instanceReport,
+    kotlinReference ? undefined : "call",
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;
@@ -4462,6 +4649,8 @@ async function resolveReceiverDefinition(
         false,
         undefined,
         owner.def,
+        undefined,
+        "value",
       );
       if (!field || field.kind !== SymbolKind.Variable || !field.isMember) return null;
       const fieldContext = await ensureParsedContextForIndex(index, field.file);

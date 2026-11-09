@@ -1,4 +1,5 @@
 import type { CallableArity, CallableIdentity } from "../languages/callable-arity.js";
+import type { SyntaxNodeLike } from "../languages/types.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 
 export type MemberScope = "any" | "static" | "instance";
@@ -11,6 +12,8 @@ export type MemberModel<Owner, Member> = {
   name(member: Member): string;
   key(member: Member): string;
   callable(member: Member): CallableIdentity | undefined;
+  /** Kotlin function-valued properties participate in call selection without becoming method declarations. */
+  invocationArity?(member: Member): CallableArity | null | undefined;
   scope(member: Member): MemberScope;
   visible(member: Member, useFile: string): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
@@ -20,7 +23,12 @@ export type MemberModel<Owner, Member> = {
 export type MemberSelection<Member> =
   | { status: "none"; named: false }
   | { status: "unique"; named: true; member: Member }
-  | { status: "ambiguous"; named: true };
+  | {
+      status: "ambiguous";
+      named: true;
+      /** Every named member rejects the call and none stands in for it: the name is hidden, not contested. */
+      inapplicable?: true;
+    };
 
 export type MemberSelectionOptions = {
   name: string;
@@ -37,6 +45,9 @@ export type MemberSelectionOptions = {
   firstDeclarationWins?: boolean;
   /** Language-specific identifier equality; source names remain unchanged. */
   normalizeIdentifier?: ((name: string) => string) | undefined;
+  /** A call prefers methods and invokable properties; a value read prefers non-method members. */
+  callSite?: boolean;
+  valueRead?: boolean;
 };
 
 /** Static and instance members have independent lookup chains in these languages. */
@@ -54,6 +65,24 @@ export function inheritsMemberOverloads(languageId: string): boolean {
 
 function accepts(range: CallableArity | null | undefined, count: number | null): boolean {
   return count === null || !range || (count >= range.minArgs && (range.maxArgs === null || count <= range.maxArgs));
+}
+/** A Kotlin property is invokable when its declared function type or initializer proves it. */
+export function kotlinPropertyInvocationArity(nameNode: SyntaxNodeLike): CallableArity | null | undefined {
+  const variable = nameNode.parent;
+  if (variable?.type !== "variable_declaration" || variable.parent?.type !== "property_declaration") return undefined;
+  const type = variable.namedChildren.find((child) => child.type === "function_type");
+  const parameters = type?.namedChildren.find((child) => child.type === "function_type_parameters");
+  if (parameters) {
+    const count = parameters.namedChildren.length;
+    return { minArgs: count, maxArgs: count };
+  }
+  const initializer = variable.parent.namedChildren.find((child) => child !== variable);
+  if (initializer?.type === "callable_reference") return null;
+  if (initializer?.type !== "lambda_literal") return undefined;
+  const lambdaParameters = initializer.namedChildren.find((child) => child.type === "lambda_parameters");
+  if (!lambdaParameters) return null;
+  const count = lambdaParameters.namedChildren.length;
+  return { minArgs: count, maxArgs: count };
 }
 
 /** Fold equivalent declarations only after their overload signatures have been checked. */
@@ -86,6 +115,21 @@ function distinctCandidates<Owner, Member>(
     selected.push(group[0]!);
   }
   return selected;
+}
+
+/** A call keeps function-valued properties beside methods, while a plain read still names the property. */
+function preferByUse<Owner, Member>(
+  candidates: readonly Member[],
+  model: MemberModel<Owner, Member>,
+  options: MemberSelectionOptions,
+): readonly Member[] {
+  if (candidates.length < 2 || (!options.callSite && !options.valueRead)) return candidates;
+  const matching = candidates.filter((member) =>
+    options.callSite
+      ? !!model.callable(member) || model.invocationArity?.(member) !== undefined
+      : !model.callable(member),
+  );
+  return matching.length ? matching : candidates;
 }
 
 function memberNameMatches<Owner, Member>(
@@ -166,24 +210,27 @@ export function selectMember<Owner, Member>(
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
     }
-    const unique = distinctCandidates(candidates, model, options.argumentCount);
+    const distinct = distinctCandidates(candidates, model, options.argumentCount);
+    const unique = preferByUse(distinct, model, options);
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;
         for (const member of unique) {
-          if (!accepts(model.callable(member)?.arity, options.argumentCount)) continue;
+          const arity = model.callable(member)?.arity ?? model.invocationArity?.(member);
+          if (!accepts(arity, options.argumentCount)) continue;
           if (match !== undefined) return { status: "ambiguous", named: true };
           match = member;
         }
         if (match !== undefined) return { status: "unique", named: true, member: match };
-        if (
-          options.keepUniqueArityMismatch &&
-          unique.length === 1 &&
-          !hasNamedAncestor(level, model, options, queryName)
-        ) {
+        // No member accepts the call. A lone mismatched member still stands in for it unless an ancestor declares
+        // the name too, which leaves the target open instead of proving the name hidden.
+        const loneArityMismatch =
+          options.keepUniqueArityMismatch && unique.length === 1 && (!model.invocationArity || distinct.length === 1);
+        if (loneArityMismatch) {
+          if (hasNamedAncestor(level, model, options, queryName)) return { status: "ambiguous", named: true };
           return { status: "unique", named: true, member: unique[0]! };
         }
-        return { status: "ambiguous", named: true };
+        return { status: "ambiguous", named: true, inapplicable: true };
       }
     }
     if (overloadState) {
@@ -197,11 +244,18 @@ export function selectMember<Owner, Member>(
         )
           continue;
         overloadState.declarations.push({ member, owner });
-        if (accepts(model.callable(member)?.arity, options.argumentCount)) {
+        const arity = model.callable(member)?.arity ?? model.invocationArity?.(member);
+        if (accepts(arity, options.argumentCount)) {
           overloadState.accepted.push({ member, owner });
         }
       }
-      if (lenient === undefined && depth === 0 && options.keepUniqueArityMismatch && unique.length === 1)
+      if (
+        lenient === undefined &&
+        depth === 0 &&
+        options.keepUniqueArityMismatch &&
+        unique.length === 1 &&
+        (!model.invocationArity || distinct.length === 1)
+      )
         lenient = unique[0];
     }
     const next: Owner[] = [];
@@ -226,5 +280,5 @@ export function selectMember<Owner, Member>(
     return { status: "unique", named: true, member: overloadState.accepted[0]!.member };
   if (overloadState && overloadState.accepted.length > 1) return { status: "ambiguous", named: true };
   if (lenient !== undefined) return { status: "unique", named: true, member: lenient };
-  return named ? { status: "ambiguous", named: true } : { status: "none", named: false };
+  return named ? { status: "ambiguous", named: true, inapplicable: true } : { status: "none", named: false };
 }

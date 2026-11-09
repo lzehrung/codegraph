@@ -9,12 +9,18 @@ import {
 } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
+import type { CallableArity, CallableIdentity } from "../../languages/callable-arity.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { rootNodeOf, sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
-import { keywordReceiverKind, ownReceiverMemberScope } from "../../util/member-access-tables.js";
+import {
+  anonymousOwnerBodyType,
+  anonymousOwnerForm,
+  keywordReceiverKind,
+  ownReceiverMemberScope,
+} from "../../util/member-access-tables.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
@@ -117,15 +123,17 @@ const STATIC_EQUIVALENT_MEMBER_CONTAINERS: Record<string, Readonly<Record<string
 /**
  * Whether `node` is lexically declared inside its language's static-equivalent member
  * container. The nearest enclosing member container decides: a nested type's members belong
- * to that type, not to an outer `object`.
+ * to that type, and an anonymous object's members to that object, not to an outer `object`.
  */
 export function declarationIsStaticEquivalent(languageId: string, node: SyntaxNodeLike): boolean {
   const containers = STATIC_EQUIVALENT_MEMBER_CONTAINERS[languageId];
   if (!containers) return false;
-  let current: SyntaxNodeLike | null = node.parent;
+  let child = node;
+  let current = node.parent;
   while (current) {
     if (containers[current.type] === true) return true;
-    if (MEMBER_CONTAINER_TYPES[current.type] === true) return false;
+    if (ownsMembersDeclaredIn(current, child)) return false;
+    child = current;
     current = current.parent;
   }
   return false;
@@ -178,6 +186,20 @@ const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   // union names and classifies them as classes).
   union_specifier: true,
 };
+
+/**
+ * Whether `owner` is the member container of code reached through its child `child`. A declaration
+ * owns everything inside it. An unnamed type (`new Base() { ... }`, `object : Base() { ... }`) owns
+ * only its body: its base type and constructor arguments run for the enclosing owner.
+ */
+function ownsMembersDeclaredIn(owner: SyntaxNodeLike, child: SyntaxNodeLike): boolean {
+  return MEMBER_CONTAINER_TYPES[owner.type] === true || anonymousOwnerBodyType(owner.type) === child.type;
+}
+
+/** Whether `container` is an unnamed type body of `languageId`, so no declaration names its owner. */
+export function isAnonymousMemberContainer(languageId: string, container: SyntaxNodeLike): boolean {
+  return anonymousOwnerForm(languageId, container.type) !== undefined;
+}
 
 /**
  * Container nodes whose declared members belong to the *enclosing* member container for
@@ -1548,11 +1570,13 @@ export function declaresMembers(def: SymbolDef): boolean {
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
 }
 
-/** Nearest enclosing declaration that lexically owns `node` as a member. */
+/** Nearest enclosing declaration, or unnamed type body, that lexically owns `node` as a member. */
 export function nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let child = node;
   let current = node.parent;
   while (current) {
-    if (MEMBER_CONTAINER_TYPES[current.type]) return current;
+    if (ownsMembersDeclaredIn(current, child)) return current;
+    child = current;
     current = current.parent;
   }
   return null;
@@ -1860,11 +1884,13 @@ export function emitReceiverCallEdges(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
+  kotlinPropertyArities: ReadonlyMap<string, CallableArity | null> = new Map(),
+  kotlinPropertyMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
   acceptsCallTarget?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
-  callableIdentities: ReadonlyMap<string, import("../../languages/callable-arity.js").CallableIdentity> = new Map(),
+  callableIdentities: ReadonlyMap<string, CallableIdentity> = new Map(),
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
@@ -1895,9 +1921,12 @@ export function emitReceiverCallEdges(
   for (const [ownerId, memberIds] of accessibleMembers) {
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
+  for (const [ownerId, memberIds] of kotlinPropertyMembers) {
+    for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
+  }
 
   let activeCandidate: ReceiverCallCandidate;
-  const facts = new Map<string, import("../../languages/callable-arity.js").CallableIdentity>();
+  const facts = new Map<string, CallableIdentity>();
   for (const [ownerId, ids] of membersByOwner) {
     for (const id of ids) {
       const canonicalId = canonicalMemberId(id, nodeAliases);
@@ -1931,12 +1960,14 @@ export function emitReceiverCallEdges(
     },
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
-    callable: (id) => facts.get(id),
+    callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
+    invocationArity: (id) => kotlinPropertyArities.get(canonicalMemberId(id, nodeAliases)),
     scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
     visible: (id, useFile) => {
       const canonicalId = canonicalMemberId(id, nodeAliases);
       const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
-      if (!node || (node.kind !== "function" && !node.callable)) return false;
+      if (!node || (node.kind !== "function" && !node.callable && !kotlinPropertyArities.has(canonicalId)))
+        return false;
       if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
       if (
         (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
@@ -1987,6 +2018,7 @@ export function emitReceiverCallEdges(
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
       normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
+      callSite: languageId === "kotlin",
       separateMemberScopes: hasSeparateMemberScopes(languageId),
       startAtAncestor: candidate.viaSupertypes,
       inheritOverloads: inheritsMemberOverloads(languageId),

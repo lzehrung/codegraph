@@ -155,22 +155,68 @@ export class ProjectedSyntaxNode {
     return null;
   }
 
+  /**
+   * Return the smallest named descendant holding a UTF-16 range. As in Tree-sitter's
+   * `named_descendant_for_byte_range`, an earlier nonempty child ending at the range start
+   * does not own that boundary. Walk anonymous children too: they can contain named nodes.
+   */
   descendantForIndex(startIndex: number, endIndex: number): ProjectedSyntaxNode {
-    for (const child of this.namedChildren) {
-      if (child.startIndex <= startIndex && child.endIndex >= endIndex) {
-        return child.descendantForIndex(startIndex, endIndex);
+    const columns = this.tree.columns;
+    let currentId = this.id;
+    let namedId = currentId;
+    for (;;) {
+      let nextId = -1;
+      const end = columns.childOffsets[currentId + 1]!;
+      for (let slot = columns.childOffsets[currentId]!; slot < end; slot += 1) {
+        const childId = columns.childIds[slot]!;
+        const childEnd = this.tree.stringIndexForByte(columns.endIndex[childId]!);
+        if (childEnd < endIndex) continue;
+        const childStart = this.tree.stringIndexForByte(columns.startIndex[childId]!);
+        if (endsBeforeRangeStart(childEnd - startIndex, childStart === childEnd)) continue;
+        if (startIndex < childStart) break;
+        nextId = childId;
+        if (columns.named[childId]) namedId = childId;
+        break;
       }
+      if (nextId < 0) return this.tree.nodeById(namedId)!;
+      currentId = nextId;
     }
-    return this;
   }
 
+  /** `descendantForIndex` for a range given as row and column positions (UTF-16 columns). */
   descendantForPosition(start: ProjectedPosition, end: ProjectedPosition): ProjectedSyntaxNode {
-    for (const child of this.namedChildren) {
-      if (comparePosition(child.startPosition, start) <= 0 && comparePosition(child.endPosition, end) >= 0) {
-        return child.descendantForPosition(start, end);
+    const columns = this.tree.columns;
+    let currentId = this.id;
+    let namedId = currentId;
+    for (;;) {
+      let nextId = -1;
+      const childEnd = columns.childOffsets[currentId + 1]!;
+      for (let slot = columns.childOffsets[currentId]!; slot < childEnd; slot += 1) {
+        const childId = columns.childIds[slot]!;
+        const endPosition = this.tree.positionForPoint({
+          row: columns.endRow[childId]!,
+          column: columns.endColumn[childId]!,
+          index: columns.endIndex[childId]!,
+        });
+        if (comparePosition(endPosition, end) < 0) continue;
+        const startPosition = this.tree.positionForPoint({
+          row: columns.startRow[childId]!,
+          column: columns.startColumn[childId]!,
+          index: columns.startIndex[childId]!,
+        });
+        if (
+          endsBeforeRangeStart(comparePosition(endPosition, start), comparePosition(startPosition, endPosition) === 0)
+        ) {
+          continue;
+        }
+        if (comparePosition(start, startPosition) < 0) break;
+        nextId = childId;
+        if (columns.named[childId]) namedId = childId;
+        break;
       }
+      if (nextId < 0) return this.tree.nodeById(namedId)!;
+      currentId = nextId;
     }
-    return this;
   }
 
   private collect(ids: Uint32Array, offsets: Uint32Array): ProjectedSyntaxNode[] {
@@ -204,4 +250,13 @@ function comparePosition(left: ProjectedPosition, right: ProjectedPosition): num
     return left.row - right.row;
   }
   return left.column - right.column;
+}
+
+/**
+ * Whether a child that reaches a lookup range's end still lies before the range, given how its end compares with the
+ * range's start. A child that only ends where the range starts does, so the node that starts there holds the offset.
+ * An empty child has no extent to extend past the offset it sits at, so it holds that offset.
+ */
+function endsBeforeRangeStart(endVersusRangeStart: number, childIsEmpty: boolean): boolean {
+  return childIsEmpty ? endVersusRangeStart < 0 : endVersusRangeStart <= 0;
 }

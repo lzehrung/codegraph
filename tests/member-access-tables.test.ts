@@ -62,6 +62,9 @@ function declaredNodeTypeLists(row: MemberAccessRow): Array<{ field: string; typ
       types: [embed.body, ...(embed.memberList ? [embed.memberList] : []), embed.member],
     });
   }
+  for (const [index, form] of (row.anonymousOwners ?? []).entries()) {
+    lists.push({ field: `anonymousOwners[${index}]`, types: [form.nodeType, form.bodyType] });
+  }
   const shapes = row.memberAccessShapes ?? [];
   for (const [index, shape] of shapes.entries()) {
     if (shape.nodeTypes) lists.push({ field: `memberAccessShapes[${index}] nodeTypes`, types: shape.nodeTypes });
@@ -79,6 +82,7 @@ function declaredCapabilityFields(row: MemberAccessRow): string[] {
   if (row.navigationFallbackLastChild) fields.push("navigationFallbackLastChild");
   if (row.receiverKeywords) fields.push("receiverKeywords");
   if (row.receiverAncestry) fields.push("receiverAncestry");
+  if (row.anonymousOwners) fields.push("anonymousOwners");
   if (row.memberAccessOmittedReason) fields.push("memberAccessOmittedReason");
   if (row.receiverKeywordsOmittedReason) fields.push("receiverKeywordsOmittedReason");
   if (row.memberCallNamesFreeFunction) fields.push("memberCallNamesFreeFunction");
@@ -195,5 +199,26 @@ describe("member access tables", () => {
     for (const languageId of receiverKeywordLanguageIds) {
       expect(registeredIds.has(languageId), `receiver keywords name unregistered language id ${languageId}`).toBe(true);
     }
+  });
+
+  it("gives each unnamed-type node type one body type across languages and only to languages with receiver keywords", () => {
+    const bodies = new Map<string, string>();
+    for (const [languageId, row] of Object.entries(MEMBER_ACCESS_ROWS)) {
+      if (!row.anonymousOwners) continue;
+      expect(receiverKeywordLanguageIds, `${languageId} declares unnamed types without receiver keywords`).toContain(
+        languageId,
+      );
+      for (const form of row.anonymousOwners) {
+        const known = bodies.get(form.nodeType);
+        expect(known ?? form.bodyType, `${languageId}: ${form.nodeType} disagrees about its body`).toBe(form.bodyType);
+        bodies.set(form.nodeType, form.bodyType);
+      }
+    }
+    expect([...bodies.keys()].sort()).toEqual([
+      "anonymous_class",
+      "class",
+      "object_creation_expression",
+      "object_literal",
+    ]);
   });
 });

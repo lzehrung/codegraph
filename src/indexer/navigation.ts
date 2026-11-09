@@ -221,14 +221,6 @@ export async function goToDefinition(
 
   const pos = toTreeSitterPosition({ line, column });
   let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
-  // A position at the start of `b` in `a?.b` also touches the end of the `?.` token, which the
-  // parser reports first. The use is the name that starts at the position.
-  if (node?.type === "optional_chain" && node.parent) {
-    const startsHere = node.parent.namedChildren.find(
-      (child) => child.startPosition.row === pos.row && child.startPosition.column === pos.column,
-    );
-    if (startsHere) node = startsHere;
-  }
 
   if (node && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");

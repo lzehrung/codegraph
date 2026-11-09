@@ -86,6 +86,7 @@ import {
   cppQualifiedNameSegments,
   declaredSupertypeKind,
   declaresMembers,
+  isAnonymousMemberContainer,
   isNonBaseHeritageArgument,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
@@ -1131,8 +1132,9 @@ export async function emitFunctionBodyEdges(
     member: SyntaxNodeLike;
     target: SyntaxNodeLike;
   }> = [];
-  // C# calls through a dotted receiver (`P.Mix.M()`, `Imported.Outer.Inner.M()`): navigation's
-  // member-access resolution decides the target after the walk, so both consumers agree.
+  // Calls whose target navigation's member-access resolution decides after the walk, so both consumers agree:
+  // C# calls through a dotted receiver (`P.Mix.M()`, `Imported.Outer.Inner.M()`), and `this`/`super` calls in an
+  // unnamed type body (`new Base() { ... }`), which no declaration owns for the deferred hierarchy lookup.
   const dottedReceiverCalls: Array<{ fromId: string; access: ReceiverCallAccess }> = [];
   const callNodeTypes = new Set<string>([
     "call_expression",
@@ -1171,6 +1173,12 @@ export async function emitFunctionBodyEdges(
       }
     }
     return membersByContainer.get(container.startIndex) ?? [];
+  };
+  /** Whether the type that `this`/`super` at `site` name is an unnamed body, which has no declaration to read. */
+  const receiverOwnerIsUnnamed = (site: SyntaxNodeLike): boolean => {
+    const container = nearestMemberContainer(site);
+    if (!container || !isAnonymousMemberContainer(context.sup.id, container)) return false;
+    return !memberContainerDef(context.moduleEntry, container);
   };
 
   for (const fn of functionNodes) {
@@ -1440,7 +1448,17 @@ export async function emitFunctionBodyEdges(
               return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
             })
           : [];
-        if (declared.length === 1) {
+        const hasKotlinPropertyCollision =
+          context.sup.id === "kotlin" &&
+          !!container &&
+          context.moduleEntry.locals.some((local) => {
+            if (local.kind !== SymbolKind.Variable || local.localName !== memberName) return false;
+            const start = local.range.start.index;
+            if (start === undefined || start < container.startIndex || start >= container.endIndex) return false;
+            const nameNode = context.tree.rootNode.descendantForIndex(start, start);
+            return isDirectKeywordMemberDeclaration(nameNode, container);
+          });
+        if (declared.length === 1 && !hasKotlinPropertyCollision) {
           const unique = declared[0]!;
           recordDefEdge(context, fromId, unique.def, "calls", access.property);
           // File-hidden Swift members stay off cross-file shared owners. Skipping the
@@ -1562,6 +1580,10 @@ export async function emitFunctionBodyEdges(
           return;
         }
         if (receiverProof.kind === "own-type" || receiverProof.kind === "supertype") {
+          if (receiverOwnerIsUnnamed(access.accessNode)) {
+            dottedReceiverCalls.push({ fromId, access });
+            return;
+          }
           recordReceiverCall(node, access, undefined, receiverProof);
           return;
         }

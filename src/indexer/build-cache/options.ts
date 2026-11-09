@@ -133,8 +133,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Python `pkg.x` after `import pkg.mod` reads the package, and a call in a base list proves no base.
  * Epoch 136 rebuilds C# root lookup, records static-using directive positions for namespace precedence, and records
  * the non-generic types of the global namespace in each file's namespace facts.
+ * Epoch 137 rebuilds detailed graphs and navigation where `super`, `this`, and bare member calls inside an anonymous
+ * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
+ * binds a call to the method, and a plain read to the field or property, that share a name.
  */
-export const CORE_ALGORITHM_EPOCH = 136;
+export const CORE_ALGORITHM_EPOCH = 137;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

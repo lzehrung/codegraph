@@ -24,6 +24,7 @@ import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -204,11 +205,13 @@ export function resolveBareName(
   const lookupName = policy.lookupName?.(use) ?? use.name;
   const early = policy.beforeLexical?.(use, lookupName);
   if (early !== undefined) return early;
-  const found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
+  let found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
+  // A binding the language never reads at this use gives way to the earlier one declared in the same scope.
+  while (found && policy.ignoresBinding?.(use, found)) found = found.earlierSameScope ?? null;
   const state: NameLookupState = {
     use,
     lookupName,
-    closestBinding: found && policy.ignoresBinding?.(use, found) ? null : found,
+    closestBinding: found,
   };
   const fromBinding = policy.fromClosestBinding?.(state);
   if (fromBinding !== undefined) return fromBinding;
@@ -312,7 +315,7 @@ export async function settleNameResolution(
       }
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
       // A member hides the name but none is a unique, reachable target (static context, ambiguity).
-      if (member === null) return { status: "not_found", reason: "No unique member through the implicit receiver" };
+      if (member === null) return { status: "not_found", reason: AMBIGUOUS_IMPLICIT_MEMBER_REASON };
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
       if (settled) return settled;

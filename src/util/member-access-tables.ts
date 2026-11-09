@@ -73,6 +73,24 @@ export type ReceiverAncestry = {
   mixinCalls?: readonly string[];
 };
 
+/**
+ * An unnamed type whose body declares members and owns `this` and `super` for them: Java
+ * `new Base() { ... }`, Kotlin `object : Base() { ... }`, PHP `new class extends Base { ... }`, and a
+ * JavaScript or TypeScript class expression. Only code inside the body belongs to the unnamed type;
+ * its heritage and constructor arguments belong to the enclosing owner.
+ */
+export type AnonymousOwnerForm = {
+  /** Node type that declares the unnamed type. */
+  nodeType: string;
+  /** Child node type that holds its members. */
+  bodyType: string;
+  /**
+   * Field of `nodeType` naming the one declared base when no `receiverAncestry` clause node holds it:
+   * Java `new Base() { ... }` names its base in the creation's `type` field.
+   */
+  baseField?: string;
+};
+
 export type MemberAccessRow = {
   /** Why the language has no member-access capability at all; only document, style, and data formats set it. */
   omittedReason?: string;
@@ -100,6 +118,8 @@ export type MemberAccessRow = {
   receiverKeywordsOmittedReason?: string;
   /** Language syntax that declares ancestors visible to own-type and supertype receivers. */
   receiverAncestry?: ReceiverAncestry;
+  /** Unnamed type bodies that own `this` and `super` for the members declared in them. */
+  anonymousOwners?: readonly AnonymousOwnerForm[];
   /**
    * Member syntax can name a free function (`!isMember`): Kotlin extensions
    * (`fun Widget.describe()`) and Go methods, which are indexed as free functions.
@@ -126,6 +146,9 @@ const CPP_QUALIFIED_ACCESS_SHAPE: MemberAccessShape = {
 
 const THIS_SUPER_RECEIVERS: ReceiverKeywords = { own: ["this"], instanceOwn: ["this"], supertype: ["super"] };
 const SELF_RECEIVERS: ReceiverKeywords = { own: ["self"], instanceOwn: ["self"], supertype: ["super"] };
+
+/** A JavaScript or TypeScript class expression (`const X = class extends Base { ... }`) is a value, not a declaration. */
+const JS_TS_ANONYMOUS_OWNERS: readonly AnonymousOwnerForm[] = [{ nodeType: "class", bodyType: "class_body" }];
 
 export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   adoc: { omittedReason: "AsciiDoc document format; embedded code blocks parse as their own language." },
@@ -209,6 +232,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "extends_interfaces", relation: "extends" },
       ],
     },
+    anonymousOwners: [{ nodeType: "object_creation_expression", bodyType: "class_body", baseField: "type" }],
     memberCallNamesFreeFunctionOmittedReason: "A method call names a member of the receiver type, not a free function.",
   },
   js: {
@@ -216,6 +240,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       "The shared generic default already reads member_expression's object and property fields.",
     receiverKeywords: THIS_SUPER_RECEIVERS,
     receiverAncestry: { clauses: [{ nodeType: "class_heritage", relation: "extends", supertype: "all" }] },
+    anonymousOwners: JS_TS_ANONYMOUS_OWNERS,
     memberCallNamesFreeFunctionOmittedReason:
       "Member syntax names an object property; a free function is not called that way.",
   },
@@ -229,6 +254,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       // Kotlin does not require the class to come first (`class C : I, Base()`); the declaration keyword picks it.
       clauses: [{ nodeType: "delegation_specifiers", relation: "superclass-first", supertype: "all" }],
     },
+    anonymousOwners: [{ nodeType: "object_literal", bodyType: "class_body" }],
     memberCallNamesFreeFunction: true,
   },
   less: { omittedReason: "Style language; no member-access concept." },
@@ -266,6 +292,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "use_declaration", relation: "trait", each: true },
       ],
     },
+    anonymousOwners: [{ nodeType: "anonymous_class", bodyType: "declaration_list" }],
     memberCallNamesFreeFunctionOmittedReason: "A member or scoped call names a class member, not a free function.",
   },
   python: {
@@ -346,6 +373,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "extends_type_clause", relation: "extends" },
       ],
     },
+    anonymousOwners: JS_TS_ANONYMOUS_OWNERS,
     memberCallNamesFreeFunctionOmittedReason:
       "Member syntax names an object property; a free function is not called that way.",
   },
@@ -360,6 +388,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         { nodeType: "extends_type_clause", relation: "extends" },
       ],
     },
+    anonymousOwners: JS_TS_ANONYMOUS_OWNERS,
     memberCallNamesFreeFunctionOmittedReason:
       "Member syntax names an object property; a free function is not called that way.",
   },
@@ -375,6 +404,26 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
 export const receiverKeywordLanguageIds: readonly string[] = Object.keys(MEMBER_ACCESS_ROWS).filter(
   (languageId) => MEMBER_ACCESS_ROWS[languageId]!.receiverKeywords !== undefined,
 );
+
+/**
+ * Body child type per unnamed-type node type. Languages that declare the same node type agree on its
+ * body, so a language-agnostic ancestor walk can ask by node type alone.
+ */
+const ANONYMOUS_OWNER_BODY_TYPES: ReadonlyMap<string, string> = new Map(
+  Object.values(MEMBER_ACCESS_ROWS).flatMap((row) =>
+    (row.anonymousOwners ?? []).map((form): [string, string] => [form.nodeType, form.bodyType]),
+  ),
+);
+
+/** Child node type holding the members of an unnamed type node, or undefined when `nodeType` is no unnamed type. */
+export function anonymousOwnerBodyType(nodeType: string): string | undefined {
+  return ANONYMOUS_OWNER_BODY_TYPES.get(nodeType);
+}
+
+/** The unnamed-type form that `nodeType` takes in `languageId`, when the language has one. */
+export function anonymousOwnerForm(languageId: string, nodeType: string): AnonymousOwnerForm | undefined {
+  return MEMBER_ACCESS_ROWS[languageId]?.anonymousOwners?.find((form) => form.nodeType === nodeType);
+}
 
 /** Languages that emit proven receiver `calls` edges from the shared keyword table. */
 export function supportsReceiverCallEdges(languageId: string): boolean {
