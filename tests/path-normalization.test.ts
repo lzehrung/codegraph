@@ -13,8 +13,10 @@ import {
   toProjectRelativePath,
 } from "../src/util.js";
 import {
+  createRootPathMapper,
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
+  isCanonicalRelativePath,
   isFileIdentityCaseInsensitive,
   resetFileIdentityCaseSensitivityForTests,
   setFileIdentityCaseInsensitive,
@@ -296,5 +298,74 @@ describe("cross-platform path normalization", () => {
     expect(findPathIdentityGuardViolations("src/example.ts", "index.byFile.get(file);")).toEqual([
       "src/example.ts:1: index.byFile.get(file);",
     ]);
+  });
+});
+
+describe("bulk conversion of paths under one root", () => {
+  const ROOT = path.resolve(process.cwd(), "tests", "samples");
+  const INPUTS = [
+    "a.ts",
+    "src/a/b.ts",
+    "src/dir with spaces/c.ts",
+    ".hidden/x.ts",
+    "a..b/c.ts",
+    "dotted.name.ts",
+    "..",
+    "../outside.ts",
+    "a/../b.ts",
+    "./a.ts",
+    "a/./b.ts",
+    "a//b.ts",
+    "a/",
+    ".",
+    "",
+    "a\\b.ts",
+    "/rooted.ts",
+    "C:/drive.ts",
+    "C:relative.ts",
+    path.join(ROOT, "src", "absolute.ts"),
+  ];
+
+  it("maps each path to what path.resolve gives, whether it joins the root or takes the full resolution", () => {
+    for (const root of [ROOT, `${ROOT}${path.sep}`, path.join(ROOT, "src", "..")]) {
+      const mapper = createRootPathMapper(root);
+      for (const input of INPUTS) {
+        const expected = normalizePath(path.isAbsolute(input) ? input : path.resolve(root, input));
+        expect(mapper.toAbsolute(input), `${root} + ${input}`).toBe(expected);
+      }
+    }
+  });
+
+  it("tells canonical relative paths from every form that path.resolve would change", () => {
+    const canonical = ["a.ts", "src/a/b.ts", "src/dir with spaces/c.ts", ".hidden/x.ts", "a..b/c.ts", "dotted.name.ts"];
+    for (const input of canonical) expect(isCanonicalRelativePath(input), input).toBe(true);
+    const other = ["..", "../outside.ts", "a/../b.ts", "./a.ts", "a/./b.ts", "a//b.ts", "a/", ".", "", "a\\b.ts"];
+    for (const input of [...other, "/rooted.ts", "C:/drive.ts", "C:relative.ts", "a/..", "a\0b"]) {
+      expect(isCanonicalRelativePath(input), input).toBe(false);
+    }
+  });
+
+  it("maps an absolute path back to its root-relative form, and a path outside the root to a .. path", () => {
+    const mapper = createRootPathMapper(ROOT);
+    const inside = normalizePath(path.join(ROOT, "src", "a", "b.ts"));
+    expect(mapper.toRelative(inside)).toBe("src/a/b.ts");
+    expect(mapper.toAbsolute(mapper.toRelative(inside))).toBe(inside);
+    expect(mapper.toRelative(normalizePath(ROOT))).toBe(".");
+    expect(mapper.toRelative(normalizePath(path.resolve(ROOT, "..", "elsewhere.ts")))).toBe("../elsewhere.ts");
+  });
+
+  it("keeps the root's own spelling, so an alias root stays an alias", () => {
+    const alias = path.resolve(process.cwd(), "alias-of-the-repository");
+    const mapper = createRootPathMapper(alias);
+    expect(mapper.toAbsolute("src/a.ts")).toBe(`${normalizePath(alias)}/src/a.ts`);
+    expect(mapper.toRelative(`${normalizePath(alias)}/src/a.ts`)).toBe("src/a.ts");
+  });
+
+  it("handles a filesystem root, whose prefix already ends with a separator", () => {
+    const filesystemRoot = path.parse(process.cwd()).root;
+    const mapper = createRootPathMapper(filesystemRoot);
+    const expected = normalizePath(path.resolve(filesystemRoot, "a", "b.ts"));
+    expect(mapper.toAbsolute("a/b.ts")).toBe(expected);
+    expect(mapper.toRelative(expected)).toBe("a/b.ts");
   });
 });

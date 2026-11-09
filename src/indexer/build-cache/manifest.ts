@@ -16,7 +16,9 @@ import {
 } from "../../util/project-files.js";
 import {
   assertFilePathWithinRoot,
+  createRootPathMapper,
   fileIdentityKey,
+  isCanonicalRelativePath,
   isFilePathWithinRoot,
   normalizePath,
   toProjectRelativePath,
@@ -109,6 +111,19 @@ export type IndexManifest = {
    * Empty proves no earlier dirty tracked state needs reconciliation; absent or invalid requires a blob scan.
    */
   gitDirtyFiles?: string[];
+  /**
+   * Submodule directories (gitlinks) that differed from `lastCommit` when the manifest was written, stored
+   * project-relative. Git reports one path per submodule, so the next update lists a recorded submodule's own files
+   * again even after it was restored. Absent or invalid requires reconciling every submodule.
+   */
+  gitDirtySubmodules?: string[];
+  /**
+   * Tracked files flagged assume-unchanged or skip-worktree when the manifest was written, stored project-relative.
+   * Git omits them from every diff, so an edit or a deletion that a flag hid stays unseen once the flag is cleared
+   * (`git sparse-checkout add` does that) unless the next update verifies the files that were flagged. Absent or
+   * invalid means that record is unknown, so `gitDirtyFiles` cannot be trusted either and the update compares blob ids.
+   */
+  gitFlaggedFiles?: string[];
   configHash?: string;
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
@@ -259,6 +274,23 @@ export function sanitizeManifestTransientFilesForRoot(
   return [...sanitizedFiles];
 }
 
+/**
+ * A recorded list of project-relative paths as absolute paths under `projectRoot`. Every entry must be a canonical
+ * relative path (see `isCanonicalRelativePath`), which stays inside the root by construction and resolves without
+ * `path.resolve`; one other entry makes the whole list unknown, as `gitDirtyFiles` does. The list can hold every
+ * file of a sparse checkout, so its cost per entry is kept to a pattern test and a concatenation.
+ */
+function resolveRecordedRelativePaths(projectRoot: string, stored: unknown): string[] | undefined {
+  if (!Array.isArray(stored)) return undefined;
+  const toAbsolute = createRootPathMapper(projectRoot).toAbsolute;
+  const resolved: string[] = [];
+  for (const value of stored) {
+    if (typeof value !== "string" || !isCanonicalRelativePath(value)) return undefined;
+    resolved.push(toAbsolute(value));
+  }
+  return resolved;
+}
+
 function resolveManifestSymlinkDirectories(
   projectRoot: string,
   storedProjectRoot: string,
@@ -398,13 +430,19 @@ export async function loadManifest(
     const {
       declaredContainers: storedDeclaredContainers,
       gitDirtyFiles: storedGitDirtyFiles,
+      gitDirtySubmodules: storedGitDirtySubmodules,
+      gitFlaggedFiles: storedGitFlaggedFiles,
       ...parsedWithoutDerivedPaths
     } = parsed;
-    let gitDirtyFiles: string[] | undefined;
-    if (Array.isArray(storedGitDirtyFiles)) {
-      const sanitized = sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, storedGitDirtyFiles);
-      if (sanitized.length === storedGitDirtyFiles.length) gitDirtyFiles = sanitized;
-    }
+    // A recorded path list is usable only when every entry stays inside the project root.
+    const sanitizeRecordedPaths = (stored: unknown): string[] | undefined => {
+      if (!Array.isArray(stored)) return undefined;
+      const sanitized = sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, stored);
+      return sanitized.length === stored.length ? sanitized : undefined;
+    };
+    const gitDirtyFiles = sanitizeRecordedPaths(storedGitDirtyFiles);
+    const gitDirtySubmodules = sanitizeRecordedPaths(storedGitDirtySubmodules);
+    const gitFlaggedFiles = resolveRecordedRelativePaths(projectRoot, storedGitFlaggedFiles);
     const declaredContainers = resolveManifestDeclaredContainers(
       projectRoot,
       parsed.projectRoot,
@@ -419,6 +457,8 @@ export async function loadManifest(
       ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
       ...(declaredContainers !== undefined ? { declaredContainers } : {}),
       ...(gitDirtyFiles !== undefined ? { gitDirtyFiles } : {}),
+      ...(gitDirtySubmodules !== undefined ? { gitDirtySubmodules } : {}),
+      ...(gitFlaggedFiles !== undefined ? { gitFlaggedFiles } : {}),
     };
     return migrated;
   } catch (error) {

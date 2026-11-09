@@ -155,7 +155,7 @@ describe("getGitBlobHashes", () => {
       expect(restored.byFile.has(fileIdentityKey(clean))).toBe(true);
       let calls = await gitCalls(log);
       expect(calls.filter((args) => args[0] === "hash-object")).toEqual([]);
-      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-s"))).toHaveLength(1);
       expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toHaveLength(1);
 
       await fsp.writeFile(log, "");
@@ -165,8 +165,12 @@ describe("getGitBlobHashes", () => {
       expect(report.files?.changed).toBe(0);
       expect((await gitCalls(log)).filter((args) => args[0] === "hash-object")).toEqual([]);
       calls = await gitCalls(log);
-      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toEqual([]);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-s"))).toEqual([]);
       expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toEqual([]);
+      // One Git child lists untracked files and, in the same listing, the tracked files Git cannot compare.
+      expect(
+        calls.filter((args) => args[0] === "ls-files" && args.includes("-v") && args.includes("--others")),
+      ).toHaveLength(1);
       expect(calls.filter((args) => args[0] === "diff")).toHaveLength(1);
       await fsp.writeFile(log, "");
       expect(await resolveIncrementalFilePlan(root, options)).not.toBeNull();
@@ -178,7 +182,7 @@ describe("getGitBlobHashes", () => {
       calls = await gitCalls(log);
       expect(calls.filter((args) => args[0] === "hash-object").flatMap((args) => args.slice(2))).toEqual([clean]);
       expect(calls.filter((args) => args[0] === "diff")).toHaveLength(2);
-      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toHaveLength(1);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-s"))).toHaveLength(1);
       expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toHaveLength(1);
       const stored = JSON.parse(
         await fsp.readFile(path.join(root, ".codegraph", "cache", "index-v1", "manifest.json"), "utf8"),
@@ -217,7 +221,7 @@ describe("getGitBlobHashes", () => {
       await buildProjectIndexIncremental(root, { ...options, report: warmReport });
       expect(warmReport.files?.parsed).toBe(0);
       let calls = await gitCalls(log);
-      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-v"))).toEqual([]);
+      expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-s"))).toEqual([]);
       expect(calls.filter((args) => args[0] === "ls-files" && args.includes("-m"))).toEqual([]);
       runGit(root, ["add", "main.ts", "value.ts"]);
       await fsp.writeFile(log, "");
@@ -283,7 +287,7 @@ describe("getGitBlobHashes", () => {
           'const fs = require("node:fs");',
           "const args = process.argv.slice(2);",
           'const result = spawnSync("git", args, { encoding: "utf8", windowsHide: true });',
-          `if (args[0] === "diff" && args.includes("--name-only") && !fs.existsSync(${JSON.stringify(marker)})) {`,
+          `if (args[0] === "diff" && args.includes("--raw") && !fs.existsSync(${JSON.stringify(marker)})) {`,
           `  fs.writeFileSync(${JSON.stringify(marker)}, "edited");`,
           `  fs.writeFileSync(${JSON.stringify(path.join(root, "clean.ts"))}, "export const edited = 99;\\n");`,
           "}",

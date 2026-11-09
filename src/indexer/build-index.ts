@@ -20,7 +20,7 @@ import {
   type ProjectDiscoveryContext,
   type ProjectFileInfo,
 } from "../util/project-files.js";
-import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
+import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFileEntries, listChangedFiles } from "../util/git.js";
 import { clearResolutionCaches, loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
@@ -40,7 +40,7 @@ import {
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { pushAll } from "../util/collections.js";
-import { readConfinedUtf8File } from "../util/confined-file.js";
+import { readConfinedUtf8File, readConfinedUtf8FileWithSize } from "../util/confined-file.js";
 import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { runWithProbeCache } from "../util/fs-probe-cache.js";
 import { logWithLevel } from "../logging.js";
@@ -175,10 +175,15 @@ import {
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   collectGitManifestChangeCandidates,
+  findRespelledTrackedFiles,
+  findStaleOrUnseenManifestFiles,
+  listGitWorktreeSignals,
   manifestFileSignatureMatches,
   filterIncrementalDiscoveryCandidates,
   partitionTrackedManifestFiles,
   probePathExistence,
+  reconcileGitHiddenChanges,
+  type GitWorktreeSignals,
 } from "./incremental-plan.js";
 import {
   declarationImportRecheck,
@@ -1351,12 +1356,12 @@ async function prepareFileSignatures(args: {
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
     const gitSig = args.gitSigMap.get(file);
-    const source = args.confinedRoot
-      ? await readConfinedUtf8File(args.confinedRoot, args.projectRoot, file)
+    const read = args.confinedRoot
+      ? await readConfinedUtf8FileWithSize(args.confinedRoot, args.projectRoot, file)
       : undefined;
-    if (source !== undefined) {
-      args.trustedSources?.set(file, source);
-      return [file, fileSignatureFromSource(source, gitSig)] as const;
+    if (read !== undefined) {
+      args.trustedSources?.set(file, read.source);
+      return [file, fileSignatureFromSource(read.source, read.size, gitSig)] as const;
     }
     const sigInfo = await fileSignature(file, args.signatureStrict, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
@@ -1886,10 +1891,10 @@ async function buildIndexFromFileListInProbeCache(
         let sigInfo = fileSignatures.get(file);
         if (!sigInfo) {
           const gitSig = gitSigMap.get(file);
-          const source = confinedRoot ? await readConfinedUtf8File(confinedRoot, projectRoot, file) : undefined;
-          if (source !== undefined) {
-            trustedSources?.set(file, source);
-            sigInfo = fileSignatureFromSource(source, gitSig);
+          const read = confinedRoot ? await readConfinedUtf8FileWithSize(confinedRoot, projectRoot, file) : undefined;
+          if (read !== undefined) {
+            trustedSources?.set(file, read.source);
+            sigInfo = fileSignatureFromSource(read.source, read.size, gitSig);
           } else {
             sigInfo = await fileSignature(file, signatureStrict, gitSig, {
               forceContentHash: cacheEnabled && !gitSig,
@@ -2780,16 +2785,20 @@ async function buildProjectIndexIncrementalInProbeCache(
     };
     const reconciledWorkingTreeDiffFiles = canReuseReconciliation ? opts?.reconciledWorkingTreeDiffFiles : undefined;
     let manifestDiffFiles = reconciledWorkingTreeDiffFiles ?? [];
+    let changedSubmodules: string[] = [];
     if (shouldDiffAgainstWorkingTree && reconciledWorkingTreeDiffFiles === undefined) {
       try {
-        manifestDiffFiles = await measureSourceDiscovery(() =>
-          listChangedFiles(projectRoot, {
+        const changed = await measureSourceDiscovery(() =>
+          listChangedFileEntries(projectRoot, {
             base: manifest.lastCommit,
             head: "WORKTREE",
             includeRenameSources: true,
+            includeHiddenSubmoduleChanges: true,
             discoveryCache: discoveryContext.git,
           }),
         );
+        manifestDiffFiles = changed.files;
+        changedSubmodules = changed.gitlinks;
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
         if (manifestReport) {
@@ -2870,6 +2879,8 @@ async function buildProjectIndexIncrementalInProbeCache(
     // the same way a stale manifest commit does above.
     let untrackedFiles: string[] = [];
     let gitManifestCandidates: string[] = [];
+    // Tracked files Git cannot compare with the worktree, and Git's spelling of each path.
+    let worktreeSignals: GitWorktreeSignals | undefined;
     // Without that cheap Git signal -- no repository at all, or `--cache-strict` asking for
     // maximum certainty over speed -- the manifest file list cannot prove that no new file
     // appeared, so rediscover the project instead of trusting it. Per-file signature checks
@@ -2887,10 +2898,13 @@ async function buildProjectIndexIncrementalInProbeCache(
           untrackedFiles = await measureSourceDiscovery(() =>
             listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext),
           );
+          worktreeSignals = await measureSourceDiscovery(() =>
+            listGitWorktreeSignals(projectRoot, opts?.discovery, discoveryContext),
+          );
         }
         if (!canReuseReconciliation || opts?.reconciledWorkingTreeDiffFiles === undefined) {
           gitManifestCandidates = await measureSourceDiscovery(() =>
-            collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest.gitDirtyFiles),
+            collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest),
           );
         }
       } catch (error) {
@@ -2933,6 +2947,44 @@ async function buildProjectIndexIncrementalInProbeCache(
       );
     }
     manifestDiffFiles = [...new Set([...manifestDiffFiles, ...gitManifestCandidates])];
+    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
+    // A case-only rename leaves the manifest key spelled the old way on a case-insensitive file system, where an
+    // existence probe still finds the file. The authoritative spelling is Git's listing (a submodule's own listing
+    // inside a submodule), or the rediscovered list.
+    let retiredTrackedFiles = canReuseReconciliation ? (opts?.reconciledRetiredTrackedFiles ?? []) : [];
+    // Files Git cannot report on (changed submodules and flagged files) are verified by stat.
+    let hiddenChangeFiles = canReuseReconciliation ? (opts?.reconciledHiddenChangeFiles ?? []) : [];
+    if (worktreeSignals) {
+      const hidden = await measureSourceDiscovery(() =>
+        reconcileGitHiddenChanges({
+          projectRoot,
+          trackedEntries,
+          gitCandidates: [...manifestDiffFiles, ...untrackedFiles],
+          changedSubmodules,
+          manifest,
+          signals: worktreeSignals,
+          opts,
+          context: discoveryContext,
+          concurrency: buildConcurrency(opts),
+        }),
+      );
+      retiredTrackedFiles = hidden.retiredTrackedFiles;
+      hiddenChangeFiles = hidden.files;
+      manifestDiffFiles = [
+        ...new Set([...manifestDiffFiles.filter((file) => !hidden.droppedSpellings.has(file)), ...hidden.files]),
+      ];
+    } else if (rediscoveredFiles.length) {
+      const rediscovered = new Set(rediscoveredFiles);
+      retiredTrackedFiles = findRespelledTrackedFiles(trackedEntries, rediscoveredFiles, (file) =>
+        rediscovered.has(file),
+      ).retiredTrackedFiles;
+    }
+    for (const file of retiredTrackedFiles) {
+      if (!trackedFiles.delete(file)) continue;
+      deletedTrackedFiles.add(file);
+      delete trackedEntries[file];
+      manifestRequiresSanitization = true;
+    }
     const projectCandidates = new Set(
       await filterIncrementalDiscoveryCandidates(
         projectRoot,
@@ -2962,7 +3014,7 @@ async function buildProjectIndexIncrementalInProbeCache(
       (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
     );
     const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
-    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
+
     for (const file of retiredTransientFiles) {
       trackedFiles.delete(file);
       deletedTrackedFiles.add(file);
@@ -3021,6 +3073,16 @@ async function buildProjectIndexIncrementalInProbeCache(
       };
     }
     const changedFiles = new Set<string>();
+    // A signature is `${mtimeMs}:${size}`, plus `:${contentHash}` when strict or when no Git identity exists.
+    const manifestSignatureStatPrefix = (sig: string): string => sig.split(":", 2).join(":");
+    const hasStaleStat = (recordedSig: string, currentSig: string): boolean =>
+      manifestSignatureStatPrefix(recordedSig) !== manifestSignatureStatPrefix(currentSig);
+    // Submodule and flagged files whose content a Git or content identity proves unchanged, but whose manifest
+    // `mtime:size` is out of date. An update compares only these by stat, so a stale one would send every later update
+    // through a signature pass: the manifest and snapshot are rewritten with the fresh signature once. A file Git's
+    // diff reports is checked whatever its stat says, so a touch there costs a signature pass but no rewrite.
+    const staleSignatureFiles = new Set<string>();
+    const statVerifiedFiles = new Set(hiddenChangeFiles);
     if (!resolverEnvironmentMatchesManifest) {
       for (const file of allFiles) changedFiles.add(file);
     }
@@ -3051,7 +3113,9 @@ async function buildProjectIndexIncrementalInProbeCache(
     if (fileReport) fileReport.changed = changedFiles.size;
 
     const reuseUnchangedSnapshot = async (): Promise<ProjectIndex | null> => {
-      if (changedFiles.size || deletedTrackedFiles.size || manifestRequiresSanitization) return null;
+      if (changedFiles.size || staleSignatureFiles.size || deletedTrackedFiles.size || manifestRequiresSanitization) {
+        return null;
+      }
       const manifestEntryMap = new Map(Object.entries(trackedEntries));
       const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, manifestEntryMap, report);
       if (!snapshotLoad) return null;
@@ -3090,26 +3154,12 @@ async function buildProjectIndexIncrementalInProbeCache(
     // An already indexed untracked file (a build artifact or scratch file, for example) can reuse its snapshot
     // when its stat still matches; an unseen or changed file must pass ordinary signature validation.
     // `entry.sig` starts with `${mtimeMs}:${size}` (`fileStatSignature` in build-cache/module-cache.ts).
-    const hasStaleOrUnseenUntrackedFile = untrackedFiles.length
-      ? (
-          await Promise.all(
-            untrackedFiles.map(async (file) => {
-              const entry = trackedEntries[file];
-              if (!entry?.sig) return true;
-              try {
-                const stat = await fsp.stat(file);
-                // Non-strict signatures are `${mtimeMs}:${size}`; strict ones append
-                // `:${contentHash}`. Match either form so the fast path works when
-                // `cacheStrict: false` (where this gate itself only runs).
-                const prefix = `${stat.mtimeMs}:${stat.size}`;
-                return !(entry.sig === prefix || entry.sig.startsWith(`${prefix}:`));
-              } catch {
-                return true;
-              }
-            }),
-          )
-        ).some(Boolean)
-      : false;
+    const staleUntrackedFiles = await findStaleOrUnseenManifestFiles(
+      untrackedFiles,
+      trackedEntries,
+      buildConcurrency(opts),
+    );
+    const hasStaleOrUnseenUntrackedFile = !!staleUntrackedFiles.length;
     const canSkipFileValidation =
       gitAvailable &&
       !opts?.cacheStrict &&
@@ -3174,6 +3224,8 @@ async function buildProjectIndexIncrementalInProbeCache(
         if (!entry) addedFiles.push(file);
         if (!entry || !hasMatchingSignature) {
           changedFiles.add(file);
+        } else if (statVerifiedFiles.has(file) && hasStaleStat(entry.sig, sigInfo.sig)) {
+          staleSignatureFiles.add(file);
         }
       }
       const reverseDeps = buildTrackedFileReverseDependencies(trackedEntries);
@@ -3791,13 +3843,51 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
-  const [manifestCandidates, untrackedFiles] = await Promise.all([
+  const [manifestCandidates, untrackedFiles, worktreeSignals, worktreeDiff] = await Promise.all([
     gitAvailable
-      ? collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest?.gitDirtyFiles)
+      ? collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest ?? undefined)
       : [],
     listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable, discoveryContext),
+    gitAvailable && manifest ? listGitWorktreeSignals(projectRoot, opts?.discovery, discoveryContext) : undefined,
+    gitAvailable && manifest?.lastCommit && !hasExplicitGitRange
+      ? listChangedFileEntries(projectRoot, {
+          base: manifest.lastCommit,
+          head: "WORKTREE",
+          includeRenameSources: true,
+          includeHiddenSubmoduleChanges: true,
+          discoveryCache: discoveryContext.git,
+        }).catch((error: unknown) => {
+          // The index build below rebuilds in full when the manifest commit is gone.
+          if (!isMissingGitRevisionError(error)) throw error;
+          return undefined;
+        })
+      : undefined,
   ]);
-  const reconciliationCandidates = [...new Set([...manifestCandidates, ...untrackedFiles])];
+  let staleSpellings = new Set<string>();
+  let hiddenChangeFiles: string[] = [];
+  if (worktreeSignals) {
+    const hidden = await reconcileGitHiddenChanges({
+      projectRoot,
+      trackedEntries,
+      gitCandidates: [...manifestDiffFiles, ...manifestCandidates, ...untrackedFiles],
+      changedSubmodules: worktreeDiff?.gitlinks ?? [],
+      manifest: manifest ?? undefined,
+      signals: worktreeSignals,
+      opts,
+      context: discoveryContext,
+      concurrency: buildConcurrency(opts),
+    });
+    staleSpellings = hidden.droppedSpellings;
+    hiddenChangeFiles = hidden.files;
+    for (const file of hidden.retiredTrackedFiles) {
+      if (!trackedFiles.delete(file)) continue;
+      deletedTrackedFiles.add(file);
+    }
+  }
+  manifestDiffFiles = manifestDiffFiles.filter((file) => !staleSpellings.has(file));
+  const reconciliationCandidates = [
+    ...new Set([...manifestCandidates, ...untrackedFiles, ...hiddenChangeFiles]),
+  ].filter((file) => !staleSpellings.has(file));
   const projectCandidates = new Set(
     await filterIncrementalDiscoveryCandidates(
       projectRoot,

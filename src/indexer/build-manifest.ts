@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { getGitHeadOrEmptyTree, listChangedFiles } from "../util/git.js";
+import { getGitHeadOrEmptyTree, listChangedFileEntries, listFlaggedTrackedFiles } from "../util/git.js";
 import { logWithLevel } from "../logging.js";
 import {
   computeConfigHash,
@@ -20,6 +20,7 @@ import {
   DEFAULT_PROJECT_PATTERNS,
   type ProjectDiscoveryContext,
 } from "../util/project-files.js";
+import { createRootPathMapper } from "../util/paths.js";
 import { languageExtensionPatterns } from "../languages.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 
@@ -81,20 +82,42 @@ export async function writeIndexManifestSnapshot(args: {
   const lastCommit = await getGitHeadOrEmptyTree(args.projectRoot, args.discoveryContext?.git);
   recordManifestTimingStep(args.timings, "git-head", gitHeadStartedAt);
   let gitDirtyFiles: string[] | undefined;
+  let gitDirtySubmodules: string[] | undefined;
+  let gitFlaggedFiles: string[] | undefined;
   if (lastCommit) {
     try {
-      const changed = await listChangedFiles(args.projectRoot, {
-        base: lastCommit,
-        head: "WORKTREE",
-        includeRenameSources: true,
-      });
+      // The diff is not shared with the update that precedes this write: an edit made while that update ran must be
+      // recorded, or the next update would trust a state older than the one it indexed. The flagged files come from that
+      // update's own listing, so no further Git child runs; a flag set after the listing is verified by the next update
+      // only while it is still set.
+      const flaggedListingOptions = args.discoveryContext ? { discoveryCache: args.discoveryContext.git } : {};
+      const [changedResult, flaggedResult] = await Promise.allSettled([
+        listChangedFileEntries(args.projectRoot, {
+          base: lastCommit,
+          head: "WORKTREE",
+          includeRenameSources: true,
+          includeHiddenSubmoduleChanges: true,
+        }),
+        listFlaggedTrackedFiles(args.projectRoot, flaggedListingOptions),
+      ]);
+      // A failed Git child must not leave the other holding the project directory open.
+      if (changedResult.status === "rejected") throw changedResult.reason;
+      if (flaggedResult.status === "rejected") throw flaggedResult.reason;
+      const changed = changedResult.value;
       const matchesDiscovery = createDiscoveredFileMatcher(
         args.projectRoot,
         args.opts?.discovery?.globRoot ?? args.projectRoot,
         [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(args.opts?.languageExtensions)],
         args.opts?.discovery,
       );
-      gitDirtyFiles = changed.filter((file) => Object.hasOwn(files, file) || matchesDiscovery(file));
+      // A submodule is recorded as one directory; its own files are listed when the next update reconciles it.
+      const gitlinks = new Set(changed.gitlinks);
+      // A dirty file matters to the next update when it is indexed now, or could be once it changes back.
+      const mayBeIndexed = (file: string): boolean => Object.hasOwn(files, file) || matchesDiscovery(file);
+      gitDirtyFiles = changed.files.filter((file) => !gitlinks.has(file) && mayBeIndexed(file));
+      gitDirtySubmodules = changed.gitlinks;
+      // Every flagged file is recorded, indexed or not: clearing a flag can bring back a file the index never saw.
+      gitFlaggedFiles = flaggedResult.value.map(createRootPathMapper(args.projectRoot).toRelative);
     } catch (error) {
       logWithLevel(
         args.opts?.logLevel,
@@ -120,6 +143,10 @@ export async function writeIndexManifestSnapshot(args: {
     ...(gitDirtyFiles !== undefined
       ? { gitDirtyFiles: gitDirtyFiles.map((file) => cacheRelativePath(args.projectRoot, file)) }
       : {}),
+    ...(gitDirtySubmodules !== undefined
+      ? { gitDirtySubmodules: gitDirtySubmodules.map((directory) => cacheRelativePath(args.projectRoot, directory)) }
+      : {}),
+    ...(gitFlaggedFiles !== undefined ? { gitFlaggedFiles } : {}),
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),

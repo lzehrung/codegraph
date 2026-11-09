@@ -359,6 +359,47 @@ export function toProjectDisplayPath(projectRoot: string | undefined, filePath: 
   return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
 }
 
+/**
+ * Matches a relative path that is not canonical: empty, rooted, drive-qualified, holding a backslash or NUL, or
+ * with an empty, `.` or `..` segment or a trailing separator.
+ */
+const NON_CANONICAL_RELATIVE_PATH = /^$|^[\\/]|^[A-Za-z]:|[\\\0]|\/\/|\/$|(?:^|\/)\.\.?(?:\/|$)/u;
+
+/**
+ * Whether `candidate` is a canonical relative path: `/`-separated, with no empty, `.` or `..` segment, no trailing
+ * separator, and no root or drive prefix. Git lists its paths this way, and the manifest records them this way.
+ */
+export function isCanonicalRelativePath(candidate: string): boolean {
+  return !NON_CANONICAL_RELATIVE_PATH.test(candidate);
+}
+
+export type RootPathMapper = {
+  /** `normalizePath(path.resolve(root, relativePath))`; an absolute `relativePath` is only normalized. */
+  toAbsolute: (relativePath: string) => string;
+  /** The `/`-separated path of a normalized absolute path relative to the root, or `.` for the root itself. */
+  toRelative: (absolutePath: string) => string;
+};
+
+/**
+ * Converts many paths under one root, which `path.resolve` and `path.relative` do at about a microsecond each: a list
+ * of every flagged file in a sparse checkout is large enough for that to show. A canonical relative path joins the
+ * root's prefix, which resolves to the same string; any other path takes the full resolution.
+ */
+export function createRootPathMapper(root: string): RootPathMapper {
+  const resolvedRoot = normalizePath(path.resolve(root));
+  const prefix = resolvedRoot.endsWith("/") ? resolvedRoot : `${resolvedRoot}/`;
+  return {
+    toAbsolute: (relativePath) => {
+      if (isCanonicalRelativePath(relativePath)) return prefix + relativePath;
+      return normalizePath(path.isAbsolute(relativePath) ? relativePath : path.resolve(root, relativePath));
+    },
+    toRelative: (absolutePath) => {
+      if (absolutePath.startsWith(prefix)) return absolutePath.slice(prefix.length);
+      return normalizePath(path.relative(resolvedRoot, absolutePath)) || ".";
+    },
+  };
+}
+
 export function normalizeResolutionHints(hints?: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();

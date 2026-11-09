@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stringifyUnknown } from "./ast.js";
-import { normalizePath } from "./paths.js";
+import { createRootPathMapper, normalizePath } from "./paths.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 
 /**
@@ -16,14 +16,30 @@ export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 type GitExcludeFile = { file: string; baseDir: string; priority: number };
 
+/**
+ * One `git ls-files` listing of a repository. A listing that asked for tracked entries too also records the tracked
+ * paths Git cannot compare with the worktree, and every tracked spelling. Both are read on first use: an update with
+ * no flagged file resolves no flagged path, and one that never compares spellings resolves no tracked path.
+ */
+export type GitWorktreeListing = {
+  untracked: string[];
+  /** Tracked files flagged assume-unchanged or skip-worktree. Undefined when the listing did not read tracked entries. */
+  flaggedFiles: (() => readonly string[]) | undefined;
+  /** Tracked path spellings as Git records them. Undefined when the listing did not read tracked entries. */
+  trackedPaths: (() => ReadonlySet<string>) | undefined;
+};
+
+/** Changed paths of one diff, with the submodule (gitlink) paths among them. */
+export type GitChangedEntries = { files: string[]; gitlinks: string[] };
+
 /** Git facts shared only by callers in the same discovery operation. */
 export type GitDiscoveryCache = {
   repositories: Map<string, Promise<boolean>>;
   ignoredRoots: Map<string, Promise<boolean>>;
   excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
-  untrackedFiles: Map<string, Promise<string[]>>;
+  untrackedFiles: Map<string, Promise<GitWorktreeListing>>;
   indexedBlobs: Map<string, Promise<IndexedBlob[]>>;
-  workingTreeDiffs: Map<string, Promise<string[]>>;
+  workingTreeDiffs: Map<string, Promise<GitChangedEntries>>;
 };
 
 export function createGitDiscoveryCache(): GitDiscoveryCache {
@@ -627,6 +643,11 @@ type GitChangedFileOptions = {
   discoveryCache?: GitDiscoveryCache;
   /** @internal Retain deleted rename sources when recording incremental worktree history. */
   includeRenameSources?: boolean;
+  /**
+   * @internal Also report a submodule whose untracked or configured-ignored content a default diff hides, so incremental
+   * updates can reconcile the submodule's own files.
+   */
+  includeHiddenSubmoduleChanges?: boolean;
 };
 
 /**
@@ -636,36 +657,93 @@ type GitChangedFileOptions = {
  * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
  */
 export async function listChangedFiles(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
+  return (await listChangedFileEntries(projectRoot, opts)).files;
+}
+
+/** {@link listChangedFiles} plus the changed submodule (gitlink) paths, which Git reports as one path per submodule. */
+export async function listChangedFileEntries(
+  projectRoot: string,
+  opts: GitChangedFileOptions,
+): Promise<GitChangedEntries> {
   const cache = opts.discoveryCache?.workingTreeDiffs;
-  if (opts.head !== "WORKTREE" || !opts.base || !cache) return await listChangedFilesUncached(projectRoot, opts);
-  const key = `${path.resolve(projectRoot)}\0${opts.base}\0${opts.includeRenameSources ? 1 : 0}`;
+  if (opts.head !== "WORKTREE" || !opts.base || !cache) return await listChangedFileEntriesUncached(projectRoot, opts);
+  const key = [
+    path.resolve(projectRoot),
+    opts.base,
+    opts.includeRenameSources ? 1 : 0,
+    opts.includeHiddenSubmoduleChanges ? 1 : 0,
+  ].join("\0");
   const cached = cache.get(key);
   if (cached) return await cached;
-  const diff = listChangedFilesUncached(projectRoot, opts);
+  const diff = listChangedFileEntriesUncached(projectRoot, opts);
   cache.set(key, diff);
   return await diff;
 }
 
-async function listChangedFilesUncached(projectRoot: string, opts: GitChangedFileOptions): Promise<string[]> {
+const GIT_GITLINK_MODE = "160000";
+
+/** Parse `git diff --name-only -z`. The trailing split segment is empty, and a real filename can start or end with whitespace. */
+function parseNameOnlyDiffEntries(projectRoot: string, stdout: string): GitChangedEntries {
+  const files = new Set<string>();
+  for (const rel of stdout.split("\0")) {
+    const abs = rel ? normalizePath(path.resolve(projectRoot, rel)) : "";
+    if (abs) files.add(abs);
+  }
+  return { files: Array.from(files), gitlinks: [] };
+}
+
+/**
+ * Parse `git diff --raw -z`: `:<src mode> <dst mode> <src id> <dst id> <status>` then one path, or two for a rename
+ * or copy. A rename reports its destination, as `--name-only` does. A gitlink names a submodule, not a file.
+ */
+function parseRawDiffEntries(projectRoot: string, stdout: string): GitChangedEntries {
+  const fields = stdout.split("\0");
+  const files = new Set<string>();
+  const gitlinks = new Set<string>();
+  for (let index = 0; index < fields.length; index += 1) {
+    const meta = fields[index];
+    if (!meta?.startsWith(":")) continue;
+    const [sourceMode, destinationMode, , , status = ""] = meta.slice(1).split(" ");
+    const pathCount = status.startsWith("R") || status.startsWith("C") ? 2 : 1;
+    const rel = fields[index + pathCount];
+    index += pathCount;
+    const abs = rel ? normalizePath(path.resolve(projectRoot, rel)) : "";
+    if (!abs) continue;
+    files.add(abs);
+    if (sourceMode === GIT_GITLINK_MODE || destinationMode === GIT_GITLINK_MODE) gitlinks.add(abs);
+  }
+  return { files: Array.from(files), gitlinks: Array.from(gitlinks) };
+}
+
+async function listChangedFileEntriesUncached(
+  projectRoot: string,
+  opts: GitChangedFileOptions,
+): Promise<GitChangedEntries> {
+  // -z NUL-delimits entries; git also quotes/octal-escapes non-ASCII bytes in the unquoted forms, corrupting them, so
+  // -z is required, not cosmetic. --raw (instead of --name-only) names each entry's modes, which identify a gitlink.
+  const reportsSubmodules = !!opts.includeHiddenSubmoduleChanges;
+  const format = reportsSubmodules ? "--raw" : "--name-only";
+  const submoduleArgs = reportsSubmodules ? ["--ignore-submodules=none"] : [];
   let args = [
     "diff",
     "--relative",
     "--no-ext-diff",
     "--no-textconv",
     "--find-renames",
-    "--name-only",
+    format,
     "-z",
     "--diff-filter=ACDMRTUXB",
+    ...submoduleArgs,
   ];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args = gitDiffArgs(opts.base, head, ["--relative", "--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
+    args = gitDiffArgs(opts.base, head, ["--relative", format, "-z", "--diff-filter=ACDMRTUXB", ...submoduleArgs]);
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
-    return [];
+    return { files: [], gitlinks: [] };
   }
-  // --name-only coalesces a rename into its destination; dirty history must also retain the deleted source.
+  // A rename reports only its destination; dirty history must also retain the deleted source.
   if (opts.includeRenameSources) {
     const renameFlagIndex = args.indexOf("--find-renames");
     if (renameFlagIndex < 0) throw new Error("Git diff arguments are missing the rename policy.");
@@ -674,17 +752,7 @@ async function listChangedFilesUncached(projectRoot: string, opts: GitChangedFil
   args.push("--");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
-    // -z NUL-delimits entries; git also quotes/octal-escapes non-ASCII bytes in the
-    // unquoted -name-only form, corrupting them, so -z is required, not cosmetic. The
-    // trailing split segment is always empty, not a filename, and a real filename can
-    // legitimately start or end with whitespace, so filter without trimming.
-    const relFiles = stdout.split("\0").filter(Boolean);
-    const out: string[] = [];
-    for (const rel of relFiles) {
-      const abs = normalizePath(path.resolve(projectRoot, rel));
-      if (abs) out.push(abs);
-    }
-    return Array.from(new Set(out));
+    return reportsSubmodules ? parseRawDiffEntries(projectRoot, stdout) : parseNameOnlyDiffEntries(projectRoot, stdout);
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
@@ -941,36 +1009,165 @@ export async function listUntrackedFiles(
   projectRoot: string,
   opts?: { gitAvailable?: boolean; respectGitignore?: boolean; discoveryCache?: GitDiscoveryCache },
 ): Promise<string[]> {
-  const gitAvailable = opts?.gitAvailable ?? true;
-  if (!gitAvailable) return [];
-  const respectGitignore = opts?.respectGitignore ?? true;
-  const cache = opts?.discoveryCache?.untrackedFiles;
-  const cacheKey = `${path.resolve(projectRoot)}\0${respectGitignore ? 1 : 0}`;
-  const cached = cache?.get(cacheKey);
-  if (cached) return cached;
-  const listing = listUntrackedFilesUncached(projectRoot, respectGitignore);
-  cache?.set(cacheKey, listing);
-  return listing;
+  if (!(opts?.gitAvailable ?? true)) return [];
+  // With a shared cache the child also reads the tracked entries, so `listUntrackedAndFlaggedFiles` later in the same
+  // operation reuses it instead of spawning another child (a config hash or discovery pass usually lists first).
+  return (await listWorktreeListing(projectRoot, opts, !!opts?.discoveryCache)).untracked;
 }
 
-async function listUntrackedFilesUncached(projectRoot: string, respectGitignore: boolean): Promise<string[]> {
-  const args = ["ls-files", "--others", "-z"];
+/**
+ * Untracked files plus the tracked files Git cannot compare with the worktree, from one `git ls-files` process
+ * that replaces the plain untracked listing for the same operation.
+ *
+ * A tracked file flagged assume-unchanged (`h`) or skip-worktree (`S`) is omitted from every Git diff and status, so an
+ * edit to it, or its reversion, leaves no Git signal. The listing also names every tracked spelling, which tells a
+ * path's current case from a stale one on a case-insensitive file system.
+ */
+export async function listUntrackedAndFlaggedFiles(
+  projectRoot: string,
+  opts?: { respectGitignore?: boolean; discoveryCache?: GitDiscoveryCache },
+): Promise<GitWorktreeListing> {
+  return await listWorktreeListing(projectRoot, opts, true);
+}
+
+async function listWorktreeListing(
+  projectRoot: string,
+  opts: { respectGitignore?: boolean; discoveryCache?: GitDiscoveryCache } | undefined,
+  includeTracked: boolean,
+): Promise<GitWorktreeListing> {
+  const respectGitignore = opts?.respectGitignore ?? true;
+  const cache = opts?.discoveryCache?.untrackedFiles;
+  const cacheKey = worktreeListingCacheKey(projectRoot, respectGitignore);
+  const cached = cache?.get(cacheKey);
+  if (cached) {
+    if (!includeTracked) return await cached;
+    const listing = await cached;
+    if (listing.flaggedFiles) return listing;
+  }
+  const pending = listWorktreeListingUncached(projectRoot, respectGitignore, includeTracked);
+  cache?.set(cacheKey, pending);
+  return await pending;
+}
+
+function worktreeListingCacheKey(projectRoot: string, respectGitignore: boolean): string {
+  return `${path.resolve(projectRoot)}\0${respectGitignore ? 1 : 0}`;
+}
+
+/** Whether a `git ls-files -v` tag marks a tracked entry Git cannot compare with the worktree: assume-unchanged or skip-worktree. */
+function isFlaggedTag(tag: string): boolean {
+  const isAssumeUnchanged = tag >= "a" && tag <= "z";
+  return tag === "S" || isAssumeUnchanged;
+}
+
+async function listWorktreeListingUncached(
+  projectRoot: string,
+  respectGitignore: boolean,
+  includeTracked: boolean,
+): Promise<GitWorktreeListing> {
+  const args = includeTracked ? ["ls-files", "--cached", "--others", "-v", "-z"] : ["ls-files", "--others", "-z"];
   if (respectGitignore) args.push("--exclude-standard");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an
     // empty string, not a filename, so filter it out without trimming (a leading or
     // trailing whitespace character can be a legitimate part of a real filename).
-    const relFiles = stdout.toString().split("\0").filter(Boolean);
-    const out: string[] = [];
-    for (const rel of relFiles) {
-      const abs = resolveGitListedPath(projectRoot, rel);
-      if (abs) out.push(abs);
+    const records = stdout.split("\0");
+    const toAbsolute = createRootPathMapper(projectRoot).toAbsolute;
+    const untracked = new Set<string>();
+    if (!includeTracked) {
+      for (const rel of records) {
+        if (rel) untracked.add(toAbsolute(rel));
+      }
+      return { untracked: Array.from(untracked), flaggedFiles: undefined, trackedPaths: undefined };
     }
-    return Array.from(new Set(out));
+    // `-v` prefixes each record with `<tag> `: `?` for an untracked path, otherwise the tracked entry's state. A
+    // lowercase tag marks an assume-unchanged entry and `S` a skip-worktree entry. Flagged paths stay as Git lists
+    // them until a caller asks: a sparse checkout flags most of a large repository.
+    const flaggedListed: string[] = [];
+    for (const record of records) {
+      const tag = record.charAt(0);
+      if (!tag || tag === "H") continue;
+      if (tag === "?") untracked.add(toAbsolute(record.slice(2)));
+      else if (isFlaggedTag(tag)) flaggedListed.push(record.slice(2));
+    }
+    let flaggedFiles: readonly string[] | undefined;
+    let trackedPaths: Set<string> | undefined;
+    return {
+      untracked: Array.from(untracked),
+      flaggedFiles: () => (flaggedFiles ??= flaggedListed.map(toAbsolute)),
+      trackedPaths: () => {
+        if (trackedPaths) return trackedPaths;
+        trackedPaths = new Set<string>();
+        for (const record of records) {
+          if (record && !record.startsWith("?")) trackedPaths.add(toAbsolute(record.slice(2)));
+        }
+        return trackedPaths;
+      },
+    };
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
+}
+
+/**
+ * The tracked files flagged assume-unchanged or skip-worktree. A manifest records them beside the dirty files Git's diff
+ * names. The update that writes the manifest has already listed them, with the untracked files, in its discovery
+ * cache's listing, which is reused whichever ignore mode it used because the flagged files do not depend on it. A flag
+ * set after that listing is not in the record: the next update verifies the files flagged then. One Git child lists
+ * them only when the operation made no listing.
+ */
+export async function listFlaggedTrackedFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; discoveryCache?: GitDiscoveryCache },
+): Promise<readonly string[]> {
+  if (!(opts?.gitAvailable ?? true)) return [];
+  const listed = await flaggedFilesOfCachedListing(projectRoot, opts?.discoveryCache);
+  if (listed) return listed;
+  const args = ["ls-files", "-v", "-z"];
+  try {
+    const stdout = await runGitCollectStdout(projectRoot, args);
+    const toAbsolute = createRootPathMapper(projectRoot).toAbsolute;
+    const flagged = new Set<string>();
+    for (const record of stdout.split("\0")) {
+      if (isFlaggedTag(record.charAt(0))) flagged.add(toAbsolute(record.slice(2)));
+    }
+    return Array.from(flagged);
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/** The flagged files of a listing that read tracked entries, or undefined when the cache holds none (or a failed one). */
+async function flaggedFilesOfCachedListing(
+  projectRoot: string,
+  cache: GitDiscoveryCache | undefined,
+): Promise<readonly string[] | undefined> {
+  if (!cache) return undefined;
+  for (const respectGitignore of [true, false]) {
+    const pending = cache.untrackedFiles.get(worktreeListingCacheKey(projectRoot, respectGitignore));
+    const listing = await pending?.catch(() => undefined);
+    if (listing?.flaggedFiles) return listing.flaggedFiles();
+  }
+  return undefined;
+}
+
+/**
+ * Project file candidates of one initialized submodule, as cold discovery lists them: its tracked files (nested
+ * submodules included) plus the untracked files of the submodule and of every nested submodule. The superproject's
+ * own listings and diffs name only the submodule's gitlink.
+ */
+export async function listSubmoduleFiles(
+  submoduleDir: string,
+  opts: { respectGitignore: boolean; discoveryCache?: GitDiscoveryCache },
+): Promise<string[]> {
+  const [tracked, nestedDirectories] = await Promise.all([
+    listTrackedFiles(submoduleDir, { recurseSubmodules: true }),
+    listGitSubmoduleDirectories(submoduleDir, { recurse: true }),
+  ]);
+  const untracked = await Promise.all(
+    [submoduleDir, ...nestedDirectories].map((directory) => listUntrackedFiles(directory, opts)),
+  );
+  return Array.from(new Set([...tracked, ...untracked.flat()]));
 }
 
 /**
