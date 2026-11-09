@@ -304,5 +304,24 @@ export const cppCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "scope.cpp", fromName: "nested" },
   },
+  {
+    id: "cpp/template-function-name-stays-visible",
+    language: "cpp",
+    callForm: "bare-call",
+    files: {
+      "scope.cpp": [
+        "struct Widget {};",
+        "template <typename Widget> void generic(Widget&) {}",
+        "void use() { Widget w; generic(w); }",
+        "",
+      ].join("\n"),
+      "decoy.cpp": "void generic(int) {}\n",
+    },
+    use: { file: "scope.cpp", line: 3, token: "generic" },
+    expected: { file: "scope.cpp", line: 2, token: "generic" },
+    decoy: { file: "decoy.cpp", line: 1, token: "generic" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "scope.cpp", fromName: "use" },
+  },
   typeParameterReceiverCell("cpp"),
 ];

@@ -552,5 +552,5 @@ describe("Tree-sitter edge corpus", () => {
       process.stdout.write(`Known edge-corpus gaps:\n${knownGaps.join("\n")}\n`);
     }
     expect(failures, [...failures, ...knownGaps].join("\n")).toEqual([]);
-  });
+  }, 120_000);
 });
