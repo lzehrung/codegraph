@@ -201,7 +201,8 @@ function extensionScopeRank(
   return site.mod.imports.some((imp) => imp.kind === "star" && imp.from === packageName) ? 3 : null;
 }
 
-async function extensionReceiverApplies(
+/** A fallback extension is a target only when the implicit receiver proves its declared receiver type. */
+export async function extensionReceiverApplies(
   site: AccessSite,
   def: SymbolDef,
   declared: { node: SyntaxNodeLike; parsed: ParsedFileContext },

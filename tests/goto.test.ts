@@ -115,8 +115,22 @@ import {
 } from "./helpers/scope-binding-read-fixtures.js";
 import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixture.js";
 import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
+import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("Go to Definition", () => {
+  it("separates Kotlin accessor call targets and factory-named receiver types", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-review-goto-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_RECEIVER_REVIEW_SOURCES);
+      await expectKotlinReceiverReview(await buildProjectIndex(root, { cache: "off" }), files);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves Kotlin extension-body calls before enclosing and file decoys", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-goto-"));
     try {

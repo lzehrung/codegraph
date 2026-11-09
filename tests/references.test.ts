@@ -125,8 +125,22 @@ import {
 } from "./helpers/scope-binding-read-fixtures.js";
 import { PYTHON_DOTTED_IMPORT_FILES } from "./helpers/python-dotted-import-fixture.js";
 import { QUALIFIED_BASE_FIXTURES, positionOf } from "./helpers/qualified-base-fixture.js";
+import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("declaration header reference namespaces", () => {
+  it("excludes Kotlin accessor decoys and keeps factory-named receiver references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-review-refs-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_RECEIVER_REVIEW_SOURCES);
+      await expectKotlinReceiverReview(await indexer.buildProjectIndex(root, { cache: "off" }), files);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("excludes Kotlin extension receiver calls from same-file lexical decoy references", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-extension-refs-"));
     try {

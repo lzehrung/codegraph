@@ -168,6 +168,7 @@ const DEFAULT_IMPORT_TYPES: Readonly<Record<string, string>> = {
   MutableSet: "kotlin.collections.MutableSet",
   MutableMap: "kotlin.collections.MutableMap",
   StringBuilder: "kotlin.text.StringBuilder",
+  SequenceScope: "kotlin.sequences.SequenceScope",
   ArrayList: "java.util.ArrayList",
   LinkedHashMap: "java.util.LinkedHashMap",
   HashMap: "java.util.HashMap",

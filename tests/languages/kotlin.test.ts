@@ -32,6 +32,10 @@ import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "../helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "../helpers/kotlin-default-package-fixture.js";
 import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "../helpers/kotlin-extension-receiver-fixture.js";
+import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "../helpers/kotlin-receiver-review-fixture.js";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
@@ -216,6 +220,20 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Kotlin accessor and receiver type identities", () => {
+  it("agrees across navigation, references, and detailed calls without property or factory decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-review-"));
+    try {
+      const files = await writeFixtureFiles(root, KOTLIN_RECEIVER_REVIEW_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const mod of index.byFile.values()) expect(mod.parseErrorRanges).toEqual([]);
+      await expectKotlinReceiverReview(index, files);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Kotlin Unicode symbol ranges (C11)", () => {
   it("publishes a UTF-16 string index for a function name preceded by multibyte text", async () => {

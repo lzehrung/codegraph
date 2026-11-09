@@ -52,7 +52,9 @@ import {
 } from "./kotlin-external-receivers.js";
 import {
   acceptsArgumentCount,
+  declarationNodeOf,
   declaredVisibility,
+  extensionReceiverApplies,
   lookupExternalReceiverExtension,
   lookupReceiverTypeExtension,
   lookupReceiverTypeMember,
@@ -67,8 +69,9 @@ import {
   type ReceiverTypeMember,
 } from "./navigation-goto.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { definitionForBinding, findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import type { ParsedFileContext } from "./parse-context.js";
+import type { Binding } from "./scope-types.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import type { ScopeIndex } from "./scope.js";
 import { bindsTypeParameter } from "./type-parameters.js";
@@ -81,8 +84,8 @@ export type LambdaReceiver =
   | { kind: "type"; def: SymbolDef; nullable: boolean }
   /** A well-known type outside the project, with the names a bare call may bind to through it. */
   | { kind: "external"; fqn: string; names: ReadonlySet<string> }
-  /** A receiver may exist, and its members are not in the index. */
-  | { kind: "unproven" };
+  /** A receiver may exist, and its members are not in the index; declared type evidence can still match an extension. */
+  | { kind: "unproven"; evidence?: { node: SyntaxNodeLike; site: Site } };
 
 /** The receivers of the lambdas of one file, by the start index of each lambda. */
 export type LambdaReceiverCache = Map<number, Promise<LambdaReceiver>>;
@@ -441,7 +444,7 @@ async function aliasTarget(
 function externalReceiver(site: Site, type: SyntaxNodeLike): LambdaReceiver {
   const fqn = resolveExternalType(site.mod, type.text);
   const names = fqn ? externalTypeNames(fqn) : undefined;
-  return names && fqn ? { kind: "external", fqn, names } : UNPROVEN;
+  return names && fqn ? { kind: "external", fqn, names } : { kind: "unproven", evidence: { node: type, site } };
 }
 
 /** The receiver an instance of the type `node` is, as declared in `site`. */
@@ -455,7 +458,7 @@ async function receiverOfType(
   const def = await resolveType(env, site, typeNameNode(type));
   if (def) return isNominalType(def) ? { kind: "type", def, nullable } : UNPROVEN;
   // A nullable external receiver is reached only through `?.`, which no table models.
-  return nullable ? UNPROVEN : externalReceiver(site, type);
+  return nullable ? { kind: "unproven", evidence: { node, site } } : externalReceiver(site, type);
 }
 
 async function receiverOfFunctionType(
@@ -748,7 +751,9 @@ async function receiverOfExpression(
   if (!evidence) return UNPROVEN;
   if (bindsTypeParameter(sliceText(evidence, parsed.source), evidence, parsed.source, parsed.sup)) return UNPROVEN;
   const def = await resolveType(env, env.site, evidence);
-  return def && isNominalType(def) ? { kind: "type", def, nullable: false } : UNPROVEN;
+  if (def && isNominalType(def)) return { kind: "type", def, nullable: false };
+  const declaredType = evidence.type === "user_type" || evidence.parent?.type === "user_type";
+  return declaredType ? { kind: "unproven", evidence: { node: evidence, site: env.site } } : UNPROVEN;
 }
 
 /** The expression `with` runs its lambda on: its first argument. */
@@ -942,6 +947,131 @@ async function propertyInvocation(env: LambdaReceiverEnvironment, def: SymbolDef
   return plain ? "plain" : "unproven";
 }
 
+/** Function-valued properties use their function type's argument count, not the property's missing callable identity. */
+async function acceptsInvocationArguments(
+  env: LambdaReceiverEnvironment,
+  def: SymbolDef,
+  argumentCount: number | undefined,
+): Promise<boolean> {
+  if (argumentCount === undefined || def.callable) return acceptsArgumentCount(def, argumentCount);
+  const declaration = await declarationOf(env.index, def);
+  const name = declaration?.node.namedChildren.find((child) => child.type === "identifier");
+  const arity = name ? kotlinPropertyInvocationArity(name) : undefined;
+  return !arity || (argumentCount >= arity.minArgs && (arity.maxArgs === null || argumentCount <= arity.maxArgs));
+}
+
+/**
+ * Identical type-position bindings can prove an extension receiver even without a member table: declarations in one
+ * file share a binding, and explicit imports in different files can name the same external type. A type parameter
+ * cannot stand in for another receiver, and this comparison never infers an external subtype.
+ */
+function sameUnindexedReceiver(
+  receiver: { node: SyntaxNodeLike; site: Site },
+  extension: { node: SyntaxNodeLike; site: Site },
+): boolean {
+  const receiverType = peelType(receiver.node);
+  const extensionType = peelType(extension.node);
+  if (receiverType.nullable && !extensionType.nullable) return false;
+  const receiverName = typeNameNode(receiverType.type);
+  const extensionName = typeNameNode(extensionType.type);
+  const name = receiverName.text;
+  const { parsed, scopeIndex } = receiver.site;
+  if (bindsTypeParameter(name, receiverName, parsed.source, parsed.sup)) return false;
+  const target = extension.site;
+  if (bindsTypeParameter(extensionName.text, extensionName, target.parsed.source, target.parsed.sup)) return false;
+  const receiverBinding = findClosestScopeBinding(scopeIndex, name, receiverName, parsed.sup, true);
+  const extensionBinding = findClosestScopeBinding(
+    target.scopeIndex,
+    extensionName.text,
+    extensionName,
+    target.parsed.sup,
+    true,
+  );
+  if (fileIdentityKey(receiver.site.mod.file) === fileIdentityKey(target.mod.file)) {
+    return name === extensionName.text && receiverBinding === extensionBinding;
+  }
+  const receiverImport = receiverBinding?.import;
+  const extensionImport = extensionBinding?.import;
+  if (receiverBinding && !receiverImport) return false;
+  if (extensionBinding && !extensionImport) return false;
+  if (receiverImport?.kind === "named") {
+    return !!resolveExternalType(target.mod, extensionName.text, [receiverImport.from]);
+  }
+  if (extensionImport?.kind === "named") {
+    return !!resolveExternalType(receiver.site.mod, name, [extensionImport.from]);
+  }
+  return false;
+}
+
+/**
+ * An extension body's lexical fallback still has to be callable. File-scope functions precede a same-named property,
+ * regardless of declaration order; a property answers only when its value proves an invocation of this arity. An
+ * extension fallback also needs the body's declared receiver, not merely a matching name in the file.
+ */
+export async function kotlinReceiverCallFallback(
+  env: LambdaReceiverEnvironment,
+  use: SyntaxNodeLike,
+  candidate: SymbolDef,
+  scopes: readonly SyntaxNodeLike[],
+): Promise<SymbolDef | null> {
+  const { parsed, mod, scopeIndex } = env.site;
+  const extensionBody = scopes.some((scope) => scope.type !== "lambda_literal");
+  // Lambda-only fallback semantics are unchanged: this guard fixes extension bodies and accessor scopes.
+  if (!extensionBody && candidate.kind === SymbolKind.Function) return candidate;
+  const argumentCount =
+    getCallArgumentCount({ languageId: "kotlin", source: parsed.source, call: use.parent ?? use }) ?? undefined;
+  const binding = findClosestScopeBinding(scopeIndex, candidate.localName, use, parsed.sup);
+  const bindsCandidate =
+    fileIdentityKey(candidate.file) === fileIdentityKey(mod.file) &&
+    binding?.def?.start.index === candidate.range.start.index;
+  if (binding && bindsCandidate) {
+    let node = binding.node?.parent;
+    if (node?.type === "variable_declaration") node = node.parent ?? undefined;
+    if (node?.parent?.type === "source_file") {
+      let selected: SymbolDef | null = null;
+      for (let entry: Binding | null = binding; entry; entry = entry.earlierSameScope ?? null) {
+        if (entry.kind !== "function" || !entry.node?.parent) continue;
+        if (kotlinExtensionReceiverType(entry.node.parent)) continue;
+        const def =
+          entry.def?.start.index === candidate.range.start.index
+            ? candidate
+            : definitionForBinding(entry, mod.file, use, parsed.sup, parsed.source, parsed.tree);
+        if (!def || !acceptsArgumentCount(def, argumentCount)) continue;
+        if (selected) return null;
+        selected = def;
+      }
+      if (selected) return selected;
+    }
+  }
+  if ((await propertyInvocation(env, candidate)) !== "invokable") return null;
+  if (!(await acceptsInvocationArguments(env, candidate, argumentCount))) return null;
+  const declared = await declarationNodeOf(env.index, candidate);
+  if (!declared) return null;
+  const typeNode = kotlinExtensionReceiverType(declared.node);
+  if (!typeNode) return candidate;
+  const declaration = await declarationOf(env.index, candidate);
+  if (!declaration) return null;
+  for (const scope of scopes) {
+    const receiver = await receiverOfScope(env, scope);
+    if (receiver.kind === "none") continue;
+    if (receiver.kind === "unproven") {
+      const node = kotlinExtensionReceiverType(scope);
+      const evidence = receiver.evidence ?? (node ? { node, site: env.site } : null);
+      if (evidence && sameUnindexedReceiver(evidence, { node: typeNode, site: declaration.site })) return candidate;
+      if (scope.type !== "lambda_literal") return null;
+      continue;
+    }
+    if (receiver.kind === "type" && receiver.nullable && typeNode.type !== "nullable_type") continue;
+    const site = { index: env.index, mod, use };
+    const typedSite =
+      receiver.kind === "type" ? { ...site, receiver: receiver.def } : { ...site, externalReceiver: receiver.fqn };
+    const { applies } = await extensionReceiverApplies(typedSite, candidate, declared, typeNode, env.resolveTypeName);
+    if (applies === "yes") return candidate;
+    if (applies === "unknown") return null;
+  }
+  return null;
+}
+
 /**
  * `lookupReceiverTypeMember` for a call. A property answers it only when a call can invoke it. A plain one is no
  * candidate, so an extension in scope on the receiver takes the call, else the lookup passes to the next receiver and
@@ -968,7 +1098,7 @@ async function lookupCalledMember(
   );
   if (found.status !== "member") return found;
   const invocation = await propertyInvocation(env, found.member);
-  if (invocation === "invokable") return found;
+  if (invocation === "invokable" && (await acceptsInvocationArguments(env, found.member, argumentCount))) return found;
   if (invocation === "unproven") return MAYBE_INVOKED_MEMBER;
   return lookupReceiverTypeExtension(
     env.index,

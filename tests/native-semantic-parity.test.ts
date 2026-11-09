@@ -45,6 +45,10 @@ import {
   KOTLIN_EXTENSION_RECEIVER_SOURCES,
 } from "./helpers/kotlin-extension-receiver-fixture.js";
 import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "./helpers/kotlin-receiver-review-fixture.js";
+import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
   QUALIFIED_TYPE_CASES,
@@ -1673,6 +1677,20 @@ nativeDescribe("native semantic coverage", () => {
             graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
         ),
       ).toEqual([]);
+    }
+  });
+
+  it("keeps native Kotlin accessor and factory receiver targets stable after cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-receiver-review-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, KOTLIN_RECEIVER_REVIEW_SOURCES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const mod of index.byFile.values()) {
+        expect(mod.nativeOutcome).toBe("used");
+        expect(mod.parseErrorRanges).toEqual([]);
+      }
+      await expectKotlinReceiverReview(index, files);
     }
   });
 

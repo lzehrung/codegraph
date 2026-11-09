@@ -1007,7 +1007,17 @@ async function findReferencesInternal(
       }
     }
   }
-  const kotlinExtension = isKotlinExtensionFunction(parsedContext, definition);
+  const kotlinExtension = isKotlinExtensionDeclaration(parsedContext, definition);
+  // A same-scope property can own all lexical occurrences of a callable's name. Goto selects by callability and
+  // arity instead, so references of the hidden function need the same verified scan as extension declarations.
+  const kotlinFileCallable =
+    parsedContext.sup.id === "kotlin" && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
+  const kotlinFileBinding = kotlinFileCallable
+    ? getCachedScope(index, definitionFile, mod, parsedContext).allScopes[0]?.map.get(
+        parsedContext.sup.normalizeIdentifier(definition.localName),
+      )
+    : undefined;
+  const kotlinCallableCollision = !!kotlinFileBinding?.earlierSameScope;
 
   const requiresSameFileVerifiedScan =
     ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
@@ -1016,7 +1026,8 @@ async function findReferencesInternal(
     scansNamespaceReferences ||
     requiresTypeScriptOverloadVerifiedScan ||
     requiresRuntimeBindingVerifiedScan ||
-    kotlinExtension;
+    kotlinExtension ||
+    kotlinCallableCollision;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
@@ -2052,10 +2063,11 @@ function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDe
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
 }
 
-/** A Kotlin extension function: a bare call names it only when an implicit receiver of its type exists. */
-function isKotlinExtensionFunction(parsedContext: ParsedFileContext, def: SymbolDef): boolean {
+/** A Kotlin extension declaration: a bare name reaches it only through a matching implicit receiver. */
+function isKotlinExtensionDeclaration(parsedContext: ParsedFileContext, def: SymbolDef): boolean {
   if (parsedContext.sup.id !== "kotlin") return false;
-  const declaration = syntaxNodeForDefinition(parsedContext, def).parent;
+  let declaration = syntaxNodeForDefinition(parsedContext, def).parent;
+  if (declaration?.type === "variable_declaration") declaration = declaration.parent;
   return !!declaration && !!kotlinExtensionReceiverType(declaration);
 }
 

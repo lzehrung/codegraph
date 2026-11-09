@@ -91,6 +91,8 @@ export type ResolveExportOptions = {
   argumentCount?: number;
   /** Whether the name is called (even with an unknown argument count) or is a callable-reference target. */
   isCallableUse?: boolean;
+  /** JVM type syntax excludes same-named factory functions and values before judging uniqueness. */
+  typeOnly?: boolean;
 };
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
@@ -441,6 +443,7 @@ export function resolveExport(
   type ExportResolution = ResolvedExport | "ambiguous" | null;
   const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
     (!opts?.preferredKind || def.kind === opts.preferredKind) &&
+    (!opts?.typeOnly || declaresMemberKind(def)) &&
     (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace) &&
     (opts?.csharpGenericArity === undefined || (def.csharpGenericArity ?? 0) === opts.csharpGenericArity);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
@@ -495,7 +498,7 @@ export function resolveExport(
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
     // The current file's export-only mode and the enclosing lookup's fallback mode are separate:
     // a Python star excludes private locals, but an explicit re-export can still name one.
-    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${opts?.csharpGenericArity ?? ""}|${names.normalizeIdentifier(name)}`;
+    const key = `${names.id}|${opts?.preferredKind ?? ""}|${opts?.typeOnly ? 1 : 0}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${opts?.csharpGenericArity ?? ""}|${names.normalizeIdentifier(name)}`;
     const cached = index.exportCache.get(key);
     if (cached !== undefined) return cached;
     // A root answer is safe for the same top-level query even when its walk cut a cycle.
@@ -1029,6 +1032,7 @@ function resolveJvmPackageExport(
   samePackage?: boolean,
   incomplete = false,
   isCallableUse = argumentCount !== undefined,
+  typeOnly = false,
 ): SymbolDef | null {
   const candidates: SymbolDef[] = [];
   for (const file of files) {
@@ -1039,6 +1043,7 @@ function resolveJvmPackageExport(
     for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
       if (
         target.isMember ||
+        (typeOnly && !declaresMemberKind(target)) ||
         !isJvmPackageSymbolVisible(target, targetLanguage, importerLanguageId ?? targetLanguage, !!samePackage) ||
         candidates.some((candidate) => sameSymbolDef(index, candidate, target))
       )
@@ -1101,6 +1106,7 @@ export function resolveImported(
       imp.jvmSamePackage,
       imp.jvmPackageIncomplete,
       opts?.isCallableUse ?? opts?.argumentCount !== undefined,
+      opts?.typeOnly,
     );
   }
   if (

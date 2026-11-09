@@ -5,6 +5,10 @@ import {
   disposeConsumerAgreementFixture,
   type ConsumerAgreementFixture,
 } from "./helpers/consumer-agreement.js";
+import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "./helpers/kotlin-receiver-review-fixture.js";
 
 // These bindings follow the compiled and executed kotlinc 2.4.21 receiver-precedence oracle.
 const TYPES = [
@@ -159,6 +163,7 @@ const FILES = {
   "external/Extension.kt": EXTERNAL_EXTENSION,
   "external/Use.kt": EXTERNAL,
   "nullable/Use.kt": NULLABLE,
+  ...KOTLIN_RECEIVER_REVIEW_SOURCES,
 };
 
 type Target = { file: string; line: number; token: string };
@@ -213,6 +218,10 @@ afterAll(async () => {
 });
 
 describe("Kotlin extension-body implicit receivers", () => {
+  it("keeps accessor calls callable, receiver-compatible, and arity-compatible beside factory-named types", async () => {
+    await expectKotlinReceiverReview(fixture.index, fixture.paths);
+  });
+
   const cases: Array<[string, string, Target, Target]> = [
     ["topBare", "stamp", receiverStamp, topStamp],
     ["topThis", "stamp", receiverStamp, topStamp],

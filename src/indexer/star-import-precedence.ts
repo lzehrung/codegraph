@@ -164,6 +164,7 @@ export function resolveStarImportedDefinition(
   argumentCount?: number,
   isCallableUse = argumentCount !== undefined,
   csharpGenericArity?: number,
+  typeOnly = false,
 ): SymbolDef | null {
   if (imp.kind !== "star" || imp.staticMembersOf) return null;
   const result = resolveImported(index, imp, name, {
@@ -171,6 +172,7 @@ export function resolveStarImportedDefinition(
     ...(argumentCount !== undefined ? { argumentCount } : {}),
     ...(isCallableUse ? { isCallableUse } : {}),
     ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}),
+    ...(typeOnly ? { typeOnly } : {}),
     // Ruby star expansion already publishes exported constants. Local fallback would
     // resurrect a nested class as a bare name the exports query omitted.
     ...(languageId === "ruby" ? { allowLocalFallback: false } : {}),

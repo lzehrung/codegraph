@@ -343,8 +343,13 @@ const RECEIVER_OUTRANKED_SCOPE_TYPES: Readonly<Record<string, true>> = {
  */
 function bindsBelowLambdaReceivers({ closestBinding }: NameLookupState): boolean {
   if (!closestBinding || closestBinding.import) return true;
-  if (closestBinding.kind !== "function") return false;
-  const scope = closestBinding.node?.parent?.parent;
+  let declaration = closestBinding.node?.parent;
+  if (closestBinding.kind === "local" && declaration?.type === "variable_declaration") {
+    declaration = declaration.parent ?? undefined;
+  } else if (closestBinding.kind !== "function") {
+    return false;
+  }
+  const scope = declaration?.parent;
   return !!scope && !!RECEIVER_OUTRANKED_SCOPE_TYPES[scope.type];
 }
 

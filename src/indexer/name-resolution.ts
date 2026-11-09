@@ -29,7 +29,12 @@ import {
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
-import { kotlinLambdaReceiverVerdict, type LambdaReceiverCache } from "./kotlin-lambda-receiver.js";
+import {
+  kotlinLambdaReceiverVerdict,
+  kotlinReceiverCallFallback,
+  type LambdaReceiverCache,
+  type LambdaReceiverEnvironment,
+} from "./kotlin-lambda-receiver.js";
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
@@ -243,7 +248,7 @@ export function resolveBareName(
       policy.crossModuleName?.(state) ?? lookupName,
       policy.cNamespace?.(node),
       node.startIndex,
-      { node, source },
+      { node, source, ...(jvmTypeOnly ? { typeOnly: true } : {}) },
       scopeIndex,
     );
     const adjusted = policy.afterCrossModule?.(state, resolved);
@@ -298,24 +303,31 @@ async function settleKotlinLambdaReceiver(
   options: SettleNameOptions,
 ): Promise<GoToResult | null | undefined> {
   const { index, mod, node, parsed } = use;
-  const verdict = await kotlinLambdaReceiverVerdict(
-    {
-      index,
-      site: { mod, parsed, scopeIndex: use.scopeIndex },
-      resolveCallee: options.resolveCallee ?? (() => Promise.resolve(null)),
-      resolveTypeName: resolveJvmTypeName,
-      classified: options.lambdaReceivers ?? new Map(),
-    },
-    { node, name: request.lookupName, receivers: request.receivers },
-  );
-  if (verdict.status === "none") return undefined;
+  const env: LambdaReceiverEnvironment = {
+    index,
+    site: { mod, parsed, scopeIndex: use.scopeIndex },
+    resolveCallee: options.resolveCallee ?? (() => Promise.resolve(null)),
+    resolveTypeName: resolveJvmTypeName,
+    classified: options.lambdaReceivers ?? new Map(),
+  };
+  const verdict = await kotlinLambdaReceiverVerdict(env, {
+    node,
+    name: request.lookupName,
+    receivers: request.receivers,
+  });
   if (verdict.status === "member") {
     return okGoToResult(index, verdict.member, { resolution: "member-access", confidence: "medium" });
   }
   if (verdict.status === "shadowed") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
   const candidate = await settleNameResolution(use, fallback, options);
-  if (candidate?.status !== "ok" || !candidate.definition.isMember) return candidate;
-  return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
+  if (candidate?.status !== "ok") return candidate;
+  const unproven = { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON } as const;
+  if (verdict.status === "unproven" && candidate.definition.isMember) return unproven;
+  const target = await kotlinReceiverCallFallback(env, node, candidate.definition, request.receivers);
+  if (!target) return unproven;
+  return target === candidate.definition
+    ? candidate
+    : okGoToResult(index, target, { resolution: "exact", confidence: "high" });
 }
 
 /** Runs the async member steps a {@link resolveBareName} result deferred. */

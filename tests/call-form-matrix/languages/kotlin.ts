@@ -7,6 +7,7 @@ import {
 import { KOTLIN_QUOTED_SCOPE_FILES, KOTLIN_QUOTED_SCOPE_SOURCES } from "../../helpers/kotlin-quoted-fixture.js";
 import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "../../helpers/kotlin-extension-receiver-fixture.js";
+import { KOTLIN_RECEIVER_REVIEW_SOURCES } from "../../helpers/kotlin-receiver-review-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const kotlinOmissions: readonly CallFormOmission[] = [];
@@ -22,6 +23,28 @@ export const kotlinCells: MatrixCell[] = [
     decoy: { file: "app/Use.kt", line: 6, token: "hit" },
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "app/Use.kt", fromName: "display" },
+  },
+  {
+    id: "kotlin/extension-accessor-function-before-property",
+    language: "kotlin",
+    callForm: "bare-call",
+    files: KOTLIN_RECEIVER_REVIEW_SOURCES,
+    use: { file: "accessor/Accessors.kt", line: 5, token: "sig(" },
+    expected: { file: "accessor/Accessors.kt", line: 3, token: "sig" },
+    decoy: { file: "accessor/Accessors.kt", line: 4, token: "sig:" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "accessor/Accessors.kt", fromName: "sig2" },
+  },
+  {
+    id: "kotlin/factory-named-extension-receiver",
+    language: "kotlin",
+    callForm: "bare-call",
+    files: KOTLIN_RECEIVER_REVIEW_SOURCES,
+    use: { file: "user/User.kt", line: 6, token: "elementName" },
+    expected: { file: "desc/Desc.kt", line: 3, token: "elementName" },
+    decoy: { file: "desc/Descs.kt", line: 3, token: "elementName" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "user/User.kt", fromName: "describe" },
   },
   ...[
     { spelling: "quoted-binding", caller: "quotedParameter", line: 2 },
