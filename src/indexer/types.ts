@@ -40,6 +40,8 @@ export type SymbolDef = {
   /** Indexed callable facts; absent for symbols that are not callable. */
   callable?: CallableIdentity;
   isMember?: boolean;
+  /** C# nominal type's own generic parameter count; absent for a non-generic type. */
+  csharpGenericArity?: number;
   /** Direct JVM type owner for nested classifiers and Java members. */
   jvmTypeOwnerStartIndex?: number;
   /** Java member with static syntax, or an implicitly static nested classifier. */

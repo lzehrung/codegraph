@@ -504,6 +504,7 @@ function hasValidCallableSymbol(value: unknown): boolean {
     jvmStaticMember?: unknown;
     swiftExtensionOwner?: unknown;
     typeParameter?: unknown;
+    csharpGenericArity?: unknown;
   };
   const callableValid =
     symbol.kind === "function"
@@ -516,6 +517,10 @@ function hasValidCallableSymbol(value: unknown): boolean {
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     (symbol.jvmStaticMember === undefined || typeof symbol.jvmStaticMember === "boolean") &&
     (symbol.swiftExtensionOwner === undefined || typeof symbol.swiftExtensionOwner === "boolean") &&
+    (symbol.csharpGenericArity === undefined ||
+      (typeof symbol.csharpGenericArity === "number" &&
+        Number.isSafeInteger(symbol.csharpGenericArity) &&
+        symbol.csharpGenericArity > 0)) &&
     (symbol.typeParameter === undefined || typeof symbol.typeParameter === "boolean")
   );
 }

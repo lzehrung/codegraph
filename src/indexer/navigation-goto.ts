@@ -22,6 +22,8 @@ import { foldPhpIdentifierCase, normalizeCsharpQualifiedName, normalizeKotlinIde
 import {
   csharpNamespaceAtIndex,
   csharpNamespaceRegionAtIndex,
+  csharpTypeArgumentArity,
+  csharpTypeNameWithArity,
   type CsharpNamespaceRegion,
 } from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -615,15 +617,22 @@ export function resolveCsharpNameRoot(
   const name = sliceText(qualifier, source);
   if (csharpAliasAt(mod, name, qualifier)) return { kind: "none" };
   const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
+  const genericArity = csharpTypeArgumentArity(qualifier);
   const regions = mod.csharpNamespaceFacts?.regions;
   let namespace = regions ? csharpNamespaceAtIndex(regions, qualifier.startIndex) : "";
   for (;;) {
-    const member = csharpNamespaceMemberKind(index, mod, namespace, normalized);
+    const member = csharpNamespaceMemberKind(index, mod, namespace, normalized, genericArity);
     const qualified = namespace ? `${namespace}.${normalized}` : normalized;
     if (member === "namespace") return { kind: "namespace", name: qualified };
     if (member === "type") {
       // Only this namespace's own declaration counts here: a bare lookup would also match an enclosing namespace's.
-      const resolved = resolveCsharpQualifiedName(index, mod, `global::${qualified}`, qualifier.startIndex);
+      const resolved = resolveCsharpQualifiedName(
+        index,
+        mod,
+        `global::${qualified}`,
+        qualifier.startIndex,
+        genericArity,
+      );
       return resolved?.kind === "resolved" ? { kind: "resolved", definition: resolved.def } : { kind: "unavailable" };
     }
     // A name that is both a namespace and a type there is a conflict. One that an incomplete table merely lacks is not:
@@ -635,19 +644,22 @@ export function resolveCsharpNameRoot(
       if (region && (qualifier.startIndex < region.start || qualifier.startIndex >= region.end)) continue;
       if (imp.staticMembersOf) {
         const use = { index, mod, ...(files ? { files } : {}) };
-        const types = csharpUsingStaticTypeCandidates(use, imp, name);
+        const types = csharpUsingStaticTypeCandidates(use, imp, name, genericArity);
         if (!types) unavailable = true;
         for (const def of types ?? []) candidates.push({ imp, def });
         continue;
       }
-      if (csharpShadowedImports(index).has(imp) && csharpShadowedStarsMayHold(index, mod, name)) {
+      if (
+        csharpShadowedImports(index).has(imp) &&
+        csharpShadowedStarsMayHold(index, mod, csharpTypeNameWithArity(name, genericArity))
+      ) {
         unavailable = true;
         continue;
       }
-      // The declaration table lists only types a bare name binds, so a generic `B<T>` never stands for `B`.
-      if (csharpNamespaceMemberKind(index, mod, imported, normalized) !== "type") continue;
-      const def = resolveStarImportedDefinition(index, imp, name, "csharp");
-      if (def) candidates.push({ imp, def });
+      // `B<T>` binds only the matching generic declaration; a bare `B` still needs arity zero.
+      if (csharpNamespaceMemberKind(index, mod, imported, normalized, genericArity) !== "type") continue;
+      const def = resolveImported(index, imp, name, { csharpGenericArity: genericArity });
+      if (def && !("namespace" in def)) candidates.push({ imp, def });
     }
     if (unavailable) return { kind: "unavailable" };
     const imported = decideStarImportCandidates(index, "csharp", candidates, mod.file);
@@ -845,12 +857,18 @@ export function resolveCsharpQualifiedReceiverType(
     const root = resolveCsharpNameRoot(index, mod, lead.qualifier, source, files);
     if (root.kind === "namespace") {
       const suffix = lead.names.toReversed().join(".");
-      const resolved = resolveCsharpQualifiedName(index, mod, `global::${root.name}.${suffix}`, typeNode.startIndex);
+      const resolved = resolveCsharpQualifiedName(
+        index,
+        mod,
+        `global::${root.name}.${suffix}`,
+        typeNode.startIndex,
+        csharpTypeArgumentArity(typeNode),
+      );
       return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
     }
     if (root.kind !== "none") return null;
   }
-  const resolved = resolveCsharpQualifiedName(index, mod, name, typeNode.startIndex);
+  const resolved = resolveCsharpQualifiedName(index, mod, name, typeNode.startIndex, csharpTypeArgumentArity(typeNode));
   return resolved?.kind === "resolved" && declaresMembers(resolved.def) ? resolved.def : null;
 }
 
@@ -4475,6 +4493,9 @@ async function resolveReceiverDefinition(
         const def = await csharpQualifiedReceiverTypeLoaded(index, mod, constructor, source, getScopeIndex());
         return def ? { def, memberScope: "instance" } : null;
       }
+      const resolved = await resolveExpression(constructor);
+      const def = resolved?.kind === "resolved" ? asMemberContainer(index, resolved.def) : undefined;
+      return def ? { def, memberScope: "instance" } : null;
     }
     if (sup.id === "cpp") {
       const qualifiedType = cppQualifiedNameSegments(constructor, source);

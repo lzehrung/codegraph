@@ -85,6 +85,11 @@ import {
 } from "./helpers/csharp-inherited-alias-assertions.js";
 import { CSHARP_DOTTED_USING_CASES, expectDottedUsingReferences } from "./helpers/csharp-dotted-using-fixture.js";
 import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+  expectInstantiatedReceiverReferences,
+} from "./helpers/csharp-instantiated-receiver-fixture.js";
+import {
   CSHARP_NEARER_RECEIVER_CASES,
   csharpNearerReceiverFixture,
   CSHARP_QUALIFIED_RECEIVER_TYPES,
@@ -4554,6 +4559,18 @@ describe("Find References", () => {
             false,
           );
         }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(CSHARP_INSTANTIATED_RECEIVER_SCOPES)("keeps C# generic receiver references through %s", async (scope) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-instantiated-refs-"));
+      try {
+        const fixture = csharpInstantiatedReceiverFixture(scope);
+        const files = await writeFixtureFiles(root, fixture.files);
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectInstantiatedReceiverReferences(index, files, fixture);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

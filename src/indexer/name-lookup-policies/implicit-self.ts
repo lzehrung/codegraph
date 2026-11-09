@@ -15,6 +15,7 @@ import {
   nodeInStaticMemberContext,
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { sliceText } from "../../util/ast.js";
+import { csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceMemberKind } from "../compilation-units.js";
 import {
   csharpAliasAt,
@@ -134,7 +135,13 @@ export const swiftLookupPolicy: NameLookupPolicy = {
 function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoToResult | null {
   const qualifiedName = csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports);
   if (!qualifiedName.includes(".")) return null;
-  const hit = resolveCsharpQualifiedName(use.index, use.mod, qualifiedName, use.node.startIndex);
+  const hit = resolveCsharpQualifiedName(
+    use.index,
+    use.mod,
+    qualifiedName,
+    use.node.startIndex,
+    csharpTypeArgumentArity(use.node),
+  );
   return hit?.kind === "resolved"
     ? okGoToResult(use.index, hit.def, { resolution: "import", confidence: "high" })
     : null;
@@ -198,7 +205,13 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     if (root.kind !== "namespace") return undefined;
     const suffix = lead.names.toReversed().join(".");
     const qualified = `${root.name}.${suffix}`;
-    const hit = resolveCsharpQualifiedName(index, mod, `global::${qualified}`, use.node.startIndex);
+    const hit = resolveCsharpQualifiedName(
+      index,
+      mod,
+      `global::${qualified}`,
+      use.node.startIndex,
+      csharpTypeArgumentArity(use.node),
+    );
     if (hit?.kind === "resolved") return okGoToResult(index, hit.def, { resolution: "import", confidence: "high" });
     const namespace = csharpNamespaceMemberKind(index, mod, "", qualified) === "namespace";
     return { status: "not_found", reason: namespace ? CSHARP_NAMESPACE_NAME_REASON : UNRESOLVED_QUALIFIED_TYPE_REASON };

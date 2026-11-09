@@ -9,7 +9,12 @@ import {
 } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
-import { CSHARP_FILE_LOCAL_PREFIX, csharpNamespaceAtIndex, type CsharpNamespaceRegion } from "../util/csharp-tree.js";
+import {
+  CSHARP_FILE_LOCAL_PREFIX,
+  csharpNamespaceAtIndex,
+  csharpTypeNameWithArity,
+  type CsharpNamespaceRegion,
+} from "../util/csharp-tree.js";
 import { isJvmPackageKnown } from "../util/jvm-tree.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRootSync } from "../util/resolution/files.js";
 import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
@@ -347,8 +352,9 @@ export function csharpNamespaceMemberKind(
   mod: ModuleIndex,
   namespaceName: string,
   name: string,
+  genericArity = 0,
 ): CsharpDeclaredNameKind | "unavailable" | null {
-  const declared = namespaceName ? `${namespaceName}.${name}` : name;
+  const declared = csharpTypeNameWithArity(namespaceName ? `${namespaceName}.${name}` : name, genericArity);
   const declarations = csharpProjectDeclaredNames(index, mod.file);
   if (mod.csharpNamespaceFacts?.types.includes(CSHARP_FILE_LOCAL_PREFIX + declared)) return "type";
   return declarations.names.get(declared) ?? (declarations.complete ? null : "unavailable");

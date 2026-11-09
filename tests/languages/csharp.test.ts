@@ -45,6 +45,11 @@ import {
   csharpPartialGenericRootFixture,
   expectDottedUsingConsumers,
 } from "../helpers/csharp-dotted-using-fixture.js";
+import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+  expectInstantiatedReceiverConsumers,
+} from "../helpers/csharp-instantiated-receiver-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -1957,12 +1962,20 @@ describe("C# partial class members across files", () => {
     }
   });
 
-  it("does not coalesce partials with different generic arities", async () => {
+  it("resolves partial types by arity without combining their members", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-arity-"));
     try {
       const plain = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
       const generic = ["namespace P;", "public partial class Box<T> {", "  public void Helper() {}", "}"];
-      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
+      const caller = [
+        "namespace P;",
+        "class Caller {",
+        "  Box Make() => new Box();",
+        "  Box<int> MakeGeneric() => new Box<int>();",
+        "  void Plain(Box obj) { obj.Helper(); }",
+        "  void Generic(Box<int> obj) { obj.Helper(); }",
+        "}",
+      ];
       const paths = await writeFixtureFiles(root, {
         "Box.A.cs": `${plain.join("\n")}\n`,
         "Box.Generic.cs": `${generic.join("\n")}\n`,
@@ -1973,12 +1986,50 @@ describe("C# partial class members across files", () => {
         paths["Box.Generic.cs"]!,
         paths["Caller.cs"]!,
       ]);
-      const result = await goToDefinition(index, {
-        file: paths["Caller.cs"]!,
-        line: 3,
-        column: columnOf(caller, 3, "new Box") + 4,
+      for (const [line, target] of [
+        [3, "Box.A.cs"],
+        [4, "Box.Generic.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: paths["Caller.cs"]!,
+          line,
+          column: columnOf(caller, line, "new Box") + 4,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(paths[target]);
+      }
+      for (const [line, target] of [
+        [5, "Box.A.cs"],
+        [6, "Box.Generic.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: paths["Caller.cs"]!,
+          line,
+          column: columnOf(caller, line, "Helper"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(paths[target]);
+        const refs = await findReferences(index, {
+          file: paths[target]!,
+          line: 3,
+          column: columnOf(plain, 3, "Helper"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(
+            refs.references.filter((ref) => ref.file === paths["Caller.cs"]).map((ref) => ref.range.start.line),
+          ).toEqual([line]);
+          expect(refs.referenceCoverage.state).toBe("complete");
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || from?.file !== paths["Caller.cs"] || to?.name !== "Helper") return [];
+        return [`${from.name}:${path.basename(to.file)}`];
       });
-      expect(result.status).toBe("not_found");
+      expect(calls.sort()).toEqual(["Generic:Box.Generic.cs", "Plain:Box.A.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2939,6 +2990,53 @@ describe("C# partial class members across files", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(CSHARP_INSTANTIATED_RECEIVER_SCOPES)("keeps C# generic receiver arities through %s", async (scope) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-instantiated-language-"));
+    try {
+      const fixture = csharpInstantiatedReceiverFixture(scope);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectInstantiatedReceiverConsumers(index, files, fixture);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["TKey, TValue", "TLimit, TActivatorData, TRegistrationStyle"])(
+    "leaves a generic header split by preprocessor directives unproven (%s)",
+    async (parameters) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-conditional-generic-header-"));
+      try {
+        const argumentsText = parameters
+          .split(", ")
+          .map(() => "int")
+          .join(", ");
+        const lines = ["namespace Models;", `public class Client : Contract<${argumentsText}> {}`];
+        const files = await writeFixtureFiles(root, {
+          "Contract.cs": `namespace Models;\npublic interface Contract\n#if CURRENT\n<${parameters}>\n#else\n<${parameters}>\n#endif\n{}\n`,
+          "Use.cs": lines.join("\n"),
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(files["Contract.cs"]!))?.parseErrorRanges?.length).toBeGreaterThan(0);
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: 2,
+          column: columnOf(lines, 2, "Contract"),
+        });
+        expect(result.status).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges.filter(
+            (edge) =>
+              ["extends", "implements"].includes(edge.label ?? "") && graph.nodes.get(edge.to)?.name === "Contract",
+          ),
+        ).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each(CSHARP_DOTTED_USING_CASES)("keeps C# dotted roots on $name", async (testCase) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-dotted-using-language-"));

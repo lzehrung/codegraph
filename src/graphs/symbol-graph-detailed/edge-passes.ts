@@ -728,6 +728,8 @@ function resolveNamedType(
   }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
+  // C# type roots, including generic arity, are settled by the shared positioned lookup.
+  if (context.sup.id === "csharp") return null;
   // A parameter/annotation type name is a closer scope binding than the class it names.
   const normalized = context.sup.normalizeIdentifier(name);
   const typed = context.moduleEntry.locals.filter(

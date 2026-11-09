@@ -1283,6 +1283,8 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     (symbol.jvmTypeOwnerStartIndex === undefined || typeof symbol.jvmTypeOwnerStartIndex === "number") &&
     isOptionalBoolean(symbol.jvmStaticMember) &&
     isOptionalBoolean(symbol.swiftExtensionOwner) &&
+    (symbol.csharpGenericArity === undefined ||
+      (Number.isSafeInteger(symbol.csharpGenericArity) && symbol.csharpGenericArity > 0)) &&
     isOptionalBoolean(symbol.typeParameter) &&
     (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&

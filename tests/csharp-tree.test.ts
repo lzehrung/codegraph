@@ -1354,7 +1354,7 @@ describe("C# alias shadowing facts", () => {
     }
   });
 
-  it("declares a type for other files' lookups only when a bare name can bind it", () => {
+  it("records namespace type names with their generic arity", () => {
     const source = [
       "namespace Local {",
       "  class Plain {}",
@@ -1374,9 +1374,21 @@ describe("C# alias shadowing facts", () => {
     ].join("\n");
     const facts = collectCsharpNamespaceFacts(treeForSource(source));
 
-    // `X` never binds `X<T>`, so only a namespace or a type without type parameters can shadow a bare name. A type of
-    // the global namespace is recorded by its bare name, because the global namespace has members of its own.
-    expect([...facts.types].sort()).toEqual(["GlobalPlain", "Local.Both", "Local.Mode", "Local.Plain"]);
+    // Bare names and generic instantiations are distinct lookup keys, including file-local types.
+    expect([...facts.types].sort()).toEqual([
+      "GlobalGeneric`1",
+      "GlobalPlain",
+      "Local.Both",
+      "Local.Both`1",
+      "Local.Handler`1",
+      "Local.IBox`1",
+      "Local.Mode",
+      "Local.OnlyGeneric`1",
+      "Local.Pair`2",
+      "Local.Plain",
+      "Local.Wrapper`1",
+      "file Local.Hidden`1",
+    ]);
     // A generic type outside every namespace still makes its file a global-namespace peer.
     expect(facts.regions.map((region) => region.name)).toEqual(["", "Local"]);
   });

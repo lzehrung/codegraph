@@ -27,6 +27,10 @@ import {
   CSHARP_DOTTED_USING_CASES,
   csharpPartialGenericRootFixture,
 } from "../../helpers/csharp-dotted-using-fixture.js";
+import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+} from "../../helpers/csharp-instantiated-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
@@ -59,6 +63,25 @@ const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "me
 const partialGenericRoot = csharpPartialGenericRootFixture();
 
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_INSTANTIATED_RECEIVER_SCOPES.flatMap((scope) => {
+    const fixture = csharpInstantiatedReceiverFixture(scope);
+    return fixture.sites.map((site): MatrixCell => {
+      const targetIndex = ["Prompt.cs", "Pair.cs", "Plain.cs"].indexOf(site.target);
+      const target = fixture.targets[targetIndex]!;
+      const decoy = fixture.targets[targetIndex === 2 ? 0 : 2]!;
+      return {
+        id: `csharp/instantiated-receiver-${scope}-${site.caller.toLowerCase()}`,
+        language: "csharp",
+        callForm: "typed-local-receiver",
+        files: fixture.files,
+        use: { file: "Use.cs", line: site.line, token: "Count" },
+        expected: { file: target.file, line: target.line, token: "Count" },
+        decoy: { file: decoy.file, line: decoy.line, token: "Count" },
+        decoyKind: "callable",
+        edge: { label: "calls", fromFile: "Use.cs", fromName: site.caller },
+      };
+    });
+  }),
   {
     id: "csharp/dotted-root-partial-owner-type-parameter",
     language: "csharp",

@@ -71,6 +71,11 @@ import {
   expectInheritedTypeConsumers,
 } from "./helpers/csharp-inherited-alias-assertions.js";
 import { CSHARP_DOTTED_USING_CASES, expectDottedUsingConsumers } from "./helpers/csharp-dotted-using-fixture.js";
+import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+  expectInstantiatedReceiverConsumers,
+} from "./helpers/csharp-instantiated-receiver-fixture.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -1539,6 +1544,21 @@ nativeDescribe("native semantic coverage", () => {
     expect(edges.filter((edge) => edge.startsWith("Parameter ") || edge.startsWith("Unused "))).toEqual([]);
     expect(edges.filter((edge) => edge === "Local calls Second.cs::Run")).toHaveLength(1);
   });
+
+  it.each(CSHARP_INSTANTIATED_RECEIVER_SCOPES)(
+    "keeps native C# generic receiver arities on disk reload (%s)",
+    async (scope) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-instantiated-"));
+      tempDirs.push(root);
+      const fixture = csharpInstantiatedReceiverFixture(scope);
+      const files = await writeFixtureFiles(root, fixture.files);
+      for (let build = 0; build < 2; build += 1) {
+        const index = await buildProjectIndex(root, { cache: "disk" });
+        await expectInstantiatedReceiverConsumers(index, files, fixture);
+        clearMemoryCache();
+      }
+    },
+  );
 
   it.each(CSHARP_DOTTED_USING_CASES)("keeps native C# dotted roots on $name after disk reload", async (testCase) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-csharp-dotted-using-"));

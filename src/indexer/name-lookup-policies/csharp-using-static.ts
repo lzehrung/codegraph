@@ -13,6 +13,7 @@ import type { SyntaxNodeLike } from "../../languages/types.js";
 import { getCallableArity } from "../../languages/callable-arity.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
+import { csharpGenericArity, csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceAt } from "../compilation-units.js";
 import { isCsharpAccessibleOutsideType } from "../declaration-visibility.js";
 import { okGoToResult } from "../navigation-provenance.js";
@@ -102,6 +103,7 @@ function usingStaticCandidates(
   use: Pick<BareNameUse, "index" | "mod"> & { files?: ParsedFileProvider },
   name: string,
   binding?: ImportBinding,
+  typeArity = 0,
   typesOnly = false,
 ): Candidate[] | null {
   const candidates: Candidate[] = [];
@@ -119,11 +121,11 @@ function usingStaticCandidates(
     }
     for (const def of matches) {
       const declaration = declarationOf(parsed, def);
-      if (typesOnly) {
-        if (!declaration || !NESTED_TYPE_DECLARATIONS.has(declaration.type)) continue;
-        if (declaration.namedChildren.some((child) => child.type === "type_parameter_list")) continue;
-      }
-      if (declaration && importsMember(use, parsed, declaration, imp)) {
+      if (!declaration) continue;
+      const nestedType = NESTED_TYPE_DECLARATIONS.has(declaration.type);
+      if (typesOnly && !nestedType) continue;
+      if (nestedType && csharpGenericArity(declaration) !== typeArity) continue;
+      if (importsMember(use, parsed, declaration, imp)) {
         candidates.push({ def, declaration, source: parsed.source });
       }
     }
@@ -136,8 +138,9 @@ export function csharpUsingStaticTypeCandidates(
   use: Pick<BareNameUse, "index" | "mod"> & { files?: ParsedFileProvider },
   binding: ImportBinding,
   name: string,
+  genericArity = 0,
 ): SymbolDef[] | null {
-  return usingStaticCandidates(use, name, binding, true)?.map((candidate) => candidate.def) ?? null;
+  return usingStaticCandidates(use, name, binding, genericArity, true)?.map((candidate) => candidate.def) ?? null;
 }
 
 /** One candidate, or the unique one whose parameters accept the call's argument count. */
@@ -168,7 +171,7 @@ export function withCsharpUsingStatic(
   lookupName: string,
   resolved: GoToResult | null,
 ): NameResolution | null {
-  const candidates = usingStaticCandidates(use, lookupName);
+  const candidates = usingStaticCandidates(use, lookupName, undefined, csharpTypeArgumentArity(use.node));
   if (!candidates?.length) return resolved;
   const selected = selectCandidate(use, candidates);
   if (resolved?.status === "ok") {
