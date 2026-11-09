@@ -51,6 +51,51 @@ nativeDescribe("native parse tree projection", () => {
     expect(byPosition.text).toBe("name");
   });
 
+  it.each(["js", "ts"] as const)("selects the later %s class member at an adjacent zero-width boundary", (id) => {
+    const support = supportById(id);
+    expect(support).toBeDefined();
+    const source = "var X=class{a(){}b(){}c(){this.b()}}";
+    const execution = getNativeSyntaxTreeExecution(source, support!);
+    expect(execution.tree).not.toBeNull();
+    const root = new ProjectedSyntaxTree(source, execution.tree!).rootNode;
+    const declarationIndex = source.indexOf("b(){}");
+    const useIndex = source.indexOf("this.b()") + "this.".length;
+
+    expect(root.descendantForIndex(declarationIndex, declarationIndex).text).toBe("b");
+    expect(root.descendantForIndex(declarationIndex, declarationIndex + 1).text).toBe("b");
+    expect(
+      root.descendantForPosition({ row: 0, column: declarationIndex }, { row: 0, column: declarationIndex }).text,
+    ).toBe("b");
+    expect(root.descendantForIndex(useIndex, useIndex).text).toBe("b");
+    expect(root.descendantForIndex(declarationIndex - 1, declarationIndex + 1).type).toBe("class_body");
+  });
+
+  it("keeps UTF-16 boundary lookups aligned after multibyte text", () => {
+    const support = supportById("js");
+    expect(support).toBeDefined();
+    const source = 'const marker = "\u{1f989}";var X=class{a(){}b(){}c(){this.b()}}';
+    const execution = getNativeSyntaxTreeExecution(source, support!);
+    expect(execution.tree).not.toBeNull();
+    const root = new ProjectedSyntaxTree(source, execution.tree!).rootNode;
+    const declarationIndex = source.indexOf("b(){}");
+    expect(root.descendantForIndex(declarationIndex, declarationIndex).text).toBe("b");
+    expect(
+      root.descendantForPosition({ row: 0, column: declarationIndex }, { row: 0, column: declarationIndex }).text,
+    ).toBe("b");
+  });
+
+  it("selects a name starting where an optional-chain token ends", () => {
+    const support = supportById("js");
+    expect(support).toBeDefined();
+    const source = "const obj={b(){}};obj?.b()";
+    const execution = getNativeSyntaxTreeExecution(source, support!);
+    expect(execution.tree).not.toBeNull();
+    const root = new ProjectedSyntaxTree(source, execution.tree!).rootNode;
+    const useIndex = source.lastIndexOf("b()");
+    expect(root.descendantForIndex(useIndex, useIndex).text).toBe("b");
+    expect(root.descendantForPosition({ row: 0, column: useIndex }, { row: 0, column: useIndex }).text).toBe("b");
+  });
+
   it("projects UTF-8 byte offsets to JavaScript string indices", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();

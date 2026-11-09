@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { findReferences, goToDefinition } from "../src/index.js";
 import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js";
 import {
   assertConsumerAgreement,
@@ -764,6 +765,57 @@ nativeDescribe("anonymous class and object bodies own super and this", () => {
         edges: [{ label: "calls", from: { file: "Outer.php", name: "outerSuper" } }],
       },
     ]);
+  });
+
+  it.each(["js", "ts"] as const)("resolves %s calls in a minified class expression's later member", async (id) => {
+    const file = `minified.${id}`;
+    const decoyFile = `decoy.${id}`;
+    const source = "var X=class{a(){}b(){}c(){this.b()}}";
+    const decoy = "class Other { b() {} }";
+    const fixture = await fixtureFor(`cg-anon-minified-${id}-`, { [file]: source, [decoyFile]: decoy });
+    const declarationColumn = source.indexOf("b(){}") + 1;
+    const useColumn = source.indexOf("this.b()") + "this.".length + 1;
+    const use = { file: fixture.paths[file]!, line: 1, column: useColumn };
+    const goto = await goToDefinition(fixture.index, use);
+    expect(goto.status).toBe("ok");
+    if (goto.status === "ok") {
+      expect(goto.definition.file).toBe(fixture.paths[file]);
+      expect(goto.definition.range.start.column).toBe(declarationColumn);
+    }
+
+    const refs = await findReferences(fixture.index, {
+      file: fixture.paths[file]!,
+      line: 1,
+      column: declarationColumn,
+    });
+    expect(refs.status).toBe("ok");
+    if (refs.status === "ok") {
+      expect(refs.references).toContainEqual(
+        expect.objectContaining({
+          file: fixture.paths[file],
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 1, column: useColumn }) }),
+        }),
+      );
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(refs.references.some((reference) => reference.file === fixture.paths[decoyFile])).toBe(false);
+    }
+
+    const caller = findDetailedNode(fixture, file, "c");
+    const target = findDetailedNode(fixture, file, "b");
+    const decoyTarget = findDetailedNode(fixture, decoyFile, "b");
+    const calls = fixture.graph.edges.filter((edge) => edge.label === "calls" && edge.from === caller.id);
+    expect(calls.map((edge) => edge.to)).toEqual([target.id]);
+    expect(calls.some((edge) => edge.to === decoyTarget.id)).toBe(false);
+  });
+
+  it.each(["js", "ts"] as const)("navigates %s optional member calls at the token boundary", async (id) => {
+    const file = `optional.${id}`;
+    const source = "var X=class{a(){}b(){}c(){this?.b()}}";
+    const fixture = await fixtureFor(`cg-anon-optional-${id}-`, { [file]: source });
+    const useColumn = source.indexOf("this?.b()") + "this?.".length + 1;
+    const goto = await goToDefinition(fixture.index, { file: fixture.paths[file]!, line: 1, column: useColumn });
+    expect(goto.status).toBe("ok");
+    if (goto.status === "ok") expect(goto.definition.range.start.column).toBe(source.indexOf("b(){}") + 1);
   });
 
   it("resolves a TypeScript class expression's super and this calls in goto, references, and the graph", async () => {
