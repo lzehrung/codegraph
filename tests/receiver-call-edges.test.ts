@@ -2779,8 +2779,8 @@ nativeDescribe("receiver call arity and callable metadata regressions", () => {
       "kttrail.kt": [
         "class KtTrail {",
         "  fun pick(a: Int): Int = a",
-        "  fun pick(a: Int, b: Int): Int = a + b",
-        "  fun caller(): Int { return this.pick(1) { it } }",
+        "  fun pick(a: Int, block: () -> Int): Int = a + block()",
+        "  fun caller(): Int { return this.pick(1) { 2 } }",
         "}",
       ].join("\n"),
     };
