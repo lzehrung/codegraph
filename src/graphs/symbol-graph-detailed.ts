@@ -53,6 +53,7 @@ import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { kotlinCallableAcceptsTrailingLambda, kotlinHasTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
   assertQuerySourceForIndex,
   ensureParsedContextForIndex,
@@ -826,6 +827,19 @@ export async function buildSymbolGraphDetailed(
     }
   }
 
+  const trailingLambdaCalls = new Set<ReceiverCallCandidate>();
+  const trailingLambdaNames = new Set<string>();
+  for (const candidate of callableReceiverCalls) {
+    if (supportForIndexedFile(candidate.site.file)?.id !== "kotlin") continue;
+    const start = candidate.site.range.start.index;
+    if (start === undefined) continue;
+    const parsed = await loadParsedFile(candidate.site.file);
+    const use = parsed?.tree.rootNode.descendantForIndex(start, start);
+    if (!use || !kotlinHasTrailingLambda(use)) continue;
+    trailingLambdaCalls.add(candidate);
+    trailingLambdaNames.add(candidate.memberName);
+  }
+  const lambdaRejectedTargets = new Set<string>();
   const memberIdentities = new Map<string, CallableIdentity>();
   const hasHierarchyReceiver = callableReceiverCalls.some((candidate) =>
     inheritsMemberOverloads(supportForIndexedFile(candidate.site.file)?.id ?? ""),
@@ -854,6 +868,9 @@ export async function buildSymbolGraphDetailed(
         }
         const id = defNodeId(def);
         memberIdentities.set(id, def.callable);
+        if (trailingLambdaNames.has(def.localName) && supportForIndexedFile(def.file)?.id === "kotlin") {
+          if (!(await kotlinCallableAcceptsTrailingLambda(index, def))) lambdaRejectedTargets.add(id);
+        }
         receiverMemberDefinitions?.set(id, def);
       }
     }
@@ -908,6 +925,9 @@ export async function buildSymbolGraphDetailed(
       const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
       return memberPackage === usePackage;
     },
+    trailingLambdaCalls.size
+      ? (targetId, candidate) => !trailingLambdaCalls.has(candidate) || !lambdaRejectedTargets.has(targetId)
+      : undefined,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

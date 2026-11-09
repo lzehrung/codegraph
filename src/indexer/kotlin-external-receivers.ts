@@ -164,6 +164,7 @@ const EXTERNAL_TYPE_SAME_AS: Readonly<Record<string, string>> = {
 
 /** The types a bare spelling names without an import: the default imports of `kotlin.*`, `kotlin.collections.*`, and `java.lang.*`. */
 const DEFAULT_IMPORT_TYPES: Readonly<Record<string, string>> = {
+  Any: "kotlin.Any",
   MutableList: "kotlin.collections.MutableList",
   MutableSet: "kotlin.collections.MutableSet",
   MutableMap: "kotlin.collections.MutableMap",

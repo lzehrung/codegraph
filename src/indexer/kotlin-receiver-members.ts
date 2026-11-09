@@ -20,17 +20,28 @@ import {
   type ExternalBaseOmits,
   type ReceiverTypeMember,
 } from "./navigation-goto.js";
-import { getOrBuildScopeIndex } from "./navigation-local.js";
+import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
-import { bindsTypeParameter } from "./type-parameters.js";
+import {
+  declarationNodeOf,
+  kotlinCallableAcceptsTrailingLambda,
+  kotlinHasTrailingLambda,
+  unindexedType,
+} from "./kotlin-call-compatibility.js";
+import { bindsTypeParameter, kotlinSingleUpperBound } from "./type-parameters.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import type { ScopeIndex } from "./scope.js";
 import { type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
 
 /** Whether the member can be called at the use: proven either way, or "unproven" when nothing indexed settles it. */
 type MemberAccess = "visible" | "hidden" | "unproven";
 
 type Visibility = "public" | "private" | "protected" | "internal";
+
+type ReceiverTypeEvidence = {
+  node: SyntaxNodeLike;
+  site: { mod: ModuleIndex; parsed: ParsedFileContext; scopeIndex: ScopeIndex };
+};
 
 /** Where a receiver member is looked up from. */
 type AccessSite = {
@@ -39,39 +50,13 @@ type AccessSite = {
   use: SyntaxNodeLike;
   receiver?: SymbolDef;
   externalReceiver?: string;
+  unindexedReceiver?: ReceiverTypeEvidence;
 };
 
 const OMITTED: ReceiverTypeMember = { status: "omitted" };
 const UNPROVEN: ReceiverTypeMember = { status: "unproven" };
 
-/** Nodes that carry the modifiers of a declaration. */
-const DECLARATION_NODE_TYPES: Readonly<Record<string, true>> = {
-  class_parameter: true,
-  function_declaration: true,
-  property_declaration: true,
-  class_declaration: true,
-  object_declaration: true,
-  enum_entry: true,
-};
-
-/** The declaration a definition names, with its parsed file; null when that file cannot be read. */
-export async function declarationNodeOf(
-  index: ProjectIndex,
-  def: SymbolDef,
-): Promise<{ node: SyntaxNodeLike; parsed: ParsedFileContext } | null> {
-  const start = def.range.start.index;
-  if (start === undefined) return null;
-  try {
-    const parsed = await ensureParsedContextForIndex(index, def.file);
-    let node: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForIndex(start, start);
-    for (; node; node = node.parent) {
-      if (DECLARATION_NODE_TYPES[node.type]) return { node, parsed };
-    }
-  } catch (error) {
-    rethrowStaleQuerySource(error);
-  }
-  return null;
-}
+const UNPROVEN_SHADOWING: ReceiverTypeMember = { status: "unproven", blocksFallback: true };
 
 /** The visibility modifier a declaration spells; a declaration with none is public. */
 export function declaredVisibility(declaration: SyntaxNodeLike): Visibility {
@@ -201,6 +186,42 @@ function extensionScopeRank(
   return site.mod.imports.some((imp) => imp.kind === "star" && imp.from === packageName) ? 3 : null;
 }
 
+/** Identical declared bindings prove an external receiver's identity, but never an external subtype. */
+export function sameUnindexedReceiver(receiver: ReceiverTypeEvidence, extension: ReceiverTypeEvidence): boolean {
+  const receiverType = unindexedType(receiver.node);
+  const extensionType = unindexedType(extension.node);
+  if (receiverType.nullable && !extensionType.nullable) return false;
+  const receiverName = receiverType.name;
+  const extensionName = extensionType.name;
+  const name = receiverName.text;
+  const { parsed, scopeIndex } = receiver.site;
+  if (bindsTypeParameter(name, receiverName, parsed.source, parsed.sup)) return false;
+  const target = extension.site;
+  if (bindsTypeParameter(extensionName.text, extensionName, target.parsed.source, target.parsed.sup)) return false;
+  const receiverBinding = findClosestScopeBinding(scopeIndex, name, receiverName, parsed.sup, true);
+  const extensionBinding = findClosestScopeBinding(
+    target.scopeIndex,
+    extensionName.text,
+    extensionName,
+    target.parsed.sup,
+    true,
+  );
+  if (fileIdentityKey(receiver.site.mod.file) === fileIdentityKey(target.mod.file)) {
+    return name === extensionName.text && receiverBinding === extensionBinding;
+  }
+  const receiverImport = receiverBinding?.import;
+  const extensionImport = extensionBinding?.import;
+  if (receiverBinding && !receiverImport) return false;
+  if (extensionBinding && !extensionImport) return false;
+  if (receiverImport?.kind === "named") {
+    return !!resolveExternalType(target.mod, extensionName.text, [receiverImport.from]);
+  }
+  if (extensionImport?.kind === "named") {
+    return !!resolveExternalType(receiver.site.mod, name, [extensionImport.from]);
+  }
+  return false;
+}
+
 /** A fallback extension is a target only when the implicit receiver proves its declared receiver type. */
 export async function extensionReceiverApplies(
   site: AccessSite,
@@ -210,12 +231,16 @@ export async function extensionReceiverApplies(
   resolveTypeName: JvmTypeNameResolver,
 ): Promise<{ applies: "yes" | "no" | "unknown"; target: SymbolDef | null }> {
   const mod = site.index.byFile.get(fileIdentityKey(def.file));
-  const type = typeNode.type === "nullable_type" ? typeNode.namedChildren[0] : typeNode;
+  let type = typeNode.type === "nullable_type" ? typeNode.namedChildren[0] : typeNode;
   if (!mod || !type) return { applies: "no", target: null };
-  const ids = type.namedChildren.filter((child) => child.type === "identifier");
-  const lookup = ids.length === 1 ? ids[0]! : type;
+  let matchingType = typeNode;
+  let lookup = unindexedType(type).name;
   if (bindsTypeParameter(lookup.text, lookup, declared.parsed.source, declared.parsed.sup)) {
-    return { applies: "unknown", target: null };
+    const bound = kotlinSingleUpperBound(lookup, declared.parsed.source, declared.parsed.sup);
+    if (!bound) return { applies: "unknown", target: null };
+    type = bound;
+    matchingType = bound;
+    lookup = unindexedType(bound).name;
   }
   const scopeIndex = getOrBuildScopeIndex(
     site.index,
@@ -228,6 +253,18 @@ export async function extensionReceiverApplies(
   const target = definitionWithoutDeferredSteps(
     await resolveTypeName(site.index, mod, declared.parsed, scopeIndex, lookup),
   );
+  if (!target && resolveExternalType(mod, type.text, ["kotlin.Any"])) {
+    const nullableReceiver = site.unindexedReceiver && unindexedType(site.unindexedReceiver.node).nullable;
+    const acceptsNullable = typeNode.type === "nullable_type";
+    return { applies: nullableReceiver && !acceptsNullable ? "no" : "yes", target: null };
+  }
+  if (site.unindexedReceiver) {
+    const matches = sameUnindexedReceiver(site.unindexedReceiver, {
+      node: matchingType,
+      site: { mod, parsed: declared.parsed, scopeIndex },
+    });
+    return { applies: matches ? "yes" : "no", target: null };
+  }
   if (target && (target.kind === SymbolKind.Class || target.kind === SymbolKind.Interface)) {
     if (!site.receiver) return { applies: "no", target };
     const sameReceiver =
@@ -242,6 +279,14 @@ export async function extensionReceiverApplies(
         })
       : "unknown";
     return { applies, target };
+  }
+  if (!target && site.receiver) {
+    const owner = await declarationNodeOf(site.index, site.receiver);
+    const packageName = getPackageDeclarationName(site.index, site.receiver.file, "kotlin");
+    const qualified = packageName ? `${packageName}.${site.receiver.localName}` : site.receiver.localName;
+    const importedReceiver =
+      owner?.node.parent?.type === "source_file" && resolveExternalType(mod, type.text, [qualified]);
+    if (importedReceiver) return { applies: "yes", target: site.receiver };
   }
   if (!target && site.externalReceiver && resolveExternalType(mod, type.text, [site.externalReceiver])) {
     return { applies: "yes", target: null };
@@ -288,6 +333,7 @@ async function inScopeExtension(
   let selected: SymbolDef | null = null;
   let selectedType: SymbolDef | null = null;
   let uncertain = false;
+  const trailingLambda = kotlinHasTrailingLambda(site.use);
   for (const candidateName of names) {
     for (const def of projectCallablesNamed(site.index, candidateName)) {
       if (def.kind !== SymbolKind.Function) continue;
@@ -295,6 +341,7 @@ async function inScopeExtension(
         if (def.isMember || !topLevelDeclarationInScope(site.index, site.mod, def)) continue;
       }
       if (!acceptsArgumentCount(def, argumentCount)) continue;
+      if (trailingLambda && !(await kotlinCallableAcceptsTrailingLambda(site.index, def))) continue;
       const declared = await declarationNodeOf(site.index, def);
       if (!declared) continue;
       const typeNode = kotlinExtensionReceiverType(declared.node);
@@ -334,7 +381,7 @@ async function inScopeExtension(
       }
     }
   }
-  if (uncertain) return UNPROVEN;
+  if (uncertain) return UNPROVEN_SHADOWING;
   return selected ? { status: "member", member: selected } : OMITTED;
 }
 
@@ -349,6 +396,59 @@ export function lookupExternalReceiverExtension(
   resolveTypeName: JvmTypeNameResolver,
 ): Promise<ReceiverTypeMember> {
   return inScopeExtension({ index, mod, use, externalReceiver: receiver }, member, argumentCount, resolveTypeName);
+}
+
+/** A unique exact-type extension may bind an external receiver, but never bypass an indexed project member. */
+export async function lookupUnindexedReceiverExtension(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  receiver: ReceiverTypeEvidence,
+  member: string,
+  argumentCount: number | undefined,
+  resolveTypeName: JvmTypeNameResolver,
+): Promise<ReceiverTypeMember> {
+  const extension = await inScopeExtension(
+    { index, mod, use, unindexedReceiver: receiver },
+    member,
+    argumentCount,
+    resolveTypeName,
+  );
+  if (extension.status !== "member") return extension;
+  const declaredType = unindexedType(receiver.node);
+  if (declaredType.nullable) return extension;
+  const type = declaredType.name;
+  let simpleName = type.text;
+  for (const child of type.namedChildren) {
+    if (child.type === "identifier") simpleName = child.text;
+  }
+  const receiverPackage = getPackageDeclarationName(index, receiver.site.mod.file, "kotlin");
+  const binding = findClosestScopeBinding(receiver.site.scopeIndex, type.text, type, receiver.site.parsed.sup, true);
+  const projectTypeName = binding?.import?.kind === "named" ? binding.import.imported : simpleName;
+  let omitsExternalBase: ExternalBaseOmits | undefined;
+  for (const candidate of projectCallablesNamed(index, projectTypeName)) {
+    if (candidate.kind !== SymbolKind.Class || candidate.isMember) continue;
+    const packageName = getPackageDeclarationName(index, candidate.file, "kotlin");
+    const samePackageType =
+      !binding?.import &&
+      packageName === receiverPackage &&
+      normalizeKotlinIdentifier(type.text) === normalizeKotlinIdentifier(candidate.localName);
+    const qualified = packageName ? `${packageName}.${candidate.localName}` : candidate.localName;
+    if (!samePackageType && !resolveExternalType(receiver.site.mod, type.text, [qualified])) continue;
+    omitsExternalBase ??= externalBasesLacking(member);
+    const found = await findReceiverTypeMember(
+      index,
+      mod,
+      use,
+      candidate,
+      member,
+      argumentCount,
+      omitsExternalBase,
+      "call",
+    );
+    if (found.status !== "omitted") return UNPROVEN_SHADOWING;
+  }
+  return extension;
 }
 
 /** Project extensions in scope on the project receiver type `receiver`, for a call its own members cannot take. */
@@ -395,11 +495,13 @@ export async function lookupReceiverTypeMember(
     externalBasesLacking(member),
     memberUse,
   );
-  if (found.status === "unproven") return found;
+  let unprovenMember = found.status === "unproven";
   if (found.status === "member") {
     const access = await memberAccess(site, found.member);
-    if (access === "unproven") return UNPROVEN;
+    unprovenMember = access === "unproven";
     if (access === "visible" && acceptsArgumentCount(found.member, argumentCount)) return found;
   }
-  return inScopeExtension(site, member, argumentCount, resolveTypeName);
+  const extension = await inScopeExtension(site, member, argumentCount, resolveTypeName);
+  if (!unprovenMember) return extension;
+  return extension.status === "omitted" ? UNPROVEN : UNPROVEN_SHADOWING;
 }

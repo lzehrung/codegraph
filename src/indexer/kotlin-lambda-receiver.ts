@@ -25,8 +25,8 @@
  *   unproven. A lambda in parentheses or by name of an unknown callee is read as an ordinary function argument.
  *
  * A receiver whose type is outside the project, or a project type with a supertype outside it that no table knows,
- * cannot rule a name out, so the call stays unproven there too. A nullable receiver (`Builder?.() -> Unit`) is
- * reached only through `?.`, so a bare call does not bind to its members.
+ * cannot rule a name out. An exact declared external type can still bind a unique project extension, assuming no
+ * unseen member shadows it. A nullable receiver reaches only extensions declared for a nullable receiver.
  */
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
@@ -52,12 +52,13 @@ import {
 } from "./kotlin-external-receivers.js";
 import {
   acceptsArgumentCount,
-  declarationNodeOf,
   declaredVisibility,
   extensionReceiverApplies,
   lookupExternalReceiverExtension,
   lookupReceiverTypeExtension,
   lookupReceiverTypeMember,
+  lookupUnindexedReceiverExtension,
+  sameUnindexedReceiver,
   topLevelDeclarationInScope,
 } from "./kotlin-receiver-members.js";
 import { kotlinPropertyInvocationArity } from "./member-selection.js";
@@ -72,9 +73,10 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { definitionForBinding, findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Binding } from "./scope-types.js";
+import { declarationNodeOf } from "./kotlin-call-compatibility.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import type { ScopeIndex } from "./scope.js";
-import { bindsTypeParameter } from "./type-parameters.js";
+import { bindsTypeParameter, kotlinSingleUpperBound } from "./type-parameters.js";
 import { type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
 
 /** What a lambda literal's implicit receiver is. */
@@ -96,8 +98,8 @@ export type LambdaReceiverVerdict =
   /** A receiver that is not indexed may declare the name, which hides a member of the enclosing type. */
   | { status: "unproven" }
   /**
-   * A known external receiver declares or extends the name, or a project receiver's property of that name may be
-   * invoked through its type, so no other declaration is provably the call's target.
+   * A known external receiver declares the name, an applicable extension set is ambiguous or hidden by an unproven
+   * member, or a receiver property may be invoked through its type: no fallback is provably the call's target.
    */
   | { status: "shadowed" }
   | { status: "none" };
@@ -453,8 +455,16 @@ async function receiverOfType(
   site: Site,
   node: SyntaxNodeLike,
 ): Promise<LambdaReceiver> {
-  const { type, nullable } = peelType(node);
+  let { type, nullable } = peelType(node);
   if (type.type !== "user_type") return UNPROVEN;
+  const name = typeNameNode(type);
+  if (bindsTypeParameter(name.text, name, site.parsed.source, site.parsed.sup)) {
+    const bound = kotlinSingleUpperBound(name, site.parsed.source, site.parsed.sup);
+    if (!bound) return UNPROVEN;
+    const upper = peelType(bound);
+    type = upper.type;
+    nullable = nullable || upper.nullable;
+  }
   const def = await resolveType(env, site, typeNameNode(type));
   if (def) return isNominalType(def) ? { kind: "type", def, nullable } : UNPROVEN;
   // A nullable external receiver is reached only through `?.`, which no table models.
@@ -665,7 +675,32 @@ async function declarationInScope(
   const body = node.parent;
   if (body && CLASS_BODY_TYPES[body.type]) {
     const use = argument.callee ?? argument.call;
-    if (argument.receiverExpression || !use) return true;
+    if (argument.receiverExpression) {
+      const receiver = await receiverOfExpression(env, argument.receiverExpression);
+      if (receiver.kind === "type") {
+        const container = nearestMemberContainer(node);
+        if (!container) return false;
+        const reaches = await declarationReaches(index, receiver.def, {
+          file: def.file,
+          containerStart: container.startIndex,
+        });
+        return reaches !== "no";
+      }
+      if (receiver.kind === "unproven" && receiver.evidence) {
+        const evidence = receiver.evidence;
+        const name = typeNameNode(peelType(evidence.node).type);
+        const binding = findClosestScopeBinding(
+          evidence.site.scopeIndex,
+          name.text,
+          name,
+          evidence.site.parsed.sup,
+          true,
+        );
+        if (binding?.import?.kind === "named" && typeof binding.import.resolved !== "string") return false;
+      }
+      return true;
+    }
+    if (!use) return true;
     if (sameFile && body.startIndex <= use.startIndex && use.endIndex <= body.endIndex) return true;
     const container = nearestMemberContainer(node);
     if (!container) return false;
@@ -753,7 +788,10 @@ async function receiverOfExpression(
   const def = await resolveType(env, env.site, evidence);
   if (def && isNominalType(def)) return { kind: "type", def, nullable: false };
   const declaredType = evidence.type === "user_type" || evidence.parent?.type === "user_type";
-  return declaredType ? { kind: "unproven", evidence: { node: evidence, site: env.site } } : UNPROVEN;
+  const namedFactory =
+    !declaredType &&
+    projectCallablesNamed(env.index, evidence.text).some((candidate) => candidate.kind === SymbolKind.Function);
+  return namedFactory ? UNPROVEN : { kind: "unproven", evidence: { node: evidence, site: env.site } };
 }
 
 /** The expression `with` runs its lambda on: its first argument. */
@@ -961,49 +999,6 @@ async function acceptsInvocationArguments(
 }
 
 /**
- * Identical type-position bindings can prove an extension receiver even without a member table: declarations in one
- * file share a binding, and explicit imports in different files can name the same external type. A type parameter
- * cannot stand in for another receiver, and this comparison never infers an external subtype.
- */
-function sameUnindexedReceiver(
-  receiver: { node: SyntaxNodeLike; site: Site },
-  extension: { node: SyntaxNodeLike; site: Site },
-): boolean {
-  const receiverType = peelType(receiver.node);
-  const extensionType = peelType(extension.node);
-  if (receiverType.nullable && !extensionType.nullable) return false;
-  const receiverName = typeNameNode(receiverType.type);
-  const extensionName = typeNameNode(extensionType.type);
-  const name = receiverName.text;
-  const { parsed, scopeIndex } = receiver.site;
-  if (bindsTypeParameter(name, receiverName, parsed.source, parsed.sup)) return false;
-  const target = extension.site;
-  if (bindsTypeParameter(extensionName.text, extensionName, target.parsed.source, target.parsed.sup)) return false;
-  const receiverBinding = findClosestScopeBinding(scopeIndex, name, receiverName, parsed.sup, true);
-  const extensionBinding = findClosestScopeBinding(
-    target.scopeIndex,
-    extensionName.text,
-    extensionName,
-    target.parsed.sup,
-    true,
-  );
-  if (fileIdentityKey(receiver.site.mod.file) === fileIdentityKey(target.mod.file)) {
-    return name === extensionName.text && receiverBinding === extensionBinding;
-  }
-  const receiverImport = receiverBinding?.import;
-  const extensionImport = extensionBinding?.import;
-  if (receiverBinding && !receiverImport) return false;
-  if (extensionBinding && !extensionImport) return false;
-  if (receiverImport?.kind === "named") {
-    return !!resolveExternalType(target.mod, extensionName.text, [receiverImport.from]);
-  }
-  if (extensionImport?.kind === "named") {
-    return !!resolveExternalType(receiver.site.mod, name, [extensionImport.from]);
-  }
-  return false;
-}
-
-/**
  * An extension body's lexical fallback still has to be callable. File-scope functions precede a same-named property,
  * regardless of declaration order; a property answers only when its value proves an invocation of this arity. An
  * extension fallback also needs the body's declared receiver, not merely a matching name in the file.
@@ -1139,7 +1134,7 @@ async function typedReceiverVerdict(
   const call = use.node.parent ?? use.node;
   const argumentCount = getCallArgumentCount({ languageId: "kotlin", source: parsed.source, call }) ?? undefined;
   const found = await lookupCalledMember(env, use.node, receiver, use.name, argumentCount);
-  if (found.status === "unproven") return UNPROVEN_VERDICT;
+  if (found.status === "unproven") return found.blocksFallback ? SHADOWED_VERDICT : UNPROVEN_VERDICT;
   if (found.status === "maybe-invoked" && !receiver.nullable) return SHADOWED_VERDICT;
   // A receiver whose only declaration of the name takes another argument count is no candidate; the next receiver is tried.
   if (found.status === "member" && memberAcceptsCallAt(env.index, found.member, use.node, parsed.source, "kotlin")) {
@@ -1163,7 +1158,26 @@ export async function kotlinLambdaReceiverVerdict(
   for (const scope of use.receivers ?? enclosingReceiverScopes(use.node)) {
     const receiver = await receiverOfScope(env, scope);
     if (receiver.kind === "none") continue;
-    if (receiver.kind === "unproven") return UNPROVEN_VERDICT;
+    if (receiver.kind === "unproven") {
+      if (!receiver.evidence) return UNPROVEN_VERDICT;
+      const argumentCount =
+        getCallArgumentCount({
+          languageId: "kotlin",
+          source: env.site.parsed.source,
+          call: use.node.parent ?? use.node,
+        }) ?? undefined;
+      const extension = await lookupUnindexedReceiverExtension(
+        env.index,
+        env.site.mod,
+        use.node,
+        receiver.evidence,
+        use.name,
+        argumentCount,
+        env.resolveTypeName,
+      );
+      if (extension.status === "member") return { status: "member", member: extension.member };
+      return extension.status === "unproven" && extension.blocksFallback ? SHADOWED_VERDICT : UNPROVEN_VERDICT;
+    }
     if (receiver.kind === "external") {
       if (receiver.names.has(name)) return SHADOWED_VERDICT;
       const argumentCount =

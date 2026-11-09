@@ -125,6 +125,7 @@ import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name
 import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-using-static.js";
 import { csharpTypeOnlyName } from "./scope-nodes.js";
 import { bindsTypeParameter, typeParameterNamesInScope } from "./type-parameters.js";
+import { kotlinCallableAcceptsTrailingLambda, kotlinHasTrailingLambda } from "./kotlin-call-compatibility.js";
 import {
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -3229,6 +3230,8 @@ async function resolveKeywordReceiverMember(
     memberUse === "call" && current.context.sup.id === "kotlin"
       ? new Map<SymbolDef, CallableArity | null | undefined>()
       : undefined;
+  const trailingLambda = current.context.sup.id === "kotlin" && kotlinHasTrailingLambda(node);
+  const lambdaCompatible = trailingLambda ? new Map<SymbolDef, boolean>() : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
@@ -3292,6 +3295,7 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (lambdaCompatible) lambdaCompatible.set(hit, await kotlinCallableAcceptsTrailingLambda(index, hit));
         if (propertyInvocationArities && !hit.callable) {
           const start = hit.range.start.index;
           if (start !== undefined) {
@@ -3358,6 +3362,7 @@ async function resolveKeywordReceiverMember(
       return facts.unboundArity ? { ...facts, arity: facts.unboundArity } : facts;
     },
     ...(propertyInvocationArities ? { invocationArity: (def: SymbolDef) => propertyInvocationArities.get(def) } : {}),
+    ...(lambdaCompatible ? { acceptsCall: (def: SymbolDef) => lambdaCompatible.get(def) ?? true } : {}),
     scope: (def) => scopeByMember.get(def) ?? "any",
     visible: (def) => visible.has(def),
     sameSignature: (a, b) => sameSignatures.get(memberKey(a))?.has(memberKey(b)) ?? false,
@@ -3698,7 +3703,7 @@ const KOTLIN_ANY_MEMBER_ARITY: Readonly<Record<string, number>> = { equals: 1, h
 export type ReceiverTypeMember =
   | { status: "member"; member: SymbolDef }
   /** The type may declare it: an overload set the argument count does not settle, a hidden member, or an unindexed supertype. */
-  | { status: "unproven" }
+  | { status: "unproven"; blocksFallback?: true }
   /** The type and every supertype lack it, so lookup continues with the next receiver. */
   | { status: "omitted" };
 
@@ -3719,7 +3724,7 @@ export async function findReceiverTypeMember(
 ): Promise<ReceiverTypeMember> {
   const unproven: ReceiverTypeMember = { status: "unproven" };
   if (!declaresMembers(receiver)) return unproven;
-  const report = { named: false, ambiguous: false };
+  const report: KeywordMemberReport = { named: false, ambiguous: false };
   const found = await resolveKeywordReceiverMember(
     index,
     mod,
@@ -3732,7 +3737,21 @@ export async function findReceiverTypeMember(
     report,
     memberUse,
   );
-  if (found) return { status: "member", member: found };
+  if (found) {
+    const acceptsCall =
+      argumentCount === undefined || (receiverMemberAcceptsArgumentCount(index, found, argumentCount) ?? true);
+    if (acceptsCall) return { status: "member", member: found };
+    report.inapplicable = true;
+  }
+  if (report.inapplicable) {
+    if (kotlinHasTrailingLambda(use)) return { status: "omitted" };
+    const owner = await keywordClassRefFromDef(index, receiver);
+    const onlyImplicitAnyBase =
+      owner?.context.sup.id === "kotlin" &&
+      !owner.container.namedChildren.some((child) => child.type === "delegation_specifiers");
+    const implicitAnyMember = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, normalizeKotlinIdentifier(member));
+    if (onlyImplicitAnyBase && !implicitAnyMember) return { status: "omitted" };
+  }
   if (report.named) return unproven;
   const anyName = normalizeKotlinIdentifier(member);
   const anyArity = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, anyName) ? KOTLIN_ANY_MEMBER_ARITY[anyName] : undefined;

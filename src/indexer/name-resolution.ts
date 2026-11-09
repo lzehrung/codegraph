@@ -291,10 +291,10 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
 /**
  * What the lambdas around a Kotlin bare call decide: a member of the closest receiver that declares the name, or
  * `undefined` when no receiver claims it and the lookup goes on. A receiver whose members are not indexed may declare
- * the name, which hides a member of the enclosing type, so such a call has no target; a file-level function stays the
- * answer, because only a same-named member of the unseen receiver would hide it and nothing indexed says whether one
- * exists. A known external receiver that declares or extends the name hides every project declaration of it, and so
- * does a project receiver's property that its type may make callable.
+ * the name, which hides a member of the enclosing type. A file-level function can still answer unless an in-scope
+ * extension applies to the receiver: an ambiguous extension set never falls back to a same-named global function.
+ * A known external receiver that declares the name, or a project receiver's possibly invokable property, also hides
+ * every project fallback.
  */
 async function settleKotlinLambdaReceiver(
   use: BareNameUse,

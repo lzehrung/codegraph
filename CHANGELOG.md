@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- Kotlin implicit receiver calls no longer fall back to a same-named global function when an extension applies. Single upper bounds and exact-type external receiver extensions retain their calls, and trailing lambdas exclude overloads with incompatible final parameters across navigation, references, and detailed graphs.
 - Python annotated parameters retain calls to methods of a class in the same file, while shadowed imports and generic type parameters remain excluded.
 - Native syntax lookups now select the node starting at a shared boundary instead of the preceding node that ends there, restoring go-to-definition, references, and detailed call edges for later members of minified JavaScript and TypeScript class expressions.
 - Kotlin extension accessors no longer call a same-named non-invokable property or an extension on the wrong receiver type. Calls respect argument counts, and receiver type positions prefer a type declaration over a same-named factory, keeping navigation, references, and detailed call edges consistent.

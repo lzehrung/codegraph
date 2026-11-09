@@ -1896,6 +1896,7 @@ export function emitReceiverCallEdges(
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
+  acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1964,6 +1965,9 @@ export function emitReceiverCallEdges(
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
     invocationArity: (id) => kotlinPropertyArities.get(canonicalMemberId(id, nodeAliases)),
+    ...(acceptsCallShape
+      ? { acceptsCall: (id: string) => acceptsCallShape(canonicalMemberId(id, nodeAliases), activeCandidate) }
+      : {}),
     scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
     visible: (id, useFile) => {
       const canonicalId = canonicalMemberId(id, nodeAliases);
