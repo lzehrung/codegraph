@@ -34,7 +34,6 @@ import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import { AMBIGUOUS_CPP_OVERLOAD_REASON } from "./ambiguous-resolution.js";
 import {
-  effectiveExplicitBinding,
   findRubyReopenedConstantParts,
   isExpandedStarBinding,
   resolveStarImportedDefinition,
@@ -147,12 +146,51 @@ import {
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
+import {
+  isPythonDottedImportBinding,
+  pythonImportedModuleFiles,
+  pythonImportPrecedesUse,
+  pythonLoadedSubmodules,
+} from "./python-dotted-imports.js";
 import { toTreeSitterPosition } from "./shared.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier", "union_specifier"]);
 const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
 const MAX_REFERENCE_NAMESPACE_PATHS = 64;
+
+/**
+ * A package an unaliased Python `import a.b.c` names besides the leaf its binding resolves to: `a` or `a.b`, which a
+ * module can reach under that package's own dotted spelling.
+ */
+type ImportPackageView = { file: string; phrase: string };
+
+/**
+ * The ways one import is scanned for references: the binding as it resolves, then each package a dotted Python import
+ * also names, searched under that package's own dotted spelling.
+ */
+function* importScanViews(
+  index: ProjectIndex,
+  imports: readonly ImportBinding[],
+): Generator<{ imp: ImportBinding; packageView?: ImportPackageView }> {
+  for (const imp of imports) {
+    yield { imp };
+    if (!isPythonDottedImportBinding(imp)) continue;
+    for (const { phrase, file } of pythonImportedModuleFiles(index, imp)) {
+      if (phrase !== imp.from) yield { imp, packageView: { file, phrase } };
+    }
+  }
+}
+
+function importScanTarget(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  packageView: ImportPackageView | undefined,
+): string | undefined {
+  if (packageView) return packageView.file;
+  // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
+  return typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
+}
 
 export async function goToDefinition(
   index: ProjectIndex,
@@ -971,9 +1009,15 @@ async function findReferencesInternal(
     const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
+      let rubyQualifiedConstant = false;
+      if (parsedContext.sup.id === "ruby") {
+        const position = toTreeSitterPosition(occurrence.start);
+        const node = parsedContext.tree.rootNode.descendantForPosition(position, position);
+        rubyQualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
+      }
       // A scope occurrence is not proof of a member call. Languages that invoke a free
       // function that way verify the site; an unresolvable receiver stays unavailable.
-      if (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence)) {
+      if (rubyQualifiedConstant || (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence))) {
         memberCallOccurrencesNeedVerification = true;
         continue;
       }
@@ -1241,12 +1285,12 @@ async function findReferencesInternal(
       }
     }
 
-    for (const imp of module.imports) {
+    const loadedSubmodules =
+      parsedContext.sup.id === "python" ? pythonLoadedSubmodules(index, module.imports) : undefined;
+    for (const { imp, packageView } of importScanViews(index, module.imports)) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
-      // A C# directive that an enclosing namespace shadows resolves nothing, so it is verified like an unresolved import.
-      const targetFile =
-        typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
+      const targetFile = importScanTarget(index, imp, packageView);
       if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
         const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
         const targetDirectories = new Set(
@@ -1375,7 +1419,8 @@ async function findReferencesInternal(
           // Python binds the first segment of an unaliased dotted import, while an alias
           // binds the whole module. Other namespaces use their local name directly.
           const namespaceSearchName =
-            imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS;
+            packageView?.phrase ??
+            (imp.mechanism === "python" && imp.from.includes(".") && !imp.explicitAlias ? imp.from : imp.localNS);
           const targetModule = index.byFile.get(fileIdentityKey(targetFile));
           if (
             targetModule?.exports.some(
@@ -1401,7 +1446,13 @@ async function findReferencesInternal(
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
-            if (parsed.sup.id === "csharp" && imp.localRange) {
+            const loadedImports = loadedSubmodules?.get(fileIdentityKey(targetFile))?.get(exportedName);
+            if (loadedImports?.length) {
+              const position = toTreeSitterPosition(range.start);
+              const use = parsed.tree.rootNode.descendantForPosition(position, position);
+              if (loadedImports.some((binding) => pythonImportPrecedesUse(binding, use, parsed.tree))) continue;
+            }
+            if ((parsed.sup.id === "csharp" && imp.localRange) || parsed.sup.id === "python") {
               const proof = await goToDefinition(
                 index,
                 { file: fileId, line: range.start.line, column: range.start.column },
@@ -1482,6 +1533,14 @@ async function findReferencesInternal(
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) break;
+              if (parsed.sup.id === "python") {
+                const proof = await goToDefinition(
+                  index,
+                  { file: fileId, line: range.start.line, column: range.start.column },
+                  parsed,
+                );
+                if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
+              }
               pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
             }
           }
@@ -1542,6 +1601,12 @@ async function findReferencesInternal(
               );
               for (const range of ranges) {
                 if (hasReachedCollectionLimit()) break;
+                const proof = await goToDefinition(
+                  index,
+                  { file: fileId, line: range.start.line, column: range.start.column },
+                  parsed,
+                );
+                if (proof.status !== "ok" || !matchesReferenceDefinition(proof.definition)) continue;
                 pushRef({ file: fileId, range, via: { import: imp, namespaceMember: exportedName } });
               }
               continue;
@@ -2370,21 +2435,6 @@ export async function collectNamespaceMemberRefs(
   const normalizedNs = normalize(ns);
   const namespaceSegments = normalizedNs.includes(".") ? normalizedNs.split(".") : undefined;
   const normalizedMember = normalize(member);
-  let effectivePythonBinding: ImportBinding | undefined;
-  if (sup.id === "python" && importBinding && imports) {
-    let bindingName: string | undefined;
-    if (importBinding.kind === "namespace") bindingName = importBinding.localNS;
-    else if (importBinding.kind === "named" || importBinding.kind === "default") bindingName = importBinding.local;
-    if (bindingName) {
-      const normalizedBindingName = normalize(bindingName);
-      effectivePythonBinding = effectiveExplicitBinding(imports, sup.id, (binding) => {
-        if (binding.kind === "namespace") return normalize(binding.localNS) === normalizedBindingName;
-        return (
-          (binding.kind === "named" || binding.kind === "default") && normalize(binding.local) === normalizedBindingName
-        );
-      });
-    }
-  }
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
@@ -2420,17 +2470,16 @@ export async function collectNamespaceMemberRefs(
               : null;
           const aliasQualified = isCsharpAliasQualifier(receiver, sup);
           const inFileScope =
-            aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
-          const inPythonBindingScope =
-            sup.id !== "python" || !effectivePythonBinding || effectivePythonBinding === importBinding;
+            sup.id === "python"
+              ? !closest || !!closest.import
+              : aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
           const inAliasScope =
-            inPythonBindingScope &&
-            (sup.id !== "csharp" ||
-              !importBinding ||
-              !imports ||
-              importBinding.kind !== "namespace" ||
-              !importBinding.localRange ||
-              innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding);
+            sup.id !== "csharp" ||
+            !importBinding ||
+            !imports ||
+            importBinding.kind !== "namespace" ||
+            !importBinding.localRange ||
+            innermostNamespaceImport(imports, objectName, obj, normalize) === importBinding;
           if (inAliasScope && inFileScope) ranges.push(toRange(prop));
         }
       }

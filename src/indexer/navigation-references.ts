@@ -77,6 +77,7 @@ import {
   type SymbolDef,
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
+import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "./python-dotted-imports.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 
@@ -956,6 +957,7 @@ function jsNamespaceImportReachesDefinition(
 /**
  * Whether one import of a module can bind `def` or a namespace that reaches it. Candidate selection tests this on the
  * imports of the files it can reach, and the candidate-selection parity test runs it on every import of every module.
+ * An unaliased Python `import a.b.c` names the packages `a` and `a.b` as well as the leaf its binding resolves to.
  */
 export function importCanReferenceDefinition(
   index: ProjectIndex,
@@ -964,8 +966,23 @@ export function importCanReferenceDefinition(
   exportedNames: readonly string[],
   languageId: string,
 ): boolean {
+  if (languageId === "python" && isPythonDottedImportBinding(imp)) {
+    return pythonImportedModuleFiles(index, imp).some(({ file }) =>
+      importTargetCanReferenceDefinition(index, imp, file, def, exportedNames, languageId),
+    );
+  }
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-  if (!targetFile) return false;
+  return !!targetFile && importTargetCanReferenceDefinition(index, imp, targetFile, def, exportedNames, languageId);
+}
+
+function importTargetCanReferenceDefinition(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  targetFile: string,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+  languageId: string,
+): boolean {
   let cNamespace: "tag" | "ordinary" | undefined;
   if (languageId === "c") cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;

@@ -17,7 +17,12 @@ import {
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
   memberAcceptsCallAt,
+  qualifiedBaseNames,
+  pythonAnnotationTypeAtUse,
+  readRubyConstantReference,
   resolvePhpObjectCreationTarget,
+  resolveQualifiedMemberContainer,
+  resolveRubyConstantReference,
   resolveRubyVisibleConstant,
   resolveSharedOwnerContainers,
   resolveSwiftAliasContainer,
@@ -58,6 +63,7 @@ import {
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
+import { isSwiftQualifiedTypeSuffix } from "../../util/swift-tree.js";
 import {
   MEMBER_ACCESS_ROWS,
   type ReceiverAncestorClause,
@@ -79,6 +85,7 @@ import {
   cppQualifiedNameSegments,
   declaredSupertypeKind,
   declaresMembers,
+  isNonBaseHeritageArgument,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
   kotlinMayNameClassBare,
@@ -703,6 +710,18 @@ function resolveNamedType(
   }
   // A type parameter shadows a same-named class, and it declares no members.
   if (bindsTypeParameter(name, node, context.source, context.sup)) return null;
+  if (context.sup.id === "python") {
+    const annotation = pythonAnnotationTypeAtUse(
+      context.index,
+      context.moduleEntry,
+      node,
+      context.source,
+      context.tree,
+      context.sup,
+      context.scopeIndex,
+    );
+    if (annotation !== undefined) return annotation && declaresMembers(annotation) ? annotation : null;
+  }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
   // A parameter/annotation type name is a closer scope binding than the class it names.
@@ -1283,7 +1302,12 @@ export async function emitFunctionBodyEdges(
               exportedName = sliceText(prop, context.source);
             }
           }
-          if (exportedName) {
+          // An unaliased Python `import a.b` makes `a.b` the submodule, whatever `a`'s `__init__` declares as `b`.
+          const namesDottedModule =
+            !!exportedName &&
+            context.sup.id === "python" &&
+            context.aliasToTargetModule.has(`${nameKey}.${exportedName}`);
+          if (exportedName && !namesDottedModule) {
             target = context.resolveExportFrom(modFile, exportedName);
             if (!target && (context.sup.id !== "go" || isGoExportedMemberName(context.sup.id, exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
@@ -1702,15 +1726,26 @@ const QUALIFIER_NAME_FIELD: Record<string, string> = {
   qualified_name: "name", // C#: Namespace.Base, Outer.Inner
   alias_qualified_name: "name", // C#: X::Base, global::Namespace.Base
   qualified_identifier: "name", // C++: ns::Base
-  scope_resolution: "name", // Ruby: Module::Base
-  qualified_type: "name", // Go: pkg.Base
 };
+
+/**
+ * The node that spells a qualified base whose qualifier the member-access lookup proves: a Python module attribute, a
+ * Ruby constant path, a Go package type. The base's own last name is never looked up by itself.
+ */
+const MEMBER_ACCESS_BASE_NODE_TYPES: Readonly<Record<string, string>> = {
+  python: "attribute",
+  ruby: "scope_resolution",
+  go: "qualified_type",
+};
+
+function isMemberAccessBase(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  return MEMBER_ACCESS_BASE_NODE_TYPES[sup.id] === node.type;
+}
 
 /** Generic wrappers contribute the base name, not their type arguments. */
 const GENERIC_WRAPPER_TYPES: Record<string, true> = {
   generic_name: true,
   generic_type: true,
-  user_type: true,
   template_type: true,
 };
 const GENERIC_ARGUMENT_CHILD_TYPES: Record<string, true> = {
@@ -1724,13 +1759,6 @@ const GENERIC_ARGUMENT_CHILD_TYPES: Record<string, true> = {
 const CALL_LIKE_WRAPPER_SKIP_TYPES: Record<string, Record<string, true>> = {
   constructor_invocation: { value_arguments: true }, // Base(args)
   explicit_delegation: { primary_expression: true }, // Interface by delegate
-};
-
-/** Python base-list entries that are never base types. */
-const BASE_TYPE_IGNORED_TYPES: Record<string, true> = {
-  keyword_argument: true,
-  dictionary_splat: true,
-  list_splat: true,
 };
 
 /** Remove type arguments and wrapper syntax before resolving a direct base. */
@@ -1756,6 +1784,13 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
           }
         }
       }
+      if (!named || named === current) return current;
+      current = named;
+      continue;
+    }
+    if (current.type === "user_type") {
+      // A dotted Kotlin or Swift type is its last segment, found through the segments before it.
+      const named = (current.namedChildren ?? []).findLast((child) => !GENERIC_ARGUMENT_CHILD_TYPES[child.type]);
       if (!named || named === current) return current;
       current = named;
       continue;
@@ -1789,14 +1824,18 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 /** Collect one type identifier per direct base or interface specifier. */
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
   if (isUnprovenHeritageExpression(node)) return;
-  if (BASE_TYPE_IGNORED_TYPES[node.type]) return;
+  if (isNonBaseHeritageArgument(node)) return;
   if (sup.id === "cpp" && node.type === "qualified_identifier") {
     out.push(node);
     return;
   }
   const narrowed = narrowBaseSpecifierNode(node);
   if (isUnprovenHeritageExpression(narrowed)) return;
-  if ((sup.id === "ts" || sup.id === "tsx") && narrowed.type === "member_expression") {
+  if (isJsTsLanguage(sup.id) && narrowed.type === "member_expression") {
+    out.push(narrowed);
+    return;
+  }
+  if (isMemberAccessBase(sup, narrowed)) {
     out.push(narrowed);
     return;
   }
@@ -1871,6 +1910,70 @@ async function swiftExtendedNominal(context: EdgePassContext, target: SymbolDef)
   return nominal && !nominal.swiftExtensionOwner ? nominal : null;
 }
 
+/** A bare base name: the shared lookup, or a Swift nested type, or a Ruby constant `require` published. */
+async function resolveBareBase(context: EdgePassContext, identifier: SyntaxNodeLike): Promise<SymbolDef | null> {
+  const name = sliceText(identifier, context.source);
+  // A later segment of a dotted Swift type names a type nested in the segments before it; settling runs that lookup.
+  if (isSwiftQualifiedTypeSuffix(identifier)) {
+    return await context.settleName(name, identifier, context.resolveName(name, identifier));
+  }
+  const target = context.resolveIdentifier(name, identifier);
+  // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
+  // same visibility as goto so `class Worker < Base` follows the required class.
+  if (!target && context.sup.id === "ruby") {
+    return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
+  }
+  return target;
+}
+
+/**
+ * A qualified base (`other.Base`, `Other::Base`, Go `pkg.Base`) is found through its qualifier by the lookup member
+ * navigation uses for the same clause, or it names nothing: the last name alone would match any same-named type. A
+ * Ruby constant path is searched through the namespaces that enclose it, as goto does.
+ */
+async function resolveQualifiedPathBase(
+  context: EdgePassContext,
+  qualified: SyntaxNodeLike,
+): Promise<SymbolDef | null> {
+  if (context.sup.id === "ruby") {
+    const reference = readRubyConstantReference(qualified, context.index, context.moduleEntry);
+    return reference ? resolveRubyConstantReference(context.index, context.moduleEntry, reference) : null;
+  }
+  const names = qualifiedBaseNames(context.sup, context.source, qualified);
+  if (!names) return null;
+  const [base, ...path] = names;
+  const container = await resolveQualifiedMemberContainer(
+    context.index,
+    context.moduleEntry,
+    base!,
+    path,
+    context.sup.normalizeIdentifier,
+    context.sup,
+    { node: qualified, source: context.source, tree: context.tree, scopeIndex: context.scopeIndex },
+  );
+  return container ?? null;
+}
+
+async function resolveBaseSpecifier(context: EdgePassContext, identifier: SyntaxNodeLike): Promise<SymbolDef | null> {
+  if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
+    const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
+    const container = await resolveCppQualifiedMemberContainer(
+      context.index,
+      context.moduleEntry,
+      qualifiedPath,
+      context.loadParsedFile,
+    );
+    if (container || qualifiedPath.length < 2) return container;
+    return context.resolveIdentifier(qualifiedPath.join("::"), identifier);
+  }
+  if (isJsTsLanguage(context.sup.id) && identifier.type === "member_expression") {
+    const qualified = context.resolveMemberChainTarget(identifier);
+    return qualified && declaresMembers(qualified) ? qualified : null;
+  }
+  if (isMemberAccessBase(context.sup, identifier)) return await resolveQualifiedPathBase(context, identifier);
+  return await resolveBareBase(context, identifier);
+}
+
 async function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
@@ -1886,30 +1989,7 @@ async function recordIdentifierRelations(
   collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
-    let target: SymbolDef | null;
-    if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
-      const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
-      target = await resolveCppQualifiedMemberContainer(
-        context.index,
-        context.moduleEntry,
-        qualifiedPath,
-        context.loadParsedFile,
-      );
-      if (!target && qualifiedPath.length > 1) {
-        target = context.resolveIdentifier(qualifiedPath.join("::"), identifier);
-      }
-    } else if ((context.sup.id === "ts" || context.sup.id === "tsx") && identifier.type === "member_expression") {
-      const qualified = context.resolveMemberChainTarget(identifier);
-      target = qualified && declaresMembers(qualified) ? qualified : null;
-    } else {
-      const name = sliceText(identifier, context.source);
-      target = context.resolveIdentifier(name, identifier);
-      // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
-      // same visibility as goto so `class Worker < Base` follows the required class.
-      if (!target && context.sup.id === "ruby") {
-        target = resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
-      }
-    }
+    let target = await resolveBaseSpecifier(context, identifier);
     if (!target) continue;
     let swiftBase: SwiftBase | null = null;
     if (context.sup.id === "swift") {

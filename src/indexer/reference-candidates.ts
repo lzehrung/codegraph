@@ -2,6 +2,7 @@ import type { FileId } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ModuleIndex } from "./types.js";
 import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
+import { pythonDottedImportPackageCandidates } from "./python-dotted-imports.js";
 
 export function buildReferenceCandidateIndex(modules: ReadonlyMap<FileId, ModuleIndex>): ReferenceCandidateIndex {
   const byTargetFile = new Map<FileId, Set<FileId>>();
@@ -19,6 +20,8 @@ export function buildReferenceCandidateIndex(modules: ReadonlyMap<FileId, Module
         for (const targetFile of imp.jvmPackageFiles) recordTarget(targetFile);
       } else if (typeof imp.resolved === "string") {
         recordTarget(imp.resolved);
+        // An unaliased Python `import a.b.c` also loads and names the packages `a` and `a.b`.
+        for (const packageFile of pythonDottedImportPackageCandidates(imp)) recordTarget(packageFile);
       }
     }
   }

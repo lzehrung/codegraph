@@ -9,11 +9,9 @@
  */
 
 import type { SyntaxNodeLike } from "../languages/types.js";
-import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId } from "../types.js";
 
 import { sliceText } from "../util/ast.js";
-import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import {
   collectMemberAccessChain,
   isReceiverNameNode,
@@ -21,6 +19,7 @@ import {
   jvmQualifiedTypeSegments,
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
+import { isSwiftQualifiedTypeSuffix, swiftQualifiedTypeSegments } from "../util/swift-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
@@ -28,9 +27,6 @@ import {
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
-import { getPackageDeclarationName } from "./compilation-units.js";
-import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
-import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
@@ -38,7 +34,8 @@ import {
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
-  resolveJvmPackageSymbol,
+  resolveJvmQualifiedPath,
+  resolveSwiftNestedTypePath,
 } from "./navigation-goto.js";
 import {
   definitionForBinding,
@@ -172,38 +169,6 @@ export function moduleAliasIsUnshadowed(use: BareNameUse, aliasFrom?: string): b
   return fileBindingIsUnshadowed(use.scopeIndex, closestBinding, aliasFrom);
 }
 
-/** A nested classifier is proven only by its recorded direct owner and visible declaration. */
-function jvmNestedType(use: BareNameUse, owner: SymbolDef, name: string): SymbolDef | undefined {
-  const module = use.index.byFile.get(fileIdentityKey(owner.file));
-  const support = supportForFileWithoutHeaderSample(owner.file, use.index.languageExtensions);
-  const ownerStart = owner.range.start.index;
-  if (!module || ownerStart === undefined || (support?.id !== "java" && support?.id !== "kotlin")) return undefined;
-  const consumerLanguage = use.parsed.sup.id === "java" ? "java" : "kotlin";
-  const samePackage =
-    getPackageDeclarationName(use.index, owner.file, support.id) ===
-    getPackageDeclarationName(use.index, use.file, consumerLanguage);
-  const normalized = support.normalizeIdentifier(normalizeKotlinIdentifier(name));
-  let result: SymbolDef | undefined;
-  for (const entry of module.exports) {
-    if (entry.type !== "local" || support.normalizeIdentifier(entry.exportedAs) !== normalized) continue;
-    if (!isJvmTypeWildcardMember(entry.target, ownerStart, support.id)) continue;
-    if (!isJvmPackageSymbolVisible(entry.target, support.id, consumerLanguage, samePackage)) continue;
-    if (result && result.range.start.index !== entry.target.range.start.index) return undefined;
-    result = entry.target;
-  }
-  return result;
-}
-
-function jvmNestedPath(use: BareNameUse, owner: SymbolDef, parts: readonly string[], start: number): SymbolDef | null {
-  let current = owner;
-  for (let index = start; index < parts.length; index += 1) {
-    const nested = jvmNestedType(use, current, parts[index]!);
-    if (!nested) return null;
-    current = nested;
-  }
-  return current;
-}
-
 /** Resolves a qualified JVM name through a visible type owner or a declared package, never a bare suffix. */
 function resolveQualifiedJvmName(
   use: BareNameUse,
@@ -221,32 +186,32 @@ function resolveQualifiedJvmName(
   const rootBinding = findClosestScopeBinding(scopeIndex, rootName, root, parsed.sup, typeOnly);
   if (rootDefinition || rootBinding) {
     if (!rootDefinition || !declaresMembers(rootDefinition)) return null;
-    return jvmNestedPath(use, rootDefinition, parts, 1);
+    return resolveJvmQualifiedPath(index, file, languageId, rootDefinition, parts, typeOnly);
   }
   if (rootResult?.status === "not_found" && isAmbiguousResolutionReason(rootResult.reason)) return null;
-
-  let target: SymbolDef | null = null;
-  let packageName = normalizeKotlinIdentifier(rootName);
-  for (let position = 1; position < parts.length; position += 1) {
-    const name = parts[position]!;
-    const hasNestedSuffix = position + 1 < parts.length;
-    const owner = resolveJvmPackageSymbol(index, packageName, name, languageId, file, typeOnly || hasNestedSuffix);
-    if (owner === null) return null;
-    const resolved = owner ? jvmNestedPath(use, owner, parts, position + 1) : null;
-    if (owner && !resolved) return null;
-    if (resolved) {
-      if (
-        target &&
-        (fileIdentityKey(target.file) !== fileIdentityKey(resolved.file) ||
-          target.range.start.index !== resolved.range.start.index)
-      )
-        return null;
-      target = resolved;
-    }
-    packageName += `.${normalizeKotlinIdentifier(name)}`;
-  }
-  return target;
+  return resolveJvmQualifiedPath(index, file, languageId, null, parts, typeOnly);
 }
+
+/**
+ * A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it, so its
+ * own spelling never binds a bare name. The first segment is looked up as an ordinary name and must declare members;
+ * the nested walk runs when the resolution is settled. A root that binds nothing, or a generic owner, proves no path.
+ */
+function resolveSwiftQualifiedTypeSuffix(use: BareNameUse): NameResolution | undefined {
+  const { node, parsed } = use;
+  if (!isSwiftQualifiedTypeSuffix(node)) return undefined;
+  const unproven: NameResolution = { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+  const segments = swiftQualifiedTypeSegments(node);
+  if (!segments) return unproven;
+  const root = segments[0]!;
+  let rootResult = resolveBareName({ ...use, node: root, name: sliceText(root, parsed.source) });
+  while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
+  const owner = rootResult?.status === "ok" ? rootResult.definition : null;
+  if (!owner || !declaresMembers(owner)) return unproven;
+  const names = segments.slice(1).map((segment) => sliceText(segment, parsed.source));
+  return { status: "deferred", request: { kind: "swift-nested-type", owner, names }, fallback: unproven };
+}
+
 /**
  * Resolves a bare (unqualified or C++-qualified) name at a use site. Returns `null` when no
  * lookup step answers; go-to-definition then tries a declaration at the position.
@@ -288,6 +253,10 @@ export function resolveBareName(
         ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
         : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     }
+  }
+  if (sup.id === "swift") {
+    const qualifiedType = resolveSwiftQualifiedTypeSuffix(use);
+    if (qualifiedType) return qualifiedType;
   }
   const policy = nameLookupPolicyFor(sup.id);
   const lookupName = policy.lookupName?.(use) ?? use.name;
@@ -402,6 +371,9 @@ export async function settleNameResolution(
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
       if (settled) return settled;
+    } else if (request.kind === "swift-nested-type") {
+      const nested = await resolveSwiftNestedTypePath(index, request.owner, request.names);
+      if (nested) return okGoToResult(index, nested, { resolution: "member-access", confidence: "medium" });
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;

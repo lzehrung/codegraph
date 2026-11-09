@@ -21,6 +21,8 @@ import { fileIdentityKey } from "../../src/util/paths.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { collectModuleSpecifiersFromSource } from "../../src/graphs/specifiers.js";
 import { exportedNameOf } from "../helpers/narrow.js";
+import { PYTHON_DOTTED_IMPORT_FILES, expectPythonDottedImports } from "../helpers/python-dotted-import-fixture.js";
+import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -1374,6 +1376,9 @@ describe("Python receiver member navigation", () => {
       "    other = Other()",
       "    return other.run()",
       "",
+      "def via_typed_parameter(svc: Service):",
+      "    return svc.run()",
+      "",
     ].join("\n");
     await fsp.writeFile(file, source, "utf8");
     try {
@@ -1408,6 +1413,9 @@ describe("Python receiver member navigation", () => {
       const annotated = await goToDefinition(index, { file, line: 36, column: columnOf(36, "run") });
       expect(annotated.status).toBe("ok");
       if (annotated.status === "ok") expect(annotated.definition.range.start.line).toBe(9);
+      const typedParam = await goToDefinition(index, { file, line: 50, column: columnOf(50, "run") });
+      expect(typedParam.status).toBe("ok");
+      if (typedParam.status === "ok") expect(typedParam.definition.range.start.line).toBe(9);
 
       const factory = await goToDefinition(index, { file, line: 40, column: columnOf(40, "run") });
       expect(factory.status).toBe("not_found");
@@ -1423,7 +1431,7 @@ describe("Python receiver member navigation", () => {
       expect(methodRefs.status).toBe("ok");
       if (methodRefs.status === "ok") {
         const linesHit = methodRefs.references.map((reference) => reference.range.start.line);
-        expect(linesHit).toEqual(expect.arrayContaining([9, 13, 32, 36]));
+        expect(linesHit).toEqual(expect.arrayContaining([9, 13, 32, 36, 50]));
         expect(linesHit).not.toContain(25);
         expect(linesHit).not.toContain(40);
         expect(linesHit).not.toContain(43);
@@ -2287,3 +2295,17 @@ describe("Python inherited and replaced property navigation", () => {
 });
 
 describeTypeParameterReceiverRows("python", "Python PEP 695 type parameter beside a same-named class");
+
+describe("Python dotted imports with rebound roots", () => {
+  it("keeps positioned bindings and lazy imports consistent across consumers", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-dotted-bindings-"));
+    try {
+      await writeFixtureFiles(root, PYTHON_DOTTED_IMPORT_FILES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      await expectPythonDottedImports(root, index, graph, "language");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
