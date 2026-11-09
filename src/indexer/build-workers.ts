@@ -353,7 +353,15 @@ export async function prepareFileContextForBuild(
         recordNativeExecutionOutcome(report, { file, support, languageId: support.id, results: recorded.moduleRecord });
         return recorded;
       }
-      prepared = workerResultToPrepared(workerResult, support, file, source);
+      const needsFrameworkSource =
+        workerResult.fallbackReason === "sourceTooLarge" &&
+        (support.id === "js" || support.id === "ts" || support.id === "tsx");
+      if (needsFrameworkSource) {
+        // The worker omits oversized source; the main-thread fallback still needs it for regex-only framework facts.
+        prepared = await prepareFileForIndexing(file, opts?.languageExtensions, source, support);
+      } else {
+        prepared = workerResultToPrepared(workerResult, support, file, source);
+      }
     } catch (error) {
       if (isNativeRequiredUnavailableError(error) && error instanceof Error) throw error;
       if (workerSetup.report) workerSetup.report.tasksFailed++;

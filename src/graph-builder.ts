@@ -10,7 +10,7 @@ import { initNativeBackendReport } from "./native/native-backend-report.js";
 import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { LanguageExtensionMap } from "./languages.js";
-import type { BuildReport } from "./indexer/types.js";
+import type { BuildReport, ModuleIndex } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
 import { edgeKey } from "./util/graph-edges.js";
@@ -51,6 +51,7 @@ export async function collectGraph(
     logLevel?: LogLevel;
     allFiles?: string[];
     languageExtensions?: LanguageExtensionMap;
+    angularJsModules?: Iterable<Pick<ModuleIndex, "file" | "angularJsFacts">>;
   },
 ): Promise<Graph> {
   assertNativeRequiredAvailable();
@@ -161,6 +162,7 @@ export async function collectGraph(
     filesToCollect,
     workspaceConfig,
     opts?.parsed,
+    opts?.angularJsModules,
   );
   addEdgeTargetsToGraph(angularJsEdges);
   graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);

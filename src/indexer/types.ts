@@ -11,6 +11,7 @@ import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { CsharpNamespaceFacts } from "../util/csharp-tree.js";
 import type { JvmFileFacts } from "../util/jvm-tree.js";
+import type { AngularJsFileFacts } from "../frameworks/angularjs.js";
 
 export type { ImportBinding } from "./import-types.js";
 
@@ -105,6 +106,8 @@ export type ModuleIndex = {
   exports: ExportEntry[];
   imports: ImportBinding[];
   locals: SymbolDef[];
+  /** Own-file AngularJS registrations and references; project-wide targets are derived at graph assembly time. */
+  angularJsFacts?: AngularJsFileFacts;
   /** Set only when a syntax tree and supported docstring syntax checked this module. */
   docstringsChecked?: boolean;
   /**

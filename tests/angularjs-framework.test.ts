@@ -2,8 +2,17 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildSymbolGraphDetailed, collectGraph } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  collectGraph,
+} from "../src/index.js";
 import { extractAngularJsRegistrations } from "../src/frameworks/angularjs.js";
+import { clearMemoryCache } from "../src/indexer/build-cache/module-cache.js";
+import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../src/indexer/types.js";
+import type { Graph } from "../src/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -13,6 +22,25 @@ async function mkTmpDir(prefix: string): Promise<string> {
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
 const frameworkSamplePath = (...parts: string[]): string =>
   path.resolve(process.cwd(), "tests", "samples", "frameworks", "angularjs", ...parts);
+
+function heuristicEdges(graph: Graph): string[] {
+  return graph.edges
+    .filter((edge) => edge.resolved === "heuristic")
+    .map((edge) => {
+      const target = edge.to.type === "file" ? path.basename(edge.to.path) : `external:${edge.to.name}`;
+      return `${path.basename(edge.from)} -> ${target} raw=${edge.raw} confidence=${edge.confidence}`;
+    })
+    .sort();
+}
+
+async function expectAngularJsGraph(root: string, index: ProjectIndex, expected: string[]): Promise<void> {
+  expect(heuristicEdges(index.graph)).toEqual([...expected].sort());
+  const graph = await collectGraph(
+    root,
+    [...index.byFile.values()].map((module) => module.file),
+  );
+  expect(heuristicEdges(graph)).toEqual([...expected].sort());
+}
 
 describe("AngularJS framework characterization", () => {
   it("keeps useful baseline JS import and symbol-use edges inside controller bodies", async () => {
@@ -293,6 +321,13 @@ describe("AngularJS framework characterization", () => {
           edge.confidence === 0.8,
       ),
     ).toBe(true);
+    const injectedHttp = graph.edges.filter(
+      (edge) => edge.from === serviceFile && edge.resolved === "heuristic" && edge.raw === "$http",
+    );
+    expect(injectedHttp).toEqual([
+      expect.objectContaining({ to: { type: "external", name: "$http" }, confidence: 0.7 }),
+    ]);
+    expect(graph.edges.some((edge) => edge.raw === "$http: unknown")).toBe(false);
     expect(
       graph.edges.some(
         (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
@@ -356,4 +391,243 @@ describe("AngularJS framework characterization", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    { cache: "disk", workers: false },
+    { cache: "memory", workers: false },
+    { cache: "disk", workers: true },
+    { cache: "memory", workers: true },
+  ] as const)(
+    "keeps cold, incremental, and full AngularJS graphs equal with $cache cache and workers=$workers",
+    async ({ cache, workers }) => {
+      const root = await mkTmpDir("cg-angularjs-incremental-");
+      const cacheDir = `${root}-cache`;
+      const controller = path.join(root, "user.controller.js");
+      const service = path.join(root, "user.service.js");
+      const directive = path.join(root, "user-card.directive.js");
+      const other = path.join(root, "other.js");
+      const template = path.join(root, "user-card.html");
+      const options: BuildOptions = {
+        cache,
+        cacheDir,
+        cacheStrict: true,
+        threads: 1,
+        useNativeWorkers: workers,
+        nativeThreads: 1,
+      };
+      const controllerSource = (name: string, body = "") =>
+        `angular.module('admin').controller('${name}', function ${name}() { ${body} });\n`;
+      const directiveSource = (name: string, comment = "") =>
+        `angular.module('admin').directive('userCard', ['userService', function userCard(userService) {\n${comment}  return { controller: '${name}', templateUrl: './user-card.html' };\n}]);\n`;
+      const linked = (name: string) => [
+        `user-card.directive.js -> user.controller.js raw=${name} confidence=0.9`,
+        "user-card.directive.js -> user.service.js raw=userService confidence=0.8",
+        "user-card.directive.js -> user-card.html raw=./user-card.html confidence=0.9",
+      ];
+      const external = (name: string) => [
+        `user-card.directive.js -> external:${name} raw=${name} confidence=0.75`,
+        "user-card.directive.js -> user.service.js raw=userService confidence=0.8",
+        "user-card.directive.js -> user-card.html raw=./user-card.html confidence=0.9",
+      ];
+      try {
+        await fsp.writeFile(controller, controllerSource("UserCtrl"));
+        await fsp.writeFile(service, "angular.module('admin').service('userService', function userService() {});\n");
+        await fsp.writeFile(directive, directiveSource("UserCtrl"));
+        await fsp.writeFile(other, "const unrelated = { controller: 'UserCtrl', templateUrl: './fake.html' };\n");
+        await fsp.writeFile(template, "<section>card</section>\n");
+
+        const coldReport: BuildReport = { timings: {} };
+        const cold = await buildProjectIndex(root, { ...options, report: coldReport });
+        expect(coldReport.workerPool?.enabled).toBe(workers);
+        if (workers) expect(coldReport.workerPool?.moduleRecords).toBeGreaterThan(0);
+        expect(cold.byFile.get(fileIdentityKey(controller.replace(/\\/g, "/")))?.angularJsFacts?.registrations).toEqual(
+          [{ kind: "controller", name: "UserCtrl" }],
+        );
+        await expectAngularJsGraph(root, cold, linked("UserCtrl"));
+
+        const update = async (expected: string[]): Promise<ProjectIndex> => {
+          if (cache === "disk") clearMemoryCache();
+          const index = await buildProjectIndexIncremental(root, options);
+          await expectAngularJsGraph(root, index, expected);
+          return index;
+        };
+        await fsp.writeFile(directive, directiveSource("UserCtrl", "  // edited reference\n"));
+        const referencingEdit = await update(linked("UserCtrl"));
+        expect(
+          referencingEdit.byFile.get(fileIdentityKey(directive.replace(/\\/g, "/")))?.angularJsFacts?.references,
+        ).toEqual([
+          { kind: "templateUrl", value: "./user-card.html" },
+          { kind: "controller", value: "UserCtrl" },
+          { kind: "inject", value: "userService" },
+        ]);
+
+        await fsp.writeFile(controller, controllerSource("UserCtrl", "const edited = 1;"));
+        await update(linked("UserCtrl"));
+        await fsp.writeFile(
+          other,
+          "const unrelated = { controller: 'UserCtrl', templateUrl: './fake.html' };\n// edit\n",
+        );
+        await update(linked("UserCtrl"));
+        await fsp.rm(controller);
+        await update(external("UserCtrl"));
+        await fsp.writeFile(controller, controllerSource("UserCtrl"));
+        await update(linked("UserCtrl"));
+        await fsp.writeFile(controller, controllerSource("RenamedCtrl"));
+        await update(external("UserCtrl"));
+        await fsp.writeFile(directive, directiveSource("RenamedCtrl"));
+        await update(linked("RenamedCtrl"));
+      } finally {
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+        await fsp.rm(cacheDir, { recursive: true, force: true });
+      }
+    },
+    90_000,
+  );
+
+  it.each(["ts", "tsx"] as const)("keeps cold and incremental .%s AngularJS framework edges", async (extension) => {
+    const root = await mkTmpDir("cg-angularjs-typed-incremental-");
+    const controller = path.join(root, `user.controller.${extension}`);
+    const directive = path.join(root, `user.directive.${extension}`);
+    const template = path.join(root, "user.html");
+    const options: BuildOptions = { cache: "memory", useNativeWorkers: false };
+    try {
+      await fsp.writeFile(controller, "angular.module('admin').controller('UserCtrl', function UserCtrl() {});\n");
+      await fsp.writeFile(
+        directive,
+        "angular.module('admin').directive('user', { controller: 'UserCtrl', templateUrl: './user.html' });\n",
+      );
+      await fsp.writeFile(template, "<section>user</section>\n");
+      const expected = [
+        `user.directive.${extension} -> user.controller.${extension} raw=UserCtrl confidence=0.9`,
+        `user.directive.${extension} -> user.html raw=./user.html confidence=0.9`,
+      ];
+      await expectAngularJsGraph(root, await buildProjectIndex(root, options), expected);
+      await fsp.writeFile(
+        controller,
+        "angular.module('admin').controller('UserCtrl', function UserCtrl() { const changed = 1; });\n",
+      );
+      await expectAngularJsGraph(root, await buildProjectIndexIncremental(root, options), expected);
+    } finally {
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { extension: "js", workers: false },
+    { extension: "ts", workers: false },
+    { extension: "tsx", workers: true },
+  ] as const)("reads .$extension injected names from syntax (workers=$workers)", async ({ extension, workers }) => {
+    const root = await mkTmpDir("cg-angularjs-parameters-");
+    const file = path.join(root, `injections.${extension}`);
+    const other = path.join(root, "other.js");
+    const cacheDir = `${root}-cache`;
+    const directParameters =
+      extension === "js"
+        ? "$http, opt, fallback = take(), { nested }, [ignored], ...rest"
+        : "this: Scope, $http: unknown, opt?: Service, fallback = take(), { nested }: Config, [ignored]: List, ...rest: unknown[]";
+    const componentParameters =
+      extension === "js"
+        ? "$scope, selected, defaulted = take()"
+        : "$scope: Scope, selected?: Choice, defaulted = take()";
+    const inlineParameter = extension === "js" ? "$q" : "$q: unknown";
+    const source = [
+      `angular.module('admin').service('example', function example(${directParameters}) {});`,
+      `angular.module('admin').component('card', { controller: function(${componentParameters}) {} });`,
+      `angular.module('admin').factory('inline', ['$q', function inline(${inlineParameter}) {}]);`,
+      "angular.module('admin').controller('functionalCtrl', function functionalCtrl($functionalScope, functionalService) {});",
+      "angular.module('admin').service('special', function $scope_helper_function($helperHttp) {});",
+      "function Named() {}",
+      "Named.$inject = ['$timeout'];",
+      "angular.module('admin').controller('Named', Named);",
+      "",
+    ].join("\n");
+    const names = [
+      "$http",
+      "opt",
+      "fallback",
+      "rest",
+      "$scope",
+      "selected",
+      "defaulted",
+      "$q",
+      "$timeout",
+      "$functionalScope",
+      "functionalService",
+      "$helperHttp",
+    ];
+    const expected = names.map((name) => `injections.${extension} -> external:${name} raw=${name} confidence=0.7`);
+    const options: BuildOptions = { cache: "disk", cacheDir, useNativeWorkers: workers, nativeThreads: 1, threads: 1 };
+    try {
+      await fsp.writeFile(file, source);
+      await fsp.writeFile(other, "export const unrelated = 1;\n");
+      const cold = await buildProjectIndex(root, options);
+      const ownReferences = cold.byFile.get(fileIdentityKey(normalizePath(file)))?.angularJsFacts?.references ?? [];
+      expect(
+        ownReferences
+          .filter((reference) => reference.kind === "inject")
+          .map((reference) => reference.value)
+          .sort(),
+      ).toEqual([...names].sort());
+      await expectAngularJsGraph(root, cold, expected);
+      clearMemoryCache();
+      await fsp.writeFile(other, "export const unrelated = 2;\n");
+      await expectAngularJsGraph(root, await buildProjectIndexIncremental(root, options), expected);
+    } finally {
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { cache: "disk", workers: false },
+    { cache: "memory", workers: true },
+  ] as const)(
+    "keeps oversized AngularJS sources consistent with $cache cache and workers=$workers",
+    async ({ cache, workers }) => {
+      const root = await mkTmpDir("cg-angularjs-oversized-");
+      const cacheDir = `${root}-cache`;
+      const directive = path.join(root, "card.directive.js");
+      const controller = path.join(root, "user.controller.js");
+      const other = path.join(root, "other.js");
+      const source =
+        [
+          "angular.module('admin').directive('card', ['$kept', function card($oversized) {",
+          "  return { controller: 'UserCtrl', templateUrl: './card.html' };",
+          "}]);",
+          "",
+        ].join("\n") + " ".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES);
+      const expected = [
+        "card.directive.js -> external:$kept raw=$kept confidence=0.7",
+        "card.directive.js -> user.controller.js raw=UserCtrl confidence=0.9",
+        "card.directive.js -> card.html raw=./card.html confidence=0.9",
+      ];
+      const options: BuildOptions = {
+        cache,
+        cacheDir,
+        cacheStrict: true,
+        useNativeWorkers: workers,
+        nativeThreads: 1,
+        threads: 1,
+      };
+      try {
+        expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(DEFAULT_NATIVE_SOURCE_MAX_BYTES);
+        await fsp.writeFile(directive, source);
+        await fsp.writeFile(controller, "angular.module('admin').controller('UserCtrl', function UserCtrl() {});\n");
+        await fsp.writeFile(path.join(root, "card.html"), "<section>card</section>\n");
+        await fsp.writeFile(other, "export const unrelated = 1;\n");
+        const cold = await buildProjectIndex(root, options);
+        await expectAngularJsGraph(root, cold, expected);
+        if (cache === "disk") clearMemoryCache();
+        await fsp.writeFile(other, "export const unrelated = 2;\n");
+        await expectAngularJsGraph(root, await buildProjectIndexIncremental(root, options), expected);
+      } finally {
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+        await fsp.rm(cacheDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

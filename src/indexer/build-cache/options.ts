@@ -136,8 +136,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 137 rebuilds detailed graphs and navigation where `super`, `this`, and bare member calls inside an anonymous
  * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
  * binds a call to the method, and a plain read to the field or property, that share a name.
+ * Epoch 138 persists per-file AngularJS registrations and references in module records and assembles their
+ * cross-file framework edges from all indexed modules, including unchanged files, at graph-build time.
  */
-export const CORE_ALGORITHM_EPOCH = 137;
+export const CORE_ALGORITHM_EPOCH = 138;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

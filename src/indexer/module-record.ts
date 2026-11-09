@@ -1,4 +1,5 @@
 import { collectEdgeModuleSpecifiers } from "../graphs/specifiers.js";
+import { extractAngularJsFileFacts } from "../frameworks/angularjs.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { LanguageExtensionMap, LanguageSupport } from "../languages.js";
@@ -152,6 +153,8 @@ export async function buildModuleRecord(input: ModuleRecordInput): Promise<Modul
       nativeQueries,
       ...logLevel,
     });
+    const angularJsFacts = extractAngularJsFileFacts(source, tree);
+    if (angularJsFacts) module.angularJsFacts = angularJsFacts;
     module.parseErrorRanges = collectParseErrorRanges(tree);
     module.nativeOutcome = "used";
     const specifiers = collectEdgeModuleSpecifiers(support, source, {

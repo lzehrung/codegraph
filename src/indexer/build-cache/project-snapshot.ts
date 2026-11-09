@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
+import { isAngularJsFileFacts } from "../../frameworks/angularjs.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph } from "../../types.js";
@@ -790,6 +791,7 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     locals: [...mod.locals],
     ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
     ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
+    ...(mod.angularJsFacts ? { angularJsFacts: mod.angularJsFacts } : {}),
     ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
     ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
     ...(mod.phpDeclarationNames ? { phpDeclarationNames: [...mod.phpDeclarationNames] } : {}),
@@ -1243,6 +1245,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   const moduleIndex = value as Partial<ModuleIndex>;
   return (
     typeof moduleIndex.file === "string" &&
+    (moduleIndex.angularJsFacts === undefined || isAngularJsFileFacts(moduleIndex.angularJsFacts)) &&
     isOptionalBoolean(moduleIndex.docstringsChecked) &&
     isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
     isOptionalBoolean(moduleIndex.parserDegraded) &&
