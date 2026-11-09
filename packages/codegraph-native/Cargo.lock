@@ -585,7 +585,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-kotlin-ng"
 version = "1.1.0"
-source = "git+https://github.com/lzehrung/tree-sitter-kotlin?rev=0edffee5daa85b0881e621e021d4618657649165#0edffee5daa85b0881e621e021d4618657649165"
+source = "git+https://github.com/lzehrung/tree-sitter-kotlin?rev=eccc9e40bbc63604cbc0a390a806f69f024af8b4#eccc9e40bbc63604cbc0a390a806f69f024af8b4"
 dependencies = [
  "cc",
  "tree-sitter-language",

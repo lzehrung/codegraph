@@ -159,8 +159,11 @@ export const CORE_ALGORITHM_EPOCH = 140;
  * and reads implicit lambda parameters as declarations.
  * Epoch 14 gives Swift quoted and plain identifiers one case-sensitive identity.
  * Epoch 15 scopes C# catch and for declarations and classifies Kotlin type parameters as types.
+ * Epoch 16 re-extracts Kotlin files with the grammar fork's error recovery, which no longer reads the rest of a file as
+ * one token: a file with a syntax error keeps the declarations after it, so its symbols, ERROR ranges, and package
+ * facts change, and a stray `$` before a keyword-prefixed name with decimal digits above ASCII no longer stalls the parse.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 15;
+export const LANGUAGE_BEHAVIOR_EPOCH = 16;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

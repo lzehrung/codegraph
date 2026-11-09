@@ -13,6 +13,7 @@ import {
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { createNativeWorkerPool, type NativeExtractResult } from "../src/worker/native-worker-pool.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "./helpers/kotlin-unread-tail-fixture.js";
 
 const tempDirs: string[] = [];
 async function temporaryProject(): Promise<string> {
@@ -245,7 +246,7 @@ describe("project facts extracted before import resolution", () => {
   }, 60_000);
 
   for (const contents of [
-    "package core\n)\nfun answer(x: String) = x\n",
+    `package core\n${KOTLIN_UNREAD_TAIL_LINE}\nfun answer(x: String) = x\n`,
     `package core\n/*${"x".repeat(DEFAULT_NATIVE_SOURCE_MAX_BYTES)}*/\n`,
   ]) {
     it(`keeps an ${contents.length > DEFAULT_NATIVE_SOURCE_MAX_BYTES ? "oversized" : "malformed"} package file conservative with workers on or off`, async () => {

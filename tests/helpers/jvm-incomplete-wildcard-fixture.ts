@@ -1,4 +1,5 @@
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../src/native/source-limits.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "./kotlin-unread-tail-fixture.js";
 
 /** Real package files shared by navigation, references, graph, and native-cache regressions. */
 export function jvmIncompleteWildcardSources(): Record<string, string> {
@@ -7,13 +8,13 @@ export function jvmIncompleteWildcardSources(): Record<string, string> {
     "big/Small.kt": "package big\n\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
     "big/Big.kt": `package big\n\nclass Before\n${padding}fun select(x: String) = x\nfun Service(x: String) = Service(0)\n`,
     "gap/Small.kt": "package gap\n\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
-    "gap/Gap.kt": "package gap\n\nclass Before\n)\nfun select(x: String) = x\nfun Service(x: String) = Service(0)\n",
+    "gap/Gap.kt": `package gap\n\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun select(x: String) = x\nfun Service(x: String) = Service(0)\n`,
     "overlap/A.kt": "package overlap\n\nfun select(x: Int) = x\n",
     "overlap/B.kt": "package overlap\n\nfun select(x: String) = x\n",
     "single/Only.kt": "package single\n\nfun select(x: Int) = x\n",
     "classes/Only.kt": "package classes\n\nclass Service(val value: Int)\n",
     "shapes/Shape.java": "package shapes;\n\npublic class Shape {}\n",
-    "shapes/Gap.kt": "package shapes\n\nclass Before\n)\nfun Shape(x: String) = x\n",
+    "shapes/Gap.kt": `package shapes\n\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun Shape(x: String) = x\n`,
     "decoy/Decoy.kt": "package decoy\n\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
     "app/BigUse.kt": [
       "package bigapp",

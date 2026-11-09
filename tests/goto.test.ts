@@ -4287,13 +4287,25 @@ describe("Go to Definition: Unicode cross-file fixtures", () => {
     await testGoToDefinition(index, consumerFile, 7, 12, definitionFile, 3);
   });
 
-  it("resolves a Kotlin Unicode import alias across files", async () => {
+  // unicode_nfd_consumer.kt shares package `unicode_fixture` with the alias fixture. Its combining mark is not a letter
+  // to the grammar, so the file ends in a syntax error at the top of its tree and the package is incomplete: that file
+  // may declare the aliased function, so the alias import is unproven and go-to-definition finds nothing. With a
+  // complete package the alias resolves (tests/languages/kotlin.test.ts).
+  it("leaves a Kotlin Unicode import alias unresolved while a peer in its package has a syntax error", async () => {
     const samplePath = path.resolve(process.cwd(), "tests", "samples", "kotlin");
     const consumerFile = path.join(samplePath, ".regressions", "unicode_consumer.kt").replace(/\\/g, "/");
-    const definitionFile = path.join(samplePath, ".regressions", "unicode_def.kt").replace(/\\/g, "/");
-    const index = await createTestIndexFromFiles(samplePath, [consumerFile, definitionFile]);
+    const peerFile = path.join(samplePath, ".regressions", "unicode_nfd_consumer.kt").replace(/\\/g, "/");
+    const index = await createTestIndexFromPath(samplePath);
 
-    await testGoToDefinition(index, consumerFile, 6, 10, definitionFile, 3);
+    expect(
+      index.byFile.get(fileIdentityKey(peerFile))?.parseErrorRanges?.length,
+      "the pinned grammar no longer fails on the NFD file",
+    ).toBeTruthy();
+    expect(index.byFile.get(fileIdentityKey(consumerFile))).toMatchObject({
+      parserDegraded: true,
+      importLookupIncomplete: true,
+    });
+    await testGoToDefinition(index, consumerFile, 6, 10, undefined, undefined, "not_found");
   });
 
   it("resolves a Go Unicode-letter import alias across files", async () => {

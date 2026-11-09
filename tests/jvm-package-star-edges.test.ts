@@ -14,6 +14,7 @@ import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { clearMemoryCache, closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "./helpers/kotlin-unread-tail-fixture.js";
 import {
   jvmIncompleteWildcardSources,
   JVM_INCOMPLETE_WILDCARD_CALLS,
@@ -1414,7 +1415,7 @@ describe("JVM package wildcard graph edges", () => {
     try {
       const sources = {
         "p/Small.kt": "package p\nfun select(x: Int) = x\n",
-        "p/Gap.kt": "package p\nclass Before\n)\nfun select(x: String) = x\nfun Service(x: String) = x\n",
+        "p/Gap.kt": `package p\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun select(x: String) = x\nfun Service(x: String) = x\n`,
         "q/Target.kt": "package q\nfun select(x: Int) = x\nclass Service(val value: Int)\n",
         "app/Forward.kt":
           'package app\nimport p.*\nimport q.*\nfun forward() = select("x")\nfun makeForward() = Service("x")\nfun referenceForward(): (String) -> Any = ::Service\n',

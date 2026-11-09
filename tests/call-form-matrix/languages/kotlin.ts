@@ -5,6 +5,7 @@ import {
   KOTLIN_QUALIFIED_TYPE_SOURCES,
 } from "../../helpers/qualified-type-import-fixture.js";
 import { KOTLIN_QUOTED_SCOPE_FILES, KOTLIN_QUOTED_SCOPE_SOURCES } from "../../helpers/kotlin-quoted-fixture.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "../../helpers/kotlin-unread-tail-fixture.js";
 import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
 import { KOTLIN_EXTENSION_RECEIVER_SOURCES } from "../../helpers/kotlin-extension-receiver-fixture.js";
 import { KOTLIN_RECEIVER_REVIEW_SOURCES } from "../../helpers/kotlin-receiver-review-fixture.js";
@@ -211,7 +212,7 @@ export const kotlinCells: MatrixCell[] = [
     callForm: "bare-call",
     files: {
       "p/Small.kt": "package p\n\nfun select(x: Int) = x\n",
-      "p/Gap.kt": "package p\n\nclass Before\n)\nfun select(x: String) = x\n",
+      "p/Gap.kt": `package p\n\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun select(x: String) = x\n`,
       "app/Use.kt": 'package app\nimport p.*\nfun use() = select("x")\n',
     },
     use: { file: "app/Use.kt", line: 3, token: "select" },
@@ -227,7 +228,7 @@ export const kotlinCells: MatrixCell[] = [
     callForm: "construction",
     files: {
       "p/Service.kt": "package p\n\nclass Service(val value: Int)\n",
-      "p/Gap.kt": "package p\n\nclass Before\n)\nfun Service(x: String) = Service(0)\n",
+      "p/Gap.kt": `package p\n\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun Service(x: String) = Service(0)\n`,
       "app/Use.kt": 'package app\nimport p.*\nfun use() = Service("x")\n',
     },
     use: { file: "app/Use.kt", line: 3, token: "Service" },

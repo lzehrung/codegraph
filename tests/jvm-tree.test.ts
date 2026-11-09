@@ -22,6 +22,7 @@ import {
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { parseSyntaxTree, type JvmLanguageId } from "../src/util/syntax-tree.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js";
+import { KOTLIN_UNREAD_TAIL_LINE } from "./helpers/kotlin-unread-tail-fixture.js";
 
 function treeFor(languageId: JvmLanguageId, source: string): SyntaxTreeLike {
   const tree = parseSyntaxTree(source, supportById(languageId)!).tree;
@@ -280,42 +281,68 @@ describe("JVM facts and Kotlin syntax errors", () => {
     expect(facts.javaTypes).toEqual(["Marker", "Wrapper", "Service"]);
   });
 
-  it("declares no member of a class the grammar fails inside, and none of the text after the failure", () => {
-    // A stray `)` inside a member function is a syntax error whatever the grammar reads, so it ends the tree in an
-    // ERROR. The answer is a miss: neither the class nor its members (`read`, `update`) nor `After` become top-level
-    // names.
-    const source = [
-      "package p",
-      "class Reader : Source {",
-      "  fun read(): Long {",
-      "    var done = false)",
-      "    while (!done) {",
-      "      if (ready()) {",
-      "        done = true",
-      "      }",
-      "    }",
-      "    return 0",
-      "  }",
-      "  private fun update() {}",
-      "}",
-      "class After",
-      "",
-    ].join("\n");
-    const tree = treeFor("kotlin", source);
-    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+  // A stray `)` in a member function is recovered inside the function body: the class and `After` are read, and the
+  // tree has no ERROR at its top, so the file is not incomplete. An unterminated string takes the rest of the file as its
+  // text, so the tree ends in an ERROR and the answer is a miss: neither the class nor its members (`read`, `update`) nor
+  // `After` become top-level names.
+  it.each([
+    {
+      name: "a stray token is recovered inside the function",
+      error: "    var done = false)",
+      topLevelError: false,
+      facts: { packageName: "p", symbols: ["Reader", "After"], javaTypes: ["Reader", "After"] },
+    },
+    {
+      name: "an unterminated string takes the class and the text after it",
+      error: `    var done = ${KOTLIN_UNREAD_TAIL_LINE}`,
+      topLevelError: true,
+      facts: { packageName: "p", symbols: [], javaTypes: [], incomplete: true },
+    },
+  ])(
+    "declares the names of a class with a syntax error in a member function: $name",
+    ({ error, topLevelError, facts }) => {
+      const source = [
+        "package p",
+        "class Reader : Source {",
+        "  fun read(): Long {",
+        error,
+        "    while (!done) {",
+        "      if (ready()) {",
+        "        done = true",
+        "      }",
+        "    }",
+        "    return 0",
+        "  }",
+        "  private fun update() {}",
+        "}",
+        "class After",
+        "",
+      ].join("\n");
+      const tree = treeFor("kotlin", source);
+      expect(hasTopLevelError(tree), "the grammar no longer gives this source its error").toBe(topLevelError);
 
-    const facts = collectJvmFileFacts(tree, "kotlin");
+      expect(collectJvmFileFacts(tree, "kotlin")).toEqual(facts);
+    },
+  );
 
-    expect(facts.packageName).toBe("p");
-    expect(facts.symbols).toEqual([]);
-    expect(facts.javaTypes).toEqual([]);
-  });
-
-  it("counts a declaration an ERROR holds outside braces as top-level, and nothing the ERROR swallowed", () => {
+  // `return }x()` ends the function body early, so `consume` sits in an ERROR outside braces and the `}` after it is
+  // stray. A stray token costs the token: the declarations after it are read. An unterminated string takes them.
+  it.each([
+    {
+      name: "a stray token",
+      call: "x()",
+      facts: { packageName: "p", symbols: ["consume", "After", "Obj"], javaTypes: ["After", "Obj"], incomplete: true },
+    },
+    {
+      name: "an unterminated string",
+      call: `x(${KOTLIN_UNREAD_TAIL_LINE}`,
+      facts: { packageName: "p", symbols: ["consume"], javaTypes: [], incomplete: true },
+    },
+  ])("counts a declaration an ERROR holds outside braces as top-level beside $name", ({ call, facts }) => {
     const source = [
       "package p",
       "fun consume(): Int {",
-      "  return }x()",
+      `  return }${call}`,
       "}",
       "class After { fun member() {} }",
       "object Obj",
@@ -324,14 +351,19 @@ describe("JVM facts and Kotlin syntax errors", () => {
     const tree = treeFor("kotlin", source);
     expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
 
-    const facts = collectJvmFileFacts(tree, "kotlin");
-
-    expect(facts.symbols).toEqual(["consume"]);
-    expect(facts.javaTypes).toEqual([]);
+    expect(collectJvmFileFacts(tree, "kotlin")).toEqual(facts);
   });
 
-  it("keeps the declarations before a stray token and reads none after it", () => {
-    const source = ["package p", "class Before", ")", "class After { fun m() {} }", "fun later() {}", ""].join("\n");
+  it("keeps the declarations before an unterminated string and reads none after it", () => {
+    // The string takes the rest of the file as its text, so the declarations in it are not in the tree.
+    const source = [
+      "package p",
+      "class Before",
+      KOTLIN_UNREAD_TAIL_LINE,
+      "class After { fun m() {} }",
+      "fun later() {}",
+      "",
+    ].join("\n");
     const tree = treeFor("kotlin", source);
     expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
 
@@ -341,9 +373,46 @@ describe("JVM facts and Kotlin syntax errors", () => {
     expect(facts.javaTypes).toEqual(["Before"]);
   });
 
+  it("reads the declarations after a stray token, and still marks the file incomplete", () => {
+    // Error recovery resumes at the next declaration, so only the `)` is lost. The file stays incomplete: a stray token
+    // can as well swallow a declaration, and an importer may not take the names read as the whole list.
+    const source = ["package p", "class Before", ")", "class After { fun m() {} }", "fun later() {}", ""].join("\n");
+    const tree = treeFor("kotlin", source);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    expect(collectJvmFileFacts(tree, "kotlin")).toEqual({
+      packageName: "p",
+      symbols: ["Before", "After", "later"],
+      javaTypes: ["Before", "After"],
+      incomplete: true,
+    });
+  });
+
+  // The clause is read when only a stray token precedes it, and an unterminated string before it takes the clause.
+  it.each([
+    {
+      name: "a stray token before the clause",
+      before: ")",
+      facts: { packageName: "p", symbols: ["select"], javaTypes: [], incomplete: true },
+    },
+    {
+      name: "an unterminated string before the clause",
+      before: KOTLIN_UNREAD_TAIL_LINE,
+      facts: { packageName: null, symbols: [], javaTypes: [], incomplete: true },
+    },
+  ])("reads the package clause or not beside $name", ({ before, facts }) => {
+    const tree = treeFor("kotlin", `${before}\npackage p\n\nfun select(x: String) = x\n`);
+    expect(hasTopLevelError(tree), "the pinned grammar no longer fails on this source").toBe(true);
+
+    expect(collectJvmFileFacts(tree, "kotlin")).toEqual(facts);
+  });
+
   it("records that a syntax error at the top of a file left declarations unread, and only then", () => {
     // Declarations the error swallowed are not in `symbols`, so the facts must say the list may be short.
-    const kotlin = treeFor("kotlin", "package p\nclass Before\n)\nfun select(x: String) = x\n");
+    const kotlin = treeFor(
+      "kotlin",
+      `package p\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun select(x: String) = x\n`,
+    );
     expect(hasTopLevelError(kotlin), "the pinned Kotlin grammar no longer fails on this source").toBe(true);
     expect(collectJvmFileFacts(kotlin, "kotlin")).toEqual({
       packageName: "p",
@@ -827,9 +896,10 @@ describe("JVM importers while a package file has no readable syntax tree", () =>
 });
 
 describe("JVM importers beside a package file with a syntax error", () => {
-  // The error leaves `select(String)` unread, so Gap.kt may overload what Peer.kt declares. `Before` was read first.
+  // The error leaves `select(String)` unread (an unterminated string takes the rest of the file), so Gap.kt may
+  // overload what Peer.kt declares. `Before` was read first.
   const sources: Record<string, string> = {
-    "p/Gap.kt": "package com.acme.p\n\nclass Before\n)\nfun select(x: String) = x\n",
+    "p/Gap.kt": `package com.acme.p\n\nclass Before\n${KOTLIN_UNREAD_TAIL_LINE}\nfun select(x: String) = x\n`,
     "p/Peer.kt": "package com.acme.p\n\nfun select(x: Int) = x\n",
     "app/UseSelect.kt": "package com.acme.app\n\nimport com.acme.p.select\n",
     "app/UseBefore.kt": "package com.acme.app\n\nimport com.acme.p.Before\n",
@@ -913,7 +983,11 @@ describe("JVM files whose package clause was not read", () => {
   // that is nothing but comments.
   const padding = "// padding\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 11) + 1);
   const cases: Array<{ name: string; contents: string; hidden: boolean }> = [
-    { name: "a syntax error before the clause", contents: ")\npackage p\n\nfun select(x: String) = x\n", hidden: true },
+    {
+      name: "a syntax error before the clause",
+      contents: `${KOTLIN_UNREAD_TAIL_LINE}\npackage p\n\nfun select(x: String) = x\n`,
+      hidden: true,
+    },
     {
       name: "comments that fill the parsed head of an oversized file",
       contents: `${padding}package p\n\nfun select(x: String) = x\n`,
@@ -977,6 +1051,49 @@ describe("JVM files whose package clause was not read", () => {
       }
     });
   }
+
+  // A stray token before the clause costs the token: the clause is read, so the file is in `p` and incomplete. Wildcards
+  // list it and are marked, while `select` is declared by two files and stays unresolved whether or not one is complete.
+  it("places a file whose package clause follows a stray token in its package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-jvm-stray-before-clause-"));
+    try {
+      const sources: Record<string, string> = {
+        "p/Peer.kt": "package p\n\nfun select(x: Int) = x\n",
+        "p/Other.kt": ")\npackage p\n\nfun select(x: String) = x\n",
+        "app/UseSelect.kt": "package app\n\nimport p.select\n",
+        "app/UseStar.kt": "package app\n\nimport p.*\n",
+        "app/UseStarJava.java": "package app;\n\nimport p.*;\n\nclass UseStarJava {}\n",
+      };
+      for (const [file, text] of Object.entries(sources)) {
+        await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await writeFile(path.join(root, file), text, "utf8");
+      }
+      const index = await buildProjectIndex(root, { cache: "memory", threads: 1, useNativeWorkers: false });
+      const moduleOf = (relative: string) =>
+        index.byFile.get(fileIdentityKey(normalizePath(path.join(root, relative))));
+
+      expect(moduleOf("p/Other.kt")?.jvmFacts).toEqual({
+        packageName: "p",
+        symbols: ["select"],
+        javaTypes: [],
+        incomplete: true,
+      });
+      const select = moduleOf("app/UseSelect.kt");
+      expect(select?.imports[0]?.resolved).toEqual({ external: "p.select" });
+      expect(select?.importLookupIncomplete).toBeUndefined();
+      for (const relative of ["app/UseStar.kt", "app/UseStarJava.java"]) {
+        const star = moduleOf(relative);
+        expect(star?.importLookupIncomplete, relative).toBe(true);
+        expect(
+          star?.imports.find((binding) => binding.kind === "star")?.jvmPackageFiles?.map((file) => path.basename(file)),
+          relative,
+        ).toEqual(["Other.kt", "Peer.kt"]);
+      }
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   // Only an importer in the package itself can name a package-private Java type of it, and Gap.java may declare one
   // under any name. An importer whose own clause was not read may be in that package.
