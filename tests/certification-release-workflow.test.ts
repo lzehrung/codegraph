@@ -536,4 +536,23 @@ describe("certified release workflows", () => {
     expect(smoke).toMatch(/target: win32-arm64-msvc\n\s+mode: structural/);
     expect(funnel).not.toContain("win32-arm64");
   });
+
+  it("starts every release runner image before planning the release", () => {
+    const gate = jobBlock(releaseWorkflow, "runner-images");
+    const gateLabels = new Set([...gate.matchAll(/^ {10}- ([a-z0-9.-]+)$/gm)].map((match) => match[1]));
+    const usedLabels = new Set(
+      [releaseWorkflow, standaloneWorkflow].flatMap((workflow) =>
+        [...workflow.matchAll(/^\s+(?:- )?(?:os|runs-on): ([a-z0-9.-]+)$/gm)].map((match) => match[1]),
+      ),
+    );
+
+    expect([...gateLabels].sort()).toEqual([...usedLabels].sort());
+    expect(usedLabels).toContain("macos-15");
+    expect(gate).toContain("runs-on: ${{ matrix.os }}");
+    expect(gate).toContain("fail-fast: false");
+    expect(jobBlock(releaseWorkflow, "plan-release")).toMatch(/needs:\n {6}- runner-images\n/);
+    const help = jobBlock(releaseWorkflow, "runner-images-help");
+    expect(help).toContain("if: ${{ always() && needs.runner-images.result != 'success' }}");
+    expect(help).toContain("::error title=Runner image unavailable::");
+  });
 });
