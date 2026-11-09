@@ -781,6 +781,58 @@ describe("C# qualified receiver boundaries", () => {
     ]);
   });
 
+  it.each(["peer", "using", "static"] as const)(
+    "rejects bare and wrong-arity generic receiver types through %s",
+    async (scope) => {
+      const owner =
+        scope === "static"
+          ? "public class Outer { public class Prompt<T> { public int Count() => 1; } }"
+          : "public class Prompt<T> { public int Count() => 1; }";
+      const lines = [
+        scope === "static" ? "using static Models.Outer;" : "using Models;",
+        scope === "peer" ? "namespace Models;" : "namespace Client;",
+        "public class Use {",
+        "  public int Bare(Prompt obj) { return obj.Count(); }",
+        "  public int Wrong(Prompt<int, int> obj) { return obj.Count(); }",
+        "  public int Good(Prompt<int> obj) { return obj.Count(); }",
+        "}",
+        "",
+      ];
+      const p = await fixture("cg-csharp-receiver-arity-boundary-", {
+        "Prompt.cs": `namespace Models; ${owner}\n`,
+        "Use.cs": lines.join("\n"),
+      });
+      for (const line of [4, 5, 6]) {
+        for (const token of ["Prompt", "Count"]) {
+          const result = await goToDefinition(p.index, {
+            file: p.f("Use.cs"),
+            line,
+            column: lines[line - 1]!.indexOf(token) + 1,
+          });
+          expect(result.status, `${scope}: ${line}:${token}`).toBe(line === 6 ? "ok" : "not_found");
+          if (result.status === "ok") expect(result.definition.file).toBe(p.f("Prompt.cs"));
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(p.index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "Count")
+        .map((edge) => graph.nodes.get(edge.from)?.name);
+      expect(calls).toEqual(["Good"]);
+      const refs = await findReferences(p.index, {
+        file: p.f("Prompt.cs"),
+        line: 1,
+        column: `namespace Models; ${owner}`.indexOf("Count") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.filter((ref) => ref.file === p.f("Use.cs")).map((ref) => ref.range.start.line)).toEqual([
+          6,
+        ]);
+        expect(refs.referenceCoverage.state).toBe("partial");
+      }
+    },
+  );
+
   it("keeps generic-qualified receiver types unresolved instead of selecting a namespace decoy", async () => {
     const p = await fixture("cg-csharp-generic-receiver-", CSHARP_GENERIC_RECEIVER_FILES);
     const lines = CSHARP_GENERIC_RECEIVER_FILES["Use.cs"].split("\n");

@@ -4,22 +4,33 @@
  * member lookup, which applies static scope and overload selection, and it takes precedence over
  * a same-named module-level name or import.
  */
-import { UNRESOLVED_QUALIFIED_TYPE_REASON } from "../ambiguous-resolution.js";
+import {
+  AMBIGUOUS_STAR_IMPORT_REASON,
+  CSHARP_NAMESPACE_NAME_REASON,
+  UNRESOLVED_QUALIFIED_TYPE_REASON,
+} from "../ambiguous-resolution.js";
 import {
   declaresMembers,
   nearestMemberContainer,
   nodeInStaticMemberContext,
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import { sliceText } from "../../util/ast.js";
+import { csharpTypeArgumentArity } from "../../util/csharp-tree.js";
+import { csharpNamespaceMemberKind } from "../compilation-units.js";
 import {
   csharpAliasAt,
   csharpAliasQualifiedLookupName,
   csharpAliasUnprovenReason,
+  csharpBindingWithinOwner,
   csharpChainQualifier,
-  csharpShadowedUsingReason,
+  csharpOuterMemberResolution,
+  csharpTypeRootName,
+  resolveCsharpNameRoot,
+  csharpNamespaceFallbackReason,
   implicitSelfCallee,
   isCsharpAliasQualifier,
   isDirectKeywordMemberDeclaration,
+  peekCsharpOuterMember,
 } from "../navigation-goto.js";
 import {
   CSHARP_GENERIC_OWNER_REASON,
@@ -124,7 +135,13 @@ export const swiftLookupPolicy: NameLookupPolicy = {
 function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoToResult | null {
   const qualifiedName = csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports);
   if (!qualifiedName.includes(".")) return null;
-  const hit = resolveCsharpQualifiedName(use.index, use.mod, qualifiedName, use.node.startIndex);
+  const hit = resolveCsharpQualifiedName(
+    use.index,
+    use.mod,
+    qualifiedName,
+    use.node.startIndex,
+    csharpTypeArgumentArity(use.node),
+  );
   return hit?.kind === "resolved"
     ? okGoToResult(use.index, hit.def, { resolution: "import", confidence: "high" })
     : null;
@@ -138,43 +155,85 @@ function namesAliasRequiringMemberLookup({ use, closestBinding }: NameLookupStat
   return !!csharpAliasAt(use.mod, use.name, use.node);
 }
 
+/**
+ * A type or dotted-name root that the other parts or the project base classes of an enclosing type can bind before any
+ * namespace member or import does. A binding declared inside the innermost type already beats them.
+ */
+function namesOuterOwnerRoot({ use, closestBinding }: NameLookupState): boolean {
+  if (csharpBindingWithinOwner(closestBinding, use.node)) return false;
+  return csharpTypeRootName(use.node);
+}
+
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
   fromClosestBinding: ownOverloadDeclaration,
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
-  // A dotted name led by a compilation-unit alias that an enclosing namespace shadows, or that reaches a project
-  // with a file of unknown declarations, is unproven, and so is one qualified through a generic type, whose
-  // namespace-qualified spelling drops its type arguments, and one led by a name that a `using N;` shadowed by an
-  // enclosing namespace may bring in.
+  // A qualified name whose type or alias root could not be resolved must not become a namespace path.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
-    if (!chainNode) return undefined;
+    if (!chainNode) {
+      const root = resolveCsharpNameRoot(use.index, use.mod, use.node, use.parsed.source, use.files);
+      if (root.kind === "namespace") {
+        return { status: "not_found", reason: CSHARP_NAMESPACE_NAME_REASON };
+      }
+      if (root.kind === "resolved")
+        return okGoToResult(use.index, root.definition, { resolution: "import", confidence: "high" });
+      if (root.kind === "ambiguous") return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
+      if (root.kind === "unavailable") return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+      return undefined;
+    }
     if (csharpQualifiedThroughGenericOwner(chainNode)) {
       return { status: "not_found", reason: CSHARP_GENERIC_OWNER_REASON };
     }
     const lead = csharpChainQualifier(chainNode, use.parsed.source);
     if (!lead) return undefined;
     const { index, mod, parsed } = use;
-    const reason =
-      csharpAliasUnprovenReason(index, mod, lead.qualifier, parsed.source) ??
-      csharpShadowedUsingReason(index, mod, lead.qualifier, parsed.source);
-    return reason ? { status: "not_found", reason } : undefined;
+    const aliasReason = csharpAliasUnprovenReason(index, mod, lead.qualifier, parsed.source);
+    if (aliasReason) return { status: "not_found", reason: aliasReason };
+    // A member an enclosing type receives from another part or a base class binds the root first, and its own nested
+    // lookup is not modeled: no namespace or import may answer in its place.
+    const qualifierName = sliceText(lead.qualifier, parsed.source);
+    const boundByOwner =
+      csharpTypeRootName(lead.qualifier) &&
+      !csharpAliasAt(mod, qualifierName, lead.qualifier) &&
+      peekCsharpOuterMember(index, use.file, lead.qualifier, qualifierName)?.status === "member";
+    if (boundByOwner) return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    const reason = csharpNamespaceFallbackReason(index, mod, lead.qualifier, parsed.source, use.files);
+    if (reason) return { status: "not_found", reason };
+    const root = resolveCsharpNameRoot(index, mod, lead.qualifier, parsed.source, use.files);
+    if (root.kind !== "namespace") return undefined;
+    const suffix = lead.names.toReversed().join(".");
+    const qualified = `${root.name}.${suffix}`;
+    const hit = resolveCsharpQualifiedName(
+      index,
+      mod,
+      `global::${qualified}`,
+      use.node.startIndex,
+      csharpTypeArgumentArity(use.node),
+    );
+    if (hit?.kind === "resolved") return okGoToResult(index, hit.def, { resolution: "import", confidence: "high" });
+    const namespace = csharpNamespaceMemberKind(index, mod, "", qualified) === "namespace";
+    return { status: "not_found", reason: namespace ? CSHARP_NAMESPACE_NAME_REASON : UNRESOLVED_QUALIFIED_TYPE_REASON };
   },
   shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),
   moduleAliasIsUnshadowed({ use, closestBinding }) {
     if (!csharpAliasAt(use.mod, use.name, use.node)) return true;
     return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
   },
-  // A member of an enclosing type binds an alias's name before the alias does. Finding one reads other files, so the
-  // alias stays the fallback of a deferred member lookup.
+  // Enclosing members precede aliases and imports, including nested types of another partial part or a base class.
   wrapRest(state, rest) {
-    if (!namesAliasRequiringMemberLookup(state)) return rest();
-    return {
+    const { use } = state;
+    const deferToMemberLookup = (): NameResolution => ({
       status: "deferred",
-      request: { kind: "csharp-alias-member", lookupName: state.use.name },
+      request: { kind: "csharp-alias-member", lookupName: use.name },
       fallback: rest(),
-    };
+    });
+    if (namesAliasRequiringMemberLookup(state)) return deferToMemberLookup();
+    if (!namesOuterOwnerRoot(state)) return rest();
+    const peeked = peekCsharpOuterMember(use.index, use.file, use.node, use.name);
+    if (!peeked) return deferToMemberLookup();
+    return csharpOuterMemberResolution(use.index, peeked) ?? rest();
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
     if (!closestBinding?.import || !csharpTypeOnlyName(use.node, true)) return undefined;

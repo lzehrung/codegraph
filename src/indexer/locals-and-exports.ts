@@ -16,6 +16,7 @@ import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from 
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { replaceContents } from "../util/collections.js";
 import { swiftExtensionOwnerType } from "../util/swift-tree.js";
+import { csharpGenericArity } from "../util/csharp-tree.js";
 import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
@@ -836,6 +837,13 @@ export function collectLocalsAndExportsFromSource(
         : {}),
     };
     if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    if (support.id === "csharp" && node) {
+      const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
+      if (nominalType) {
+        const arity = node.parent ? csharpGenericArity(node.parent) : 0;
+        if (arity) base.csharpGenericArity = arity;
+      }
+    }
     const jvmOwner =
       node &&
       (support.id === "java" || support.id === "kotlin") &&

@@ -40,6 +40,16 @@ import {
   expectInheritedAliasCallConsumers,
   expectInheritedTypeConsumers,
 } from "../helpers/csharp-inherited-alias-assertions.js";
+import {
+  CSHARP_DOTTED_USING_CASES,
+  csharpPartialGenericRootFixture,
+  expectDottedUsingConsumers,
+} from "../helpers/csharp-dotted-using-fixture.js";
+import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+  expectInstantiatedReceiverConsumers,
+} from "../helpers/csharp-instantiated-receiver-fixture.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
 import {
   CSHARP_NEARER_RECEIVER_CASES,
@@ -1952,12 +1962,20 @@ describe("C# partial class members across files", () => {
     }
   });
 
-  it("does not coalesce partials with different generic arities", async () => {
+  it("resolves partial types by arity without combining their members", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-arity-"));
     try {
       const plain = ["namespace P;", "public partial class Box {", "  public void Helper() {}", "}"];
       const generic = ["namespace P;", "public partial class Box<T> {", "  public void Helper() {}", "}"];
-      const caller = ["namespace P;", "class Caller {", "  Box Make() => new Box();", "}"];
+      const caller = [
+        "namespace P;",
+        "class Caller {",
+        "  Box Make() => new Box();",
+        "  Box<int> MakeGeneric() => new Box<int>();",
+        "  void Plain(Box obj) { obj.Helper(); }",
+        "  void Generic(Box<int> obj) { obj.Helper(); }",
+        "}",
+      ];
       const paths = await writeFixtureFiles(root, {
         "Box.A.cs": `${plain.join("\n")}\n`,
         "Box.Generic.cs": `${generic.join("\n")}\n`,
@@ -1968,12 +1986,50 @@ describe("C# partial class members across files", () => {
         paths["Box.Generic.cs"]!,
         paths["Caller.cs"]!,
       ]);
-      const result = await goToDefinition(index, {
-        file: paths["Caller.cs"]!,
-        line: 3,
-        column: columnOf(caller, 3, "new Box") + 4,
+      for (const [line, target] of [
+        [3, "Box.A.cs"],
+        [4, "Box.Generic.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: paths["Caller.cs"]!,
+          line,
+          column: columnOf(caller, line, "new Box") + 4,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(paths[target]);
+      }
+      for (const [line, target] of [
+        [5, "Box.A.cs"],
+        [6, "Box.Generic.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: paths["Caller.cs"]!,
+          line,
+          column: columnOf(caller, line, "Helper"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(paths[target]);
+        const refs = await findReferences(index, {
+          file: paths[target]!,
+          line: 3,
+          column: columnOf(plain, 3, "Helper"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(
+            refs.references.filter((ref) => ref.file === paths["Caller.cs"]).map((ref) => ref.range.start.line),
+          ).toEqual([line]);
+          expect(refs.referenceCoverage.state).toBe("complete");
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || from?.file !== paths["Caller.cs"] || to?.name !== "Helper") return [];
+        return [`${from.name}:${path.basename(to.file)}`];
       });
-      expect(result.status).toBe("not_found");
+      expect(calls.sort()).toEqual(["Generic:Box.Generic.cs", "Plain:Box.A.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2930,6 +2986,191 @@ describe("C# partial class members across files", () => {
         });
         expect(result.status).toBe("not_found");
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(CSHARP_INSTANTIATED_RECEIVER_SCOPES)("keeps C# generic receiver arities through %s", async (scope) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-instantiated-language-"));
+    try {
+      const fixture = csharpInstantiatedReceiverFixture(scope);
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectInstantiatedReceiverConsumers(index, files, fixture);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["TKey, TValue", "TLimit, TActivatorData, TRegistrationStyle"])(
+    "leaves a generic header split by preprocessor directives unproven (%s)",
+    async (parameters) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-conditional-generic-header-"));
+      try {
+        const argumentsText = parameters
+          .split(", ")
+          .map(() => "int")
+          .join(", ");
+        const lines = ["namespace Models;", `public class Client : Contract<${argumentsText}> {}`];
+        const files = await writeFixtureFiles(root, {
+          "Contract.cs": `namespace Models;\npublic interface Contract\n#if CURRENT\n<${parameters}>\n#else\n<${parameters}>\n#endif\n{}\n`,
+          "Use.cs": lines.join("\n"),
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        expect(index.byFile.get(fileIdentityKey(files["Contract.cs"]!))?.parseErrorRanges?.length).toBeGreaterThan(0);
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: 2,
+          column: columnOf(lines, 2, "Contract"),
+        });
+        expect(result.status).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges.filter(
+            (edge) =>
+              ["extends", "implements"].includes(edge.label ?? "") && graph.nodes.get(edge.to)?.name === "Contract",
+          ),
+        ).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(CSHARP_DOTTED_USING_CASES)("keeps C# dotted roots on $name", async (testCase) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-dotted-using-language-"));
+    try {
+      const files = await writeFixtureFiles(root, testCase.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      await expectDottedUsingConsumers(index, files, testCase);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a generic dotted root before a nested type in another partial owner part", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-partial-generic-root-"));
+    try {
+      const fixture = csharpPartialGenericRootFixture();
+      const files = await writeFixtureFiles(root, fixture.files);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const { lines, genericLine, ordinaryLine } = fixture;
+      const generic = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: genericLine,
+        column: columnOf(lines, genericLine, "Run"),
+      });
+      expect(generic.status).toBe("not_found");
+      const ordinary = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: ordinaryLine,
+        column: columnOf(lines, ordinaryLine, "Run"),
+      });
+      expect(ordinary.status).toBe("ok");
+      if (ordinary.status === "ok") expect(ordinary.definition.file).toBe(files["Part.cs"]);
+      const refs = await findReferences(index, {
+        file: files["Part.cs"]!,
+        line: 1,
+        column: fixture.files["Part.cs"]!.indexOf("Run") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.filter((site) => site.file === files["Use.cs"]).map((site) => site.range.start.line),
+        ).toEqual([ordinaryLine]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const callers = graph.edges.flatMap((edge) => {
+        const from = graph.nodes.get(edge.from);
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || from?.file !== files["Use.cs"] || to?.file !== files["Part.cs"]) return [];
+        return [from.name];
+      });
+      expect(callers).toEqual(["M"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const receiverUse = (...rows: string[]): string => [...rows, ""].join("\n");
+  it.each([
+    {
+      name: "a using static method named like a namespace does not block that namespace",
+      source: {
+        "NB.cs": "namespace N; public class Outer { public static void B() {} }\n",
+        "Decoy.cs": "namespace B; public class Nested { public void Run() {} }\n",
+        "Use.cs": receiverUse(
+          "namespace A {",
+          "  using static N.Outer;",
+          "  class Use {",
+          "    void M(B.Nested x) { x.Run(); }",
+          "  }",
+          "}",
+        ),
+      },
+      target: "Decoy.cs",
+    },
+    {
+      name: "a nested type of another partial part binds the receiver type before a namespace",
+      source: {
+        "Part.cs":
+          "namespace A; partial class Use { public class B { public class Nested { public void Run() {} } } }\n",
+        "Decoy.cs": "namespace B; public class Nested { public void Run() {} }\n",
+        "Use.cs": receiverUse(
+          "namespace A {",
+          "  partial class Use {",
+          "    void M(B.Nested x) { x.Run(); }",
+          "  }",
+          "}",
+        ),
+      },
+      target: undefined,
+    },
+    {
+      name: "a value member of another partial part hides a namespace root",
+      source: {
+        "Part.cs": "namespace A; partial class Use { public int B; }\n",
+        "Decoy.cs": "namespace B; public class Nested { public static void Run() {} }\n",
+        "Use.cs": receiverUse("namespace A {", "  partial class Use {", "    void M() { B.Nested.Run(); }", "  }", "}"),
+      },
+      target: undefined,
+    },
+    {
+      name: "a property typed by its own name still lets the type answer",
+      source: {
+        "Color.cs": "namespace A; public class Color { public static void Red() {} }\n",
+        "Part.cs": "namespace A; partial class Use { public Color Color { get; } }\n",
+        "Use.cs": receiverUse("namespace A {", "  partial class Use {", "    void M() { Color.Red(); }", "  }", "}"),
+      },
+      target: "Color.cs",
+    },
+  ])("keeps C# receiver roots when $name", async ({ source, target }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-receiver-roots-"));
+    try {
+      const files = await writeFixtureFiles(root, source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const lines = source["Use.cs"].split("\n");
+      const line = lines.findIndex((text) => text.includes("void M")) + 1;
+      const token = /Run|Red/u.exec(lines[line - 1]!)![0];
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line,
+        column: columnOf(lines, line, token),
+      });
+      expect(result.status).toBe(target ? "ok" : "not_found");
+      if (result.status === "ok") expect(result.definition.file).toBe(files[target!]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = graph.edges.flatMap((edge) => {
+        const to = graph.nodes.get(edge.to);
+        if (edge.label !== "calls" || graph.nodes.get(edge.from)?.name !== "M" || !to) return [];
+        return [path.basename(to.file)];
+      });
+      expect(callees).toEqual(target ? [target] : []);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -4904,10 +5145,13 @@ describe("C# using namespace across files", () => {
     }
   });
 
-  it("keeps a type imported by a using namespace as the root of a dotted call", async () => {
+  it.each([
+    { placement: "compilation unit", headers: ["using Imported;", "namespace Q;"], target: "Decoy.cs" },
+    { placement: "namespace", headers: ["namespace Q;", "using Imported;"], target: "PType.cs" },
+  ])("keeps a dotted root's $placement using precedence", async ({ headers, target }) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-type-root-"));
     try {
-      // Class Imported.P comes from the second file of namespace Imported; namespace P is a decoy.
+      // The using's namespace placement decides whether Imported.P or the global namespace P binds the root.
       await writeFile(path.join(root, "Aaa.cs"), "namespace Imported;\npublic class Aaa { }\n");
       await writeFile(
         path.join(root, "PType.cs"),
@@ -4917,23 +5161,17 @@ describe("C# using namespace across files", () => {
         path.join(root, "Decoy.cs"),
         "namespace P;\npublic class Nested { public static int M() => 2; }\n",
       );
-      const useLines = [
-        "using Imported;",
-        "namespace Q;",
-        "public class Use {",
-        "  public int A() => P.Nested.M();",
-        "}",
-      ];
+      const useLines = [...headers, "public class Use {", "  public int A() => P.Nested.M();", "}"];
       const use = normalizePath(path.join(root, "Use.cs"));
       await writeFile(use, `${useLines.join("\n")}\n`);
       const index = await buildProjectIndex(root, { cache: "off" });
       const result = await goToDefinition(index, { file: use, line: 4, column: useLines[3]!.lastIndexOf("M(") + 1 });
-      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe("PType.cs");
+      expect(result.status === "ok" ? path.basename(result.definition.file) : null).toBe(target);
       const graph = await buildSymbolGraphDetailed(index);
       const targets = graph.edges
         .filter((edge) => edge.label === "calls" && edge.from.startsWith(use))
         .map((edge) => path.basename(graph.nodes.get(edge.to)?.file ?? ""));
-      expect(targets).toEqual(["PType.cs"]);
+      expect(targets).toEqual([target]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

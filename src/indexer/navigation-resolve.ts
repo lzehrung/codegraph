@@ -82,6 +82,8 @@ export type ResolveExportOptions = {
   cNamespace?: "tag" | "ordinary";
   /** Source position for implicit C# namespace lookup in the initial file. */
   referenceIndex?: number;
+  /** Explicit C# type argument count, including zero for a name without type arguments. */
+  csharpGenericArity?: number;
   /**
    * Explicit argument count at a call. Java and Kotlin overload sets (several functions
    * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
@@ -439,7 +441,8 @@ export function resolveExport(
   type ExportResolution = ResolvedExport | "ambiguous" | null;
   const matchesOptions = (def: SymbolDef, namespace: ResolveExportOptions["cNamespace"]): boolean =>
     (!opts?.preferredKind || def.kind === opts.preferredKind) &&
-    (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace);
+    (namespace === undefined || (def.cTag ? "tag" : "ordinary") === namespace) &&
+    (opts?.csharpGenericArity === undefined || (def.csharpGenericArity ?? 0) === opts.csharpGenericArity);
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
   function resolveFromFile(
@@ -492,7 +495,7 @@ export function resolveExport(
     const argumentCountKey = opts?.argumentCount === undefined ? "" : String(opts.argumentCount);
     // The current file's export-only mode and the enclosing lookup's fallback mode are separate:
     // a Python star excludes private locals, but an explicit re-export can still name one.
-    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${names.normalizeIdentifier(name)}`;
+    const key = `${names.id}|${opts?.preferredKind ?? ""}|${namespace ?? ""}|${allowLocalFallback ? 1 : 0}|${allowCurrentLocalFallback ? 1 : 0}|${referenceIndex ?? ""}|${argumentCountKey}|${opts?.csharpGenericArity ?? ""}|${names.normalizeIdentifier(name)}`;
     const cached = index.exportCache.get(key);
     if (cached !== undefined) return cached;
     // A root answer is safe for the same top-level query even when its walk cut a cycle.
@@ -988,8 +991,10 @@ export function resolveCsharpQualifiedName(
   mod: ModuleIndex,
   qualifiedName: string,
   referenceIndex: number,
+  csharpGenericArity?: number,
 ): ResolvedExport | null {
-  const direct = resolveExport(index, mod.file, qualifiedName, { referenceIndex });
+  const options = { referenceIndex, ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}) };
+  const direct = resolveExport(index, mod.file, qualifiedName, options);
   if (direct) return direct;
   const separator = qualifiedName.lastIndexOf(".");
   if (separator <= 0) return null;
@@ -1001,13 +1006,13 @@ export function resolveCsharpQualifiedName(
     const files = csharpNamespaceImportDirectories(index).get(imp);
     const boundFile = (typeof imp.resolved === "string" ? imp.resolved : undefined) ?? files?.[0];
     if (!boundFile) continue;
-    const hit = resolveCsharpNamespaceImport(index, imp, boundFile, qualifiedName, { referenceIndex });
+    const hit = resolveCsharpNamespaceImport(index, imp, boundFile, qualifiedName, options);
     if (hit) return "namespace" in hit ? { kind: "namespace", file: hit.namespace } : { kind: "resolved", def: hit };
   }
   for (const imp of mod.imports) {
     if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
     if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
-    const hit = resolveImported(index, imp, typeName);
+    const hit = resolveImported(index, imp, typeName, options);
     if (!hit) return null;
     return "namespace" in hit ? { kind: "namespace", file: hit.namespace } : { kind: "resolved", def: hit };
   }

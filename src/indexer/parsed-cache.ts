@@ -15,6 +15,16 @@ import {
 } from "./parse-context.js";
 import type { BuildOptions, ProjectIndex } from "./types.js";
 import type { ScopeIndex } from "./scope-types.js";
+import type { FileId } from "../types.js";
+/** Synchronous access to parsed files; loading providers retain misses for an async retry. */
+export type ParsedFileProvider = {
+  get(file: FileId): ParsedFileContext | null;
+};
+
+export type LoadingParsedFileProvider = ParsedFileProvider & {
+  takeMisses(): FileId[];
+  load(files: readonly FileId[]): Promise<void>;
+};
 
 export function parsedCacheMaxEntries(opts: BuildOptions | undefined): number {
   return Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
@@ -756,4 +766,54 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
     inFlightMetadataBytes,
     sourceIdentityMetadataBytes,
   };
+}
+
+export function createLoadingParsedFileProvider(
+  index: ProjectIndex,
+  current: { file: FileId; parsed: ParsedFileContext },
+): LoadingParsedFileProvider {
+  const loaded = new Map<string, ParsedFileContext | null>([[fileIdentityKey(current.file), current.parsed]]);
+  const misses = new Map<string, FileId>();
+  return {
+    get(file) {
+      const key = fileIdentityKey(file);
+      const hit = loaded.get(key);
+      if (hit !== undefined) return hit;
+      misses.set(key, file);
+      return null;
+    },
+    takeMisses() {
+      const files = [...misses.values()];
+      misses.clear();
+      return files;
+    },
+    async load(files) {
+      for (const file of files) {
+        const key = fileIdentityKey(file);
+        if (loaded.has(key)) continue;
+        try {
+          loaded.set(key, await ensureParsedContextForIndex(index, file));
+        } catch (error) {
+          rethrowStaleQuerySource(error);
+          // A file without a usable syntax tree remains unproven on subsequent passes.
+          loaded.set(key, null);
+        }
+      }
+    },
+  };
+}
+
+/** Load-and-retry passes for a lookup that reads files it has not parsed yet. */
+const MAX_NAME_RESOLUTION_LOADS = 4;
+
+/** Runs a synchronous lookup step, parsing any file it missed and rerunning it. */
+export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step: () => T): Promise<T> {
+  let result = step();
+  for (let attempt = 0; attempt < MAX_NAME_RESOLUTION_LOADS; attempt += 1) {
+    const missing = files.takeMisses();
+    if (!missing.length) break;
+    await files.load(missing);
+    result = step();
+  }
+  return result;
 }

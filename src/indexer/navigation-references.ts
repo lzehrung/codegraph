@@ -57,6 +57,7 @@ import {
 } from "./navigation-resolve.js";
 import {
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -752,6 +753,7 @@ export async function collectVerifiedNamedNodeReferences(
       }
       continue;
     }
+    if (resolved.reason === CSHARP_NAMESPACE_NAME_REASON) continue;
     let recoveredByLanguageFallback = false;
     if (parsed.sup.id === "php" && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);

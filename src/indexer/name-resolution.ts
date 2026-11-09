@@ -2,7 +2,7 @@
  * One lookup order for a bare name at a use site, shared by go-to-definition, references (which
  * verify through go-to-definition), and the detailed call graph.
  *
- * `resolveBareName` is synchronous: it reads parsed files through a {@link ParsedFileProvider}
+ * `resolveBareName` is synchronous: it reads parsed files through a parsed-file provider
  * and never awaits. The few steps that need async member lookup return a `deferred` resolution
  * with the answer to use when that lookup finds nothing; {@link settleNameResolution} runs those
  * steps. Navigation settles immediately; the graph settles after its body walk.
@@ -30,6 +30,7 @@ import {
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
+  csharpAliasAt,
   csharpAliasMemberLookup,
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
@@ -46,26 +47,17 @@ import {
 
 import { okGoToResult } from "./navigation-provenance.js";
 
-import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import { createLoadingParsedFileProvider, withParsedFiles } from "./parsed-cache.js";
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
-import type {
-  BareNameUse,
-  JvmTypeNameResolver,
-  LoadingParsedFileProvider,
-  NameLookupState,
-  NameResolution,
-} from "./name-resolution-types.js";
+import type { BareNameUse, JvmTypeNameResolver, NameLookupState, NameResolution } from "./name-resolution-types.js";
 
 export type {
   BareNameUse,
   DeferredNameRequest,
-  LoadingParsedFileProvider,
   NameLookupPolicy,
   NameLookupState,
   NameResolution,
-  ParsedFileProvider,
 } from "./name-resolution-types.js";
 
 import { type GoToResult, type ImportBinding, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
@@ -90,56 +82,6 @@ export function phpImportTypeAtPosition(
     }
   }
   return undefined;
-}
-
-export function createLoadingParsedFileProvider(
-  index: ProjectIndex,
-  current: { file: FileId; parsed: ParsedFileContext },
-): LoadingParsedFileProvider {
-  const loaded = new Map<string, ParsedFileContext | null>([[fileIdentityKey(current.file), current.parsed]]);
-  const misses = new Map<string, FileId>();
-  return {
-    get(file) {
-      const key = fileIdentityKey(file);
-      const hit = loaded.get(key);
-      if (hit !== undefined) return hit;
-      misses.set(key, file);
-      return null;
-    },
-    takeMisses() {
-      const files = [...misses.values()];
-      misses.clear();
-      return files;
-    },
-    async load(files) {
-      for (const file of files) {
-        const key = fileIdentityKey(file);
-        if (loaded.has(key)) continue;
-        try {
-          loaded.set(key, await ensureParsedContextForIndex(index, file));
-        } catch (error) {
-          rethrowStaleQuerySource(error);
-          // Reduced mode: a file that cannot be parsed stays unavailable, as before.
-          loaded.set(key, null);
-        }
-      }
-    },
-  };
-}
-
-/** Load-and-retry passes for a lookup that reads files it has not parsed yet. */
-const MAX_NAME_RESOLUTION_LOADS = 4;
-
-/** Runs a synchronous lookup step, parsing any file it missed and rerunning it. */
-export async function withParsedFiles<T>(files: LoadingParsedFileProvider, step: () => T): Promise<T> {
-  let result = step();
-  for (let attempt = 0; attempt < MAX_NAME_RESOLUTION_LOADS; attempt += 1) {
-    const missing = files.takeMisses();
-    if (!missing.length) break;
-    await files.load(missing);
-    result = step();
-  }
-  return result;
 }
 
 /** Resolve JVM type syntax using the same on-demand parsed files as positioned navigation. */
@@ -321,7 +263,10 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   const { index, mod, node } = use;
   const lookup = await csharpAliasMemberLookup(index, mod, node, lookupName);
   if (lookup.status === "none") return undefined;
-  if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+  if (lookup.status === "unproven") {
+    if (!csharpAliasAt(mod, lookupName, node)) return undefined;
+    return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
+  }
   if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }

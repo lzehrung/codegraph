@@ -42,6 +42,46 @@ const CSHARP_DIRECTIVE_CONTAINER_TYPES: Record<string, true> = {
 /** Marks a declared type name only its own file can see (a C# 11 `file` type); other files' lookups skip it. */
 export const CSHARP_FILE_LOCAL_PREFIX = "file ";
 
+/** Generic arity declared by a type, from its own parameter list. */
+export function csharpGenericArity(container: SyntaxNodeLike): number {
+  const parameters =
+    container.childForFieldName("type_parameters") ??
+    container.namedChildren.find((child) => child.type === "type_parameter_list");
+  if (!parameters) return 0;
+  let arity = 0;
+  for (const child of parameters.namedChildren) {
+    if (child.type === "type_parameter" || child.type === "identifier") arity += 1;
+  }
+  return arity;
+}
+
+/** Type arguments belong to the generic name, not to an identifier used inside its argument list. */
+export function csharpTypeArgumentArity(node: SyntaxNodeLike): number {
+  while (node.type === "qualified_name" || node.type === "alias_qualified_name") {
+    const name = node.childForFieldName("name");
+    if (!name) return 0;
+    node = name;
+  }
+  const generic = node.type === "generic_name" ? node : node.parent;
+  if (generic?.type !== "generic_name") return 0;
+  const name = generic.childForFieldName("name") ?? generic.namedChildren[0];
+  if (node !== generic && name?.id !== node.id) return 0;
+  const argumentsNode = generic.namedChildren.find((child) => child.type === "type_argument_list");
+  if (!argumentsNode) return 0;
+  let arity = 1;
+  for (let index = 0; ; index += 1) {
+    const child = argumentsNode.child(index);
+    if (!child) break;
+    if (child.type === ",") arity += 1;
+  }
+  return arity;
+}
+
+/** Compiler-style arity suffix; a backtick cannot collide with a C# identifier. */
+export function csharpTypeNameWithArity(name: string, arity: number): string {
+  return arity ? `${name}\`${arity}` : name;
+}
+
 export type CsharpNamePath = {
   value: string;
   leaf: SyntaxNodeLike;
@@ -76,9 +116,9 @@ export type CsharpNamespaceFacts = {
   /** Namespace regions in source order, each opened by this file. */
   regions: CsharpNamespaceRegion[];
   /**
-   * Types without type parameters declared directly in a namespace, as dotted names (`Outer.Inner.Type`):
-   * a bare name `X` never binds `X<T>`. A C# 11 `file` type carries {@link CSHARP_FILE_LOCAL_PREFIX},
-   * because only this file can see it.
+   * Types declared directly in a namespace or in the global namespace, as dotted names (`Outer.Inner.Type`, or
+   * `Type` for a global one). Generic names carry a compiler-style backtick and arity suffix, so a bare name `X`
+   * never binds `X<T>`. A C# 11 `file` type carries {@link CSHARP_FILE_LOCAL_PREFIX}, visible only in its own file.
    */
   types: string[];
 };
@@ -214,17 +254,15 @@ export function collectCsharpNamespaceFacts(tree: SyntaxTreeLike): CsharpNamespa
   };
 
   const addType = (node: SyntaxNodeLike, namespaceName: string | null): void => {
-    if (!namespaceName) {
-      hasGlobalType = true;
-      return;
-    }
+    if (!namespaceName) hasGlobalType = true;
     const children = node.namedChildren;
-    // A bare name `X` binds a type with no type parameters, never `X<T>`.
-    if (children.some((child) => child.type === "type_parameter_list")) return;
     const nameNode = node.childForFieldName("name");
     const name = nameNode ? normalizeCsharpIdentifier(nameNode.text) : "";
     if (!name) return;
-    const declared = `${namespaceName}.${name}`;
+    const declared = csharpTypeNameWithArity(
+      namespaceName ? `${namespaceName}.${name}` : name,
+      csharpGenericArity(node),
+    );
     const isFileLocal = children.some((child) => child.type === "modifier" && child.text === "file");
     types.add(isFileLocal ? CSHARP_FILE_LOCAL_PREFIX + declared : declared);
   };

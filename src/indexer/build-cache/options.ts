@@ -131,8 +131,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 135 resolves a qualified base through its qualifier (Python module attribute, Ruby constant path, Swift nested
  * type, Go package type, JavaScript namespace member, Kotlin dotted type) and never by its last name or its qualifier.
  * Python `pkg.x` after `import pkg.mod` reads the package, and a call in a base list proves no base.
+ * Epoch 136 rebuilds C# root lookup, records static-using directive positions for namespace precedence, and records
+ * the non-generic types of the global namespace in each file's namespace facts.
  */
-export const CORE_ALGORITHM_EPOCH = 135;
+export const CORE_ALGORITHM_EPOCH = 136;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

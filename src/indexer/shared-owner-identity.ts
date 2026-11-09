@@ -6,6 +6,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText } from "../util/ast.js";
 import { normalizeCsharpQualifiedName, normalizeSwiftIdentifier } from "../util/identifiers.js";
+import { csharpGenericArity, csharpTypeNameWithArity } from "../util/csharp-tree.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import {
@@ -83,27 +84,6 @@ function csharpNameText(node: SyntaxNodeLike | null, source: string): string {
   return normalizeCsharpQualifiedName(sliceText(node, source));
 }
 
-function csharpGenericArity(container: SyntaxNodeLike): number {
-  const typeParameters =
-    container.childForFieldName("type_parameters") ??
-    (container.namedChildren ?? []).find((child) => child.type === "type_parameter_list") ??
-    null;
-  if (!typeParameters) return 0;
-  const parameters = (typeParameters.namedChildren ?? []).filter((child) => child.type === "type_parameter");
-  if (parameters.length) return parameters.length;
-  return (typeParameters.namedChildren ?? []).filter((child) => child.type === "identifier").length;
-}
-
-/**
- * Enclosing type segment carrying its generic arity compiler-style (`Outer`1`).
- * A backtick cannot appear in a C# type or namespace name, so an encoded
- * segment can never collide with a declared name and dot-joined namespace
- * parts stay unambiguous.
- */
-function csharpEnclosingSegment(name: string, arity: number): string {
-  return arity > 0 ? `${name}\`${arity}` : name;
-}
-
 const CSHARP_CONDITIONAL_WRAPPERS: Record<string, true> = { preproc_if: true, preproc_elif: true, preproc_else: true };
 
 /**
@@ -144,7 +124,7 @@ function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | 
   while (current) {
     if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) {
       const outerName = csharpNameText(current.childForFieldName("name"), source);
-      if (outerName) outer.push(csharpEnclosingSegment(outerName, csharpGenericArity(current)));
+      if (outerName) outer.push(csharpTypeNameWithArity(outerName, csharpGenericArity(current)));
     }
     if (current.type === "namespace_declaration" || current.type === "file_scoped_namespace_declaration") {
       const nsNode =

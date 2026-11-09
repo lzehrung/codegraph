@@ -23,6 +23,14 @@ import {
   csharpInheritedAliasCase,
 } from "../../helpers/csharp-inherited-alias-fixture.js";
 import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
+import {
+  CSHARP_DOTTED_USING_CASES,
+  csharpPartialGenericRootFixture,
+} from "../../helpers/csharp-dotted-using-fixture.js";
+import {
+  CSHARP_INSTANTIATED_RECEIVER_SCOPES,
+  csharpInstantiatedReceiverFixture,
+} from "../../helpers/csharp-instantiated-receiver-fixture.js";
 
 /** Every call form has a cell; nothing is omitted. */
 export const csharpOmissions: readonly CallFormOmission[] = [];
@@ -52,7 +60,54 @@ const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "me
   return { ...base, expected: "not_found", decoy, decoyAmbiguous: true };
 };
 
+const partialGenericRoot = csharpPartialGenericRootFixture();
+
 export const csharpCells: MatrixCell[] = [
+  ...CSHARP_INSTANTIATED_RECEIVER_SCOPES.flatMap((scope) => {
+    const fixture = csharpInstantiatedReceiverFixture(scope);
+    return fixture.sites.map((site): MatrixCell => {
+      const targetIndex = ["Prompt.cs", "Pair.cs", "Plain.cs"].indexOf(site.target);
+      const target = fixture.targets[targetIndex]!;
+      const decoy = fixture.targets[targetIndex === 2 ? 0 : 2]!;
+      return {
+        id: `csharp/instantiated-receiver-${scope}-${site.caller.toLowerCase()}`,
+        language: "csharp",
+        callForm: "typed-local-receiver",
+        files: fixture.files,
+        use: { file: "Use.cs", line: site.line, token: "Count" },
+        expected: { file: target.file, line: target.line, token: "Count" },
+        decoy: { file: decoy.file, line: decoy.line, token: "Count" },
+        decoyKind: "callable",
+        edge: { label: "calls", fromFile: "Use.cs", fromName: site.caller },
+      };
+    });
+  }),
+  {
+    id: "csharp/dotted-root-partial-owner-type-parameter",
+    language: "csharp",
+    callForm: "static-receiver",
+    files: partialGenericRoot.files,
+    use: { file: "Use.cs", line: partialGenericRoot.genericLine, token: "Run" },
+    expected: "not_found",
+    decoy: { file: "Part.cs", line: 1, token: "Run" },
+    decoyKind: "callable",
+    decoyAmbiguous: true,
+    edge: { label: "calls", fromFile: "Use.cs", fromName: "Generic" },
+  },
+  ...CSHARP_DOTTED_USING_CASES.map(
+    (testCase): MatrixCell => ({
+      id: `csharp/dotted-root-${testCase.name.replaceAll(" ", "-")}`,
+      language: "csharp",
+      callForm: "static-receiver",
+      files: testCase.files,
+      use: { file: "Use.cs", line: testCase.callLine, token: "Run" },
+      expected: testCase.target ? { file: testCase.target, line: 1, token: "Run" } : "not_found",
+      decoy: { file: testCase.target === "Decoy.cs" ? "NB.cs" : "Decoy.cs", line: 1, token: "Run" },
+      decoyKind: "callable",
+      decoyAmbiguous: testCase.ambiguous || !testCase.target,
+      edge: { label: "calls", fromFile: "Use.cs", fromName: "M" },
+    }),
+  ),
   // Enclosing project members precede aliases; external members are outside the index.
   inheritedAliasCell("inherited field", "yields-to-inherited-field", "member"),
   inheritedAliasCell("inherited field declared in another file", "yields-to-inherited-field-in-another-file", "member"),

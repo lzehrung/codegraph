@@ -4,7 +4,13 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
-import { assertQuerySourceForIndex, ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import {
+  assertQuerySourceForIndex,
+  createLoadingParsedFileProvider,
+  ensureParsedContextForIndex,
+  rethrowStaleQuerySource,
+  withParsedFiles,
+} from "./parsed-cache.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
@@ -136,12 +142,10 @@ import {
 } from "../scss/resolution.js";
 import { findTerraformReferences, goToTerraformDefinition } from "../terraform/navigation.js";
 import {
-  createLoadingParsedFileProvider,
   phpImportTypeAtPosition,
   resolveBareName,
   resolveJvmTypeName,
   settleNameResolution,
-  withParsedFiles,
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";

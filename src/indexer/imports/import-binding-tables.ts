@@ -244,6 +244,7 @@ export async function applyCsharpImportDirective(
         resolved: typeMatch.file.replace(/\\/g, "/"),
         typeOnly,
         staticMembersOf: qualifiedType,
+        csharpDirectiveStartIndex: directive.startIndex,
       });
       return;
     }
@@ -252,6 +253,7 @@ export async function applyCsharpImportDirective(
       from: parsed.rawValue,
       resolved: { external: parsed.rawValue },
       typeOnly,
+      csharpDirectiveStartIndex: directive.startIndex,
     });
     return;
   }

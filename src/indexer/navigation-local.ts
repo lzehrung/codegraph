@@ -3,6 +3,7 @@ import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { csharpGenericArity, csharpTypeArgumentArity } from "../util/csharp-tree.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
@@ -265,6 +266,17 @@ function effectivePythonModuleScopeBinding(
   return null;
 }
 
+/** A C# type name includes its syntactic arity; imports and declaration tokens keep their own binding. */
+function wrongCsharpTypeArity(binding: Binding, use: SyntaxNodeLike, arity: number): boolean {
+  if (binding.import || !binding.node?.parent || binding.node.id === use.id) return false;
+  if (binding.kind !== "class" && binding.kind !== "type") return false;
+  const declaration = use.parent;
+  const constructorName =
+    declaration?.type === "constructor_declaration" || declaration?.type === "destructor_declaration";
+  if (constructorName) return declaration.parent?.parent?.childForFieldName("name")?.id !== binding.node.id;
+  return csharpGenericArity(binding.node.parent) !== arity;
+}
+
 export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -276,13 +288,24 @@ export function findClosestScopeBinding(
   if (support.id === "csharp" && bindingName.includes(".")) {
     const names = bindingName.split(".");
     const first = names.shift()!;
-    let owner = findClosestScopeBinding(scopeIndex, first, currentNode, support);
-    for (const name of names) {
+    // Each qualifier has its own arity; the leaf's type arguments must not hide a non-generic owner.
+    let rootNode = csharpQualifiedNameNode(currentNode) ?? currentNode;
+    while (rootNode.type === "qualified_name" || rootNode.type === "alias_qualified_name") {
+      const qualifier = rootNode.childForFieldName("qualifier") ?? rootNode.childForFieldName("alias");
+      if (!qualifier) return null;
+      rootNode = qualifier;
+    }
+    let owner = findClosestScopeBinding(scopeIndex, first, rootNode, support);
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index]!;
       if (owner?.kind !== "class") return null;
       const body = owner.node?.parent?.childForFieldName("body");
       if (!body) return null;
       const bodyScope = scopeIndex.allScopes.find((scope) => scope.node.id === body.id);
-      owner = bodyScope?.map.get(support.normalizeIdentifier(name)) ?? null;
+      let nested = bodyScope?.map.get(support.normalizeIdentifier(name));
+      const arity = index === names.length - 1 ? csharpTypeArgumentArity(currentNode) : 0;
+      while (nested && wrongCsharpTypeArity(nested, currentNode, arity)) nested = nested.earlierSameScope;
+      owner = nested ?? null;
     }
     return owner;
   }
@@ -294,6 +317,7 @@ export function findClosestScopeBinding(
 
   const methodCall = isExplicitMethodCall(row, currentNode);
   const typeOnly = jvmTypeOnly || typeOnlyName(support.id, currentNode);
+  const csharpArity = support.id === "csharp" ? csharpTypeArgumentArity(currentNode) : 0;
   const pythonModuleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   while (currentScope) {
@@ -306,7 +330,8 @@ export function findClosestScopeBinding(
       while (binding) {
         const wrongNamespace =
           (methodCall && binding.kind === "local") || (typeOnly && isValueNamespaceBinding(binding));
-        if (!wrongNamespace) {
+        const wrongCsharpArity = support.id === "csharp" && wrongCsharpTypeArity(binding, currentNode, csharpArity);
+        if (!wrongNamespace && !wrongCsharpArity) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
           if (
             atModuleRuntime ||
@@ -525,6 +550,7 @@ export function resolveNamedDefinition(
   const arityOptions = {
     ...(isCallableUse ? { isCallableUse } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
+    ...(support.id === "csharp" && callSite ? { csharpGenericArity: csharpTypeArgumentArity(callSite.node) } : {}),
   };
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
@@ -728,7 +754,16 @@ export function resolveNamedDefinition(
           continue;
         }
       }
-      const def = resolveStarImportedDefinition(index, imp, name, support.id, cNamespace, argumentCount, isCallableUse);
+      const def = resolveStarImportedDefinition(
+        index,
+        imp,
+        name,
+        support.id,
+        cNamespace,
+        argumentCount,
+        isCallableUse,
+        arityOptions.csharpGenericArity,
+      );
       // A resolved export can still be replaced by forwarding of the same name. Keep that
       // uncertainty until a later proven binding overwrites it; unrelated imports are harmless.
       if (targetModule) {
