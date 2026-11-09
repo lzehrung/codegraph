@@ -31,7 +31,13 @@ import {
   receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
-import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
+import {
+  declarationMemberArity,
+  findFirstNodeByType,
+  isIdentifierType,
+  kotlinExtensionReceiverType,
+  PARAMETER_LIST_NODE_TYPES,
+} from "./ast.js";
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -55,6 +61,8 @@ export type ReceiverCallCandidate = {
    * `null` means the call shape is unknown, so arity-based resolution is omitted.
    */
   argumentCount: number | null;
+  /** Known at the Kotlin call node while collecting edges; no need to reparse it during final selection. */
+  kotlinTrailingLambda?: boolean;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
   /** Required static/instance scope; omitted candidates are classified from site. */
   memberScope?: ReceiverMemberScope;
@@ -796,11 +804,7 @@ export function unwrapNamedType(node: SyntaxNodeLike, sup: LanguageSupport): Syn
  */
 export function kotlinExtensionReceiverTypeNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
   if (node.type !== "function_declaration") return null;
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-  const receiverType = node.namedChildren.find(
-    (child) => child.startIndex < nameNode.startIndex && (child.type === "user_type" || child.type === "nullable_type"),
-  );
+  const receiverType = kotlinExtensionReceiverType(node);
   return receiverType ? unwrapNamedType(receiverType, sup) : null;
 }
 
@@ -1894,6 +1898,7 @@ export function emitReceiverCallEdges(
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
+  acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1962,6 +1967,9 @@ export function emitReceiverCallEdges(
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
     invocationArity: (id) => kotlinPropertyArities.get(canonicalMemberId(id, nodeAliases)),
+    ...(acceptsCallShape
+      ? { acceptsCall: (id: string) => acceptsCallShape(canonicalMemberId(id, nodeAliases), activeCandidate) }
+      : {}),
     scope: (id) => memberScopes.get(id) ?? memberScopes.get(canonicalMemberId(id, nodeAliases)) ?? "any",
     visible: (id, useFile) => {
       const canonicalId = canonicalMemberId(id, nodeAliases);

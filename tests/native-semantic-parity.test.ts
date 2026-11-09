@@ -41,6 +41,14 @@ import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtu
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
+  KOTLIN_EXTENSION_RECEIVER_LINES,
+  KOTLIN_EXTENSION_RECEIVER_SOURCES,
+} from "./helpers/kotlin-extension-receiver-fixture.js";
+import {
+  expectKotlinReceiverReview,
+  KOTLIN_RECEIVER_REVIEW_SOURCES,
+} from "./helpers/kotlin-receiver-review-fixture.js";
+import {
   JVM_QUALIFIED_REVIEW_CASES,
   JVM_VALUE_SHADOW_CASES,
   QUALIFIED_TYPE_CASES,
@@ -1669,6 +1677,67 @@ nativeDescribe("native semantic coverage", () => {
             graph.nodes.get(edge.to)?.file === files["Decoy.cs"],
         ),
       ).toEqual([]);
+    }
+  });
+
+  it("keeps native Kotlin accessor and factory receiver targets stable after cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-receiver-review-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, KOTLIN_RECEIVER_REVIEW_SOURCES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const mod of index.byFile.values()) {
+        expect(mod.nativeOutcome).toBe("used");
+        expect(mod.parseErrorRanges).toEqual([]);
+      }
+      await expectKotlinReceiverReview(index, files);
+    }
+  });
+
+  it("keeps Kotlin extension receivers consistent across native cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-extension-receiver-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, KOTLIN_EXTENSION_RECEIVER_SOURCES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      const index = await buildProjectIndex(root, { cache });
+      for (const module of index.byFile.values()) {
+        expect(module.nativeOutcome).toBe("used");
+        expect(module.parseErrorRanges).toEqual([]);
+      }
+      for (const [line, token, target] of [
+        [4, "hit", "model/Box.kt"],
+        [8, "hit", "model/Box.kt"],
+        [9, "extra", "app/Extensions.kt"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["app/Use.kt"]!,
+          line,
+          column: columnOf(KOTLIN_EXTENSION_RECEIVER_LINES["app/Use.kt"], line, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.file).toBe(files[target]);
+      }
+      const references = await findReferences(index, { file: files["model/Box.kt"]!, line: 3, column: 9 });
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.referenceCoverage.state).toBe("complete");
+        expect(
+          references.references
+            .filter((site) => site.file === files["app/Use.kt"])
+            .map((site) => site.range.start.line),
+        ).toEqual([4, 8]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [caller, target] of [
+        ["render", "model/Box.kt"],
+        ["display", "model/Box.kt"],
+        ["crossFile", "app/Extensions.kt"],
+      ] as const) {
+        const calls = graph.edges.filter(
+          (edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === caller,
+        );
+        expect(calls.map((edge) => graph.nodes.get(edge.to)?.file)).toEqual([files[target]]);
+      }
     }
   });
 

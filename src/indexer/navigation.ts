@@ -107,6 +107,7 @@ import {
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
 } from "../util/member-access.js";
+import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
 import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberName,
@@ -149,6 +150,7 @@ import {
   type BareNameUse,
 } from "./name-resolution.js";
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
+import { kotlinCalleeUnderImplicitReceiver, kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
 import {
   isPythonDottedImportBinding,
@@ -304,6 +306,12 @@ export async function goToDefinition(
     }
   }
 
+  // A lambda's receiver comes from its callee's declaration, which go-to-definition resolves at the callee.
+  const resolveLambdaCallee = async (callee: SyntaxNodeLike): Promise<SymbolDef | null> => {
+    const { line: calleeLine, column: calleeColumn } = toRange(callee).start;
+    const resolved = await goToDefinition(index, { file, line: calleeLine, column: calleeColumn }, context);
+    return resolved.status === "ok" ? resolved.definition : null;
+  };
   if (sup.supportsCrossModuleSymbols) {
     let memberAccessNode: SyntaxNodeLike | null = null;
     if (node.parent && isMemberAccessNode(sup, node.parent)) {
@@ -324,6 +332,20 @@ export async function goToDefinition(
     // it is a bare name, so the shared lookup (implicit members, imports, package) decides it.
     const receiverless = !!memberAccessNode && isReceiverlessMemberCall(sup, memberAccessNode);
     const scopeIndex = memberAccessNode ? getOrBuildScopeIndex(index, file, source, sup, mod, tree) : null;
+    if (sup.id === "kotlin" && scopeIndex && !receiverless) {
+      // `this` inside a lambda that has a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
+      const viaThis = await kotlinThisMemberResult(
+        {
+          index,
+          site: { mod, parsed: context, scopeIndex },
+          resolveCallee: resolveLambdaCallee,
+          resolveTypeName: resolveJvmTypeName,
+          classified: new Map(),
+        },
+        node,
+      );
+      if (viaThis) return viaThis;
+    }
     const memberAccessResult =
       !receiverless &&
       !isExplicitMethodCall(scopeNodesFor(sup.id), node) &&
@@ -417,6 +439,7 @@ export async function goToDefinition(
     const settled = await settleNameResolution(use, resolution, {
       recoverIncludedStar: (lookupName, cNamespace) =>
         recoverIncludedCallableStar(index, mod, sup.id, lookupName, cNamespace, node, source),
+      resolveCallee: resolveLambdaCallee,
     });
     if (settled) return settled;
   }
@@ -984,6 +1007,17 @@ async function findReferencesInternal(
       }
     }
   }
+  const kotlinExtension = isKotlinExtensionDeclaration(parsedContext, definition);
+  // A same-scope property can own all lexical occurrences of a callable's name. Goto selects by callability and
+  // arity instead, so references of the hidden function need the same verified scan as extension declarations.
+  const kotlinFileCallable =
+    parsedContext.sup.id === "kotlin" && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
+  const kotlinFileBinding = kotlinFileCallable
+    ? getCachedScope(index, definitionFile, mod, parsedContext).allScopes[0]?.map.get(
+        parsedContext.sup.normalizeIdentifier(definition.localName),
+      )
+    : undefined;
+  const kotlinCallableCollision = !!kotlinFileBinding?.earlierSameScope;
 
   const requiresSameFileVerifiedScan =
     ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
@@ -991,7 +1025,9 @@ async function findReferencesInternal(
       !receiverMemberDefinition) ||
     scansNamespaceReferences ||
     requiresTypeScriptOverloadVerifiedScan ||
-    requiresRuntimeBindingVerifiedScan;
+    requiresRuntimeBindingVerifiedScan ||
+    kotlinExtension ||
+    kotlinCallableCollision;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
@@ -1010,6 +1046,11 @@ async function findReferencesInternal(
         const position = toTreeSitterPosition(occurrence.start);
         const node = parsedContext.tree.rootNode.descendantForPosition(position, position);
         rubyQualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
+      }
+      // A bare Kotlin call under a lambda or extension body may bind to that implicit receiver instead of this scope.
+      if (isKotlinReceiverClaimableCall(parsedContext, occurrence)) {
+        memberCallOccurrencesNeedVerification = true;
+        continue;
       }
       // A scope occurrence is not proof of a member call. Languages that invoke a free
       // function that way verify the site; an unresolvable receiver stays unavailable.
@@ -2020,6 +2061,23 @@ function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileCon
 function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDef): SyntaxNodeLike {
   const position = toTreeSitterPosition(def.range.start);
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
+}
+
+/** A Kotlin extension declaration: a bare name reaches it only through a matching implicit receiver. */
+function isKotlinExtensionDeclaration(parsedContext: ParsedFileContext, def: SymbolDef): boolean {
+  if (parsedContext.sup.id !== "kotlin") return false;
+  let declaration = syntaxNodeForDefinition(parsedContext, def).parent;
+  if (declaration?.type === "variable_declaration") declaration = declaration.parent;
+  return !!declaration && !!kotlinExtensionReceiverType(declaration);
+}
+
+/** A scope occurrence that is a bare Kotlin call under a lambda or extension body, which an implicit receiver may claim. */
+function isKotlinReceiverClaimableCall(parsedContext: ParsedFileContext, occurrence: Range): boolean {
+  const start = occurrence.start.index;
+  if (parsedContext.sup.id !== "kotlin" || start === undefined) return false;
+  return kotlinCalleeUnderImplicitReceiver(
+    parsedContext.tree.rootNode.descendantForIndex(start, occurrence.end.index ?? start),
+  );
 }
 
 /**

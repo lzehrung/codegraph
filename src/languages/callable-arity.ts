@@ -415,6 +415,8 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
     ...GENERIC_PROFILE,
     parameterNodeTypes: ["parameter"],
     modifierNodeTypes: ["parameter_modifiers", "parameter_modifier"],
+    // Named arguments and a trailing lambda can skip defaults before a required parameter.
+    keywordParameterPattern: /:/,
     restWordPatterns: [/\bvararg\b/],
     spreadPrefixes: ["*"],
     spreadNodeTypes: ["spread_expression"],

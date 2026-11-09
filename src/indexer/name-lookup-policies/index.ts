@@ -12,7 +12,7 @@ import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
 import type { NameLookupPolicy } from "../name-resolution-types.js";
 import { cLookupPolicy, cppLookupPolicy } from "./c-family.js";
-import { csharpLookupPolicy, jvmLookupPolicy, swiftLookupPolicy } from "./implicit-self.js";
+import { csharpLookupPolicy, jvmLookupPolicy, kotlinLookupPolicy, swiftLookupPolicy } from "./implicit-self.js";
 import { phpLookupPolicy } from "./php.js";
 
 /** Whether a function shares its name with another function in its file (an overload set). */
@@ -118,7 +118,7 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   csharp: csharpLookupPolicy,
   java: jvmLookupPolicy,
   go: goLookupPolicy,
-  kotlin: jvmLookupPolicy,
+  kotlin: kotlinLookupPolicy,
   php: phpLookupPolicy,
   python: pythonLookupPolicy,
   rust: rustLookupPolicy,

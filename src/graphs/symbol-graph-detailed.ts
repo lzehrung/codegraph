@@ -9,6 +9,7 @@ import {
   type NameResolution,
 } from "../indexer/name-resolution.js";
 import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
+import { kotlinThisMemberResult, type LambdaReceiverCache } from "../indexer/kotlin-lambda-receiver.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
@@ -52,6 +53,7 @@ import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
   assertQuerySourceForIndex,
   ensureParsedContextForIndex,
@@ -564,6 +566,14 @@ export async function buildSymbolGraphDetailed(
         if (enclosing) return indexedOrNull(enclosing.status === "member" ? enclosing.member : null);
         return indexedOrNull(definitionWithoutDeferredSteps(resolveName(name, node)));
       };
+      // A lambda's receiver comes from its callee's declaration, resolved as go-to-definition resolves that callee.
+      // Receivers proven for this file's lambdas are shared by every call the walk settles in it.
+      const lambdaReceivers: LambdaReceiverCache = new Map();
+      const resolveLambdaCallee = (callee: SyntaxNodeLike): Promise<SymbolDef | null> => {
+        if (callee.parent?.type === "navigation_expression") return edgePassContext.resolveMemberAccessTarget(callee);
+        const calleeName = src.slice(callee.startIndex, callee.endIndex);
+        return settleName(calleeName, callee, resolveName(calleeName, callee));
+      };
       const settleName = async (
         name: string,
         node: SyntaxNodeLike,
@@ -574,6 +584,8 @@ export async function buildSymbolGraphDetailed(
           requireAcceptedArity: true,
           recoverIncludedStar: (lookupName, cNamespace) =>
             recoverIncludedCallableStar(index, moduleEntry, sup.id, lookupName, cNamespace, node, src),
+          resolveCallee: resolveLambdaCallee,
+          lambdaReceivers,
         });
         return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };
@@ -651,6 +663,20 @@ export async function buildSymbolGraphDetailed(
         },
         resolveMemberAccessTarget: async (node: SyntaxNodeLike): Promise<SymbolDef | null> => {
           const useNode = tree.rootNode.descendantForIndex(node.startIndex, node.endIndex);
+          if (sup.id === "kotlin") {
+            // `this` inside a lambda with a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
+            const viaThis = await kotlinThisMemberResult(
+              {
+                index,
+                site: { mod: moduleEntry, parsed: moduleParsed, scopeIndex },
+                resolveCallee: resolveLambdaCallee,
+                resolveTypeName: resolveJvmTypeName,
+                classified: lambdaReceivers,
+              },
+              useNode,
+            );
+            if (viaThis) return viaThis.status === "ok" ? viaThis.definition : null;
+          }
           if (sup.id === "python" && !pythonReceiverResolutionCache) {
             pythonReceiverResolutionCache = createPythonReceiverResolutionCache();
           }
@@ -801,6 +827,14 @@ export async function buildSymbolGraphDetailed(
     }
   }
 
+  const trailingLambdaCalls = new Set<ReceiverCallCandidate>();
+  const trailingLambdaNames = new Set<string>();
+  for (const candidate of callableReceiverCalls) {
+    if (!candidate.kotlinTrailingLambda) continue;
+    trailingLambdaCalls.add(candidate);
+    trailingLambdaNames.add(candidate.memberName);
+  }
+  const lambdaRejectedTargets = new Set<string>();
   const memberIdentities = new Map<string, CallableIdentity>();
   const hasHierarchyReceiver = callableReceiverCalls.some((candidate) =>
     inheritsMemberOverloads(supportForIndexedFile(candidate.site.file)?.id ?? ""),
@@ -829,6 +863,9 @@ export async function buildSymbolGraphDetailed(
         }
         const id = defNodeId(def);
         memberIdentities.set(id, def.callable);
+        if (trailingLambdaNames.has(def.localName) && supportForIndexedFile(def.file)?.id === "kotlin") {
+          if (!(await kotlinCallableAcceptsTrailingLambda(index, def))) lambdaRejectedTargets.add(id);
+        }
         receiverMemberDefinitions?.set(id, def);
       }
     }
@@ -883,6 +920,9 @@ export async function buildSymbolGraphDetailed(
       const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
       return memberPackage === usePackage;
     },
+    trailingLambdaCalls.size
+      ? (targetId, candidate) => !trailingLambdaCalls.has(candidate) || !lambdaRejectedTargets.has(targetId)
+      : undefined,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

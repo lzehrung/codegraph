@@ -125,6 +125,7 @@ import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name
 import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-using-static.js";
 import { csharpTypeOnlyName } from "./scope-nodes.js";
 import { bindsTypeParameter, typeParameterNamesInScope } from "./type-parameters.js";
+import { kotlinCallableAcceptsTrailingLambda, kotlinHasTrailingLambda } from "./kotlin-call-compatibility.js";
 import {
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -2883,8 +2884,22 @@ async function resolveDeclaredBase(
 }
 
 /**
+ * Whether a supertype outside the project, spelled `spelling` in `module`, is a known external type that lacks the
+ * member being looked up. A hierarchy walk that meets such a supertype keeps going instead of giving up.
+ */
+export type ExternalBaseOmits = (spelling: string, module: ModuleIndex) => boolean;
+
+/** The dotted source of a base an external type table may know; null for a base that names no type. */
+function declaredBaseSpelling(base: DeclaredBaseType): string | null {
+  if (base.kind === "simple") return base.name;
+  if (base.kind === "qualified") return [base.base, ...base.path].join(".");
+  return null;
+}
+
+/**
  * True when `def` and every resolved supertype lack a direct `memberName`. An unresolved
- * supertype, an unreadable declaration, or a declared member returns false.
+ * supertype, an unreadable declaration, or a declared member returns false, unless `externalBaseOmits` knows the
+ * unresolved supertype and says it lacks the name.
  */
 async function hierarchyOmitsMember(
   index: ProjectIndex,
@@ -2892,6 +2907,7 @@ async function hierarchyOmitsMember(
   memberName: string,
   memberScope: ReceiverMemberScope,
   seen: Set<string>,
+  externalBaseOmits?: ExternalBaseOmits,
 ): Promise<boolean> {
   const containerDef = asMemberContainer(index, def);
   if (!containerDef) return false;
@@ -2901,7 +2917,7 @@ async function hierarchyOmitsMember(
   seen.add(key);
   const ref = await keywordClassRefFromDef(index, containerDef);
   if (!ref) return false;
-  return containerOmitsMember(index, ref, memberName, memberScope, seen);
+  return containerOmitsMember(index, ref, memberName, memberScope, seen, externalBaseOmits);
 }
 
 /** `hierarchyOmitsMember` for a declaration body already in hand: its own members, then every base. */
@@ -2911,6 +2927,7 @@ async function containerOmitsMember(
   memberName: string,
   memberScope: ReceiverMemberScope,
   seen: Set<string>,
+  externalBaseOmits?: ExternalBaseOmits,
 ): Promise<boolean> {
   const normalize = ref.context.sup.normalizeIdentifier;
   const memberPredicate =
@@ -2939,10 +2956,61 @@ async function containerOmitsMember(
   const bases = collectDeclaredBaseTypes(ref.container, ref.context.source, ref.context.sup, index, ref.module, false);
   for (const base of bases) {
     const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
-    if (!baseDef) return false;
-    if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen))) return false;
+    if (!baseDef) {
+      const spelling = declaredBaseSpelling(base);
+      if (spelling && externalBaseOmits?.(spelling, ref.module)) continue;
+      return false;
+    }
+    if (!(await hierarchyOmitsMember(index, baseDef, memberName, memberScope, seen, externalBaseOmits))) return false;
   }
   return true;
+}
+
+/**
+ * Whether the class-like declaration `from` is the one whose container starts at `target.containerStart` in
+ * `target.file`, or derives from it through supertypes the project resolves. "unknown" when a class on the way has a
+ * supertype that is not a project declaration, since the walk cannot say what that supertype extends.
+ */
+export async function declarationReaches(
+  index: ProjectIndex,
+  from: SymbolDef,
+  target: { file: string; containerStart: number },
+): Promise<"yes" | "no" | "unknown"> {
+  const targetFile = fileIdentityKey(target.file);
+  const seen = new Set<string>();
+  let unknown = false;
+  const reaches = async (def: SymbolDef): Promise<boolean> => {
+    const containerDef = asMemberContainer(index, def);
+    const ref = containerDef ? await keywordClassRefFromDef(index, containerDef) : null;
+    if (!ref) {
+      unknown = true;
+      return false;
+    }
+    if (fileIdentityKey(ref.file) === targetFile && ref.container.startIndex === target.containerStart) return true;
+    const key = keywordContainerKey(ref.file, ref.container);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (containerHeritageIsUnproven(ref.container, ref.context.source, ref.context.sup)) {
+      unknown = true;
+      return false;
+    }
+    const bases = collectDeclaredBaseTypes(
+      ref.container,
+      ref.context.source,
+      ref.context.sup,
+      index,
+      ref.module,
+      false,
+    );
+    for (const base of bases) {
+      const baseDef = await resolveDeclaredBase(index, ref.module, ref.context, base);
+      if (!baseDef) unknown = true;
+      else if (await reaches(baseDef)) return true;
+    }
+    return false;
+  };
+  if (await reaches(from)) return "yes";
+  return unknown ? "unknown" : "no";
 }
 
 /**
@@ -3162,6 +3230,8 @@ async function resolveKeywordReceiverMember(
     memberUse === "call" && current.context.sup.id === "kotlin"
       ? new Map<SymbolDef, CallableArity | null | undefined>()
       : undefined;
+  const trailingLambda = current.context.sup.id === "kotlin" && kotlinHasTrailingLambda(node);
+  const lambdaCompatible = trailingLambda ? new Map<SymbolDef, boolean>() : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
   for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
@@ -3225,6 +3295,7 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (lambdaCompatible) lambdaCompatible.set(hit, await kotlinCallableAcceptsTrailingLambda(index, hit));
         if (propertyInvocationArities && !hit.callable) {
           const start = hit.range.start.index;
           if (start !== undefined) {
@@ -3291,6 +3362,7 @@ async function resolveKeywordReceiverMember(
       return facts.unboundArity ? { ...facts, arity: facts.unboundArity } : facts;
     },
     ...(propertyInvocationArities ? { invocationArity: (def: SymbolDef) => propertyInvocationArities.get(def) } : {}),
+    ...(lambdaCompatible ? { acceptsCall: (def: SymbolDef) => lambdaCompatible.get(def) ?? true } : {}),
     scope: (def) => scopeByMember.get(def) ?? "any",
     visible: (def) => visible.has(def),
     sameSignature: (a, b) => sameSignatures.get(memberKey(a))?.has(memberKey(b)) ?? false,
@@ -3622,6 +3694,70 @@ async function resolveImplicitSelfAt(
   );
   // Any inherited instance method of that name hides the import, even when none applies.
   return instance || instanceReport.named ? null : undefined;
+}
+
+/** Kotlin members of `Any`, with their parameter counts: every receiver has them and no project type declares them. */
+const KOTLIN_ANY_MEMBER_ARITY: Readonly<Record<string, number>> = { equals: 1, hashCode: 0, toString: 0 };
+
+/** What a typed implicit receiver, such as a Kotlin lambda's, says about a bare call named `member`. */
+export type ReceiverTypeMember =
+  | { status: "member"; member: SymbolDef }
+  /** The type may declare it: an overload set the argument count does not settle, a hidden member, or an unindexed supertype. */
+  | { status: "unproven"; blocksFallback?: true }
+  /** The type and every supertype lack it, so lookup continues with the next receiver. */
+  | { status: "omitted" };
+
+/**
+ * Looks up actual members on an implicit receiver and its supertypes. Kotlin extension candidates are selected
+ * separately from the call site's scope, after accessible members have been considered. `memberUse` tells a call,
+ * which prefers methods and invokable properties, from a read, as it does for an explicit receiver.
+ */
+export async function findReceiverTypeMember(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  use: SyntaxNodeLike,
+  receiver: SymbolDef,
+  member: string,
+  argumentCount: number | undefined,
+  externalBaseOmits?: ExternalBaseOmits,
+  memberUse?: "call" | "value",
+): Promise<ReceiverTypeMember> {
+  const unproven: ReceiverTypeMember = { status: "unproven" };
+  if (!declaresMembers(receiver)) return unproven;
+  const report: KeywordMemberReport = { named: false, ambiguous: false };
+  const found = await resolveKeywordReceiverMember(
+    index,
+    mod,
+    use,
+    member,
+    "any",
+    false,
+    argumentCount,
+    receiver,
+    report,
+    memberUse,
+  );
+  if (found) {
+    const acceptsCall =
+      argumentCount === undefined || (receiverMemberAcceptsArgumentCount(index, found, argumentCount) ?? true);
+    if (acceptsCall) return { status: "member", member: found };
+    report.inapplicable = true;
+  }
+  if (report.inapplicable) {
+    if (kotlinHasTrailingLambda(use)) return { status: "omitted" };
+    const owner = await keywordClassRefFromDef(index, receiver);
+    const onlyImplicitAnyBase =
+      owner?.context.sup.id === "kotlin" &&
+      !owner.container.namedChildren.some((child) => child.type === "delegation_specifiers");
+    const implicitAnyMember = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, normalizeKotlinIdentifier(member));
+    if (onlyImplicitAnyBase && !implicitAnyMember) return { status: "omitted" };
+  }
+  if (report.named) return unproven;
+  const anyName = normalizeKotlinIdentifier(member);
+  const anyArity = Object.hasOwn(KOTLIN_ANY_MEMBER_ARITY, anyName) ? KOTLIN_ANY_MEMBER_ARITY[anyName] : undefined;
+  if (anyArity !== undefined && (argumentCount === undefined || argumentCount === anyArity)) return unproven;
+  const omits = await hierarchyOmitsMember(index, receiver, member, "any", new Set(), externalBaseOmits);
+  return omits ? { status: "omitted" } : unproven;
 }
 
 /**

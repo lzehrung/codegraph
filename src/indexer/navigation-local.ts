@@ -533,7 +533,7 @@ export function resolveNamedDefinition(
   name: string,
   cNamespace?: "tag" | "ordinary",
   referenceIndex?: number,
-  callSite?: { node: SyntaxNodeLike; source: string },
+  callSite?: { node: SyntaxNodeLike; source: string; typeOnly?: boolean },
   scopeIndex?: ScopeIndex,
 ): GoToResult | null {
   const callArgumentCount = callSite
@@ -547,10 +547,13 @@ export function resolveNamedDefinition(
       callableReference?.type === "callable_reference" &&
       callableReference.namedChildren.at(-1)?.id === callSite?.node.id);
   const argumentCount = callArgumentCount ?? undefined;
+  const kotlinTypeUse =
+    support.id === "kotlin" && !!callSite && (callSite.typeOnly || typeOnlyName(support.id, callSite.node));
   const arityOptions = {
     ...(isCallableUse ? { isCallableUse } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
     ...(support.id === "csharp" && callSite ? { csharpGenericArity: csharpTypeArgumentArity(callSite.node) } : {}),
+    ...(kotlinTypeUse ? { typeOnly: true } : {}),
   };
   const normalizedName = support.normalizeIdentifier(name);
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
@@ -763,6 +766,7 @@ export function resolveNamedDefinition(
         argumentCount,
         isCallableUse,
         arityOptions.csharpGenericArity,
+        arityOptions.typeOnly,
       );
       // A resolved export can still be replaced by forwarding of the same name. Keep that
       // uncertainty until a later proven binding overwrites it; unrelated imports are harmless.

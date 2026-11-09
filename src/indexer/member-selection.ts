@@ -18,6 +18,8 @@ export type MemberModel<Owner, Member> = {
   visible(member: Member, useFile: string): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
   sameSignature?(derived: Member, inherited: Member): boolean;
+  /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
+  acceptsCall?(member: Member): boolean;
 };
 
 export type MemberSelection<Member> =
@@ -211,7 +213,8 @@ export function selectMember<Owner, Member>(
       }
     }
     const distinct = distinctCandidates(candidates, model, options.argumentCount);
-    const unique = preferByUse(distinct, model, options);
+    const byUse = preferByUse(distinct, model, options);
+    const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;

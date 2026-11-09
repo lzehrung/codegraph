@@ -26,8 +26,15 @@ import {
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
+  UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
+import {
+  kotlinLambdaReceiverVerdict,
+  kotlinReceiverCallFallback,
+  type LambdaReceiverCache,
+  type LambdaReceiverEnvironment,
+} from "./kotlin-lambda-receiver.js";
 import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 
 import {
@@ -241,7 +248,7 @@ export function resolveBareName(
       policy.crossModuleName?.(state) ?? lookupName,
       policy.cNamespace?.(node),
       node.startIndex,
-      { node, source },
+      { node, source, ...(jvmTypeOnly ? { typeOnly: true } : {}) },
       scopeIndex,
     );
     const adjusted = policy.afterCrossModule?.(state, resolved);
@@ -256,6 +263,13 @@ export type SettleNameOptions = {
   requireAcceptedArity?: boolean;
   /** Resolves included C/C++ star candidates; navigation owns this recovery. */
   recoverIncludedStar?: (lookupName: string, cNamespace: "tag" | "ordinary" | undefined) => Promise<GoToResult | null>;
+  /**
+   * Resolves the callee of a call that receives a lambda, as go-to-definition resolves it. Kotlin proves a lambda's
+   * receiver from that callee's declaration; without it every such callee is unresolved.
+   */
+  resolveCallee?: (callee: SyntaxNodeLike) => Promise<SymbolDef | null>;
+  /** Receivers already proven for the lambdas of this use's file, shared by every use the consumer settles there. */
+  lambdaReceivers?: LambdaReceiverCache;
 };
 
 /**
@@ -272,6 +286,48 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   }
   if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
+}
+
+/**
+ * What the lambdas around a Kotlin bare call decide: a member of the closest receiver that declares the name, or
+ * `undefined` when no receiver claims it and the lookup goes on. A receiver whose members are not indexed may declare
+ * the name, which hides a member of the enclosing type. A file-level function can still answer unless an in-scope
+ * extension applies to the receiver: an ambiguous extension set never falls back to a same-named global function.
+ * A known external receiver that declares the name, or a project receiver's possibly invokable property, also hides
+ * every project fallback.
+ */
+async function settleKotlinLambdaReceiver(
+  use: BareNameUse,
+  request: { lookupName: string; receivers: readonly SyntaxNodeLike[] },
+  fallback: NameResolution | null,
+  options: SettleNameOptions,
+): Promise<GoToResult | null | undefined> {
+  const { index, mod, node, parsed } = use;
+  const env: LambdaReceiverEnvironment = {
+    index,
+    site: { mod, parsed, scopeIndex: use.scopeIndex },
+    resolveCallee: options.resolveCallee ?? (() => Promise.resolve(null)),
+    resolveTypeName: resolveJvmTypeName,
+    classified: options.lambdaReceivers ?? new Map(),
+  };
+  const verdict = await kotlinLambdaReceiverVerdict(env, {
+    node,
+    name: request.lookupName,
+    receivers: request.receivers,
+  });
+  if (verdict.status === "member") {
+    return okGoToResult(index, verdict.member, { resolution: "member-access", confidence: "medium" });
+  }
+  if (verdict.status === "shadowed") return { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON };
+  const candidate = await settleNameResolution(use, fallback, options);
+  if (candidate?.status !== "ok") return candidate;
+  const unproven = { status: "not_found", reason: UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON } as const;
+  if (verdict.status === "unproven" && candidate.definition.isMember) return unproven;
+  const target = await kotlinReceiverCallFallback(env, node, candidate.definition, request.receivers);
+  if (!target) return unproven;
+  return target === candidate.definition
+    ? candidate
+    : okGoToResult(index, target, { resolution: "exact", confidence: "high" });
 }
 
 /** Runs the async member steps a {@link resolveBareName} result deferred. */
@@ -322,6 +378,9 @@ export async function settleNameResolution(
     } else if (request.kind === "swift-nested-type") {
       const nested = await resolveSwiftNestedTypePath(index, request.owner, request.names);
       if (nested) return okGoToResult(index, nested, { resolution: "member-access", confidence: "medium" });
+    } else if (request.kind === "kotlin-lambda-receiver-member") {
+      const settled = await settleKotlinLambdaReceiver(use, request, fallback, options);
+      if (settled !== undefined) return settled;
     } else {
       const recovered = await options.recoverIncludedStar?.(request.lookupName, request.cNamespace);
       if (recovered) return recovered;

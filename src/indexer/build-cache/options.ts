@@ -141,8 +141,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 139 qualifies each Git signature with the file's raw size, so an eol-only rewrite that Git reports clean no
  * longer reuses a module or graph entry extracted from other bytes, and records dirty submodules in each manifest.
  * Older manifests and cache entries rebuild.
+ * Epoch 140 rebuilds detailed graphs whose Kotlin bare calls inside a lambda or extension body with an implicit
+ * receiver named a member of the enclosing type instead of the receiver's, resolves lambda receivers declared by
+ * project functions and aliases, and binds accessible cross-file receiver extensions and extension-property accessor
+ * calls.
  */
-export const CORE_ALGORITHM_EPOCH = 139;
+export const CORE_ALGORITHM_EPOCH = 140;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

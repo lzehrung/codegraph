@@ -119,3 +119,30 @@ export function bindsTypeParameter(
   }
   return false;
 }
+
+/** A Kotlin type parameter's one declared upper bound, never an intersection or an inferred constraint. */
+export function kotlinSingleUpperBound(
+  node: SyntaxNodeLike,
+  source: string,
+  support: LanguageSupport,
+): SyntaxNodeLike | null {
+  const name = support.normalizeIdentifier(sliceText(node, source));
+  for (let owner: SyntaxNodeLike | null = node; owner?.parent; owner = owner.parent) {
+    for (const declared of declarationNameNodes(owner, node)) {
+      if (support.normalizeIdentifier(sliceText(declared, source)) !== name) continue;
+      const parameter = declared.parent;
+      if (parameter?.type !== "type_parameter") return null;
+      let bound = parameter.namedChildren.find((child) => child.type === "user_type") ?? null;
+      const constraints = owner.namedChildren.find((child) => child.type === "type_constraints");
+      for (const constraint of constraints?.namedChildren ?? []) {
+        const constrained = constraint.namedChildren.find((child) => child.type === "identifier");
+        if (!constrained || support.normalizeIdentifier(sliceText(constrained, source)) !== name) continue;
+        if (bound) return null;
+        bound = constraint.namedChildren.find((child) => child.type === "user_type") ?? null;
+        if (!bound) return null;
+      }
+      return bound;
+    }
+  }
+  return null;
+}

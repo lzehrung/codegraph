@@ -70,6 +70,33 @@ function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return node.childForFieldName("type");
 }
 
+/** Receiver spellings before an extension's name: a type, a nullable type, or a parenthesized one such as `(() -> Unit)`. */
+const KOTLIN_EXTENSION_RECEIVER_TYPES: Readonly<Record<string, true>> = {
+  user_type: true,
+  nullable_type: true,
+  parenthesized_type: true,
+};
+
+/**
+ * The receiver type spelled before the name of an extension function or property, or before the parameters of an
+ * anonymous function with a receiver (`fun Builder.() { }`).
+ */
+export function kotlinExtensionReceiverType(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let name: SyntaxNodeLike | null | undefined;
+  if (node.type === "function_declaration") name = node.childForFieldName("name");
+  else if (node.type === "property_declaration") {
+    name = node.namedChildren.find((child) => child.type === "variable_declaration");
+  } else if (node.type === "anonymous_function") {
+    name = node.namedChildren.find((child) => child.type === "function_value_parameters");
+  } else return null;
+  if (!name) return null;
+  return (
+    node.namedChildren.find(
+      (child) => child.startIndex < name.startIndex && KOTLIN_EXTENSION_RECEIVER_TYPES[child.type],
+    ) ?? null
+  );
+}
+
 export function collectDetailedDeclarations(
   rootNode: SyntaxNodeLike,
   sup: LanguageSupport,
@@ -165,6 +192,18 @@ export function collectDetailedDeclarations(
         // same-named symbol elsewhere would give this body another declaration's identity.
         const def = findDefinitionAt(name, nameNode!);
         if (def) functionNodes.push({ name, node, def });
+      }
+    } else if (sup.id === "kotlin" && node.type === "property_declaration" && kotlinExtensionReceiverType(node)) {
+      const variable = node.namedChildren.find((child) => child.type === "variable_declaration");
+      const nameNode = variable?.namedChildren.find((child) => child.type === "identifier");
+      const name = nameNode ? sliceText(nameNode, source) : undefined;
+      const def = name && nameNode ? findDefinitionAt(name, nameNode) : undefined;
+      if (def && name) {
+        for (const accessor of node.namedChildren) {
+          if (accessor.type === "getter" || accessor.type === "setter") {
+            functionNodes.push({ name, node: accessor, def });
+          }
+        }
       }
     } else if (
       typeNodeTypes.has(node.type) ||

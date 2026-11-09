@@ -39,10 +39,17 @@ import {
   csharpQualifiedThroughGenericOwner,
   definitionForBinding,
 } from "../navigation-local.js";
+import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
-import type { BareNameUse, NameLookupPolicy, NameLookupState, NameResolution } from "../name-resolution-types.js";
+import {
+  definitionWithoutDeferredSteps,
+  type BareNameUse,
+  type NameLookupPolicy,
+  type NameLookupState,
+  type NameResolution,
+} from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
 import { isSwiftExtensionTypeName, isSwiftQualifiedExtensionSuffix } from "../../util/swift-tree.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
@@ -320,4 +327,50 @@ export const jvmLookupPolicy: NameLookupPolicy = {
     return implicitSelf(state, lexical(state, local));
   },
   afterCrossModule: (state, resolved) => implicitSelf(state, resolved),
+};
+
+/** A scope whose names a lambda's implicit receiver outranks: a type body or the file itself. */
+const RECEIVER_OUTRANKED_SCOPE_TYPES: Readonly<Record<string, true>> = {
+  class_body: true,
+  enum_class_body: true,
+  source_file: true,
+};
+
+/**
+ * The closest binding is declared where a lambda's implicit receiver outranks it: a member of a named, anonymous, or
+ * local type, a file-level function, an import, or no declaration at all. A local function or parameter binds before
+ * every receiver.
+ */
+function bindsBelowLambdaReceivers({ closestBinding }: NameLookupState): boolean {
+  if (!closestBinding || closestBinding.import) return true;
+  let declaration = closestBinding.node?.parent;
+  if (closestBinding.kind === "local" && declaration?.type === "variable_declaration") {
+    declaration = declaration.parent ?? undefined;
+  } else if (closestBinding.kind !== "function") {
+    return false;
+  }
+  const scope = declaration?.parent;
+  return !!scope && !!RECEIVER_OUTRANKED_SCOPE_TYPES[scope.type];
+}
+
+/**
+ * Kotlin: a lambda between a bare call and its enclosing type may carry an implicit receiver, whose members bind
+ * before the enclosing type's, an inherited member, a same-file function, or an import.
+ */
+export const kotlinLookupPolicy: NameLookupPolicy = {
+  ...jvmLookupPolicy,
+  wrapRest(state, rest) {
+    if (!isImplicitSelfCall(state) || !bindsBelowLambdaReceivers(state)) return rest();
+    const receivers = enclosingReceiverScopes(state.use.node);
+    if (!receivers.length) return rest();
+    const resolution = rest();
+    // A class or alias name is a constructor call, which no receiver's member can be.
+    const named = definitionWithoutDeferredSteps(resolution);
+    if (named && declaresMembers(named)) return resolution;
+    return {
+      status: "deferred",
+      request: { kind: "kotlin-lambda-receiver-member", lookupName: state.lookupName, receivers },
+      fallback: resolution,
+    };
+  },
 };
