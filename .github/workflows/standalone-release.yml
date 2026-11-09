@@ -147,7 +147,7 @@ jobs:
             target: darwin-x64
             native-target: darwin-x64
             extension: tar.gz
-          - os: macos-14
+          - os: macos-15
             arch: arm64
             target: darwin-arm64
             native-target: darwin-arm64
@@ -325,7 +325,7 @@ jobs:
             target: darwin-x64
             mode: runtime
             extension: tar.gz
-          - os: macos-14
+          - os: macos-15
             arch: arm64
             target: darwin-arm64
             mode: runtime
@@ -444,7 +444,7 @@ jobs:
             arch: x64
             target: darwin-x64
             extension: tar.gz
-          - os: macos-14
+          - os: macos-15
             arch: arm64
             target: darwin-arm64
             extension: tar.gz
