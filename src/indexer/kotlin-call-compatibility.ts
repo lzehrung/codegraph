@@ -8,7 +8,12 @@ import {
   resolveNamedDefinition,
 } from "./navigation-local.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import {
+  assertQuerySourceForIndex,
+  cachedParsedContextForIndexSync,
+  ensureParsedContextForIndex,
+  rethrowStaleQuerySource,
+} from "./parsed-cache.js";
 import { bindsTypeParameter } from "./type-parameters.js";
 import { type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
 
@@ -31,7 +36,9 @@ export async function declarationNodeOf(
   const start = def.range.start.index;
   if (start === undefined) return null;
   try {
-    const parsed = await ensureParsedContextForIndex(index, def.file);
+    assertQuerySourceForIndex(index, def.file);
+    const parsed =
+      cachedParsedContextForIndexSync(index, def.file) ?? (await ensureParsedContextForIndex(index, def.file));
     let node: SyntaxNodeLike | null = parsed.tree.rootNode.descendantForIndex(start, start);
     for (; node; node = node.parent) {
       if (DECLARATION_NODE_TYPES[node.type]) return { node, parsed };
@@ -150,15 +157,46 @@ async function acceptsLambdaType(
   }
 }
 
+const trailingLambdaCompatibility = new WeakMap<
+  ProjectIndex,
+  { byFile: ProjectIndex["byFile"]; size: number; results: WeakMap<SymbolDef, boolean> }
+>();
+
 /** The declaration-level half of trailing-lambda call compatibility, shared by navigation and graph selection. */
-export async function kotlinCallableAcceptsTrailingLambda(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
-  const declared = await declarationNodeOf(index, def);
+export async function kotlinCallableAcceptsTrailingLambda(
+  index: ProjectIndex,
+  def: SymbolDef,
+  known?: { node: SyntaxNodeLike; parsed: ParsedFileContext },
+): Promise<boolean> {
+  let cached = trailingLambdaCompatibility.get(index);
+  if (!cached || cached.byFile !== index.byFile || cached.size !== index.byFile.size) {
+    cached = { byFile: index.byFile, size: index.byFile.size, results: new WeakMap() };
+    trailingLambdaCompatibility.set(index, cached);
+  }
+  const knownResult = cached.results.get(def);
+  if (knownResult !== undefined) {
+    assertQuerySourceForIndex(index, def.file);
+    // A fully evicted declaration must be reloaded to detect source changes, even on a compatibility hit.
+    if (known || cachedParsedContextForIndexSync(index, def.file)) return knownResult;
+  }
+  const declared = known ?? (await declarationNodeOf(index, def));
   if (!declared || declared.parsed.sup.id !== "kotlin") return true;
   const parameters = declared.node.namedChildren.find((child) => child.type === "function_value_parameters");
   if (!parameters) return true;
-  const last = parameters.namedChildren.filter((child) => child.type === "parameter").at(-1);
-  if (!last) return false;
+  const children = parameters.namedChildren;
+  let last: SyntaxNodeLike | undefined;
+  for (let i = children.length - 1; i >= 0; i--) {
+    if (children[i]!.type !== "parameter") continue;
+    last = children[i];
+    break;
+  }
+  if (!last) {
+    cached.results.set(def, false);
+    return false;
+  }
   const type = last.namedChildren.find((child) => child.type !== "identifier");
   const mod = index.byFile.get(fileIdentityKey(def.file));
-  return !type || !mod || acceptsLambdaType(index, mod, declared.parsed, type, 0);
+  const accepts = !type || !mod || (await acceptsLambdaType(index, mod, declared.parsed, type, 0));
+  cached.results.set(def, accepts);
+  return accepts;
 }

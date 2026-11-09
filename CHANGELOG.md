@@ -12,6 +12,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Changed
 
 - Cold C#, Java, and Kotlin builds reuse native worker extraction trees for namespace and package scans instead of parsing indexed files again on the main thread. Unindexed scan candidates use facts-only worker tasks.
+- Kotlin detailed-graph builds reuse extension scope and receiver proofs and record trailing-lambda call shapes during collection, avoiding repeated candidate scans without changing resolved edges.
 
 ### Fixed
 

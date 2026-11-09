@@ -53,7 +53,7 @@ import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { kotlinCallableAcceptsTrailingLambda, kotlinHasTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
+import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
   assertQuerySourceForIndex,
   ensureParsedContextForIndex,
@@ -830,12 +830,7 @@ export async function buildSymbolGraphDetailed(
   const trailingLambdaCalls = new Set<ReceiverCallCandidate>();
   const trailingLambdaNames = new Set<string>();
   for (const candidate of callableReceiverCalls) {
-    if (supportForIndexedFile(candidate.site.file)?.id !== "kotlin") continue;
-    const start = candidate.site.range.start.index;
-    if (start === undefined) continue;
-    const parsed = await loadParsedFile(candidate.site.file);
-    const use = parsed?.tree.rootNode.descendantForIndex(start, start);
-    if (!use || !kotlinHasTrailingLambda(use)) continue;
+    if (!candidate.kotlinTrailingLambda) continue;
     trailingLambdaCalls.add(candidate);
     trailingLambdaNames.add(candidate.memberName);
   }

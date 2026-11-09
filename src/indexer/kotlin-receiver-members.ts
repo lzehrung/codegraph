@@ -58,6 +58,111 @@ const UNPROVEN: ReceiverTypeMember = { status: "unproven" };
 
 const UNPROVEN_SHADOWING: ReceiverTypeMember = { status: "unproven", blocksFallback: true };
 
+type ExtensionApplicability = { applies: "yes" | "no" | "unknown"; target: SymbolDef | null };
+type ExtensionProofs = {
+  typed?: WeakMap<SymbolDef, ExtensionApplicability>;
+  unindexed?: WeakMap<SyntaxNodeLike, ExtensionApplicability>;
+  external?: Map<string, ExtensionApplicability>;
+};
+/** Top-level scope and access are stable for a module; nested extensions still use the call position. */
+type ExtensionCandidate = { def: SymbolDef; topLevelRank?: number | null; topLevelAccess?: MemberAccess };
+type ExtensionLookup = {
+  defs: readonly ExtensionCandidate[];
+  receiverAnswers?: WeakMap<object, Map<number, ReceiverTypeMember>>;
+  externalAnswers?: Map<string, Map<number, ReceiverTypeMember>>;
+};
+type ExtensionCandidates = {
+  byFile: ProjectIndex["byFile"];
+  size: number;
+  languageExtensions: ProjectIndex["languageExtensions"];
+  byModule: WeakMap<ModuleIndex, Map<string, ExtensionLookup>>;
+  nonExtensions: WeakSet<SymbolDef>;
+  proofs: WeakMap<SymbolDef, ExtensionProofs>;
+};
+
+/** Store only index-local definitions and proofs, never parsed tree nodes held by the bounded syntax cache. */
+const extensionCandidates = new WeakMap<ProjectIndex, ExtensionCandidates>();
+
+function cacheForExtensions(index: ProjectIndex): ExtensionCandidates {
+  const cache = extensionCandidates.get(index);
+  if (cache) {
+    const sameSnapshot =
+      cache.byFile === index.byFile &&
+      cache.size === index.byFile.size &&
+      cache.languageExtensions === index.languageExtensions;
+    if (sameSnapshot) return cache;
+  }
+  const created: ExtensionCandidates = {
+    byFile: index.byFile,
+    size: index.byFile.size,
+    languageExtensions: index.languageExtensions,
+    byModule: new WeakMap(),
+    nonExtensions: new WeakSet(),
+    proofs: new WeakMap(),
+  };
+  extensionCandidates.set(index, created);
+  return created;
+}
+
+function candidatesForExtension(site: AccessSite, name: string): ExtensionLookup {
+  const { index, mod } = site;
+  const cache = cacheForExtensions(index);
+  let names = cache.byModule.get(mod);
+  if (!names) {
+    names = new Map();
+    cache.byModule.set(mod, names);
+  }
+  const normalized = normalizeKotlinIdentifier(name);
+  let lookup = names.get(normalized);
+  if (!lookup) {
+    const spellings = new Set([normalized]);
+    for (const imp of mod.imports) {
+      if (imp.kind === "named" && normalizeKotlinIdentifier(imp.local) === normalized) {
+        spellings.add(normalizeKotlinIdentifier(imp.imported));
+      }
+    }
+    const eligible: ExtensionCandidate[] = [];
+    const useFile = fileIdentityKey(mod.file);
+    for (const spelling of spellings) {
+      for (const def of projectCallablesNamed(index, spelling)) {
+        if (def.kind !== SymbolKind.Function) continue;
+        if (useFile !== fileIdentityKey(def.file)) {
+          if (def.isMember || !topLevelDeclarationInScope(index, mod, def)) continue;
+        }
+        eligible.push({ def });
+      }
+    }
+    lookup = { defs: eligible };
+    names.set(normalized, lookup);
+  }
+  return lookup;
+}
+
+/** Return the call-shape answers for a proven receiver, without retaining unindexed receiver nodes. */
+function extensionAnswerMap(
+  lookup: ExtensionLookup,
+  site: AccessSite,
+  create = false,
+): Map<number, ReceiverTypeMember> | undefined {
+  const receiver = site.unindexedReceiver?.node ?? site.receiver;
+  if (receiver) {
+    let answers = lookup.receiverAnswers?.get(receiver);
+    if (!answers && create) {
+      answers = new Map();
+      (lookup.receiverAnswers ??= new WeakMap()).set(receiver, answers);
+    }
+    return answers;
+  }
+  const external = site.externalReceiver;
+  if (!external) return undefined;
+  let answers = lookup.externalAnswers?.get(external);
+  if (!answers && create) {
+    answers = new Map();
+    (lookup.externalAnswers ??= new Map()).set(external, answers);
+  }
+  return answers;
+}
+
 /** The visibility modifier a declaration spells; a declaration with none is public. */
 export function declaredVisibility(declaration: SyntaxNodeLike): Visibility {
   const modifiers = declaration.namedChildren.find((child) => child.type === "modifiers");
@@ -118,8 +223,13 @@ function privateAccess(site: AccessSite, member: SymbolDef, container: SyntaxNod
   return usesInside(site, container, member.file) ? "visible" : "hidden";
 }
 
-async function memberAccess(site: AccessSite, member: SymbolDef): Promise<MemberAccess> {
-  const declared = await declarationNodeOf(site.index, member);
+async function memberAccess(
+  site: AccessSite,
+  member: SymbolDef,
+  known?: { node: SyntaxNodeLike; parsed: ParsedFileContext },
+  inScope = false,
+): Promise<MemberAccess> {
+  const declared = known ?? (await declarationNodeOf(site.index, member));
   if (!declared) return "unproven";
   const { node } = declared;
   const topLevel = node.parent?.type === "source_file";
@@ -136,7 +246,7 @@ async function memberAccess(site: AccessSite, member: SymbolDef): Promise<Member
   // `internal` is visible within a module, and no module is modeled: only the same file is proven.
   if (visibility === "internal" && !usesFile(site, member.file)) return "unproven";
   if (extension && topLevel && !usesFile(site, member.file)) {
-    return topLevelDeclarationInScope(site.index, site.mod, member) ? "visible" : "hidden";
+    if (!inScope && !topLevelDeclarationInScope(site.index, site.mod, member)) return "hidden";
   }
   return "visible";
 }
@@ -223,13 +333,13 @@ export function sameUnindexedReceiver(receiver: ReceiverTypeEvidence, extension:
 }
 
 /** A fallback extension is a target only when the implicit receiver proves its declared receiver type. */
-export async function extensionReceiverApplies(
+async function computeExtensionReceiverApplicability(
   site: AccessSite,
   def: SymbolDef,
   declared: { node: SyntaxNodeLike; parsed: ParsedFileContext },
   typeNode: SyntaxNodeLike,
   resolveTypeName: JvmTypeNameResolver,
-): Promise<{ applies: "yes" | "no" | "unknown"; target: SymbolDef | null }> {
+): Promise<ExtensionApplicability> {
   const mod = site.index.byFile.get(fileIdentityKey(def.file));
   let type = typeNode.type === "nullable_type" ? typeNode.namedChildren[0] : typeNode;
   if (!mod || !type) return { applies: "no", target: null };
@@ -294,6 +404,45 @@ export async function extensionReceiverApplies(
   return { applies: "unknown", target };
 }
 
+/** Reuse receiver/type proofs across calls, without retaining parsed tree nodes after query-cache eviction. */
+export async function extensionReceiverApplies(
+  site: AccessSite,
+  def: SymbolDef,
+  declared: { node: SyntaxNodeLike; parsed: ParsedFileContext },
+  typeNode: SyntaxNodeLike,
+  resolveTypeName: JvmTypeNameResolver,
+): Promise<ExtensionApplicability> {
+  const cache = cacheForExtensions(site.index);
+  let proofs = cache.proofs.get(def);
+  if (!proofs) {
+    proofs = {};
+    cache.proofs.set(def, proofs);
+  }
+  if (site.unindexedReceiver) {
+    const receiver = site.unindexedReceiver.node;
+    const cached = proofs.unindexed?.get(receiver);
+    if (cached) return cached;
+    const result = await computeExtensionReceiverApplicability(site, def, declared, typeNode, resolveTypeName);
+    (proofs.unindexed ??= new WeakMap()).set(receiver, result);
+    return result;
+  }
+  if (site.receiver) {
+    const cached = proofs.typed?.get(site.receiver);
+    if (cached) return cached;
+    const result = await computeExtensionReceiverApplicability(site, def, declared, typeNode, resolveTypeName);
+    (proofs.typed ??= new WeakMap()).set(site.receiver, result);
+    return result;
+  }
+  if (site.externalReceiver) {
+    const cached = proofs.external?.get(site.externalReceiver);
+    if (cached) return cached;
+    const result = await computeExtensionReceiverApplicability(site, def, declared, typeNode, resolveTypeName);
+    (proofs.external ??= new Map()).set(site.externalReceiver, result);
+    return result;
+  }
+  return computeExtensionReceiverApplicability(site, def, declared, typeNode, resolveTypeName);
+}
+
 async function compareExtensionOwnerSpecificity(
   index: ProjectIndex,
   candidate: SymbolDef,
@@ -323,66 +472,83 @@ async function inScopeExtension(
   resolveTypeName: JvmTypeNameResolver,
   receiverNullable = false,
 ): Promise<ReceiverTypeMember> {
-  const names = new Set([normalizeKotlinIdentifier(name)]);
-  for (const imp of site.mod.imports) {
-    if (imp.kind === "named" && normalizeKotlinIdentifier(imp.local) === normalizeKotlinIdentifier(name)) {
-      names.add(normalizeKotlinIdentifier(imp.imported));
-    }
-  }
+  const lookup = candidatesForExtension(site, name);
+  const { defs } = lookup;
+  if (!defs.length) return OMITTED;
   let bestRank = Infinity;
   let selected: SymbolDef | null = null;
   let selectedType: SymbolDef | null = null;
   let uncertain = false;
   const trailingLambda = kotlinHasTrailingLambda(site.use);
-  for (const candidateName of names) {
-    for (const def of projectCallablesNamed(site.index, candidateName)) {
-      if (def.kind !== SymbolKind.Function) continue;
-      if (!usesFile(site, def.file)) {
-        if (def.isMember || !topLevelDeclarationInScope(site.index, site.mod, def)) continue;
-      }
-      if (!acceptsArgumentCount(def, argumentCount)) continue;
-      if (trailingLambda && !(await kotlinCallableAcceptsTrailingLambda(site.index, def))) continue;
-      const declared = await declarationNodeOf(site.index, def);
-      if (!declared) continue;
-      const typeNode = kotlinExtensionReceiverType(declared.node);
-      if (!typeNode) continue;
-      if (receiverNullable && typeNode.type !== "nullable_type") continue;
-      const rank = extensionScopeRank(site, def, declared.node, name);
-      if (rank === null || rank > bestRank) continue;
-      const access = await memberAccess(site, def);
-      if (access === "hidden") continue;
-      const { applies, target } = await extensionReceiverApplies(site, def, declared, typeNode, resolveTypeName);
-      if (applies === "no") continue;
-      if (rank < bestRank) {
-        bestRank = rank;
-        selected = null;
-        selectedType = null;
-        uncertain = false;
-      }
-      if (applies === "unknown" || access === "unproven") {
-        uncertain = true;
-        continue;
-      }
-      if (!selected) {
-        selected = def;
-        selectedType = target;
-        continue;
-      }
-      if (!selectedType || !target) {
-        uncertain = true;
-        continue;
-      }
-      const specificity = await compareExtensionOwnerSpecificity(site.index, target, selectedType);
-      if (specificity === "more-specific") {
-        selected = def;
-        selectedType = target;
-      } else if (specificity === "ambiguous") {
-        uncertain = true;
-      }
+  const callKey = (argumentCount ?? -1) * 4 + (trailingLambda ? 2 : 0) + (receiverNullable ? 1 : 0);
+  const cached = extensionAnswerMap(lookup, site)?.get(callKey);
+  if (cached) return cached;
+  let siteDependent = false;
+  const nonExtensions = extensionCandidates.get(site.index)!.nonExtensions;
+  for (const candidate of defs) {
+    const { def } = candidate;
+    if (!acceptsArgumentCount(def, argumentCount) || nonExtensions.has(def)) continue;
+    if (candidate.topLevelRank === null) continue;
+    if (candidate.topLevelRank !== undefined && candidate.topLevelRank > bestRank) continue;
+    const declared = await declarationNodeOf(site.index, def);
+    if (!declared) {
+      siteDependent = true;
+      continue;
+    }
+    const typeNode = kotlinExtensionReceiverType(declared.node);
+    if (!typeNode) {
+      nonExtensions.add(def);
+      continue;
+    }
+    if (declared.node.parent?.type !== "source_file" && usesFile(site, def.file)) siteDependent = true;
+    if (receiverNullable && typeNode.type !== "nullable_type") continue;
+    let rank: number | null | undefined = candidate.topLevelRank;
+    if (rank === undefined) {
+      rank = extensionScopeRank(site, def, declared.node, name);
+      if (declared.node.parent?.type === "source_file") candidate.topLevelRank = rank;
+    }
+    if (rank === null || rank > bestRank) continue;
+    if (trailingLambda && !(await kotlinCallableAcceptsTrailingLambda(site.index, def, declared))) continue;
+    let access = candidate.topLevelAccess;
+    if (!access) {
+      access = await memberAccess(site, def, declared, true);
+      if (declared.node.parent?.type === "source_file") candidate.topLevelAccess = access;
+    }
+    if (access === "hidden") continue;
+    const { applies, target } = await extensionReceiverApplies(site, def, declared, typeNode, resolveTypeName);
+    if (applies === "no") continue;
+    if (rank < bestRank) {
+      bestRank = rank;
+      selected = null;
+      selectedType = null;
+      uncertain = false;
+    }
+    if (applies === "unknown" || access === "unproven") {
+      uncertain = true;
+      continue;
+    }
+    if (!selected) {
+      selected = def;
+      selectedType = target;
+      continue;
+    }
+    if (!selectedType || !target) {
+      uncertain = true;
+      continue;
+    }
+    const specificity = await compareExtensionOwnerSpecificity(site.index, target, selectedType);
+    if (specificity === "more-specific") {
+      selected = def;
+      selectedType = target;
+    } else if (specificity === "ambiguous") {
+      uncertain = true;
     }
   }
-  if (uncertain) return UNPROVEN_SHADOWING;
-  return selected ? { status: "member", member: selected } : OMITTED;
+  let result: ReceiverTypeMember = OMITTED;
+  if (uncertain) result = UNPROVEN_SHADOWING;
+  else if (selected) result = { status: "member", member: selected };
+  if (!siteDependent) extensionAnswerMap(lookup, site, true)?.set(callKey, result);
+  return result;
 }
 
 /** Project extensions visible on a known external receiver whose own name list omits the requested name. */

@@ -214,7 +214,7 @@ export function selectMember<Owner, Member>(
     }
     const distinct = distinctCandidates(candidates, model, options.argumentCount);
     const byUse = preferByUse(distinct, model, options);
-    const unique = model.acceptsCall ? byUse.filter(model.acceptsCall) : byUse;
+    const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;

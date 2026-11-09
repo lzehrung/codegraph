@@ -1,4 +1,9 @@
-import { afterAll, beforeAll, describe, it } from "vitest";
+import fsp from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { kotlinCallableAcceptsTrailingLambda } from "../src/indexer/kotlin-call-compatibility.js";
+import { goToDefinition } from "../src/index.js";
+import { __setQuerySyntaxCacheLimitsForTests } from "../src/indexer/parsed-cache.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import {
   assertConsumerAgreement,
   buildConsumerAgreementFixture,
@@ -155,6 +160,18 @@ const NULLABLE = [
   "}",
   "",
 ].join("\n");
+const SCOPED = [
+  "package scoped",
+  "class Receiver",
+  "fun Receiver.choose(tag: String) {}",
+  'fun Receiver.outside() { choose("outside") }',
+  "class Host {",
+  "    fun Receiver.choose(tag: String) {}",
+  '    fun Receiver.inside() { choose("inside") }',
+  "}",
+  "",
+].join("\n");
+
 const FILES = {
   "model/Types.kt": TYPES,
   "library/Lib.kt": LIB,
@@ -163,6 +180,7 @@ const FILES = {
   "external/Extension.kt": EXTERNAL_EXTENSION,
   "external/Use.kt": EXTERNAL,
   "nullable/Use.kt": NULLABLE,
+  "scoped/Scoped.kt": SCOPED,
   ...KOTLIN_RECEIVER_REVIEW_SOURCES,
 };
 
@@ -220,6 +238,31 @@ afterAll(async () => {
 describe("Kotlin extension-body implicit receivers", () => {
   it("keeps accessor calls callable, receiver-compatible, and arity-compatible beside factory-named types", async () => {
     await expectKotlinReceiverReview(fixture.index, fixture.paths);
+  });
+
+  it("keeps same-file member extensions positioned when top-level answers are cached", async () => {
+    const declarations = [
+      { caller: "outside", target: "fun Receiver.choose", decoy: "    fun Receiver.choose" },
+      { caller: "inside", target: "    fun Receiver.choose", decoy: "fun Receiver.choose" },
+    ];
+    for (const declaration of declarations) {
+      const site = {
+        file: "scoped/Scoped.kt",
+        line: lineOf(SCOPED, `choose("${declaration.caller}")`),
+        token: "choose",
+      };
+      await assertConsumerAgreement(fixture, {
+        ...site,
+        expected: { file: site.file, line: lineOf(SCOPED, declaration.target) },
+        edges: [{ label: "calls", from: { file: site.file, name: declaration.caller } }],
+      });
+      await assertConsumerAgreement(fixture, {
+        ...site,
+        mustNotMatch: target(site.file, SCOPED, declaration.decoy, "choose"),
+        provablyNotAReference: true,
+        absentEdge: { label: "calls", from: { file: site.file, name: declaration.caller } },
+      });
+    }
   });
 
   const cases: Array<[string, string, Target, Target]> = [
@@ -359,5 +402,39 @@ describe("nullable extension receivers", () => {
       expected: { file: "nullable/Use.kt", line: lineOf(NULLABLE, "fun stamp") },
       edges: [{ label: "calls", from: { file: "nullable/Use.kt", name: "nullableFallback" } }],
     });
+  });
+});
+
+describe("Kotlin extension cache freshness", () => {
+  it("rejects a changed extension declaration after its parsed source is evicted", async () => {
+    const lib = "package scoped\nclass Receiver\nfun Receiver.choose(tag: String) {}\n";
+    const use = 'package scoped\nfun call(receiver: Receiver) { receiver.run { choose("one") } }\n';
+    const scoped = await buildConsumerAgreementFixture("cg-kotlin-extension-stale-", {
+      "Lib.kt": lib,
+      "Use.kt": use,
+    });
+    try {
+      const position = {
+        file: scoped.paths["Use.kt"]!,
+        line: 2,
+        column: use.split("\n")[1]!.indexOf("choose") + 1,
+      };
+      const libFile = scoped.paths["Lib.kt"]!;
+      const declaration = scoped.index.byFile
+        .get(fileIdentityKey(libFile))
+        ?.locals.find((def) => def.localName === "choose");
+      if (!declaration) throw new Error("Missing scoped extension declaration");
+      expect((await goToDefinition(scoped.index, position)).status).toBe("ok");
+      expect(await kotlinCallableAcceptsTrailingLambda(scoped.index, declaration)).toBe(false);
+      __setQuerySyntaxCacheLimitsForTests(scoped.index, { compactBytes: 0, liveBytes: 0 });
+      expect((await goToDefinition(scoped.index, position)).status).toBe("ok");
+      await fsp.writeFile(libFile, lib.replace("choose", "alter"), "utf8");
+      await expect(kotlinCallableAcceptsTrailingLambda(scoped.index, declaration)).rejects.toMatchObject({
+        name: "StaleQuerySourceError",
+      });
+      await expect(goToDefinition(scoped.index, position)).rejects.toMatchObject({ name: "StaleQuerySourceError" });
+    } finally {
+      await disposeConsumerAgreementFixture(scoped);
+    }
   });
 });

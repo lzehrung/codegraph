@@ -61,6 +61,8 @@ export type ReceiverCallCandidate = {
    * `null` means the call shape is unknown, so arity-based resolution is omitted.
    */
   argumentCount: number | null;
+  /** Known at the Kotlin call node while collecting edges; no need to reparse it during final selection. */
+  kotlinTrailingLambda?: boolean;
   site: NonNullable<SymbolGraph["edges"][number]["site"]>;
   /** Required static/instance scope; omitted candidates are classified from site. */
   memberScope?: ReceiverMemberScope;

@@ -43,6 +43,7 @@ import {
 } from "../../indexer/navigation-resolve.js";
 import { selectMember } from "../../indexer/member-selection.js";
 import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
+import { kotlinHasTrailingLambda } from "../../indexer/kotlin-call-compatibility.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
 import {
   isSwiftConstrainedExtension,
@@ -1422,6 +1423,9 @@ export async function emitFunctionBodyEdges(
           memberName,
           argumentCount,
           site,
+          ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(access.property)
+            ? { kotlinTrailingLambda: true }
+            : {}),
           memberScope: forcedMemberScope ?? binding.memberScope,
           ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
           ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
@@ -1483,6 +1487,9 @@ export async function emitFunctionBodyEdges(
         memberName,
         argumentCount,
         site,
+        ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(access.property)
+          ? { kotlinTrailingLambda: true }
+          : {}),
         memberScope: binding.memberScope,
         ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
         caseInsensitiveMemberName: phpCaseInsensitive,
@@ -1522,6 +1529,7 @@ export async function emitFunctionBodyEdges(
         memberName,
         argumentCount,
         site: { file: context.moduleEntry.file, range: toRange(callee) },
+        ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(callee) ? { kotlinTrailingLambda: true } : {}),
         // A static caller can only reach a static bare member; an instance caller
         // may bare-call either, matching C#'s unqualified invocation rules.
         memberScope: nodeInStaticMemberContext(fn.node, context.source) ? "static" : "any",
