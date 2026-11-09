@@ -208,6 +208,8 @@ const HIERARCHY_LABELS: Record<string, true> = {
 const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
   "binary_expression",
   "call_expression",
+  // A Kotlin function type (`(Event) -> Unit`) inherits a function interface; its parameter and return types are not supertypes.
+  "function_type",
   // A TypeScript namespace-qualified type (`ns.Contract`) names a member of that namespace; its bare name would bind elsewhere.
   "nested_type_identifier",
   "new_expression",
@@ -217,6 +219,62 @@ const UNPROVEN_HERITAGE_EXPRESSION_TYPES = new Set([
 
 export function isUnprovenHeritageExpression(node: SyntaxNodeLike): boolean {
   return UNPROVEN_HERITAGE_EXPRESSION_TYPES.has(node.type);
+}
+
+/**
+ * What a declaration node proves about the type it declares: an interface, a class, or neither (an object, a record, an
+ * enum, or a declaration whose keyword was not read). Kotlin shares `class_declaration` between classes and interfaces
+ * and tells them apart by the `interface` or `class` keyword token that precedes the name.
+ */
+export function declaredSupertypeKind(node: SyntaxNodeLike): "class" | "interface" | null {
+  if (node.type === "interface_declaration") return "interface";
+  if (node.type !== "class_declaration") return null;
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child) return null;
+    if (child.type === "class" || child.type === "interface") return child.type;
+  }
+}
+
+/**
+ * Whether a Kotlin class can name its base class bare, as in `class V : Base { constructor() : super(1) }`. A class with
+ * a primary constructor, or with no constructor of its own, must initialize its base class in the base list
+ * (`Base(args)`), so every bare entry of such a class is an interface. Only a class that declares secondary
+ * constructors and no primary constructor writes its base class bare.
+ */
+export function kotlinMayNameClassBare(declaration: SyntaxNodeLike): boolean {
+  if (declaration.type !== "class_declaration") return false;
+  if (declaration.namedChildren.some((child) => child.type === "primary_constructor")) return false;
+  const body = declaration.namedChildren.find((child) => child.type === "class_body");
+  return !!body?.namedChildren.some((member) => member.type === "secondary_constructor");
+}
+
+/**
+ * How a Kotlin base-list entry names its supertype. A constructor call (`Base(args)`) is a class by its syntax. A bare
+ * name (`Base`, or the type of `Face by delegate`) is an interface, or, in a class that may name its base class bare, a
+ * class: the declaration it resolves to decides which.
+ */
+export type KotlinSupertypeEntry = "invoked" | "bare";
+
+/** Kotlin base-list nodes whose direct `user_type` child is the whole supertype the entry names. */
+const KOTLIN_SUPERTYPE_ENTRY_TYPES: Record<string, true> = { delegation_specifier: true, explicit_delegation: true };
+
+/**
+ * The form of the base-list entry that `identifier` names, or `null` when the identifier is not a whole type name: a
+ * qualifier (`Outer` in `Outer.Inner`), a function type's parameter or return type, or a delegate expression (`d` in
+ * `Face by d`) proves no supertype.
+ */
+export function kotlinSupertypeEntry(identifier: SyntaxNodeLike): KotlinSupertypeEntry | null {
+  for (let current = identifier.parent; current && current.type !== "delegation_specifiers"; current = current.parent) {
+    if (current.type === "constructor_invocation") return "invoked";
+  }
+  const type = identifier.parent;
+  if (type?.type !== "user_type") return null;
+  const qualified = type.namedChildren.filter((child) => child.type === "identifier").length > 1;
+  if (qualified) return null;
+  const entry = type.parent;
+  if (!entry || !KOTLIN_SUPERTYPE_ENTRY_TYPES[entry.type]) return null;
+  return "bare";
 }
 
 /**

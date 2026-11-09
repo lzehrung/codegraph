@@ -15,6 +15,11 @@ import { columnOf as columnInLines, writeFixtureFiles } from "./callable-consume
 import { exportedNameOf } from "../helpers/narrow.js";
 import { KOTLIN_UNICODE_NAMES } from "../helpers/kotlin-unicode-fixture.js";
 import {
+  expectKotlinSecondaryConstructorHierarchyInProject,
+  expectKotlinSecondaryConstructorSuperCalls,
+  expectKotlinSecondaryConstructorSuperReferences,
+} from "../helpers/kotlin-secondary-constructor-fixture.js";
+import {
   KOTLIN_QUOTED_BOUNDARY_FILES,
   KOTLIN_QUOTED_BOUNDARY_SOURCES,
   KOTLIN_QUOTED_FILES,
@@ -2325,6 +2330,410 @@ describe("Kotlin interface inheritance", () => {
       expect(call.status).toBe("not_found");
       expect(graph.edges.filter((edge) => edge.label === "calls")).toEqual([]);
       expect(relationsOf(graph)).toEqual(["Child:extends:Parent"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Kotlin base classes named without a constructor call", () => {
+  const relationsOf = (graph: SymbolGraph): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`)
+      .sort();
+  const callsAt = (graph: SymbolGraph, file: string, line: number): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "calls" && edge.site?.file === file && edge.site.range.start.line === line)
+      .map((edge) => `${graph.nodes.get(edge.to)?.name}@${graph.nodes.get(edge.to)?.file}`);
+
+  it("records a class with only secondary constructors as extending its base, like a constructor-call subclass", async () => {
+    await expectKotlinSecondaryConstructorHierarchyInProject();
+  });
+
+  it("resolves super.run() in such a class through go-to-definition and the graph, beside a same-named decoy", async () => {
+    await expectKotlinSecondaryConstructorSuperCalls();
+  });
+
+  it("includes those super calls in references to the base member and excludes a same-named decoy base", async () => {
+    await expectKotlinSecondaryConstructorSuperReferences();
+  });
+
+  it("reads a project Java class and interface named bare in a Kotlin base list", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-java-bare-base-"));
+    try {
+      const lines = [
+        "package javamix",
+        "",
+        "class FromJava : Legacy {",
+        "    constructor() : super()",
+        "",
+        "    fun go(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+        "class FaceImpl : JavaFace {",
+        "    override fun face(): Int = 2",
+        "}",
+        "",
+        "class Both : Legacy, JavaFace {",
+        "    constructor() : super()",
+        "",
+        "    override fun face(): Int = 3",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "javamix/Legacy.java": [
+          "package javamix;",
+          "",
+          "public class Legacy {",
+          "    public Legacy() {}",
+          "",
+          "    public int run() {",
+          "        return 1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+        "javamix/JavaFace.java": [
+          "package javamix;",
+          "",
+          "public interface JavaFace {",
+          "    int face();",
+          "}",
+          "",
+        ].join("\n"),
+        "javamix/Mixed.kt": lines.join("\n"),
+        "decoy/Legacy.java": [
+          "package decoy;",
+          "",
+          "public class Legacy {",
+          "    public int run() {",
+          "        return -1;",
+          "    }",
+          "}",
+          "",
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // A Java class is a class symbol and a Java interface an interface symbol, so both read their kind from the index.
+      expect(relationsOf(graph)).toEqual([
+        "Both:extends:Legacy",
+        "Both:implements:JavaFace",
+        "FaceImpl:implements:JavaFace",
+        "FromJava:extends:Legacy",
+      ]);
+      for (const edge of graph.edges.filter((candidate) => candidate.label === "extends")) {
+        expect(graph.nodes.get(edge.to)?.file).toBe(files["javamix/Legacy.java"]);
+      }
+      const call = await goToDefinition(index, {
+        file: files["javamix/Mixed.kt"]!,
+        line: 7,
+        column: columnInLines(lines, 7, "run"),
+      });
+      expect(call.status).toBe("ok");
+      if (call.status !== "ok") return;
+      expect(call.definition.file).toBe(files["javamix/Legacy.java"]);
+      expect(call.definition.range.start.line).toBe(6);
+      expect(callsAt(graph, files["javamix/Mixed.kt"]!, 7)).toEqual([`run@${files["javamix/Legacy.java"]}`]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records no edge, and keeps super unresolved, where a bare entry does not prove its target", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-unproven-bare-base-"));
+    try {
+      const lines = [
+        "package forms",
+        "",
+        "import android.content.Context",
+        "import android.view.View",
+        "",
+        "open class Base(val x: Int) {",
+        "    open fun run(): Int = x",
+        "}",
+        "",
+        "class Plain : Base {",
+        "    constructor() : super(0)",
+        "",
+        "    fun go(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+        "typealias Alias = Base",
+        "",
+        "class ViaAlias : Alias {",
+        "    constructor() : super(5)",
+        "",
+        "    fun go(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+        "open class Event(val id: Int) {",
+        "    open fun tag(): Int = id",
+        "}",
+        "",
+        "class Handler : (Event) -> Unit {",
+        "    constructor()",
+        "",
+        "    override fun invoke(e: Event) {}",
+        "}",
+        "",
+        "class Outer {",
+        "    open class Inner(val a: Int) {",
+        "        open fun run(): Int = a",
+        "    }",
+        "",
+        "    interface Contract {",
+        "        fun hello(): Int = 1",
+        "    }",
+        "}",
+        "",
+        "class Qualified : Outer.Inner {",
+        "    constructor() : super(2)",
+        "}",
+        "",
+        "class QualifiedContract : Outer.Contract {",
+        "    constructor()",
+        "}",
+        "",
+        "open class Widget(val a: Int)",
+        "",
+        "fun Widget(): Widget = Widget(1)",
+        "",
+        "class Wrapped : Widget {",
+        "    constructor() : super(2)",
+        "}",
+        "",
+        "class MyView : View {",
+        "    constructor(ctx: Context) : super(ctx)",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Forms.kt": lines.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // In a class that declares only secondary constructors, only an unqualified class name proves a class. A
+      // typealias, a function type's parameter type, a qualifier, and a library class that the project does not declare
+      // each stay out of the hierarchy.
+      expect(relationsOf(graph)).toEqual(["Plain:extends:Base", "Wrapped:extends:Widget"]);
+      // The class that a same-named factory function shares its name with is the base, not the function.
+      const wrapped = graph.edges.find(
+        (edge) => edge.label === "extends" && graph.nodes.get(edge.from)?.name === "Wrapped",
+      );
+      expect(graph.nodes.get(wrapped?.to ?? "")?.kind).toBe("class");
+      const superCall = async (line: number) =>
+        await goToDefinition(index, { file: files["Forms.kt"]!, line, column: columnInLines(lines, line, "run") });
+      const plain = await superCall(14);
+      expect(plain.status).toBe("ok");
+      if (plain.status === "ok") expect(plain.definition.range.start.line).toBe(7);
+      expect(callsAt(graph, files["Forms.kt"]!, 14)).toEqual([`run@${files["Forms.kt"]}`]);
+      // A typealias is not followed: its `super.run()` reaches nothing in either consumer.
+      expect((await superCall(24)).status).toBe("not_found");
+      expect(callsAt(graph, files["Forms.kt"]!, 24)).toEqual([]);
+      const event = [...graph.nodes.values()].find((node) => node.name === "Event" && node.kind === "class");
+      expect(findImplementations(index, graph, event!.id).status).toBe("unsupported_target");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read the delegate expression of an explicit delegation as a base", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-delegation-base-"));
+    try {
+      const lines = [
+        "package deleg",
+        "",
+        "interface Face {",
+        "    fun hello(): Int = 1",
+        "}",
+        "",
+        "object DefaultFace : Face {",
+        "    override fun hello(): Int = 2",
+        "}",
+        "",
+        "class Delegating : Face by DefaultFace {",
+        "    fun go(): Int {",
+        "        return super.hello()",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Deleg.kt": lines.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // The delegate object is a value, so it is neither a supertype nor the class `super` addresses.
+      expect(relationsOf(graph)).toEqual(["DefaultFace:implements:Face", "Delegating:implements:Face"]);
+      const call = await goToDefinition(index, {
+        file: files["Deleg.kt"]!,
+        line: 13,
+        column: columnInLines(lines, 13, "hello"),
+      });
+      expect(call.status).toBe("not_found");
+      expect(callsAt(graph, files["Deleg.kt"]!, 13)).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records no edge for a function-type supertype and keeps its parameter and return types out of member lookup", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-function-type-base-"));
+    try {
+      const lines = [
+        "package fn",
+        "",
+        "open class Event(val id: Int) {",
+        "    open fun tag(): Int = id",
+        "}",
+        "",
+        "fun tag(): Int = 7",
+        "",
+        "open class Base(val x: Int) {",
+        "    open fun run(): Int = x",
+        "}",
+        "",
+        "class Handler : (Event) -> Unit {",
+        "    override fun invoke(e: Event) {}",
+        "",
+        "    fun go(): Int {",
+        "        return tag()",
+        "    }",
+        "}",
+        "",
+        "class Suspending : suspend () -> Event {",
+        "    override suspend fun invoke(): Event = Event(1)",
+        "}",
+        "",
+        "class Mixed : (Event) -> Unit, Base(2) {",
+        "    override fun invoke(e: Event) {}",
+        "",
+        "    fun go(): Int {",
+        "        return super.run()",
+        "    }",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Fn.kt": lines.join("\n") });
+      const file = files["Fn.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const graph = await buildSymbolGraphDetailed(index);
+      // A function type inherits a library function interface, so its parameter and return types are not supertypes:
+      // only the real class beside it is a base.
+      expect(relationsOf(graph)).toEqual(["Mixed:extends:Base"]);
+      const event = [...graph.nodes.values()].find((node) => node.name === "Event" && node.kind === "class");
+      expect(findImplementations(index, graph, event!.id).status).toBe("unsupported_target");
+      // `tag()` in Handler reaches the top-level function, never the `Event.tag` that a bound parameter type would add.
+      const topLevelTag = `${file}::tag::${lines.join("\n").indexOf("tag(): Int = 7")}`;
+      const call = await goToDefinition(index, { file, line: 17, column: columnInLines(lines, 17, "tag") });
+      expect(call.status).toBe("ok");
+      if (call.status === "ok") expect(call.definition.range.start.line).toBe(7);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && edge.site?.file === file && edge.site.range.start.line === 17)
+          .map((edge) => edge.to),
+      ).toEqual([topLevelTag]);
+      const referenceLines = async (line: number): Promise<number[]> => {
+        const refs = await findReferences(index, { file, line, column: columnInLines(lines, line, "tag") });
+        if (refs.status !== "ok") throw new Error(`Expected references at line ${line}`);
+        return refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b);
+      };
+      expect(await referenceLines(4)).toEqual([4]);
+      expect(await referenceLines(7)).toEqual([7, 17]);
+      // The class that shares a base list with a function type still answers `super`.
+      const superCall = await goToDefinition(index, { file, line: 29, column: columnInLines(lines, 29, "run") });
+      expect(superCall.status).toBe("ok");
+      if (superCall.status === "ok") expect(superCall.definition.range.start.line).toBe(10);
+      expect(callsAt(graph, file, 29)).toEqual([`run@${file}`]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps references partial when a qualified base leaves a super call unproven", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-qualified-super-"));
+    try {
+      const lines = [
+        "class Outer {",
+        "    open class Nested {",
+        "        open fun ping(): Int = 1",
+        "    }",
+        "",
+        "    class Local : Nested {",
+        "        constructor() : super()",
+        "",
+        "        fun local(): Int = super.ping()",
+        "    }",
+        "}",
+        "",
+        "open class Base(val arg: Any?, val block: () -> Any? = { null }) {",
+        "    open fun ping(): Int = 2",
+        "}",
+        "",
+        "class ArgumentCast : Base(null as Outer.Nested?, { val local: Outer.Nested? = null; local }) {",
+        "    fun call(): Int = super.ping()",
+        "    fun text(): String = super.toString()",
+        "}",
+        "",
+        "class Other {",
+        '    override fun toString(): String = "other"',
+        "}",
+        "",
+        "class Qualified : Outer.Nested {",
+        "    constructor() : super()",
+        "",
+        "    fun qualified(): Int = super.ping()",
+        "}",
+        "",
+        "class Invoked : Outer.Nested() {",
+        "    fun invoked(): Int = super.ping()",
+        "}",
+        "",
+      ];
+      const files = await writeFixtureFiles(root, { "Main.kt": lines.join("\n") });
+      const file = files["Main.kt"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const superCall = async (line: number) =>
+        await goToDefinition(index, { file, line, column: columnInLines(lines, line, "ping") });
+      // The bare nested base proves its class, so its super call resolves; a qualified base is not resolved here.
+      const local = await superCall(9);
+      expect(local.status).toBe("ok");
+      if (local.status === "ok") expect(local.definition.range.start.line).toBe(3);
+      const plainBase = await superCall(18);
+      expect(plainBase.status).toBe("ok");
+      if (plainBase.status === "ok") expect(plainBase.definition.range.start.line).toBe(14);
+      expect((await superCall(29)).status).toBe("not_found");
+      expect((await superCall(33)).status).toBe("not_found");
+      // A qualified type inside constructor value arguments or a lambda argument does not make a plain base unproven:
+      // `ArgumentCast` still proves `Base` omits `toString`, so `Other.toString` stays complete.
+      const otherRefs = await findReferences(index, {
+        file,
+        line: 23,
+        column: columnInLines(lines, 23, "toString"),
+      });
+      expect(otherRefs.status).toBe("ok");
+      if (otherRefs.status !== "ok") return;
+      expect(otherRefs.references.map((reference) => reference.range.start.line)).toEqual([23]);
+      expect(otherRefs.referenceCoverage?.state).toBe("complete");
+      // The two open calls may still reach `ping`, so the omission proof must not rule them out and coverage must not
+      // claim to be complete.
+      const baseRefs = await findReferences(index, { file, line: 14, column: columnInLines(lines, 14, "ping") });
+      expect(baseRefs.status).toBe("ok");
+      if (baseRefs.status !== "ok") return;
+      expect(baseRefs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+        14, 18,
+      ]);
+      expect(baseRefs.referenceCoverage?.state).toBe("partial");
+      const refs = await findReferences(index, { file, line: 3, column: columnInLines(lines, 3, "ping") });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([3, 9]);
+      expect(refs.referenceCoverage?.state).toBe("partial");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

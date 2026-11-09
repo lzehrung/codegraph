@@ -77,9 +77,12 @@ import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
+  declaredSupertypeKind,
   declaresMembers,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
+  kotlinMayNameClassBare,
+  kotlinSupertypeEntry,
   memberContainerDef,
   nearestMemberContainer,
   nodeInStaticMemberContext,
@@ -1876,7 +1879,7 @@ async function recordIdentifierRelations(
     target: SymbolDef,
     index: number,
     identifier: SyntaxNodeLike,
-  ) => "extends" | "implements" | "trait" | "mixin",
+  ) => ReceiverAncestryRelation | null | Promise<ReceiverAncestryRelation | null>,
   extensionNominal?: SymbolDef | null,
 ): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
@@ -1917,7 +1920,9 @@ async function recordIdentifierRelations(
     const targetId = defNodeId(target);
     if (seen.has(targetId)) continue;
     seen.add(targetId);
-    const clauseRelation = relationForTarget(target, index, identifier);
+    const clauseRelation = await relationForTarget(target, index, identifier);
+    // A relation the declaration does not prove records no edge.
+    if (!clauseRelation) continue;
     const relation = swiftBase ? swiftBaseRelation(container, swiftBase, clauseRelation) : clauseRelation;
     if (extensionNominal !== undefined) {
       // An extension is not a second implementing type. Conditional or
@@ -1945,17 +1950,15 @@ function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: Synt
 type InheritanceRelation = ReceiverAncestryRelation;
 
 /**
- * Whether a declaration is an interface. Kotlin shares `class_declaration` between classes and interfaces and tells
- * them apart by the `interface` or `class` keyword token that precedes the name.
+ * The syntax node that declares `def`, read from the current file's tree or, for a definition in another file, from
+ * that file's loaded tree. A definition whose file or declaration cannot be read has none.
  */
-function isInterfaceDeclaration(node: SyntaxNodeLike): boolean {
-  if (node.type === "interface_declaration") return true;
-  if (node.type !== "class_declaration") return false;
-  for (let index = 0; ; index += 1) {
-    const child = node.child(index);
-    if (!child || child.type === "class") return false;
-    if (child.type === "interface") return true;
-  }
+async function declarationNodeOf(context: EdgePassContext, def: SymbolDef): Promise<SyntaxNodeLike | null> {
+  const inCurrentFile = fileIdentityKey(def.file) === fileIdentityKey(context.moduleEntry.file);
+  const tree = inCurrentFile ? context.tree : (await context.loadParsedFile(def.file))?.tree;
+  const start = def.range.start.index;
+  if (!tree || start === undefined) return null;
+  return nearestMemberContainer(tree.rootNode.descendantForIndex(start, def.range.end.index ?? start));
 }
 
 /**
@@ -1982,29 +1985,52 @@ function ownClauseNodes(declaration: SyntaxNodeLike, rule: ReceiverAncestorClaus
   return rule.each ? clauses : clauses.slice(0, 1);
 }
 
+/** The type whose base list is read: its declaration node, and whether that declaration is an interface. */
+type DeclaringType = { node: SyntaxNodeLike; isInterface: boolean };
+
 /**
- * `extends` or `implements` for one entry of a base list that mixes classes and interfaces. An interface only
- * refines other interfaces, so every entry of its list extends. A class-like type extends at most one class and
- * implements the rest: Kotlin marks the class with a constructor call, and C# lists it first.
+ * `extends` or `implements` for one Kotlin base-list entry, or `null` when the entry proves neither. A constructor call
+ * (`Base(args)`) is a class by its syntax. Kotlin requires every other class to initialize its base class that way, so
+ * a bare entry is an interface, except in a class that declares only secondary constructors: there the bare entry is a
+ * class when the declaration it resolves to is one, and an entry whose kind is not proven records no edge.
+ * Go-to-definition reads the same declaration to pick the class that `super` addresses.
  */
-function baseClauseRelation(
+async function kotlinBaseRelation(
+  context: EdgePassContext,
+  declaring: DeclaringType,
+  target: SymbolDef,
+  identifier: SyntaxNodeLike,
+): Promise<InheritanceRelation | null> {
+  const entry = kotlinSupertypeEntry(identifier);
+  if (entry === "invoked") return "extends";
+  if (!kotlinMayNameClassBare(declaring.node)) return "implements";
+  if (!entry) return null;
+  // A Java interface is an interface symbol; Kotlin interfaces and classes are both class symbols.
+  if (target.kind === SymbolKind.Interface) return "implements";
+  if (target.kind !== SymbolKind.Class) return null;
+  const declaration = await declarationNodeOf(context, target);
+  const declared = declaration ? declaredSupertypeKind(declaration) : null;
+  if (declared === "interface") return "implements";
+  return declared === "class" ? "extends" : null;
+}
+
+/**
+ * `extends` or `implements` for one entry of a base list that mixes classes and interfaces, or `null` when the entry
+ * proves neither. An interface only refines other interfaces, so every entry of its list extends. A class-like type
+ * extends at most one class and implements the rest: C# lists the class first, and Kotlin names it by a constructor
+ * call or, with only secondary constructors, by a bare name.
+ */
+async function baseClauseRelation(
+  context: EdgePassContext,
   label: ReceiverAncestorClause["relation"],
+  declaring: DeclaringType,
   target: SymbolDef,
   index: number,
-  declaresInterface: boolean,
   identifier: SyntaxNodeLike,
-  kotlin: boolean,
-): InheritanceRelation {
+): Promise<InheritanceRelation | null> {
   if (label !== "superclass-first") return label;
-  if (declaresInterface) return "extends";
-  if (kotlin) {
-    let current = identifier.parent;
-    while (current && current.type !== "delegation_specifiers") {
-      if (current.type === "constructor_invocation") return "extends";
-      current = current.parent;
-    }
-    return "implements";
-  }
+  if (declaring.isInterface) return "extends";
+  if (context.sup.id === "kotlin") return await kotlinBaseRelation(context, declaring, target, identifier);
   if (target.kind === SymbolKind.Interface || index > 0) return "implements";
   return "extends";
 }
@@ -2038,13 +2064,12 @@ export async function emitClassInheritanceEdges(
 ): Promise<void> {
   const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
-  const kotlin = context.sup.id === "kotlin";
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
-    const declaresInterface = isInterfaceDeclaration(cls.node);
-    if (declaresInterface) markInterfaceNode(context, fromId);
+    const declaring: DeclaringType = { node: cls.node, isInterface: declaredSupertypeKind(cls.node) === "interface" };
+    if (declaring.isInterface) markInterfaceNode(context, fromId);
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
       extensionNominal = null;
@@ -2075,7 +2100,7 @@ export async function emitClassInheritanceEdges(
           fromId,
           specifiers,
           (target, index, identifier) =>
-            baseClauseRelation(rule.relation, target, index, declaresInterface, identifier, kotlin),
+            baseClauseRelation(context, rule.relation, declaring, target, index, identifier),
           extensionNominal,
         );
       }

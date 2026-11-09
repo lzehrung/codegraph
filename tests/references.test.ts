@@ -50,6 +50,7 @@ import {
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
+import { expectKotlinSecondaryConstructorSuperReferences } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import {
   JVM_QUALIFIED_REVIEW_CASES,
@@ -9313,4 +9314,10 @@ describe("references to members inherited through a child interface", () => {
       await expectInterfaceMemberReferences(fixture);
     },
   );
+});
+
+describe("references to a Kotlin base member called through a class with only secondary constructors", () => {
+  it("includes every super call, complete, and excludes a same-named decoy base", async () => {
+    await expectKotlinSecondaryConstructorSuperReferences();
+  });
 });

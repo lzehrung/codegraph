@@ -125,8 +125,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 132 records dirty source paths against each manifest's commit or the empty tree before the first commit.
  * Older manifests rebuild before using the clean-state shortcut; missing or invalid metadata uses blob reconciliation.
  * Epoch 133 scopes C++ template parameters to their declaration and rebuilds navigation, references, and edges.
+ * Epoch 134 rebuilds Kotlin detailed graphs that recorded the base class of a class with only secondary constructors as
+ * `implements`, or the parameter and return types of a function-type supertype as supertypes: a bare entry that
+ * resolves to a class is `extends`, and one whose kind is not proven, or a function type, records no edge.
  */
-export const CORE_ALGORITHM_EPOCH = 133;
+export const CORE_ALGORITHM_EPOCH = 134;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

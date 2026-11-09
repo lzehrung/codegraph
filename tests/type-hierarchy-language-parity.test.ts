@@ -7,6 +7,7 @@ import { findImplementations, findTypeHierarchy } from "../src/indexer/type-hier
 import * as nativeRuntime from "../src/native/tree-sitter-native.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
+import { expectKotlinSecondaryConstructorHierarchyInProject } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
@@ -38,6 +39,7 @@ const PROVEN_RELATIONS: ProvenRelation[] = [
   { from: "PyWorker", to: "PyBase", relation: "extends" },
   { from: "KotlinWorker", to: "KotlinService", relation: "implements" },
   { from: "KotlinSpecialized", to: "KotlinWorker", relation: "extends" },
+  { from: "KotlinSecondary", to: "KotlinWorker", relation: "extends" },
   { from: "PhpWorker", to: "PhpBase", relation: "extends" },
   { from: "PhpWorker", to: "PhpService", relation: "implements" },
   { from: "PhpWorker", to: "PhpGreets", relation: "trait" },
@@ -235,6 +237,16 @@ nativeDescribe("type hierarchy language parity", () => {
         "  override fun run() {}",
         "}",
         "class KotlinSpecialized : KotlinWorker()",
+        "class KotlinSecondary : KotlinWorker {",
+        "  constructor() : super()",
+        "}",
+        // A function type inherits a library function interface, so its parameter and return types are not supertypes.
+        "class KotlinHandler : (KotlinWorker) -> Unit {",
+        "  override fun invoke(worker: KotlinWorker) {}",
+        "}",
+        "class KotlinSuspending : suspend () -> KotlinWorker {",
+        "  override suspend fun invoke(): KotlinWorker = KotlinWorker()",
+        "}",
       ].join("\n"),
       "Types.php": [
         "<?php",
@@ -398,6 +410,20 @@ nativeDescribe("type hierarchy language parity", () => {
         "class KotlinArgPayload",
         "open class KotlinArgBase(value: KotlinArgPayload)",
         "class KotlinArgDerived : KotlinArgBase(KotlinArgPayload())",
+        "open class KotlinSecondaryBase(val value: Int)",
+        "class KotlinSecondaryDerived : KotlinSecondaryBase {",
+        "  constructor() : super(1)",
+        "}",
+        "class KotlinQualifierHost {",
+        "  open class KotlinQualifiedBase(val value: Int)",
+        "  interface KotlinQualifiedContract",
+        "}",
+        "class KotlinQualifiedDerived : KotlinQualifierHost.KotlinQualifiedBase {",
+        "  constructor() : super(1)",
+        "}",
+        "class KotlinQualifiedImpl : KotlinQualifierHost.KotlinQualifiedContract {",
+        "  constructor()",
+        "}",
       ].join("\n"),
       "types2.rb": [
         "module RubyQualifierHost",
@@ -432,12 +458,20 @@ nativeDescribe("type hierarchy language parity", () => {
       { from: "PyGenericDerived", to: "PyGenericBase", relation: "extends" },
       { from: "KotlinGenericWorker", to: "KotlinGenericService", relation: "implements" },
       { from: "KotlinArgDerived", to: "KotlinArgBase", relation: "extends" },
+      { from: "KotlinSecondaryDerived", to: "KotlinSecondaryBase", relation: "extends" },
       { from: "RubyQualifiedDerived", to: "RubyQualifiedBase", relation: "extends" },
     ];
     expect(actualRelations).toEqual(
       new Set(expectedRelations.map((expected) => `${expected.from}:${expected.relation}:${expected.to}`)),
     );
     expect(actualRelations).not.toContain("CppQualifiedDerived:extends:CppQualifierHost");
+    expect(actualRelations).not.toContain("KotlinQualifiedDerived:extends:KotlinQualifierHost");
+    expect(actualRelations).not.toContain("KotlinQualifiedImpl:extends:KotlinQualifierHost");
+    expect(actualRelations).not.toContain("KotlinQualifiedImpl:implements:KotlinQualifierHost");
+  });
+
+  it("records Kotlin classes with only secondary constructors as extending their base", async () => {
+    await expectKotlinSecondaryConstructorHierarchyInProject();
   });
 
   it("extracts JavaScript extends, Go struct embedding, and Go interface embedding as interface inheritance", async () => {

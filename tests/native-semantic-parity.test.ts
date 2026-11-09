@@ -23,6 +23,10 @@ import { findImplementations } from "../src/indexer/type-hierarchy.js";
 import { KOTLIN_UNICODE_FILES, KOTLIN_UNICODE_LINES, KOTLIN_UNICODE_NAMES } from "./helpers/kotlin-unicode-fixture.js";
 import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
 import {
+  KOTLIN_SECONDARY_CONSTRUCTOR_FILES,
+  expectKotlinSecondaryConstructorHierarchy,
+} from "./helpers/kotlin-secondary-constructor-fixture.js";
+import {
   KOTLIN_QUOTED_BOUNDARY_FILES,
   KOTLIN_QUOTED_BOUNDARY_LINES,
   KOTLIN_QUOTED_FILES,
@@ -3644,6 +3648,24 @@ nativeDescribe("native semantic coverage", () => {
       }
     },
   );
+
+  it("keeps Kotlin secondary-constructor base classes identical across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-secondary-constructor-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-kotlin-secondary-constructor-cache-"));
+    tempDirs.push(root, cacheDir);
+    await writeFixtureFiles(root, KOTLIN_SECONDARY_CONSTRUCTOR_FILES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    clearMemoryCache();
+    const warm = await buildProjectIndex(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      expectKotlinSecondaryConstructorHierarchy(root, index, await buildSymbolGraphDetailed(index), phase);
+    }
+  });
 
   it("keeps quoted Swift names and source ranges stable across a native disk-cache reload", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-swift-quoted-"));
