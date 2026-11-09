@@ -271,6 +271,7 @@ export function findClosestScopeBinding(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
   jvmTypeOnly = false,
+  skipFunctionScope = false,
 ): Binding | null {
   if (support.id === "csharp" && bindingName.includes(".")) {
     const names = bindingName.split(".");
@@ -289,6 +290,7 @@ export function findClosestScopeBinding(
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
   let currentScope = closestContainingScope(scopeIndex, currentNode);
+  if (skipFunctionScope && currentScope?.kind === "function") currentScope = currentScope.parent;
 
   const methodCall = isExplicitMethodCall(row, currentNode);
   const typeOnly = jvmTypeOnly || typeOnlyName(support.id, currentNode);
@@ -338,12 +340,14 @@ export function laterLocalShadowsUse(
   bindingName: string,
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
+  skipFunctionScope = false,
 ): boolean {
   if (typeOnlyName(support.id, currentNode)) return false;
   const row = scopeNodesFor(support.id);
   if (!row.laterLocalBlocksOuterKinds && !row.moduleBindingsAtFunctionRuntime) return false;
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   let scope = closestContainingScope(scopeIndex, currentNode);
+  if (skipFunctionScope && scope?.kind === "function") scope = scope.parent;
   while (scope) {
     if (!scopeAllowsUse(row, scope, currentNode)) {
       scope = scope.parent;

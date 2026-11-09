@@ -5835,6 +5835,9 @@ describe("Find References: Python receiver member resolution", () => {
     "    other = Other()",
     "    return other.run()",
     "",
+    "def via_typed_parameter(svc: Service):",
+    "    return svc.run()",
+    "",
   ].join("\n");
   const lines = source.split("\n");
 
@@ -5859,6 +5862,7 @@ describe("Find References: Python receiver member resolution", () => {
         expectReferenceAt(methodRefs, file, 5);
         expectReferenceAt(methodRefs, file, 9);
         expectReferenceAt(methodRefs, file, 30);
+        expectReferenceAt(methodRefs, file, 79);
         expect(methodRefs.references.some((reference) => reference.range.start.line === 23)).toBe(false);
         expect(methodRefs.references.some((reference) => reference.range.start.line === 34)).toBe(false);
         expect(methodRefs.references.some((reference) => reference.range.start.line === 37)).toBe(false);

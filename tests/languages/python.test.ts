@@ -1376,6 +1376,9 @@ describe("Python receiver member navigation", () => {
       "    other = Other()",
       "    return other.run()",
       "",
+      "def via_typed_parameter(svc: Service):",
+      "    return svc.run()",
+      "",
     ].join("\n");
     await fsp.writeFile(file, source, "utf8");
     try {
@@ -1410,6 +1413,9 @@ describe("Python receiver member navigation", () => {
       const annotated = await goToDefinition(index, { file, line: 36, column: columnOf(36, "run") });
       expect(annotated.status).toBe("ok");
       if (annotated.status === "ok") expect(annotated.definition.range.start.line).toBe(9);
+      const typedParam = await goToDefinition(index, { file, line: 50, column: columnOf(50, "run") });
+      expect(typedParam.status).toBe("ok");
+      if (typedParam.status === "ok") expect(typedParam.definition.range.start.line).toBe(9);
 
       const factory = await goToDefinition(index, { file, line: 40, column: columnOf(40, "run") });
       expect(factory.status).toBe("not_found");
@@ -1425,7 +1431,7 @@ describe("Python receiver member navigation", () => {
       expect(methodRefs.status).toBe("ok");
       if (methodRefs.status === "ok") {
         const linesHit = methodRefs.references.map((reference) => reference.range.start.line);
-        expect(linesHit).toEqual(expect.arrayContaining([9, 13, 32, 36]));
+        expect(linesHit).toEqual(expect.arrayContaining([9, 13, 32, 36, 50]));
         expect(linesHit).not.toContain(25);
         expect(linesHit).not.toContain(40);
         expect(linesHit).not.toContain(43);

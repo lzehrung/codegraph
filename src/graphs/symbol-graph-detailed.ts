@@ -448,6 +448,8 @@ export async function buildSymbolGraphDetailed(
         moduleEntry.locals,
       );
 
+      const hasPythonDottedImports = sup.id === "python" && moduleEntry.imports.some(isPythonDottedImportBinding);
+
       const memberResolver = createMemberChainResolver({
         sup,
         source: src,
@@ -484,7 +486,7 @@ export async function buildSymbolGraphDetailed(
           }
           return aliasToTargetModule.get(aliasKey(alias));
         },
-        ...(sup.id === "python"
+        ...(hasPythonDottedImports
           ? {
               // A dotted spelling is usable only through the positioned package binding.
               resolveNamespacePhrase: (alias: string, names: readonly string[], useNode: SyntaxNodeLike) => {

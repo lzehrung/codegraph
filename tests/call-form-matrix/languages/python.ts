@@ -133,6 +133,28 @@ export const pythonCells: MatrixCell[] = [
     edge: { label: "calls", fromFile: "use.py", fromName: "call_with_local" },
   },
   {
+    id: "python/typed-parameter-same-file",
+    language: "python",
+    callForm: "typed-local-receiver",
+    files: {
+      "box.py": [
+        "class Box:",
+        "    def run(self):",
+        "        return 1",
+        "",
+        "def call_with_parameter(box: Box):",
+        "    return box.run()",
+        "",
+      ].join("\n"),
+      "decoy.py": ["class Other:", "    def run(self):", "        return -1", ""].join("\n"),
+    },
+    use: { file: "box.py", line: 6, token: "run" },
+    expected: { file: "box.py", line: 2, token: "run" },
+    decoy: { file: "decoy.py", line: 2, token: "run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "box.py", fromName: "call_with_parameter" },
+  },
+  {
     id: "python/static-receiver",
     language: "python",
     callForm: "static-receiver",

@@ -41,6 +41,7 @@ import { typescriptCallableContainerKey, typescriptMergedNamespaceContainers } f
 import {
   effectiveExplicitBinding,
   isExpandedStarBinding,
+  resolveStarImportedDefinition,
   resolveStarImportedName,
   resolveStarImportedNamespace,
   starImportPrecedence,
@@ -96,6 +97,7 @@ import {
   csharpLookupName,
   csharpQualifiedThroughGenericOwner,
   csharpQualifiedNameNode,
+  definitionForBinding,
   findClosestScopeBinding,
   getOrBuildScopeIndex,
   laterLocalShadowsUse,
@@ -109,7 +111,7 @@ import {
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
-import { fileBindingIsUnshadowed, type ScopeIndex } from "./scope.js";
+import { fileBindingIsUnshadowed, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
@@ -1177,6 +1179,75 @@ function resolveJvmPackageExpression(
   return target ? { kind: "resolved", def: target } : null;
 }
 
+/** The current scope builder also records the type in `x: T` as a parameter named `T`. */
+function isPythonAnnotationParameter(binding: Binding | null, node: SyntaxNodeLike): boolean {
+  if (binding?.kind !== "param" || binding.def?.start.index !== node.startIndex) return false;
+  const type = node.parent;
+  return type?.type === "type" && type.parent?.type === "typed_parameter";
+}
+
+type PythonImportLookup = {
+  imports: readonly ImportBinding[];
+  length: number;
+  byName: Map<string, ImportBinding[]>;
+  stars: Array<Extract<ImportBinding, { kind: "star" }>>;
+  hasDottedImports: boolean;
+  atUse: WeakMap<SyntaxNodeLike, { binding: ImportBinding | null | undefined }>;
+};
+
+// A scope index and its source tree belong to one parsed module. Retain positioned answers only
+// while that scope is alive, and discard them if its module's import list changes.
+const pythonImportLookups = new WeakMap<ScopeIndex, PythonImportLookup>();
+
+function pythonImportLookup(mod: ModuleIndex, scopeIndex: ScopeIndex): PythonImportLookup {
+  const cached = pythonImportLookups.get(scopeIndex);
+  if (cached && cached.imports === mod.imports && cached.length === mod.imports.length) return cached;
+  const byName = new Map<string, ImportBinding[]>();
+  const stars: Array<Extract<ImportBinding, { kind: "star" }>> = [];
+  let hasDottedImports = false;
+  for (const imp of mod.imports) {
+    if (imp.kind === "star") {
+      stars.push(imp);
+      continue;
+    }
+    if (!hasDottedImports && isPythonDottedImportBinding(imp)) hasDottedImports = true;
+    const name = imp.kind === "namespace" ? imp.localNS : imp.local;
+    const entries = byName.get(name);
+    if (entries) entries.push(imp);
+    else byName.set(name, [imp]);
+  }
+  const lookup: PythonImportLookup = {
+    imports: mod.imports,
+    length: mod.imports.length,
+    byName,
+    stars,
+    hasDottedImports,
+    atUse: new WeakMap(),
+  };
+  pythonImportLookups.set(scopeIndex, lookup);
+  return lookup;
+}
+
+/** A positioned result is specific to the identifier node, not just its function or spelling. */
+function rememberPythonImportAtUse(
+  lookup: PythonImportLookup,
+  root: SyntaxNodeLike,
+  binding: ImportBinding | null | undefined,
+): ImportBinding | null | undefined {
+  lookup.atUse.set(root, { binding });
+  return binding;
+}
+
+/** Module names in a nested function body are read after module initialization. */
+function pythonUsesModuleRuntimeBindings(node: SyntaxNodeLike): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type !== "function_definition") continue;
+    const body = current.childForFieldName("body");
+    if (body && body.startIndex <= node.startIndex && body.endIndex >= node.endIndex) return true;
+  }
+  return false;
+}
+
 /** The Python import binding selected at a receiver use, after lexical shadowing and source-order lookup. */
 export function pythonImportAtUse(
   mod: ModuleIndex,
@@ -1187,25 +1258,24 @@ export function pythonImportAtUse(
   scopeIndex: ScopeIndex,
 ): ImportBinding | null | undefined {
   const name = sliceText(root, source);
-  const closest = findClosestScopeBinding(scopeIndex, name, root, sup);
-  if (closest && !closest.import) return undefined;
-  if (laterLocalShadowsUse(scopeIndex, name, root, sup)) return null;
-  let insideFunction = false;
-  for (let current = root.parent; current; current = current.parent) {
-    if (current.type !== "function_definition") continue;
-    const body = current.childForFieldName("body");
-    if (body && body.startIndex <= root.startIndex && body.endIndex >= root.endIndex) {
-      insideFunction = true;
-      break;
-    }
+  const lookup = pythonImportLookup(mod, scopeIndex);
+  const imports = lookup.byName.get(name);
+  if (!imports?.length) return undefined;
+  const cached = lookup.atUse.get(root);
+  if (cached) return cached.binding;
+  let closest = findClosestScopeBinding(scopeIndex, name, root, sup);
+  const annotationParameter = isPythonAnnotationParameter(closest, root);
+  if (annotationParameter) closest = findClosestScopeBinding(scopeIndex, name, root, sup, false, true);
+  if (closest && !closest.import) return rememberPythonImportAtUse(lookup, root, undefined);
+  if (laterLocalShadowsUse(scopeIndex, name, root, sup, annotationParameter)) {
+    return rememberPythonImportAtUse(lookup, root, null);
   }
+  const insideFunction = pythonUsesModuleRuntimeBindings(root);
   let winner: ImportBinding | undefined;
   let best: { span: number; start: number } | undefined;
   let laterLocalSpan: number | undefined;
-  for (const imp of mod.imports) {
-    if (imp.kind === "star") continue;
-    const local = imp.kind === "namespace" ? imp.localNS : imp.local;
-    if (local !== name || isExpandedStarBinding(imp, mod.imports)) continue;
+  for (const imp of imports) {
+    if (isExpandedStarBinding(imp, mod.imports)) continue;
     const laterSpan = pythonLaterImportScopeSpan(imp, root, tree);
     if (laterSpan !== undefined && (laterLocalSpan === undefined || laterSpan < laterLocalSpan)) {
       laterLocalSpan = laterSpan;
@@ -1217,7 +1287,75 @@ export function pythonImportAtUse(
       winner = imp;
     }
   }
-  if (laterLocalSpan !== undefined && (!best || best.span > laterLocalSpan)) return null;
+  if (laterLocalSpan !== undefined && (!best || best.span > laterLocalSpan)) {
+    return rememberPythonImportAtUse(lookup, root, null);
+  }
+  return rememberPythonImportAtUse(lookup, root, winner);
+}
+
+/**
+ * Resolve a plain typed parameter's annotation outside its synthetic parameter binding.
+ * Undefined means this is not that annotation; null means it has no proven declaration.
+ */
+export function pythonAnnotationTypeAtUse(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  source: string,
+  tree: SyntaxTreeLike,
+  sup: LanguageSupport,
+  scopeIndex: ScopeIndex,
+): SymbolDef | null | undefined {
+  if (node.parent?.type !== "type" || node.parent.parent?.type !== "typed_parameter") return undefined;
+  const name = sliceText(node, source);
+  const closest = findClosestScopeBinding(scopeIndex, name, node, sup);
+  if (!isPythonAnnotationParameter(closest, node)) return undefined;
+  if (bindsTypeParameter(name, node, source, sup)) return null;
+  const outer = findClosestScopeBinding(scopeIndex, name, node, sup, false, true);
+  const stars = pythonImportLookup(mod, scopeIndex).stars;
+  let winner: SymbolDef | null = null;
+  let winnerStart = -1;
+  if (outer && !outer.import) {
+    const definition = definitionForBinding(outer, mod.file, node, sup, source, tree);
+    if (!stars.length) return definition;
+    let moduleBinding = scopeIndex.allScopes[0]?.map.get(outer.canonicalName);
+    while (moduleBinding && moduleBinding !== outer) moduleBinding = moduleBinding.earlierSameScope;
+    // A class, parameter, or other local in an enclosing scope beats module-level stars.
+    if (!moduleBinding) return definition;
+    winner = definition;
+    winnerStart = outer.def?.start.index ?? -1;
+  }
+  const positioned = pythonImportAtUse(mod, node, source, tree, sup, scopeIndex);
+  if (positioned === null) return null;
+  const insideFunction = pythonUsesModuleRuntimeBindings(node);
+  if (positioned) {
+    const position = pythonImportPosition(positioned, node, tree, insideFunction, true);
+    const imported =
+      positioned.kind === "named" || positioned.kind === "default"
+        ? resolveImported(index, positioned, positioned.kind === "named" ? positioned.imported : "default")
+        : null;
+    const definition = imported && !("namespace" in imported) ? (asMemberContainer(index, imported) ?? imported) : null;
+    if (position && position.span !== Number.POSITIVE_INFINITY) return definition;
+    if (position && position.start > winnerStart) {
+      winner = definition;
+      winnerStart = position.start;
+    }
+  }
+  for (const star of stars) {
+    const start = star.pythonStatementStartIndex;
+    if (start === undefined) return null;
+    if (!insideFunction && start >= node.startIndex) continue;
+    if (start <= winnerStart) continue;
+    if (!star.moduleLevel) return null;
+    const target = typeof star.resolved === "string" ? index.byFile.get(fileIdentityKey(star.resolved)) : undefined;
+    if (!target || target.parserDegraded || target.nativeOutcome === "skipped" || target.parseErrorRanges?.length) {
+      return null;
+    }
+    const definition = resolveStarImportedDefinition(index, star, name, "python");
+    if (!definition) continue;
+    winner = definition;
+    winnerStart = start;
+  }
   return winner;
 }
 
@@ -1232,9 +1370,11 @@ export function pythonDottedPhraseAtUse(
   sup: LanguageSupport,
   scopeIndex: ScopeIndex,
 ): string | null | undefined {
+  const rootName = sliceText(root, source);
+  const imports = pythonImportLookup(mod, scopeIndex).byName.get(rootName);
+  if (!imports?.some(isPythonDottedImportBinding)) return undefined;
   const binding = pythonImportAtUse(mod, root, source, tree, sup, scopeIndex);
   if (!binding || binding.kind !== "namespace") return undefined;
-  const rootName = sliceText(root, source);
   return pythonDottedPhraseFile(index, mod.imports, phrase, (candidate) => {
     if (!isPythonDottedImportBinding(candidate) || !pythonImportPrecedesUse(candidate, root, tree)) return false;
     if (isPythonDottedImportBinding(binding)) return binding.localNS === rootName;
@@ -1380,6 +1520,10 @@ export async function resolveMemberAccessDefinition(params: {
     }
     const exprIsId = isReceiverNameNode(sup, expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId) {
+      if (sup.id === "python") {
+        const annotation = pythonAnnotationTypeAtUse(index, mod, expr, source, tree, sup, ensureScopeIndex());
+        if (annotation !== undefined) return annotation ? { kind: "resolved", def: annotation } : null;
+      }
       const aliasQualifier = isCsharpAliasQualifier(expr, sup);
       const exprName = sliceText(expr, source);
       const pythonImport =
@@ -1397,10 +1541,14 @@ export async function resolveMemberAccessDefinition(params: {
       let imp: ImportBinding | undefined;
       if (sup.id === "python") {
         imp = pythonImport;
+        // A local value must not fall back to a same-named module declaration or star import.
+        if (pythonBinding && !pythonBinding.import) return null;
         if (!imp && !pythonStarBound) {
-          // No positioned import applies, so any other binding of the name, now or later, leaves it unresolved.
-          const bindsName = !!pythonBinding || laterLocalShadowsUse(ensureScopeIndex(), exprName, expr, sup);
-          if (bindsName) return null;
+          const importBindsName = !!pythonBinding?.import;
+          const importedNameIsShadowed =
+            pythonImportLookup(mod, ensureScopeIndex()).byName.has(exprName) &&
+            laterLocalShadowsUse(ensureScopeIndex(), exprName, expr, sup);
+          if (importBindsName || importedNameIsShadowed) return null;
         }
       } else if (sup.id === "php") {
         imp = findPhpImportAlias(mod.imports, exprName, "class") ?? undefined;
@@ -1521,7 +1669,7 @@ export async function resolveMemberAccessDefinition(params: {
       // `a.b` and the leaf `a.b.c` by repeating their dotted phrases (`a.b.symbol(...)`, `a.b.c.symbol(...)`).
       // Recognize those literal phrases up front so the chain walk below lands on the module each one names, instead
       // of treating each dot as an ordinary member-access hop and failing on a segment the import only spells.
-      if (sup.id === "python") {
+      if (sup.id === "python" && pythonImportLookup(mod, ensureScopeIndex()).hasDottedImports) {
         const chain = collectMemberAccessChain({ sup, source, chainNode: expr });
         if (chain && isReceiverNameNode(sup, chain.base.type)) {
           const phraseFile = pythonDottedPhraseAtUse(
@@ -4893,6 +5041,7 @@ async function pythonReceiverClassRef(
 
   let classDef: SymbolDef | undefined;
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
+  if (constructor && bindsTypeParameter(sliceText(constructor, source), constructor, source, sup)) return null;
   const preferInstanceAttributes = receiver.kind === "named-type" && receiver.proof !== "static-type";
   if (constructor) {
     const result = await resolveExpression(constructor);

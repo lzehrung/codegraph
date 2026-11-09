@@ -3698,7 +3698,15 @@ nativeDescribe("native semantic coverage", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-dotted-import-"));
     const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-python-dotted-import-cache-"));
     tempDirs.push(root, cacheDir);
-    await writeFixtureFiles(root, PYTHON_DOTTED_IMPORT_FILES);
+    const typedSource = [
+      "class LocalBox:",
+      "    def target(self):",
+      "        return 1",
+      "def call(box: LocalBox):",
+      "    return box.target()",
+      "",
+    ].join("\n");
+    await writeFixtureFiles(root, { ...PYTHON_DOTTED_IMPORT_FILES, "typed_parameter.py": typedSource });
     const options = { cache: "disk", cacheDir, threads: 1 } as const;
     const cold = await buildProjectIndex(root, options);
     clearMemoryCache();
@@ -3710,6 +3718,33 @@ nativeDescribe("native semantic coverage", () => {
       for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
       const graph = await buildSymbolGraphDetailed(index);
       await expectPythonDottedImports(root, index, graph, phase);
+      const typedFile = path.join(root, "typed_parameter.py");
+      const target = await goToDefinition(index, { file: typedFile, line: 5, column: 16 });
+      expect(target.status, phase).toBe("ok");
+      if (target.status !== "ok") continue;
+      expect(fileIdentityKey(target.definition.file), phase).toBe(fileIdentityKey(typedFile));
+      expect(target.definition.range.start.line, phase).toBe(2);
+      const refs = await findReferences(index, { file: typedFile, line: 2, column: 9 });
+      expect(refs.status, phase).toBe("ok");
+      if (refs.status === "ok") {
+        expect(
+          refs.references.some(
+            (reference) =>
+              fileIdentityKey(reference.file) === fileIdentityKey(typedFile) && reference.range.start.line === 5,
+          ),
+          phase,
+        ).toBe(true);
+      }
+      const caller = [...graph.nodes.values()].find(
+        (node) => node.name === "call" && fileIdentityKey(node.file) === fileIdentityKey(typedFile),
+      );
+      expect(caller, phase).toBeDefined();
+      expect(
+        graph.edges.some(
+          (edge) => edge.label === "calls" && edge.from === caller?.id && edge.to === defNodeId(target.definition),
+        ),
+        phase,
+      ).toBe(true);
     }
   });
 

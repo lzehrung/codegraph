@@ -18,6 +18,7 @@ import {
   isDirectKeywordMemberDeclaration,
   memberAcceptsCallAt,
   qualifiedBaseNames,
+  pythonAnnotationTypeAtUse,
   readRubyConstantReference,
   resolvePhpObjectCreationTarget,
   resolveQualifiedMemberContainer,
@@ -709,6 +710,18 @@ function resolveNamedType(
   }
   // A type parameter shadows a same-named class, and it declares no members.
   if (bindsTypeParameter(name, node, context.source, context.sup)) return null;
+  if (context.sup.id === "python") {
+    const annotation = pythonAnnotationTypeAtUse(
+      context.index,
+      context.moduleEntry,
+      node,
+      context.source,
+      context.tree,
+      context.sup,
+      context.scopeIndex,
+    );
+    if (annotation !== undefined) return annotation && declaresMembers(annotation) ? annotation : null;
+  }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
   // A parameter/annotation type name is a closer scope binding than the class it names.

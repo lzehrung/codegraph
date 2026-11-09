@@ -4434,6 +4434,9 @@ describe("Python receiver member resolution", () => {
     "    other = Other()",
     "    return other.run()",
     "",
+    "def via_typed_parameter(svc: Service):",
+    "    return svc.run()",
+    "",
   ].join("\n");
   const lines = source.split("\n");
 
@@ -4543,6 +4546,7 @@ describe("Python receiver member resolution", () => {
     const { root, file, index } = await buildReceiverFixture();
     try {
       await testGoToDefinition(index, file, 72, columnOf(72, "run"), file, 5);
+      await testGoToDefinition(index, file, 79, columnOf(79, "run"), file, 5);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
