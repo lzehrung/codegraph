@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-10
+
 ### Changed
 
 - Cold C#, Java, and Kotlin builds reuse native worker extraction trees for namespace and package scans instead of parsing indexed files again on the main thread. Unindexed scan candidates use facts-only worker tasks.
@@ -892,7 +894,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.1.3...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.2.0
 [3.1.3]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.3
 [3.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.2
 [3.1.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.1
