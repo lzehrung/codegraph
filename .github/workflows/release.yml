@@ -27,8 +27,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # GitHub retires pinned runner images on announced dates (https://github.com/actions/runner-images).
+  # A job on a retired label fails at once ("The configuration '<image>' is not supported") while
+  # the other jobs keep running. This gate starts one empty job per label first, so a retired label
+  # stops the release before any build or test starts. List every runner label that release.yml and
+  # standalone-release.yml use.
+  runner-images:
+    name: Runner image ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - macos-15-intel
+          - ubuntu-24.04-arm
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - name: Confirm the runner started
+        run: echo "${{ matrix.os }} is available"
+
+  runner-images-help:
+    name: Explain unavailable runner image
+    needs:
+      - runner-images
+    if: ${{ always() && needs.runner-images.result != 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Name the fix
+        run: |
+          echo "::error title=Runner image unavailable::A 'Runner image <label>' job did not start, so no release job ran. GitHub has probably retired that image (https://github.com/actions/runner-images). Replace the label in .github/workflows/release.yml and .github/workflows/standalone-release.yml, then rerun the release."
+          exit 1
+
   plan-release:
     name: Plan release
+    needs:
+      - runner-images
     runs-on: ubuntu-latest
     outputs:
       source_revision: ${{ steps.version.outputs.source_revision }}
@@ -106,7 +142,7 @@ jobs:
             rust-target: x86_64-apple-darwin
             suffix: darwin-x64
             certification-class: runtime
-          - os: macos-14
+          - os: macos-15
             rust-target: aarch64-apple-darwin
             suffix: darwin-arm64
             certification-class: runtime
@@ -352,7 +388,7 @@ jobs:
             target: darwin-x64
             mode: runtime
             alpine: false
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
             mode: runtime
             alpine: false
@@ -439,7 +475,7 @@ jobs:
             target: darwin-x64
             native-target: darwin-x64
             alpine: false
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
             native-target: darwin-arm64
             alpine: false
