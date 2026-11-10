@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { isMissingPathError } from "../util/errors.js";
 import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
-import { resolveFilePathFromRoot } from "../util/paths.js";
+import { isForbiddenAnchor, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { getCliCommandUsage } from "./options.js";
 
 // A slash- or backslash-prefixed path is drive-relative on Windows. Node resolves it
@@ -93,6 +95,117 @@ export function assertValidIncludeRoots(command: string, baseRoot: string, inclu
 
 export type CliRootPolicyResult = { status: "ok"; projectRootFs: string } | { status: "error"; messages: string[] };
 
+/** Find lifecycle state without crossing Git, home, or filesystem-root boundaries. */
+export function discoverCodegraphLifecycleRoot(
+  startDirectory: string,
+  homedir: string = os.homedir(),
+): CliRootPolicyResult {
+  const start = path.resolve(startDirectory);
+  let realCandidate: string;
+  try {
+    realCandidate = fs.realpathSync.native(start);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: "error",
+      messages: [`Current directory ${start} is not accessible: ${message}. cd to the project directory and rerun.`],
+    };
+  }
+  const realHome = realpathForDiscovery(path.resolve(homedir));
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+
+  let candidate = start;
+  let childName: string | undefined;
+  let candidatePath = start;
+  try {
+    while (true) {
+      const atDiscoveryBoundary = isLifecycleDiscoveryBoundary(
+        candidate,
+        realCandidate,
+        homedir,
+        realHome,
+        caseInsensitive,
+      );
+      if (candidate !== start && atDiscoveryBoundary) break;
+      candidatePath = path.join(candidate, ".codegraph");
+      const state = lstatRootCandidate(candidatePath);
+      if (state?.isDirectory() && !state.isSymbolicLink()) {
+        candidatePath = path.join(candidatePath, "manifest.json");
+        const manifest = lstatRootCandidate(candidatePath);
+        if (manifest?.isFile()) return { status: "ok", projectRootFs: candidate };
+      }
+      if (atDiscoveryBoundary) break;
+
+      const isStateDirectory = sameDiscoveryPath(path.basename(candidate), ".codegraph", caseInsensitive);
+      const parent = path.dirname(candidate);
+      if (isStateDirectory) {
+        const isStateCache = candidate === start || sameDiscoveryPath(childName ?? "", "cache", caseInsensitive);
+        if (isStateCache) {
+          const realParent = realpathForDiscovery(parent);
+          if (!isLifecycleDiscoveryBoundary(parent, realParent, homedir, realHome, caseInsensitive)) {
+            return { status: "ok", projectRootFs: parent };
+          }
+          break;
+        }
+      }
+
+      candidatePath = path.join(candidate, ".git");
+      const git = lstatRootCandidate(candidatePath);
+      if (git) break;
+      if (parent === candidate) break;
+      childName = path.basename(candidate);
+      candidate = parent;
+      realCandidate = realpathForDiscovery(parent);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: "error",
+      messages: [`Unable to discover Codegraph lifecycle root at ${candidatePath}: ${message}`],
+    };
+  }
+  return { status: "ok", projectRootFs: start };
+}
+
+function realpathForDiscovery(candidate: string): string {
+  try {
+    return fs.realpathSync.native(candidate);
+  } catch {
+    return candidate;
+  }
+}
+
+function sameDiscoveryPath(left: string, right: string, caseInsensitive: boolean): boolean {
+  const normalizedLeft = normalizePath(left);
+  const normalizedRight = normalizePath(right);
+  if (caseInsensitive) return normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
+  return normalizedLeft === normalizedRight;
+}
+
+function isLifecycleDiscoveryBoundary(
+  candidate: string,
+  realCandidate: string,
+  homedir: string,
+  realHome: string,
+  caseInsensitive: boolean,
+): boolean {
+  if (isForbiddenAnchor(candidate, homedir, caseInsensitive)) return true;
+  if (isForbiddenAnchor(realCandidate, homedir, caseInsensitive)) return true;
+  return (
+    sameDiscoveryPath(candidate, realHome, caseInsensitive) ||
+    sameDiscoveryPath(realCandidate, realHome, caseInsensitive)
+  );
+}
+
+function lstatRootCandidate(target: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(target, { throwIfNoEntry: false });
+  } catch (error) {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
+  }
+}
+
 /**
  * Positional/root policy for every command: legacy root positionals, lifecycle
  * root rules, and the optional-project-root commands. Pure policy — callers own
@@ -170,15 +283,13 @@ export function resolveCliRootPolicy(input: {
     };
   }
 
-  const defaultProjectRoot =
-    usesLegacyRootPositional(command) &&
-    !rootOpt &&
-    firstPositionalRoot !== undefined &&
-    isExistingDirectory(firstPositionalRoot)
-      ? firstPositionalRoot
-      : cwd();
-  const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
-  return { status: "ok", projectRootFs };
+  if (rootOpt) return { status: "ok", projectRootFs: resolveAbs(rootOpt) };
+  const hasPositionalProjectRoot =
+    usesLegacyRootPositional(command) && firstPositionalRoot !== undefined && isExistingDirectory(firstPositionalRoot);
+  if (hasPositionalProjectRoot) return { status: "ok", projectRootFs: firstPositionalRoot };
+  const startDirectory = cwd();
+  if (isLifecycleCommand(command)) return discoverCodegraphLifecycleRoot(startDirectory);
+  return { status: "ok", projectRootFs: startDirectory };
 }
 
 export type CliDiscoveryGlobPolicy = {

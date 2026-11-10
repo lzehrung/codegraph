@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { BuildOptions } from "../types.js";
-import { fileIdentityKey } from "../../util/paths.js";
+import { fileIdentityKey, isForbiddenAnchor } from "../../util/paths.js";
 
 export const PROJECT_CACHE_DIRECTORY = ".codegraph";
 export const PROJECT_CACHE_RELATIVE_PATH = path.join(PROJECT_CACHE_DIRECTORY, "cache", "index-v1");
@@ -21,15 +21,6 @@ function isWritableDirectory(candidate: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isForbiddenAnchor(candidate: string): boolean {
-  const resolved = path.resolve(candidate);
-  const home = path.resolve(os.homedir());
-  const parsed = path.parse(resolved);
-  return (
-    fileIdentityKey(resolved) === fileIdentityKey(home) || fileIdentityKey(resolved) === fileIdentityKey(parsed.root)
-  );
 }
 
 function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {

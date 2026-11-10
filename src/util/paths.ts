@@ -1,5 +1,6 @@
 import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { errorMessage, isMissingPathError } from "./errors.js";
 import type { probeRealpath } from "./fs-probe-cache.js";
@@ -163,6 +164,33 @@ export function fileIdentityKey(filePath: string): string {
   return key;
 }
 
+/** Home and filesystem roots are not implicit project-state anchors. */
+export function isForbiddenAnchor(
+  candidate: string,
+  homedir: string = os.homedir(),
+  caseInsensitive?: boolean,
+): boolean {
+  const resolved = path.resolve(candidate);
+  const home = path.resolve(homedir);
+  const filesystemRoot = path.parse(resolved).root;
+  if (caseInsensitive === undefined) {
+    return (
+      fileIdentityKey(resolved) === fileIdentityKey(home) ||
+      fileIdentityKey(resolved) === fileIdentityKey(filesystemRoot)
+    );
+  }
+  // Discovery must compare paths without freezing the index's filesystem case mode.
+  let candidateKey = normalizePath(resolved);
+  let homeKey = normalizePath(home);
+  let filesystemRootKey = normalizePath(filesystemRoot);
+  if (caseInsensitive) {
+    candidateKey = candidateKey.toLowerCase();
+    homeKey = homeKey.toLowerCase();
+    filesystemRootKey = filesystemRootKey.toLowerCase();
+  }
+  return candidateKey === homeKey || candidateKey === filesystemRootKey;
+}
+
 function isWindowsQualifiedAbsolutePath(filePath: string): boolean {
   const normalizedPath = normalizePath(filePath);
   return /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//");
@@ -210,7 +238,8 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
       return true;
     }
     const relativePath = normalizePath(path.win32.relative(comparableRoot, comparableFile));
-    return !!relativePath.length && !relativePath.startsWith("..") && !path.win32.isAbsolute(relativePath);
+    const escapesRoot = relativePath === ".." || relativePath.startsWith("../");
+    return !escapesRoot && !path.win32.isAbsolute(relativePath);
   }
 
   if (rootIsWindowsPath || fileIsWindowsPath) {
@@ -222,7 +251,8 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
       return true;
     }
     const relativePath = path.posix.relative(comparableRoot, comparableFile);
-    return !!relativePath.length && !relativePath.startsWith("..") && !path.posix.isAbsolute(relativePath);
+    const escapesRoot = relativePath === ".." || relativePath.startsWith("../");
+    return !escapesRoot && !path.posix.isAbsolute(relativePath);
   }
 
   if (rootIsPosixPath || fileIsPosixPath) {
@@ -232,8 +262,9 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
   if (comparableFile === comparableRoot) {
     return true;
   }
-  const relativePath = path.relative(comparableRoot, comparableFile);
-  return !!relativePath.length && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  const relativePath = normalizePath(path.relative(comparableRoot, comparableFile));
+  const escapesRoot = relativePath === ".." || relativePath.startsWith("../");
+  return !escapesRoot && !path.isAbsolute(relativePath);
 }
 
 export function isFilePathWithinRoot(
@@ -319,8 +350,9 @@ function windowsAliasRelativePath(
   try {
     const realRoot = resolveWindowsRealpath(normalizedRoot, realpathMemo);
     const realFile = resolveWindowsRealpath(normalizedFile, realpathMemo);
-    const directRelativePath = path.win32.relative(realRoot, realFile);
-    if (!directRelativePath.startsWith("..") && !path.win32.isAbsolute(directRelativePath)) {
+    const directRelativePath = normalizePath(path.win32.relative(realRoot, realFile));
+    const escapesRoot = directRelativePath === ".." || directRelativePath.startsWith("../");
+    if (!escapesRoot && !path.win32.isAbsolute(directRelativePath)) {
       return normalizePath(directRelativePath);
     }
 

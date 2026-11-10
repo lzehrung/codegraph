@@ -6,8 +6,9 @@ import { computeConfigHash, loadManifest } from "../indexer/build-cache/manifest
 import { emitIndexCheckStart } from "../indexer/build-index.js";
 import { logWithLevel } from "../logging.js";
 import { mapLimit } from "../util/concurrency.js";
-import { isMissingPathError } from "../util/errors.js";
+import { isFileSystemErrorCode, isMissingPathError } from "../util/errors.js";
 import { createProjectDiscoveryContext, type ProjectDiscoveryContext } from "../util/project-files.js";
+import { isFilePathWithinRoot } from "../util/paths.js";
 import { normalizeGraphOptions, summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysis-summary.js";
@@ -66,6 +67,7 @@ export type CodegraphLifecycleUninitResult = {
   schemaVersion: 1;
   root: string;
   removed: boolean;
+  removedEntries: string[];
   manifestPath: string;
 };
 
@@ -214,19 +216,31 @@ export async function getCodegraphLifecycleStatus(
 
 export async function uninitCodegraphLifecycle(
   root: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; purge?: boolean; cwd?: string } = {},
 ): Promise<CodegraphLifecycleUninitResult> {
   const dir = path.join(root, CODEGRAPH_DIR);
   const manifestPath = codegraphLifecycleManifestPath(root);
   const entries = await readCodegraphDirEntries(dir);
-  if (!entries.length) {
-    return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: false, manifestPath };
+  if (!entries.length && !options.purge) {
+    return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: false, removedEntries: [], manifestPath };
   }
+  if (options.purge) await refusePurgeFromCurrentDirectory(root, dir, path.resolve(options.cwd ?? process.cwd()));
+  if (options.purge) await refusePurgeWithServerRegistry(dir);
   const unknownEntries = entries.filter((entry) => !Object.hasOwn(KNOWN_CODEGRAPH_FILES, entry));
   if (unknownEntries.length && !options.force) {
     throw new CodegraphLifecycleUserError(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,
     );
+  }
+  if (options.purge) {
+    const removedEntries = await purgeCodegraphEntries(dir, entries);
+    return {
+      schemaVersion: MANIFEST_SCHEMA_VERSION,
+      root,
+      removed: Boolean(removedEntries.length),
+      removedEntries,
+      manifestPath,
+    };
   }
   const removableEntries = entries.filter(
     (entry) => entry !== SERVER_REGISTRY_FILE && entry !== SERVER_LOG_FILE && entry !== CACHE_DIRECTORY,
@@ -240,12 +254,89 @@ export async function uninitCodegraphLifecycle(
     await removeCodegraphPath(manifestPath, {});
     await removeDirIfEmpty(dir);
   }
+  const removedEntries = options.force
+    ? removableEntries.sort()
+    : removableEntries.filter((entry) => entry === MANIFEST_FILE);
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     root,
-    removed: options.force ? Boolean(removableEntries.length) : removableEntries.includes(MANIFEST_FILE),
+    removed: Boolean(removedEntries.length),
+    removedEntries,
     manifestPath,
   };
+}
+
+async function refusePurgeFromCurrentDirectory(root: string, dir: string, cwd: string): Promise<void> {
+  let realDir: string;
+  try {
+    realDir = await fsp.realpath(dir);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    throw new CodegraphLifecycleUserError(`Unable to read ${dir}: ${stringifyError(error)}`);
+  }
+  let realCwd: string;
+  try {
+    realCwd = await fsp.realpath(cwd);
+  } catch (error) {
+    throw new CodegraphLifecycleUserError(
+      `Current directory ${cwd} is not accessible: ${stringifyError(error)}. cd to the project directory and rerun.`,
+    );
+  }
+  const insideState =
+    isFilePathWithinRoot(realDir, realCwd) || (await isDirectoryInAncestryByIdentity(realDir, realCwd));
+  if (!insideState) return;
+  throw new CodegraphLifecycleUserError(
+    `Refusing to purge ${dir} from inside it. Run cd "${root}" and rerun codegraph uninit --purge.`,
+  );
+}
+
+async function isDirectoryInAncestryByIdentity(directory: string, start: string): Promise<boolean> {
+  try {
+    const directoryStats = await fsp.stat(directory, { bigint: true });
+    if (!directoryStats.ino) return false;
+    let candidate = start;
+    while (true) {
+      const stats = await fsp.stat(candidate, { bigint: true });
+      const sameDirectory = stats.dev === directoryStats.dev && stats.ino === directoryStats.ino;
+      if (sameDirectory) return true;
+      const parent = path.dirname(candidate);
+      if (parent === candidate) return false;
+      candidate = parent;
+    }
+  } catch (error) {
+    throw new CodegraphLifecycleUserError(
+      `Unable to verify current directory containment for ${directory}: ${stringifyError(error)}`,
+    );
+  }
+}
+
+async function refusePurgeWithServerRegistry(dir: string): Promise<void> {
+  const registryPath = path.join(dir, SERVER_REGISTRY_FILE);
+  try {
+    await fsp.lstat(registryPath);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    throw new CodegraphLifecycleUserError(`Unable to read ${registryPath}: ${stringifyError(error)}`);
+  }
+  throw new CodegraphLifecycleUserError(
+    `Refusing to purge ${dir} while server.json exists. Run codegraph server stop for this project first.`,
+  );
+}
+
+async function purgeCodegraphEntries(dir: string, entries: string[]): Promise<string[]> {
+  const remainingPaths: string[] = [];
+  const removedEntries: string[] = [];
+  for (const entry of entries.sort()) {
+    const removed = await removeCodegraphPath(path.join(dir, entry), { recursive: true, remainingPaths });
+    if (removed) removedEntries.push(entry);
+  }
+  await removeDirIfEmpty(dir, remainingPaths);
+  if (remainingPaths.length) {
+    throw new CodegraphLifecycleUserError(
+      `Unable to purge Codegraph state; these paths remain: ${remainingPaths.sort().join(", ")}. They may be in use by another process (for example a Codegraph MCP server for this project) or not writable. Stop it or make the paths writable and rerun codegraph uninit --purge.`,
+    );
+  }
+  return removedEntries;
 }
 
 async function buildLifecycleManifest(
@@ -535,10 +626,18 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function removeCodegraphPath(target: string, options: { recursive?: boolean }): Promise<void> {
+async function removeCodegraphPath(
+  target: string,
+  options: { recursive?: boolean; remainingPaths?: string[] },
+): Promise<boolean> {
   try {
     await fsp.rm(target, { ...(options.recursive ? { recursive: true } : {}), force: true });
+    return true;
   } catch (error) {
+    if (options.remainingPaths && isPathInUseError(error)) {
+      options.remainingPaths.push(target);
+      return false;
+    }
     throw new CodegraphLifecycleUserError(`Unable to remove ${target}: ${stringifyError(error)}`);
   }
 }
@@ -559,14 +658,38 @@ async function readCodegraphDirEntries(dir: string): Promise<string[]> {
   }
 }
 
-async function removeDirIfEmpty(dir: string): Promise<void> {
+async function removeDirIfEmpty(dir: string, remainingPaths?: string[]): Promise<void> {
   try {
     await fsp.rmdir(dir);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOTEMPTY") return;
+    if (isFileSystemErrorCode(error, "ENOTEMPTY")) {
+      if (remainingPaths) {
+        const unexpectedEntries = (await readCodegraphDirEntries(dir)).filter(
+          (entry) => !remainingPaths.includes(path.join(dir, entry)),
+        );
+        if (unexpectedEntries.length) {
+          throw new CodegraphLifecycleUserError(
+            `Unable to purge ${dir}; unexpected entries remain: ${unexpectedEntries.sort().join(", ")}. Stop the process writing them and rerun codegraph uninit --purge.`,
+          );
+        }
+      }
+      return;
+    }
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    if (remainingPaths && isPathInUseError(error)) {
+      remainingPaths.push(dir);
+      return;
+    }
     throw new CodegraphLifecycleUserError(`Unable to remove ${dir}: ${stringifyError(error)}`);
   }
+}
+
+function isPathInUseError(error: unknown): boolean {
+  return (
+    isFileSystemErrorCode(error, "EBUSY") ||
+    isFileSystemErrorCode(error, "EPERM") ||
+    isFileSystemErrorCode(error, "EACCES")
+  );
 }
 
 function isLifecycleManifest(value: unknown): value is CodegraphLifecycleManifest {
