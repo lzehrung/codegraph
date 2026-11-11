@@ -9,6 +9,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-11-11
+
 ### Added
 
 - `codegraph uninit --purge` also removes the disk cache and server log. It refuses while a shared server is registered (run `codegraph server stop` first) or when run from inside `.codegraph/`, and lists paths it cannot remove. JSON `uninit` results add `removedEntries`.
@@ -903,7 +905,8 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 See the [GitHub Releases](https://github.com/lzehrung/codegraph/releases) page for certified package versions, native package counterparts, checksums, and standalone preview assets.
 
-[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/lzehrung/codegraph/compare/v3.2.1...HEAD
+[3.2.1]: https://github.com/lzehrung/codegraph/releases/tag/v3.2.1
 [3.2.0]: https://github.com/lzehrung/codegraph/releases/tag/v3.2.0
 [3.1.3]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.3
 [3.1.2]: https://github.com/lzehrung/codegraph/releases/tag/v3.1.2
