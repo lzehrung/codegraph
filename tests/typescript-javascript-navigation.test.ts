@@ -1559,4 +1559,473 @@ describe("TypeScript and JavaScript navigation", () => {
       await rm(fixture.root, { recursive: true, force: true });
     }
   });
+  it.each(["ts", "tsx", "js"] as const)("resolves lexical private class names in %s", async (extension) => {
+    const lines = [
+      "export class Example {",
+      "  #field = 1;",
+      "  get #value() { return this.#field; }",
+      "  set #value(v) { this.#field = v; }",
+      "  static #make(x) { return x; }",
+      "  #push(x) { return x; }",
+      "  run(obj) {",
+      "    return this.#push(1) + this.#push(2) + obj.#push(3);",
+      "  }",
+      "  has(obj) { return #field in obj; }",
+      "  read() { return this.#value; }",
+      "  write(v) { this.#value = v; }",
+      "  static make(v) { return Example.#make(v); }",
+      "  nested() {",
+      "    return class Inner {",
+      "      callOuter(obj) { return obj.#\\u0070ush(4); }",
+      "      hasOuter(obj) { return #field in obj; }",
+      "    };",
+      "  }",
+      "  shadow() {",
+      "    return class Shadow {",
+      "      callBefore(obj) { return obj.#push(8); }",
+      "      #push(x) { return -x; }",
+      "      callInner(obj) { return obj.#push(5); }",
+      "    };",
+      "  }",
+      "  static #slot = 0;",
+      "  static get #reading() { return Example.#slot; }",
+      "  static set #reading(v) { Example.#slot = v; }",
+      "  static useReading(v) { Example.#reading = v; return Example.#reading; }",
+      "  get plain() { return 1; }",
+      "  set plain(v) { void v; }",
+      "  readPlain() { return this.plain; }",
+      "  writePlain(v) { this.plain = v; }",
+      "  static get plainStatic() { return 1; }",
+      "  static set plainStatic(v) { void v; }",
+      "  static readPlainStatic() { return Example.plainStatic; }",
+      "  static writePlainStatic(v) { Example.plainStatic = v; }",
+      ...(extension === "tsx" ? ["  render() { return <span>{this.#push(7)}</span>; }"] : []),
+      "}",
+      "class Decoy {",
+      "  #field = 0;",
+      "  #push(x) { return -x; }",
+      "  decoyRun() { return this.#push(6); }",
+      "  get #value() { return 0; }",
+      "  set #value(v) { void v; }",
+      "  readDecoy() { return this.#value; }",
+      "  static get #reading() { return 0; }",
+      "  static set #reading(v) { void v; }",
+      "  static useDecoy() { return Decoy.#reading; }",
+      "}",
+      "",
+    ];
+    const source = lines.join("\n");
+    const name = `private.${extension}`;
+    const fixture = await project({ [name]: source });
+    try {
+      const file = fixture.file(name);
+      const lineOf = (text: string): number => {
+        const index = lines.findIndex((line) => line.includes(text));
+        if (index < 0) throw new Error(`missing ${text}`);
+        return index + 1;
+      };
+      const indexOf = (line: number, token: string, occurrence = 0): number => {
+        let column = -1;
+        for (let count = 0; count <= occurrence; count += 1) column = lines[line - 1]!.indexOf(token, column + 1);
+        if (column < 0) throw new Error(`missing ${token} on line ${line}`);
+        const lineStart = line === 1 ? 0 : lines.slice(0, line - 1).join("\n").length + 1;
+        return lineStart + column;
+      };
+      const checkRefs = async (declarationLine: number, token: string, expected: number[]): Promise<void> => {
+        const result = await findReferences(fixture.index, {
+          file,
+          line: declarationLine,
+          column: columnOf(source, declarationLine, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") return;
+        expect(result.referenceCoverage?.state).toBe("complete");
+        expect(result.references.map((reference) => reference.range.start.index).sort((a, b) => a! - b!)).toEqual(
+          [...expected].sort((a, b) => a - b),
+        );
+      };
+      const checkGoto = async (line: number, token: string, expectedIndex: number, occurrence = 0): Promise<void> => {
+        const offset = indexOf(line, token, occurrence);
+        const column = offset - (source.lastIndexOf("\n", offset - 1) + 1) + 1;
+        const result = await goToDefinition(fixture.index, { file, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.index).toBe(expectedIndex);
+      };
+
+      const pushLine = lineOf("  #push(x)");
+      const runLine = lineOf("return this.#push(1)");
+      const outerLine = lineOf("callOuter");
+      const innerDeclaration = lineOf("      #push(x)");
+      const innerUse = lineOf("callInner");
+      const innerBefore = lineOf("callBefore");
+      const decoyDeclaration = lineOf("class Decoy") + 2;
+      const pushIndex = indexOf(pushLine, "#push");
+      const pushSites = [
+        pushIndex,
+        indexOf(runLine, "#push", 0),
+        indexOf(runLine, "#push", 1),
+        indexOf(runLine, "#push", 2),
+        indexOf(outerLine, "#\\u0070ush"),
+      ];
+      if (extension === "tsx") pushSites.push(indexOf(lineOf("render()"), "#push"));
+      await checkRefs(pushLine, "#push", pushSites);
+      await checkRefs(outerLine, "#\\u0070ush", pushSites);
+      for (let occurrence = 0; occurrence < 3; occurrence += 1)
+        await checkGoto(runLine, "#push", pushIndex, occurrence);
+      await checkGoto(outerLine, "#\\u0070ush", pushIndex);
+      if (extension === "tsx") await checkGoto(lineOf("render()"), "#push", pushIndex);
+      await checkGoto(innerUse, "#push", indexOf(innerDeclaration, "#push"));
+      await checkGoto(innerBefore, "#push", indexOf(innerDeclaration, "#push"));
+      await checkRefs(innerDeclaration, "#push", [
+        indexOf(innerBefore, "#push"),
+        indexOf(innerDeclaration, "#push"),
+        indexOf(innerUse, "#push"),
+      ]);
+      await checkRefs(decoyDeclaration, "#push", [
+        indexOf(decoyDeclaration, "#push"),
+        indexOf(lineOf("decoyRun"), "#push"),
+      ]);
+
+      const field = indexOf(2, "#field");
+      const fieldSites = [
+        field,
+        indexOf(3, "#field"),
+        indexOf(4, "#field"),
+        indexOf(10, "#field"),
+        indexOf(17, "#field"),
+      ];
+      await checkRefs(2, "#field", fieldSites);
+      for (const line of [3, 4, 10, 17]) await checkGoto(line, "#field", field);
+      await checkRefs(lineOf("  #field = 0"), "#field", [indexOf(lineOf("  #field = 0"), "#field")]);
+
+      const accessorSites = [indexOf(3, "#value"), indexOf(4, "#value"), indexOf(11, "#value"), indexOf(12, "#value")];
+      await checkRefs(3, "#value", accessorSites);
+      await checkRefs(4, "#value", accessorSites);
+      for (const [privateLine, publicLine] of [
+        [11, lineOf("readPlain()")],
+        [12, lineOf("writePlain(")],
+      ]) {
+        const privateResult = await goToDefinition(fixture.index, {
+          file,
+          line: privateLine,
+          column: columnOf(source, privateLine, "#value"),
+        });
+        const publicResult = await goToDefinition(fixture.index, {
+          file,
+          line: publicLine,
+          column: columnOf(source, publicLine, ".plain") + 1,
+        });
+        expect(publicResult.status).toBe("not_found");
+        expect(privateResult).toEqual(publicResult);
+      }
+      await checkRefs(5, "#make", [indexOf(5, "#make"), indexOf(13, "#make")]);
+      await checkGoto(13, "#make", indexOf(5, "#make"));
+      const slotLine = lineOf("static #slot");
+      const getReading = lineOf("static get #reading");
+      const setReading = lineOf("static set #reading");
+      const useReading = lineOf("static useReading");
+      await checkRefs(slotLine, "#slot", [
+        indexOf(slotLine, "#slot"),
+        indexOf(getReading, "#slot"),
+        indexOf(setReading, "#slot"),
+      ]);
+      await checkGoto(getReading, "#slot", indexOf(slotLine, "#slot"));
+      await checkGoto(setReading, "#slot", indexOf(slotLine, "#slot"));
+      const readingSites = [
+        indexOf(getReading, "#reading"),
+        indexOf(setReading, "#reading"),
+        indexOf(useReading, "#reading", 0),
+        indexOf(useReading, "#reading", 1),
+      ];
+      await checkRefs(getReading, "#reading", readingSites);
+      await checkRefs(setReading, "#reading", readingSites);
+      for (const [occurrence, publicLine] of [
+        [0, lineOf("writePlainStatic(")],
+        [1, lineOf("readPlainStatic()")],
+      ]) {
+        const privateOffset = indexOf(useReading, "#reading", occurrence);
+        const privateColumn = privateOffset - (source.lastIndexOf("\n", privateOffset - 1) + 1) + 1;
+        const privateResult = await goToDefinition(fixture.index, { file, line: useReading, column: privateColumn });
+        const publicResult = await goToDefinition(fixture.index, {
+          file,
+          line: publicLine,
+          column: columnOf(source, publicLine, ".plainStatic") + 1,
+        });
+        expect(publicResult.status).toBe("not_found");
+        expect(privateResult).toEqual(publicResult);
+      }
+
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const outerId = `${file}::#push::${pushIndex}`;
+      const innerId = `${file}::#push::${indexOf(innerDeclaration, "#push")}`;
+      expect(callTargetIds(graph, "run")).toEqual([outerId, outerId, outerId]);
+      expect(callTargetIds(graph, "callOuter")).toEqual([outerId]);
+      expect(callTargetIds(graph, "callInner")).toEqual([innerId]);
+      expect(callTargetIds(graph, "callBefore")).toEqual([innerId]);
+      expect(callTargetIds(graph, "make")).toEqual([`${file}::#make::${indexOf(5, "#make")}`]);
+      if (extension === "tsx") expect(callTargetIds(graph, "render")).toEqual([outerId]);
+      expect(callTargetIds(graph, "decoyRun")).not.toContain(outerId);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["ts", "tsx"] as const)("resolves private overloads to their implementation in %s", async (extension) => {
+    const source = [
+      "export class Overloaded {",
+      "  #m(x: string): number;",
+      "  #m(x: number): number;",
+      "  #m(x: string | number): number { return typeof x === 'string' ? x.length : x; }",
+      "  run() { return this.#m('a') + this.#m(1); }",
+      "  static #s(x: string): string;",
+      "  static #s(x: number): string;",
+      "  static #s(x: string | number): string { return String(x); }",
+      "  static runStatic() { return Overloaded.#s(1); }",
+      "}",
+      "class Decoy {",
+      "  #m(x: number) { return x; }",
+      "  decoy() { return this.#m(2); }",
+      "}",
+      "",
+    ].join("\n");
+    const name = `overloads.${extension}`;
+    const fixture = await project({ [name]: source });
+    try {
+      const file = fixture.file(name);
+      for (const [line, column, expected] of [
+        [5, columnOf(source, 5, "#m"), 4],
+        [5, source.split("\n")[4]!.lastIndexOf("#m") + 1, 4],
+        [9, columnOf(source, 9, "#s"), 8],
+      ]) {
+        const result = await goToDefinition(fixture.index, { file, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(expected);
+      }
+      for (const line of [2, 3, 4]) {
+        const refs = await findReferences(fixture.index, { file, line, column: columnOf(source, line, "#m") });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage?.state).toBe("complete");
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([2, 3, 4, 5, 5]);
+        }
+      }
+      const staticRefs = await findReferences(fixture.index, { file, line: 8, column: columnOf(source, 8, "#s") });
+      expect(staticRefs.status).toBe("ok");
+      if (staticRefs.status === "ok") {
+        expect(staticRefs.referenceCoverage?.state).toBe("complete");
+        expect(staticRefs.references.map((reference) => reference.range.start.line)).toEqual([6, 7, 8, 9]);
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).toEqual([
+        `${file}::#m::${tokenIndex(source, 4, "#m")}`,
+        `${file}::#m::${tokenIndex(source, 4, "#m")}`,
+      ]);
+      expect(callTargetIds(graph, "runStatic")).toEqual([`${file}::#s::${tokenIndex(source, 8, "#s")}`]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["ts", "tsx", "js"] as const)("records calls to private arrow fields in %s", async (extension) => {
+    const source = [
+      "export class Holder {",
+      "  run() { return this.#fn(); }",
+      "  static runStatic() { return Holder.#sfn(); }",
+      "  #fn = () => 1;",
+      "  static #sfn = () => 2;",
+      "}",
+      "class Decoy {",
+      "  #fn = () => 3;",
+      "  static #sfn = () => 4;",
+      "}",
+      "",
+    ].join("\n");
+    const name = `arrows.${extension}`;
+    const fixture = await project({ [name]: source });
+    try {
+      const file = fixture.file(name);
+      for (const [useLine, token, definitionLine] of [
+        [2, "#fn", 4],
+        [3, "#sfn", 5],
+      ] as const) {
+        const result = await goToDefinition(fixture.index, {
+          file,
+          line: useLine,
+          column: columnOf(source, useLine, token),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(definitionLine);
+        const refs = await findReferences(fixture.index, {
+          file,
+          line: definitionLine,
+          column: columnOf(source, definitionLine, token),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage?.state).toBe("complete");
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([useLine, definitionLine]);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).toEqual([`${file}::#fn::${tokenIndex(source, 4, "#fn")}`]);
+      expect(callTargetIds(graph, "runStatic")).toEqual([`${file}::#sfn::${tokenIndex(source, 5, "#sfn")}`]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps private ranges correct after non-ASCII characters on the same line", async () => {
+    const source = [
+      "export class Unicode {",
+      "  #m() { return 1; }",
+      '  run() { const text = "\u65e5\u{1f600}"; return this.#m(); }',
+      "  #\u00e9 = 2;",
+      "  read() { return this.#\u00e9; }",
+      "}",
+      "class Decoy { #m() {} }",
+      "",
+    ].join("\n");
+    const fixture = await project({ "unicode.ts": source });
+    try {
+      const file = fixture.file("unicode.ts");
+      const use = { file, line: 3, column: columnOf(source, 3, "#m") };
+      const result = await goToDefinition(fixture.index, use);
+      expect(result.status).toBe("ok");
+      if (result.status === "ok") expect(result.definition.range.start.line).toBe(2);
+      const refs = await findReferences(fixture.index, { file, line: 2, column: columnOf(source, 2, "#m") });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.references.map((reference) => reference.range.start.index)).toEqual([
+          tokenIndex(source, 2, "#m"),
+          tokenIndex(source, 3, "#m"),
+        ]);
+        expect(refs.referenceCoverage?.state).toBe("complete");
+      }
+      const unicode = await goToDefinition(fixture.index, { file, line: 5, column: columnOf(source, 5, "#\u00e9") });
+      expect(unicode.status).toBe("ok");
+      if (unicode.status === "ok") expect(unicode.definition.range.start.line).toBe(4);
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      const call = graph.edges.find((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run");
+      expect(call?.site?.range.start.column).toBe(use.column);
+      expect(call?.site?.range.start.index).toBe(tokenIndex(source, 3, "#m"));
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps same-named private placeholders in sibling declaration classes separate", async () => {
+    const source = ["export declare class First { #private; }", "export declare class Second { #private; }", ""].join(
+      "\n",
+    );
+    const fixture = await project({ "types.d.ts": source });
+    try {
+      const file = fixture.file("types.d.ts");
+      const symbols = listSymbols(fixture.index, { file }).filter((symbol) => symbol.name === "#private");
+      expect(symbols.map((symbol) => symbol.range?.start.line)).toEqual([1, 2]);
+      for (const line of [1, 2]) {
+        const refs = await findReferences(fixture.index, { file, line, column: columnOf(source, line, "#private") });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage?.state).toBe("complete");
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([line]);
+        }
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial private-name references when duplicate declarations prevent resolution", async () => {
+    const source = [
+      "class Broken {",
+      "  #method() {}",
+      "  #method() {}",
+      "  run() { this.#method(); }",
+      "}",
+      "class Mixed {",
+      "  #mixed(x: string): void;",
+      "  static #mixed(x: string): void {}",
+      "  runMixed() { this.#mixed('x'); }",
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "broken.ts": source });
+    try {
+      const file = fixture.file("broken.ts");
+      for (const [declarationLine, useLine, token] of [
+        [2, 4, "#method"],
+        [7, 9, "#mixed"],
+      ] as const) {
+        const use = await goToDefinition(fixture.index, {
+          file,
+          line: useLine,
+          column: columnOf(source, useLine, token),
+        });
+        expect(use.status).toBe("not_found");
+        const refs = await findReferences(fixture.index, {
+          file,
+          line: declarationLine,
+          column: columnOf(source, declarationLine, token),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.referenceCoverage?.state).toBe("partial");
+          expect(refs.referenceCoverage?.reasons).toContain("strategy_unavailable");
+          expect(referenceSites(refs)).not.toContain(`broken.ts:${useLine}`);
+        }
+      }
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(callTargetIds(graph, "run")).toEqual([]);
+      expect(callTargetIds(graph, "runMixed")).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains private name navigation and call edges after a disk-cache reload", async () => {
+    const source = [
+      "export class Owner {",
+      "  #field = 1;",
+      "  #run() { return this.#field; }",
+      "  call() { return this.#run(); }",
+      "}",
+      "class Decoy { #field = 2; #run() { return this.#field; } }",
+      "",
+    ].join("\n");
+    const fixture = await project({ "cached.ts": source });
+    const options = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+    try {
+      const file = fixture.file("cached.ts");
+      const observe = async (index: ProjectIndex) => {
+        const result = await goToDefinition(index, { file, line: 4, column: columnOf(source, 4, "#run") });
+        const refs = await findReferences(index, { file, line: 3, column: columnOf(source, 3, "#run") });
+        const fields = await findReferences(index, { file, line: 2, column: columnOf(source, 2, "#field") });
+        const graph = await buildSymbolGraphDetailed(index);
+        return {
+          definition: result.status === "ok" ? result.definition.range.start.index : result.status,
+          references: referenceSites(refs),
+          coverage: refs.status === "ok" ? refs.referenceCoverage?.state : refs.status,
+          fields: referenceSites(fields),
+          calls: callTargetIds(graph, "call"),
+        };
+      };
+      const cold = await buildProjectIndexIncremental(fixture.root, options);
+      const expected = await observe(cold);
+      expect(expected).toEqual({
+        definition: tokenIndex(source, 3, "#run"),
+        references: ["cached.ts:3", "cached.ts:4"],
+        coverage: "complete",
+        fields: ["cached.ts:2", "cached.ts:3"],
+        calls: [`${file}::#run::${tokenIndex(source, 3, "#run")}`],
+      });
+      closeDiskCacheDatabase(fixture.root, options);
+      const report: BuildReport = { timings: {} };
+      const warm = await buildProjectIndexIncremental(fixture.root, { ...options, report });
+      expect(report.files?.parsed).toBe(0);
+      expect(await observe(warm)).toEqual(expected);
+    } finally {
+      closeDiskCacheDatabase(fixture.root, options);
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
 });

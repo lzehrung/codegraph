@@ -272,6 +272,8 @@ MCP tool name <-> CLI command mapping for the common handle-driven follow-ups:
 
 Call `rename_preview` with flat fields `handle`, `newName`, and optional `includeComments`, `includeStrings`, `includeFilenames`, and `maxEdits`. The edit limit defaults to 5000 and caps at 10000; comment and string candidates are opt-in, while filename suggestions require an eligible exported class, interface, or type whose filename matches its name.
 
+For a TypeScript, TSX, or JavaScript private member, `newName` must retain the `#` prefix.
+
 Responses contain exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, and omissions. The tool reuses the server session, remains available in read-only mode, never changes files, and has no apply counterpart.
 
 ### Refactor plan

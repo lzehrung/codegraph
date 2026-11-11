@@ -70,6 +70,7 @@ Get candidate test paths with `codegraph affected --base HEAD --head WORKTREE --
 Resolve the symbol, then inspect `refs`, callers, or implementations.
 Use `codegraph refactor-plan <handle>` / MCP `refactor_plan` for references, calls, hierarchy, and candidate tests from one snapshot.
 For renames, use `codegraph rename-preview <target> <new-name> --json` / MCP `rename_preview`, or add `--rename <new-name>` to `refactor-plan`.
+Keep the `#` prefix when renaming a TypeScript, TSX, or JavaScript private member.
 
 These tools do not edit source.
 Treat `safe: false` (nested `rename.safe` in refactor plans), conflicts, unsafe sites, omissions, and `sectionIssues` as blockers until checked.

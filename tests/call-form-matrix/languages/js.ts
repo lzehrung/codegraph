@@ -15,6 +15,25 @@ export const jsOmissions: readonly CallFormOmission[] = [
 
 export const jsCells: MatrixCell[] = [
   {
+    id: "js/private-self-member-call",
+    language: "js",
+    callForm: "self-member-call",
+    files: {
+      "widget.js": [
+        "export class Widget {",
+        "  #helper() { return 1; }",
+        "  run() { return this.#helper(); }",
+        "}",
+      ].join("\n"),
+      "decoy.js": ["export class Other {", "  #helper() { return -1; }", "}"].join("\n"),
+    },
+    use: { file: "widget.js", line: 3, token: "#helper" },
+    expected: { file: "widget.js", line: 2, token: "#helper" },
+    decoy: { file: "decoy.js", line: 2, token: "#helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.js", fromName: "run" },
+  },
+  {
     id: "js/bare-call",
     language: "js",
     callForm: "bare-call",

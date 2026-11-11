@@ -41,7 +41,7 @@ import {
   resolveImportTypeMember,
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
-import { selectMember } from "../../indexer/member-selection.js";
+import { resolveEcmaPrivateName, selectMember } from "../../indexer/member-selection.js";
 import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
 import { kotlinHasTrailingLambda } from "../../indexer/kotlin-call-compatibility.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
@@ -1138,6 +1138,8 @@ export async function emitFunctionBodyEdges(
   // C# calls through a dotted receiver (`P.Mix.M()`, `Imported.Outer.Inner.M()`), and `this`/`super` calls in an
   // unnamed type body (`new Base() { ... }`), which no declaration owns for the deferred hierarchy lookup.
   const dottedReceiverCalls: Array<{ fromId: string; access: ReceiverCallAccess }> = [];
+  // An arrow field declared later becomes known callable when its own body is visited.
+  const pendingPrivateCalls: Array<{ fromId: string; member: SymbolDef; access: ReceiverCallAccess }> = [];
   const callNodeTypes = new Set<string>([
     "call_expression",
     "call",
@@ -1547,6 +1549,25 @@ export async function emitFunctionBodyEdges(
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
+        if (isJsTsLanguage(context.sup.id) && access.property.type === "private_property_identifier") {
+          const target = resolveEcmaPrivateName(access.property, context.moduleEntry.locals);
+          if (target.status === "resolved" && target.target) {
+            const member = target.target;
+            const acceptsCall = memberAcceptsCallAt(
+              context.index,
+              member,
+              access.accessNode,
+              context.source,
+              context.sup.id,
+            );
+            if (acceptsCall && isCallTarget(context, member)) {
+              recordDefEdge(context, fromId, member, "calls", access.property);
+            } else if (acceptsCall && member.kind === SymbolKind.Variable) {
+              pendingPrivateCalls.push({ fromId, member, access });
+            }
+          }
+          return;
+        }
         if (recordTypeScriptNamespaceCall(context, node, access, fromId)) return;
         const typeScopedCppCall =
           context.sup.id === "cpp" &&
@@ -1746,6 +1767,9 @@ export async function emitFunctionBodyEdges(
         recordReceiverCall(call.node, call.access, implicitThis ? "any" : "static");
       }
     }
+  }
+  for (const { fromId, member, access } of pendingPrivateCalls) {
+    if (isCallTarget(context, member)) recordDefEdge(context, fromId, member, "calls", access.property);
   }
   for (const { fromId, access } of dottedReceiverCalls) {
     const member = await context.resolveMemberAccessTarget(access.property);

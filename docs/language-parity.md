@@ -79,6 +79,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Receiver navigation (`obj.method()`) works in every source language except C; the others are `limitedLanguages` in `diagnostics.memberResolutionCoverage` and may miss receiver-only consumers in impact.
 - `super`, `base`, `parent` walk class ancestors breadth-first and return only a unique shallowest match; interfaces beside the superclass are skipped.
 - TypeScript, TSX, Java, C#, and Kotlin follow explicitly typed field chains (`this.middle.repo.find()`); unannotated or ambiguous hops stay unresolved.
+- TypeScript, TSX, and JavaScript `#private` names bind to the innermost enclosing class that declares them, including fields, methods, accessors, static members, and `#name in object`. `findReferences` includes paired accessor declarations and their uses; as for public accessor pairs, `goToDefinition` leaves their uses unresolved instead of choosing a getter or setter. Detailed call edges include private methods and function-valued fields.
 - Kotlin and Java package-qualified types, nested classifiers, and Kotlin qualified constructors resolve through their proven owners rather than a same-named bare import. Value bindings do not hide package-qualified types or Java constructor types; Kotlin expression receivers still take precedence. Unproven qualified names remain unresolved with partial reference coverage; C# qualified type uses also exclude a same-named bare import.
 - Kotlin detailed graphs retain imported extension-function alias uses on value receivers; a qualified constructor does not create a use of a same-named bare import.
 - A member call on a local, parameter, field, or `this`/`self` never uses a free function, except in Kotlin and Go.
@@ -112,7 +113,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - A receiver call is never matched by bare member name against module locals or import aliases.
 - Receiver type proof belongs to its syntax site, not just its enclosing function and name; a shadowing block, closure, or parameter cannot reuse another binding's proof.
-- An unproven receiver emits no edge: structural types, non-constructor assignments (`auto b = Box::make()`), generic type parameters, unbound globals (`Math.max()`).
+- An unproven receiver emits no edge outside lexical ECMAScript private-name calls: structural types, non-constructor assignments (`auto b = Box::make()`), generic type parameters, unbound globals (`Math.max()`).
 - Several same-name members on one type are dropped unless argument count picks one; an ambiguous inheritance level emits nothing.
 - Go-to-definition and the detailed graph agree on call sites, except module top-level calls and computed or parenthesized callees (`(a ?? b)()`, `(f)()`).
 - A callback resolving to a parameter or local may have no edge; a literal-valued binding never gets one.

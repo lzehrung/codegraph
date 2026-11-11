@@ -99,6 +99,109 @@ describe("rename preview", () => {
     expect(await fsp.readFile(consumerFile, "utf8")).toBe(beforeConsumer);
   });
 
+  it.each(["ts", "tsx", "js"] as const)("preserves private name syntax in %s rename previews", async (extension) => {
+    const root = await mkTmpDir("cg-rename-private-");
+    const file = `private.${extension}`;
+    const source = [
+      "export class Owner {",
+      "  #field = 1;",
+      "  #taken = 9;",
+      "  #method() { return this.#field; }",
+      "  has(obj) { return #field in obj; }",
+      "  run() { return this.#method(); }",
+      "  nested() { return class Inner { #fresh = 0; use(obj) { return obj.#field; } }; }",
+      "}",
+      "class Decoy { #field = 2; #method() {} #renamed = 3; }",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(root, file), source, "utf8");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const fields = await workspaceSymbolsWithSession(session, { root, query: "#field" });
+      const field = fields.symbols.find((symbol) => symbol.location.range.start.line === 2);
+      expect(field).toBeDefined();
+      if (!field) throw new Error("missing private field");
+      const valid = await previewRenameWithSession(session, { root, handle: field.handle, newName: "#renamed" });
+      expect(valid.safe).toBe(true);
+      expect(valid.conflicts).toEqual([]);
+      expect(valid.edits.map((edit) => [edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        [2, "#field", "#renamed"],
+        [4, "#field", "#renamed"],
+        [5, "#field", "#renamed"],
+        [7, "#field", "#renamed"],
+      ]);
+      for (const newName of ["field", "#", "#9bad", "#constructor"]) {
+        const invalid = await previewRenameWithSession(session, { root, handle: field.handle, newName });
+        expect(invalid.safe).toBe(false);
+        expect(invalid.conflicts).toContainEqual(expect.objectContaining({ reason: "invalid_identifier" }));
+      }
+      const collision = await previewRenameWithSession(session, { root, handle: field.handle, newName: "#taken" });
+      expect(collision.safe).toBe(false);
+      expect(collision.conflicts).toContainEqual(expect.objectContaining({ reason: "name_collision" }));
+      const shadowed = await previewRenameWithSession(session, { root, handle: field.handle, newName: "#fresh" });
+      expect(shadowed.safe).toBe(false);
+      expect(shadowed.conflicts).toContainEqual(expect.objectContaining({ reason: "shadowing" }));
+
+      const methods = await workspaceSymbolsWithSession(session, { root, query: "#method" });
+      const method = methods.symbols.find((symbol) => symbol.location.range.start.line === 4);
+      expect(method).toBeDefined();
+      if (!method) throw new Error("missing private method");
+      const renamedMethod = await previewRenameWithSession(session, { root, handle: method.handle, newName: "#work" });
+      expect(renamedMethod.safe).toBe(true);
+      expect(renamedMethod.edits.map((edit) => [edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+        [4, "#method", "#work"],
+        [6, "#method", "#work"],
+      ]);
+      const invalidMethod = await previewRenameWithSession(session, { root, handle: method.handle, newName: "method" });
+      expect(invalidMethod.safe).toBe(false);
+      expect(invalidMethod.conflicts).toContainEqual(expect.objectContaining({ reason: "invalid_identifier" }));
+      const publicSymbols = await workspaceSymbolsWithSession(session, { root, query: "run" });
+      const publicMethod = publicSymbols.symbols.find((symbol) => symbol.location.range.start.line === 6);
+      expect(publicMethod).toBeDefined();
+      if (!publicMethod) throw new Error("missing public method");
+      const invalidPublic = await previewRenameWithSession(session, {
+        root,
+        handle: publicMethod.handle,
+        newName: "#run",
+      });
+      expect(invalidPublic.safe).toBe(false);
+      expect(invalidPublic.conflicts).toContainEqual(expect.objectContaining({ reason: "invalid_identifier" }));
+    } finally {
+      session.invalidate();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a private rename that captures an enclosing class name", async () => {
+    const root = await mkTmpDir("cg-rename-private-outer-");
+    const source = [
+      "export class Outer {",
+      "  #taken = 1;",
+      "  make() {",
+      "    return class Inner {",
+      "      #old = 0;",
+      "      read(inner, outer) { return inner.#old + outer.#taken; }",
+      "    };",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(root, "outer.ts"), source, "utf8");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    try {
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "#old" });
+      const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 5);
+      expect(target).toBeDefined();
+      if (!target) throw new Error("missing nested private field");
+      const renamed = await previewRenameWithSession(session, { root, handle: target.handle, newName: "#taken" });
+      expect(renamed.safe).toBe(false);
+      expect(renamed.conflicts).toContainEqual(expect.objectContaining({ reason: "shadowing" }));
+    } finally {
+      session.invalidate();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { alias: "@B", use: "B" },
     { alias: "B", use: "@B" },

@@ -7,6 +7,7 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
+import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import {
   classifyReceiver,
@@ -482,10 +483,12 @@ async function collectNamedNodeReferences(
       "type_identifier",
       "field_identifier",
     ]);
-    const canonicalSymbolName =
-      parsed.sup.id === "java" || parsed.sup.id === "kotlin"
-        ? parsed.sup.normalizeIdentifier(normalizeKotlinIdentifier(symbolName))
-        : parsed.sup.normalizeIdentifier(symbolName);
+    const privateName = isJsTsLanguage(parsed.sup.id) && symbolName.startsWith("#");
+    let canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
+    if (privateName) canonicalSymbolName = ecmaPrivateNameKey(symbolName);
+    else if (parsed.sup.id === "java" || parsed.sup.id === "kotlin") {
+      canonicalSymbolName = parsed.sup.normalizeIdentifier(normalizeKotlinIdentifier(symbolName));
+    }
     const isPhp = parsed.sup.id === "php";
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
     let nameEquivalenceUnavailable = false;
@@ -494,7 +497,8 @@ async function collectNamedNodeReferences(
     const row = scopeNodesFor(parsed.sup.id);
     const walk = (node: SyntaxNodeLike): void => {
       if (identifierTypes.has(node.type)) {
-        const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
+        let text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
+        if (privateName && node.type === "private_property_identifier") text = ecmaPrivateNameKey(text);
         let isMatch: boolean;
         if (!isPhp) {
           isMatch = text === canonicalSymbolName;
@@ -732,6 +736,16 @@ export async function collectVerifiedNamedNodeReferences(
         if (matchesExpectedDefinition(reexported.def)) {
           pushVerified({ range, via: { reexport: true } });
         }
+        continue;
+      }
+    }
+    // A getter/setter pair is one private name even when navigation cannot select an accessor.
+    const privateMember = isJsTsLanguage(parsed.sup.id) && expectedDef.isMember;
+    if (privateMember && node.type === "private_property_identifier") {
+      const locals = index.byFile.get(candidateFileKey)?.locals;
+      const privateName = locals ? resolveEcmaPrivateName(node, locals) : null;
+      if (privateName?.status === "resolved" && !privateName.target) {
+        if (privateName.definitions.some(matchesExpectedDefinition)) pushVerified({ range });
         continue;
       }
     }
