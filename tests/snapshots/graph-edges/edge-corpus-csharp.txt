@@ -31,6 +31,7 @@ file declarations/Consumer.cs -> declarations/HiddenBase.cs raw=Edge.Core
 file declarations/Consumer.cs -> declarations/OptionalOverride.cs raw=Edge.Core
 file declarations/Consumer.cs -> declarations/StaticScope.cs raw=Edge.Core
 file declarations/GlobalStatic.cs -> declarations/StaticScope.cs raw=Edge.Core.ScopeMix
+file declarations/GlobalUsings.cs -> declarations/GlobalUsings.cs raw=Edge.Global
 file declarations/QualifiedConsumer.cs -> declarations/Core.cs raw=Edge.Core.Helpers
 file declarations/RepoShadow.cs -> declarations/RepoShadow.cs raw=Decoy
 file declarations/StaticImport.cs -> declarations/StaticScope.cs raw=Edge.Core.ScopeMix
@@ -77,8 +78,22 @@ symbol declarations/FieldTypes.cs::Find@5:20 -[member_of]-> declarations/FieldTy
 symbol declarations/FieldTypes.cs::Run@22:20 -[member_of]-> declarations/FieldTypes.cs::Host@19:18
 symbol declarations/GenericOwner.cs::ViaNamespace@19:42 -[member_of]-> declarations/GenericOwner.cs::GenericOwnerConsumer@16:18
 symbol declarations/GenericOwner.cs::ViaOwner@18:47 -[member_of]-> declarations/GenericOwner.cs::GenericOwnerConsumer@16:18
+symbol declarations/GlobalStatic.cs::Call@7:16 -[calls]-> declarations/StaticScope.cs::Mix@5:23 site=7:26
 symbol declarations/GlobalStatic.cs::Call@7:16 -[member_of]-> declarations/GlobalStatic.cs::GlobalStaticConsumer@5:14
-symbol declarations/GlobalStatic.cs::ScopeMix@import -[ScopeMix]-> declarations/StaticScope.cs::ScopeMix@3:14
+symbol declarations/GlobalUsingConsumer.cs::Call@7:16 -[calls]-> declarations/GlobalUsings.cs::GlobalCall@11:23 site=7:26
+symbol declarations/GlobalUsingConsumer.cs::Call@7:16 -[member_of]-> declarations/GlobalUsingConsumer.cs::GlobalUsingConsumer@3:14
+symbol declarations/GlobalUsingConsumer.cs::NotARecordMember@9:16 -[member_of]-> declarations/GlobalUsingConsumer.cs::GlobalUsingConsumer@3:14
+symbol declarations/GlobalUsingConsumer.cs::Qualified@8:16 -[calls]-> declarations/GlobalUsings.cs::GlobalCall@11:23 site=8:47
+symbol declarations/GlobalUsingConsumer.cs::Qualified@8:16 -[member_of]-> declarations/GlobalUsingConsumer.cs::GlobalUsingConsumer@3:14
+symbol declarations/GlobalUsingConsumer.cs::Qualified@8:16 -[uses]-> declarations/GlobalUsings.cs::GlobalTools@9:21
+symbol declarations/GlobalUsings.cs::GlobalAlias@import -[GlobalRenderable]-> declarations/GlobalUsings.cs::GlobalRenderable@8:18
+symbol declarations/GlobalUsings.cs::GlobalCall@11:23 -[member_of]-> declarations/GlobalUsings.cs::GlobalTools@9:21
+symbol declarations/GlobalUsings.cs::GlobalCall@import -[GlobalCall]-> declarations/GlobalUsings.cs::GlobalCall@11:23
+symbol declarations/GlobalUsings.cs::GlobalRecord@import -[GlobalRecord]-> declarations/GlobalUsings.cs::GlobalRecord@14:15
+symbol declarations/GlobalUsings.cs::GlobalRecordHeight@import -[GlobalRecordHeight]-> declarations/GlobalUsings.cs::GlobalRecordHeight@16:16
+symbol declarations/GlobalUsings.cs::GlobalRenderable@import -[GlobalRenderable]-> declarations/GlobalUsings.cs::GlobalRenderable@8:18
+symbol declarations/GlobalUsings.cs::GlobalTools@import -[GlobalTools]-> declarations/GlobalUsings.cs::GlobalTools@9:21
+symbol declarations/GlobalUsings.cs::GlobalTypeAlias@import -[GlobalTools]-> declarations/GlobalUsings.cs::GlobalTools@9:21
 symbol declarations/Helpers.Part.cs::Two@5:23 -[member_of]-> declarations/Core.cs::PartialHelpers@8:29
 symbol declarations/Helpers.Part.cs::Two@5:23 -[member_of]-> declarations/Helpers.Part.cs::PartialHelpers@3:29
 symbol declarations/HiddenBase.cs::DerivedPicker@8:14 -[extends]-> declarations/HiddenBase.cs::BasePicker@3:14 site=8:30

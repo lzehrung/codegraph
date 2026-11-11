@@ -1,3 +1,4 @@
+import { csharpImportNamespace, csharpImportsForName, withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import {
   CSHARP_SUPPORT,
   JAVA_SUPPORT,
@@ -18,7 +19,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { sliceText, toRange } from "../util/ast.js";
-import { foldPhpIdentifierCase, normalizeCsharpQualifiedName, normalizeKotlinIdentifier } from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import {
   csharpNamespaceAtIndex,
   csharpNamespaceRegionAtIndex,
@@ -86,6 +87,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { getCallArgumentCount, memberLookupBinding, type CallableArity } from "../languages/callable-arity.js";
 import {
+  csharpNamespaceAt,
   csharpNamespaceChainDeclares,
   csharpNamespaceMemberKind,
   csharpProjectDeclarationsUnknown,
@@ -555,6 +557,7 @@ export function csharpAliasUnprovenReason(
   qualifier: SyntaxNodeLike,
   source: string,
 ): string | null {
+  mod = withCsharpGlobalUsings(index, mod);
   if (csharpAliasShadowedAt(index, mod, qualifier, source)) return CSHARP_SHADOWED_ALIAS_REASON;
   const alias = innermostNamespaceImport(
     mod.imports,
@@ -589,23 +592,29 @@ const csharpStarImportTables = new WeakMap<
 >();
 
 /** The `using N;` and `using static` directives that sit directly in `namespace`, read from the import list once. */
-function csharpStarImportsIn(mod: ModuleIndex, namespace: string): readonly CsharpStarImport[] {
-  let cached = csharpStarImportTables.get(mod.imports);
-  if (cached?.size !== mod.imports.length) {
+function csharpStarImportsIn(
+  mod: ModuleIndex,
+  namespace: string,
+  name: string,
+  arity: number,
+): readonly CsharpStarImport[] {
+  const imports = csharpImportsForName(mod, name, arity);
+  let cached = csharpStarImportTables.get(imports);
+  if (cached?.size !== imports.length) {
     const regions = mod.csharpNamespaceFacts?.regions;
     const byNamespace = new Map<string, CsharpStarImport[]>();
-    for (const binding of mod.imports) {
+    for (const binding of imports) {
       if (binding.kind !== "star") continue;
       const region = regions && csharpNamespaceRegionAtIndex(regions, binding.csharpDirectiveStartIndex);
-      const imported = normalizeCsharpQualifiedName(binding.from).replace(/^global::/u, "");
+      const imported = csharpImportNamespace(binding);
       const key = region?.name ?? "";
       const entry: CsharpStarImport = { binding, region: region || undefined, imported };
       const bucket = byNamespace.get(key);
       if (bucket) bucket.push(entry);
       else byNamespace.set(key, [entry]);
     }
-    cached = { size: mod.imports.length, byNamespace };
-    csharpStarImportTables.set(mod.imports, cached);
+    cached = { size: imports.length, byNamespace };
+    csharpStarImportTables.set(imports, cached);
   }
   return cached.byNamespace.get(namespace) ?? [];
 }
@@ -622,9 +631,10 @@ export function resolveCsharpNameRoot(
   source: string,
   files?: ParsedFileProvider,
 ): CsharpNameRoot {
+  mod = withCsharpGlobalUsings(index, mod);
   if (qualifier.parent?.type === "alias_qualified_name") return { kind: "none" };
   const name = sliceText(qualifier, source);
-  if (csharpAliasAt(mod, name, qualifier)) return { kind: "none" };
+  if (csharpAliasAt(index, mod, name, qualifier)) return { kind: "none" };
   const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
   const genericArity = csharpTypeArgumentArity(qualifier);
   const regions = mod.csharpNamespaceFacts?.regions;
@@ -649,7 +659,7 @@ export function resolveCsharpNameRoot(
     if (member === "ambiguous") return { kind: "unavailable" };
     const candidates: StarImportCandidate[] = [];
     let unavailable = false;
-    for (const { binding: imp, region, imported } of csharpStarImportsIn(mod, namespace)) {
+    for (const { binding: imp, region, imported } of csharpStarImportsIn(mod, namespace, normalized, genericArity)) {
       if (region && (qualifier.startIndex < region.start || qualifier.startIndex >= region.end)) continue;
       if (imp.staticMembersOf) {
         const use = { index, mod, ...(files ? { files } : {}) };
@@ -767,18 +777,28 @@ function csharpAliasTable(mod: ModuleIndex): CsharpAliasTable {
  * The alias, namespace or type, that C# binds the name `name` to at `useNode`: the one declared in the nearest namespace
  * block that contains the use. `undefined` when no alias is in scope there.
  */
-export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): ImportBinding | undefined {
+export function csharpAliasAt(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  name: string,
+  useNode: SyntaxNodeLike,
+): ImportBinding | undefined {
+  mod = withCsharpGlobalUsings(index, mod);
   const table = csharpAliasTable(mod);
   const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
   const typeAliases = table.types.get(normalized);
   // Most names have no alias at all, which the table proves without reading the import list again.
   if (!typeAliases && !table.namespaces.has(normalized)) return undefined;
   const namespaceAlias = innermostNamespaceImport(mod.imports, name, useNode, CSHARP_SUPPORT.normalizeIdentifier);
-  return nearestCsharpAlias(
+  const nearest = nearestCsharpAlias(
     mod,
     namespaceAlias ? [namespaceAlias, ...(typeAliases ?? [])] : (typeAliases ?? []),
     useNode.startIndex,
   );
+  if (!nearest?.csharpGlobal || useNode.parent?.type === "alias_qualified_name") return nearest;
+  const namespace = csharpNamespaceAt(index, mod.file, useNode.startIndex);
+  if (namespace && csharpNamespaceChainDeclares(index, mod, namespace, normalized)) return undefined;
+  return nearest;
 }
 
 /**
@@ -787,13 +807,19 @@ export function csharpAliasAt(mod: ModuleIndex, name: string, useNode: SyntaxNod
  * declares, or whose single alias is the one in scope at the use. A name that two aliases share, or whose alias sits in
  * another block, has no answer a whole-file table can give.
  */
-export function csharpAliasTableAnswers(mod: ModuleIndex, name: string, useNode: SyntaxNodeLike): boolean {
+export function csharpAliasTableAnswers(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  name: string,
+  useNode: SyntaxNodeLike,
+): boolean {
+  mod = withCsharpGlobalUsings(index, mod);
   const table = csharpAliasTable(mod);
   const types = table.types.get(CSHARP_SUPPORT.normalizeIdentifier(name));
   const namespaces = table.namespaces.get(CSHARP_SUPPORT.normalizeIdentifier(name));
   const declared = (types?.length ?? 0) + (namespaces?.length ?? 0);
   if (!declared) return true;
-  return declared === 1 && csharpAliasAt(mod, name, useNode) === (types?.[0] ?? namespaces?.[0]);
+  return declared === 1 && csharpAliasAt(index, mod, name, useNode) === (types?.[0] ?? namespaces?.[0]);
 }
 
 /**
@@ -856,7 +882,7 @@ export function resolveCsharpQualifiedReceiverType(
     const def = nested?.def && mod.locals.find((local) => local.range.start.index === nested.def?.start.index);
     return def && declaresMembers(def) ? def : null;
   }
-  const alias = csharpAliasAt(mod, rootName, lead.qualifier);
+  const alias = csharpAliasAt(index, mod, rootName, lead.qualifier);
   if (alias && alias.kind !== "namespace") return null;
   const name = csharpAliasQualifiedLookupName(typeNode, source, sliceText(qualified, source), mod.imports);
   if (!alias && !aliasQualified) {
@@ -1654,7 +1680,7 @@ export async function resolveMemberAccessDefinition(params: {
   const aliasBindsExpressionName = (expr: SyntaxNodeLike, exprName: string): boolean => {
     if (isCsharpAliasQualifier(expr, sup)) return false;
     if (resolveLexicalBinding?.(expr) || !csharpNameUnshadowed(ensureScopeIndex(), expr, exprName)) return false;
-    return !!csharpAliasAt(mod, exprName, expr);
+    return !!csharpAliasAt(index, mod, exprName, expr);
   };
   if (csharpLead) {
     const leadName = sliceText(csharpLead.qualifier, source);
@@ -1726,7 +1752,7 @@ export async function resolveMemberAccessDefinition(params: {
             imp = innermostNamespaceImport(mod.imports, exprName, expr, sup.normalizeIdentifier);
           if (!imp) return null;
         } else {
-          imp = csharpAliasAt(mod, exprName, expr);
+          imp = csharpAliasAt(index, mod, exprName, expr);
           if (imp) {
             const lookup = await aliasMemberLookup(expr, exprName);
             // An inherited nested type binds the name as a type receiver; any other member is a value of unknown type.
@@ -1879,7 +1905,7 @@ export async function resolveMemberAccessDefinition(params: {
           const rootName = sliceText(dottedRoot, source);
           const lexicalRoot =
             !!resolveLexicalBinding?.(dottedRoot) || !csharpNameUnshadowed(ensureScopeIndex(), dottedRoot, rootName);
-          if (!lexicalRoot && !csharpAliasAt(mod, rootName, dottedRoot)) {
+          if (!lexicalRoot && !csharpAliasAt(index, mod, rootName, dottedRoot)) {
             // A member an enclosing type receives from another part or a base class binds the root: it is no namespace.
             const enclosing = csharpTypeRootName(dottedRoot) ? await aliasMemberLookup(dottedRoot, rootName) : null;
             if (enclosing?.status === "member") return null;
@@ -4248,7 +4274,7 @@ export async function csharpAliasMemberLookup(
 ): Promise<CsharpAliasMemberLookup> {
   const typeOnly = csharpTypeOnlyName(node, true);
   const call = !typeOnly && implicitSelfCallee("csharp", node.parent ?? node)?.id === node.id;
-  if (!call && !csharpAliasAt(mod, name, node)) return csharpOuterMember(index, mod, node, name);
+  if (!call && !csharpAliasAt(index, mod, name, node)) return csharpOuterMember(index, mod, node, name);
   let ref = await keywordClassRefFromNode(index, mod, node);
   while (ref) {
     const members = await csharpTypeChainMembersNamed(index, ref, name, typeOnly, call);
@@ -4388,7 +4414,7 @@ export async function csharpAliasUsesHiddenByMembers(
     const name = sliceText(node, source);
     // A closer binding hides the alias on its own, and an alias that is not in scope here is not hidden by a member.
     const closest = findClosestScopeBinding(scopeIndex, name, node, sup);
-    if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(mod, name, node)) continue;
+    if (!fileBindingIsUnshadowed(scopeIndex, closest) || !csharpAliasAt(index, mod, name, node)) continue;
     const typeOnly = csharpTypeOnlyName(node, true);
     const call = implicitSelfCallee("csharp", node.parent ?? node)?.id === node.id;
     const argumentCount = call ? getCallArgumentCount({ languageId: "csharp", source, call: node.parent ?? node }) : "";

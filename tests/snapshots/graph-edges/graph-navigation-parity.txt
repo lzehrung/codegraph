@@ -162,8 +162,7 @@ symbol cs-qualified-construction/Consumer.cs::X@import -[UtilsClass]-> cs-qualif
 symbol cs-static-import/AliasUse.cs::Use@6:21 -[calls]-> cs-static-import/Point.cs::Sum@3:23 site=6:33
 symbol cs-static-import/AliasUse.cs::Use@6:21 -[member_of]-> cs-static-import/AliasUse.cs::AliasUse@5:14
 symbol cs-static-import/AliasUse.cs::Use@6:21 -[uses]-> cs-static-import/Point.cs::Point@2:16
-symbol cs-static-import/GlobalUsings.cs::Format@import -[Format]-> cs-static-import/Shared.cs::Format@3:26
-symbol cs-static-import/GlobalUsings.cs::TextUtilities@import -[TextUtilities]-> cs-static-import/Shared.cs::TextUtilities@2:23
+symbol cs-static-import/GlobalUsings.cs::Use@6:24 -[calls]-> cs-static-import/Shared.cs::Format@3:26 site=6:33
 symbol cs-static-import/GlobalUsings.cs::Use@6:24 -[member_of]-> cs-static-import/GlobalUsings.cs::StaticUse@5:14
 symbol cs-static-import/Point.cs::Sum@3:23 -[member_of]-> cs-static-import/Point.cs::Point@2:16
 symbol cs-static-import/Point.cs::Sum@9:23 -[member_of]-> cs-static-import/Point.cs::Point@8:16

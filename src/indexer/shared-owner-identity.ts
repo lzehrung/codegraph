@@ -449,7 +449,7 @@ export function selectUniqueCsharpNamespaceTypeFile(
   languageExtensions?: LanguageExtensionMap,
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
 ): { status: "found"; file: string } | { status: "not_found" } | { status: "ambiguous" } | { status: "partial" } {
-  const expectedPath = namespaceName + "." + typeName;
+  const expectedPath = namespaceName ? namespaceName + "." + typeName : typeName;
   const parsed = new Map<string, ParsedFileContext>();
   const matches: SymbolDef[] = [];
   let unreadable = false;

@@ -47,6 +47,14 @@ import { recordCacheCorruption } from "./reports.js";
 import type { ManifestFileEntry } from "./manifest.js";
 import { compareCodeUnits } from "../../util/collections.js";
 import { expandStarImports } from "../expand-star-imports.js";
+import {
+  isCsharpProjectUsing,
+  isCsharpProjectUsingFacts,
+  readCsharpProjectUsingFacts,
+  csharpProjectUsingFactsIdentity,
+  sameCsharpProjectUsingFacts,
+  type CsharpProjectUsingFacts,
+} from "../../util/csharp-project-usings.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 // The project snapshot embeds the filters that the bloom sidecar also holds, so a change to how a filter tokenizes
@@ -155,11 +163,14 @@ type ProjectIndexSnapshotPayload = {
   nativeRuntimeFingerprint: string;
   implementationFingerprint: string;
   projectFiles?: ProjectFileInfo[];
+  csharpProjectUsings?: ProjectIndex["csharpProjectUsings"];
   bloomFilters?: Record<string, SerializedBloomFilter>;
   fileSignatures: Record<string, SnapshotFileSignature>;
   analysis?: AnalysisSummary;
   analysisReport?: SnapshotAnalysisReport;
 };
+
+const refreshedSnapshotUsings = new WeakMap<ProjectIndexSnapshotPayload, CsharpProjectUsingFacts[]>();
 
 export function projectSnapshotFilesSignature(
   entries: ReadonlyMap<string, ManifestFileEntry>,
@@ -178,11 +189,17 @@ export function projectSnapshotFilesSignature(
   }
   return hash.digest("hex");
 }
-export function createProjectSnapshotIdentity(filesSignature: string, opts: BuildOptions | undefined): string {
+export function createProjectSnapshotIdentity(
+  filesSignature: string,
+  opts: BuildOptions | undefined,
+  csharpProjectUsings?: ProjectIndex["csharpProjectUsings"],
+): string {
   const hash = createHash("sha256");
-  hash.update("project-index-snapshot-identity-v2");
+  hash.update("project-index-snapshot-identity-v3");
   hash.update("\0");
   hash.update(filesSignature);
+  hash.update("\0");
+  hash.update(csharpProjectUsingFactsIdentity(csharpProjectUsings));
   hash.update("\0");
   hash.update(JSON.stringify(normalizeGraphOptions(opts?.graph)));
   hash.update("\0");
@@ -547,6 +564,25 @@ export async function tryLoadProjectIndexSnapshot(
       recordSnapshotInvalidation(snapshotPath, "thin snapshot missing disk-cached modules", opts?.logLevel);
       return null;
     }
+    let csharpProjectUsings = refreshedSnapshotUsings.get(payload) ?? payload.csharpProjectUsings;
+    const csharpFiles: string[] = [];
+    for (const mod of modules.values()) {
+      if (mod.csharpNamespaceFacts) csharpFiles.push(mod.file);
+    }
+    if (csharpFiles.length) {
+      const currentUsings = await readCsharpProjectUsingFacts(
+        projectRoot,
+        csharpFiles,
+        opts?.languageExtensions,
+        csharpProjectUsings,
+      );
+      if (!sameCsharpProjectUsingFacts(currentUsings, csharpProjectUsings ?? [])) {
+        recordSnapshotInvalidation(snapshotPath, "C# project Using items changed", opts?.logLevel);
+        return null;
+      }
+      refreshedSnapshotUsings.set(payload, currentUsings);
+      csharpProjectUsings = currentUsings;
+    }
     const shouldHydrateBloomFilters = opts?.useBloomFilters ?? true;
     const index: ProjectIndex = {
       graph,
@@ -561,10 +597,11 @@ export async function tryLoadProjectIndexSnapshot(
         ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters, projectRoot) }
         : {}),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
+      ...(csharpProjectUsings ? { csharpProjectUsings } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
       manifestEntries: projectIndexManifestEntries(manifestEntries),
-      projectSnapshotIdentity: createProjectSnapshotIdentity(filesSignature, opts),
+      projectSnapshotIdentity: createProjectSnapshotIdentity(filesSignature, opts, csharpProjectUsings),
     };
     return {
       index: {
@@ -901,7 +938,7 @@ export async function writeProjectIndexSnapshot(
   index: ProjectIndex,
   filesSignature: string,
 ): Promise<void> {
-  const projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
+  const projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts, index.csharpProjectUsings);
   const fileSignatures = serializeSnapshotFileSignatures(index.manifestEntries, projectRoot);
   const serializedBloomFilters = index.bloomFilters
     ? serializeBloomFilterCache(
@@ -927,6 +964,7 @@ export async function writeProjectIndexSnapshot(
       fileSignatures,
       ...(index.languageExtensions ? { languageExtensions: index.languageExtensions } : {}),
       ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
+      ...(index.csharpProjectUsings ? { csharpProjectUsings: index.csharpProjectUsings } : {}),
       ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
       ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
       ...(snapshotAnalysisReport ? { analysisReport: snapshotAnalysisReport } : {}),
@@ -1063,6 +1101,8 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
     (payload.analysisReport === undefined || isSnapshotAnalysisReport(payload.analysisReport)) &&
+    (payload.csharpProjectUsings === undefined ||
+      (Array.isArray(payload.csharpProjectUsings) && payload.csharpProjectUsings.every(isCsharpProjectUsingFacts))) &&
     (payload.projectFiles === undefined ||
       (Array.isArray(payload.projectFiles) && payload.projectFiles.every(isProjectFileInfo)))
   );
@@ -1302,6 +1342,7 @@ function isImportBinding(value: unknown): value is ImportBinding {
     typeof binding.from !== "string" ||
     !isResolvedImportTarget(binding.resolved) ||
     !isOptionalBoolean(binding.typeOnly) ||
+    (binding.csharpGlobal !== undefined && !isCsharpProjectUsing(binding.csharpGlobal)) ||
     !isImportMechanism(binding.mechanism) ||
     !isResolvedType(binding.resolvedType) ||
     !isOptionalNumber(binding.confidence)

@@ -88,6 +88,11 @@ function declaredContainersOf(facts: CsharpNamespaceFacts): DeclaredContainer[] 
     const declared = type.startsWith(CSHARP_FILE_LOCAL_PREFIX) ? type.slice(CSHARP_FILE_LOCAL_PREFIX.length) : type;
     const separator = declared.lastIndexOf(".");
     if (separator > 0) symbolsByNamespace.get(declared.slice(0, separator))?.add(declared.slice(separator + 1));
+    if (separator < 0 && !type.startsWith(CSHARP_FILE_LOCAL_PREFIX)) {
+      let globals = symbolsByNamespace.get("");
+      if (!globals) symbolsByNamespace.set("", (globals = new Set<string>()));
+      globals.add(declared);
+    }
   }
   return Array.from(symbolsByNamespace, ([name, symbols]) => ({ name, symbols }));
 }
@@ -259,7 +264,7 @@ export async function resolveCsharpNamespaceTypePath(
     ? normalizedNamespace.slice("global::".length)
     : normalizedNamespace;
   const normalizedType = normalizeCsharpIdentifier(typeName);
-  if (!namespaceLookup || !normalizedType) return { status: "not_found" };
+  if (!normalizedType) return { status: "not_found" };
 
   const indexRoot = await resolveNearestManifestRoot(projectRoot, fromFile, CSHARP_PACKAGE_MANIFEST_NAMES);
   const projectIndexResult = await getCsharpProjectNamespaceIndex(indexRoot, languageExtensions, report, parsedFiles);
@@ -278,13 +283,13 @@ export async function resolveCsharpNamespaceTypePath(
   return selected.status === "found" ? { ...selected, parts: confined.length } : selected;
 }
 
-/** The namespace and type of a dotted C# type name (`N.Solo`); `null` for a generic or single-segment name. */
+/** The namespace and type of a C# import target; a single segment belongs to the global namespace. */
 function splitCsharpTypeName(spec: string): { namespaceName: string; typeName: string } | null {
   const normalized = normalizeCsharpQualifiedName(spec);
   if (normalized.includes("<") || normalized.includes(">")) return null;
   const body = normalized.startsWith("global::") ? normalized.slice("global::".length) : normalized;
   const parts = body.split(".").filter(Boolean);
-  if (parts.length < 2) return null;
+  if (!parts.length) return null;
   return { namespaceName: parts.slice(0, -1).join("."), typeName: parts[parts.length - 1]! };
 }
 

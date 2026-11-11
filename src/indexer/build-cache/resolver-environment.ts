@@ -9,6 +9,8 @@ import { graphOnlyLanguageSupportsImportAliases } from "../../document-links.js"
 import { loadTsconfigResolutionInputsFor } from "../../util/resolution/tsconfig.js";
 import type { WorkspaceConfig } from "../../util/workspace.js";
 import type { BuildOptions } from "../types.js";
+import { csharpProjectUsingFiles } from "../../util/csharp-project-usings.js";
+import type { ProjectDiscoveryContext } from "../../util/project-files.js";
 
 const PROJECT_RESOLUTION_INPUTS = [
   "package.json",
@@ -176,6 +178,7 @@ export async function computeResolverEnvironmentFingerprint(
   files: readonly string[],
   opts: Pick<BuildOptions, "graph" | "languageExtensions" | "logLevel">,
   workspace: WorkspaceConfig | undefined,
+  discoveryContext?: ProjectDiscoveryContext,
 ): Promise<string | null | undefined> {
   const nodeModulesRoots = opts.graph?.resolveNodeModules
     ? await activeNodeModulesRoots(projectRoot, files)
@@ -222,8 +225,19 @@ export async function computeResolverEnvironmentFingerprint(
   for (const input of cargoInputs) {
     hash.update(`cargo\0${input.path}\0${input.size}\0${input.contentHash}\n`);
   }
+  // Project boundaries affect cached ordinary using resolution; Using items themselves are project-level facts.
+  const csharpManifests = await csharpProjectUsingFiles(
+    projectRoot,
+    files,
+    opts.languageExtensions,
+    discoveryContext?.readdirCache,
+  );
+  const csharpProjects = csharpManifests.filter((file) => file.toLowerCase().endsWith(".csproj"));
+  for (const file of csharpProjects) hash.update(`csharp-project\0${normalizedRelativePath(projectRoot, file)}\n`);
   if (!nodeModulesRoots) {
-    return configInputs.size || packages.length || cargoInputs.length ? hash.digest("hex") : undefined;
+    return configInputs.size || packages.length || cargoInputs.length || csharpProjects.length
+      ? hash.digest("hex")
+      : undefined;
   }
   const inputs: ResolutionInput[] = [];
   for (const name of PROJECT_RESOLUTION_INPUTS) {

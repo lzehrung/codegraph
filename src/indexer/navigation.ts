@@ -1,3 +1,4 @@
+import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -91,6 +92,7 @@ import {
   namespaceReexportOwners,
   referenceModuleTable,
   reverseReachableModules,
+  csharpGlobalUsingImporters,
 } from "./reference-query-index.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
@@ -205,8 +207,9 @@ export async function goToDefinition(
   parsedContext?: ParsedFileContext,
 ): Promise<GoToResult> {
   const { file, line, column } = req;
-  const mod = index.byFile.get(fileIdentityKey(file));
-  if (!mod) return { status: "not_found", reason: "File not indexed" };
+  const indexed = index.byFile.get(fileIdentityKey(file));
+  if (!indexed) return { status: "not_found", reason: "File not indexed" };
+  const mod = withCsharpGlobalUsings(index, indexed);
   assertQuerySourceForIndex(index, file);
 
   const sqlResult = await goToSqlDefinition(index, req);
@@ -849,8 +852,9 @@ async function findReferencesInternal(
   if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
 
-  const mod = index.byFile.get(fileIdentityKey(definitionFile));
-  if (!mod) return { status: "not_found", reason: "Module not found" };
+  const indexed = index.byFile.get(fileIdentityKey(definitionFile));
+  if (!indexed) return { status: "not_found", reason: "Module not found" };
+  const mod = withCsharpGlobalUsings(index, indexed);
 
   const refs: Reference[] = [];
   const seenRefs = new Map<string, number>();
@@ -1170,6 +1174,11 @@ async function findReferencesInternal(
     ).files) {
       unitPeerKeys.add(fileIdentityKey(unitPeer));
     }
+    if (parsedContext.sup.id === "csharp") {
+      for (const importer of csharpGlobalUsingImporters(index, candidate)) {
+        unitPeerKeys.add(fileIdentityKey(importer.file));
+      }
+    }
   }
   // A bloom filter holds each candidate file's identifiers in that file's own spelling, and a
   // probe can only test one spelling. PHP resolves class, interface, trait, enum, and function
@@ -1253,8 +1262,9 @@ async function findReferencesInternal(
 
   for (const fileId of candidateFiles) {
     if (hasReachedCollectionLimit()) break;
-    const module = index.byFile.get(fileIdentityKey(fileId));
-    if (!module) continue;
+    const indexedCandidate = index.byFile.get(fileIdentityKey(fileId));
+    if (!indexedCandidate) continue;
+    const module = withCsharpGlobalUsings(index, indexedCandidate);
 
     let scopeIndex: ScopeIndex | null = null;
     let candidateParsedContext: ParsedFileContext | null = null;

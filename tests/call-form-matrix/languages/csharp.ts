@@ -795,5 +795,21 @@ export const csharpCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "chain.cs", fromName: "Run" },
   },
+  {
+    id: "csharp/global-using-static",
+    language: "csharp",
+    callForm: "bare-call",
+    files: {
+      "Usings.cs": "global using static N.Tools;\n",
+      "Tools.cs": "namespace N;\npublic static class Tools { public static int Run() => 1; }\n",
+      "Decoy.cs": "namespace Other;\npublic static class Tools { public static int Run() => -1; }\n",
+      "Use.cs": "namespace App;\npublic class Use { public int Call() => Run(); }\n",
+    },
+    use: { file: "Use.cs", line: 2, token: "Run" },
+    expected: { file: "Tools.cs", line: 2, token: "Run" },
+    decoy: { file: "Decoy.cs", line: 2, token: "Run" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "Use.cs", fromName: "Call" },
+  },
   typeParameterReceiverCell("csharp"),
 ];

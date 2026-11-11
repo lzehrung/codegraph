@@ -1786,6 +1786,7 @@ async function buildIndexFromFileListInProbeCache(
       normalizedFiles,
       opts ?? {},
       workspaceConfig,
+      helperOpts?.discoveryContext,
     );
     if (useManifest) {
       resolverEnvironmentMatchesManifest =
@@ -2718,6 +2719,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         Object.keys(manifest.files),
         opts,
         workspaceConfig,
+        discoveryContext,
       );
       resolverEnvironmentMatchesManifest =
         resolverEnvironmentFingerprint !== null &&

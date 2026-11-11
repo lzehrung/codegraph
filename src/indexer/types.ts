@@ -10,6 +10,7 @@ import type { ProjectDiscoveryContext, ProjectFileDiscoveryOptions, ProjectFileI
 import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { CsharpNamespaceFacts } from "../util/csharp-tree.js";
+import type { CsharpProjectUsingFacts } from "../util/csharp-project-usings.js";
 import type { JvmFileFacts } from "../util/jvm-tree.js";
 import type { AngularJsFileFacts } from "../frameworks/angularjs.js";
 
@@ -218,6 +219,8 @@ export type ProjectIndex = {
   parsed?: Map<string, ParsedFileContext> | undefined;
   bloomFilters?: import("../util/bloom-filter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
+  /** Literal global Using items declared by individual project/props files, never resolved across files here. */
+  csharpProjectUsings?: CsharpProjectUsingFacts[];
   referenceCandidates?: ReferenceCandidateIndex;
   sqlNavigation?: SqlNavigationCache;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;

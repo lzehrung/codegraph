@@ -148,6 +148,7 @@ const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
 const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   class_body: true,
   class_declaration: true,
+  record_declaration: true,
   abstract_class_declaration: true,
   class_definition: true,
   class_specifier: true,

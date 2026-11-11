@@ -1,7 +1,11 @@
+import type { CsharpProjectUsing } from "../util/csharp-project-usings.js";
 import type { FileId, Range } from "../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../util/specifiers.js";
 
-export type ImportBinding =
+/** Per-file provenance; effective project-wide C# bindings are never persisted in another module. */
+export type ImportBinding = LanguageImportBinding & { csharpGlobal?: CsharpProjectUsing };
+
+type LanguageImportBinding =
   | {
       kind: "default";
       local: string;

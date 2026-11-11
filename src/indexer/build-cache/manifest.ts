@@ -1,3 +1,4 @@
+import { csharpProjectConfigurationWithoutUsings } from "../../util/csharp-project-usings.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -357,9 +358,12 @@ export async function computeConfigHash(
     for (const file of collected.files) {
       try {
         const content = await readProjectDiscoveryFileText(context, file);
+        const csharpProject = file.toLowerCase().endsWith(".csproj") || path.basename(file) === "Directory.Build.props";
+        const configuration = csharpProject ? csharpProjectConfigurationWithoutUsings(content) : content;
+        if (configuration === undefined) continue;
         const relative = path.relative(projectRoot, file).replace(/\\/g, "/");
         hash.update(relative);
-        hash.update(content);
+        hash.update(configuration);
       } catch (error) {
         const message = `Failed to read config file "${file}": ${stringifyUnknown(error)}`;
         if (!firstError) firstError = message;

@@ -1,3 +1,4 @@
+import { isCsharpProjectUsing } from "../../util/csharp-project-usings.js";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import crypto from "node:crypto";
 import { isRubyLoadForm } from "../../util/specifiers.js";
@@ -550,6 +551,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     jvmTypeWildcardName?: unknown;
     jvmStaticWildcardName?: unknown;
     csharpDirectiveStartIndex?: unknown;
+    csharpGlobal?: unknown;
     pythonStatementStartIndex?: unknown;
     jvmPackageFiles?: unknown;
     jvmPackageLanguageId?: unknown;
@@ -563,6 +565,7 @@ function hasValidImportBindingRanges(value: unknown): boolean {
     isOptionalRange(binding.localRange) &&
     (binding.jvmTypeOwnerStartIndex === undefined || typeof binding.jvmTypeOwnerStartIndex === "number") &&
     (binding.csharpDirectiveStartIndex === undefined || typeof binding.csharpDirectiveStartIndex === "number") &&
+    (binding.csharpGlobal === undefined || isCsharpProjectUsing(binding.csharpGlobal)) &&
     (binding.pythonStatementStartIndex === undefined || typeof binding.pythonStatementStartIndex === "number") &&
     (binding.jvmTypeWildcardName === undefined || typeof binding.jvmTypeWildcardName === "string") &&
     (binding.jvmStaticWildcardName === undefined || typeof binding.jvmStaticWildcardName === "string") &&

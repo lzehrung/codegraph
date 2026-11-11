@@ -22,6 +22,7 @@ import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js"
 import type { BuildReport, ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportDegradedHook, ImportResolver, ResolvedImportTarget } from "./context.js";
 import type { ParsedFileContext } from "../parse-context.js";
+import type { CsharpProjectUsing } from "../../util/csharp-project-usings.js";
 
 /**
  * Per-language import-binding registry for statement overrides and implicit native-capture
@@ -127,6 +128,14 @@ function csharpAliasTargetLeaf(node: SyntaxNodeLike): SyntaxNodeLike | null {
   return null;
 }
 
+function csharpGlobalUsing(parsed: CsharpUsingDirective): CsharpProjectUsing {
+  return {
+    from: parsed.value,
+    isStatic: parsed.isStatic,
+    ...(parsed.alias ? { alias: normalizeCsharpIdentifier(parsed.alias.text) } : {}),
+  };
+}
+
 function pushCsharpOverride(
   context: LanguageSpecificImportContext,
   parsed: CsharpUsingDirective,
@@ -154,6 +163,7 @@ function pushCsharpOverride(
       ...(importedRange ? { importedRange } : {}),
       resolved,
       typeOnly,
+      ...(parsed.isGlobal ? { csharpGlobal: csharpGlobalUsing(parsed) } : {}),
     });
     return;
   }
@@ -164,6 +174,7 @@ function pushCsharpOverride(
     resolved,
     typeOnly,
     csharpDirectiveStartIndex: directiveStartIndex,
+    ...(parsed.isGlobal ? { csharpGlobal: csharpGlobalUsing(parsed) } : {}),
   });
 }
 
@@ -222,9 +233,8 @@ export async function applyCsharpImportDirective(
   const importedRange =
     parsed.alias && lineStarts ? csharpNodeRange(parsed.leaf, context.source, lineStarts) : undefined;
 
-  // Static imports bind to a declaring type only when exactly one file owns that type. A global
-  // static using applies to the whole project, which module-local bindings cannot express.
-  if (parsed.isStatic && !parsed.isGlobal) {
+  // Static imports bind to a declaring type only when exactly one file owns that type.
+  if (parsed.isStatic) {
     const typeMatch = await resolveCsharpDottedTypeImportPath(
       context.projectRoot,
       parsed.value,
@@ -237,7 +247,7 @@ export async function applyCsharpImportDirective(
     // external. The module records that, so a later build resolves it again once every file reads.
     if (typeMatch.status === "partial") context.onDegraded?.("lookup");
     const qualifiedType = normalizeCsharpQualifiedName(parsed.value).replace(/^global::/u, "");
-    if (typeMatch.status === "found" && !typeMatch.parts && qualifiedType.includes(".")) {
+    if (typeMatch.status === "found" && !typeMatch.parts) {
       context.pushBinding({
         kind: "star",
         from: parsed.value,
@@ -245,6 +255,7 @@ export async function applyCsharpImportDirective(
         typeOnly,
         staticMembersOf: qualifiedType,
         csharpDirectiveStartIndex: directive.startIndex,
+        ...(parsed.isGlobal ? { csharpGlobal: csharpGlobalUsing(parsed) } : {}),
       });
       return;
     }
@@ -254,6 +265,7 @@ export async function applyCsharpImportDirective(
       resolved: { external: parsed.rawValue },
       typeOnly,
       csharpDirectiveStartIndex: directive.startIndex,
+      ...(parsed.isGlobal ? { csharpGlobal: csharpGlobalUsing(parsed) } : {}),
     });
     return;
   }
@@ -276,6 +288,7 @@ export async function applyCsharpImportDirective(
       ...(namespaceTargets.length === 1 ? { resolved: namespaceTargets[0]!.replace(/\\/g, "/") } : {}),
       typeOnly,
       ...(localRange ? { localRange } : {}),
+      ...(parsed.isGlobal ? { csharpGlobal: csharpGlobalUsing(parsed) } : {}),
     });
     return;
   }

@@ -1,3 +1,13 @@
+import {
+  csharpGlobalNamespaceMayExport,
+  csharpGlobalTypeFiles,
+  csharpImportNamespace,
+} from "./csharp-global-usings.js";
+import {
+  csharpGlobalUsingSource,
+  csharpProjectUsingNamespaceFiles,
+  withCsharpGlobalUsings,
+} from "./csharp-global-usings.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -968,8 +978,11 @@ function resolveCsharpNamespaceImport(
   lookupName: string,
   opts: ResolveExportOptions | undefined,
 ): SymbolDef | { namespace: FileId } | null {
+  imp = csharpGlobalUsingSource(imp);
   // A binding that is not one of the index's own (a copy) falls back to the bound file's directory.
-  const files = csharpNamespaceImportDirectories(index).get(imp) ?? [boundFile];
+  const files = csharpGlobalTypeFiles(imp, lookupName, opts?.csharpGenericArity) ??
+    csharpProjectUsingNamespaceFiles(imp) ??
+    csharpNamespaceImportDirectories(index).get(imp) ?? [boundFile];
   const matches: SymbolDef[] = [];
   let namespaceHit: FileId | undefined;
   for (const file of files) {
@@ -996,6 +1009,7 @@ export function resolveCsharpQualifiedName(
   referenceIndex: number,
   csharpGenericArity?: number,
 ): ResolvedExport | null {
+  mod = withCsharpGlobalUsings(index, mod);
   const options = { referenceIndex, ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}) };
   const direct = resolveExport(index, mod.file, qualifiedName, options);
   if (direct) return direct;
@@ -1005,7 +1019,7 @@ export function resolveCsharpQualifiedName(
   const typeName = qualifiedName.slice(separator + 1);
   for (const imp of mod.imports) {
     if (imp.kind !== "namespace") continue;
-    if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
+    if (csharpImportNamespace(imp) !== namespaceName) continue;
     const files = csharpNamespaceImportDirectories(index).get(imp);
     const boundFile = (typeof imp.resolved === "string" ? imp.resolved : undefined) ?? files?.[0];
     if (!boundFile) continue;
@@ -1014,7 +1028,7 @@ export function resolveCsharpQualifiedName(
   }
   for (const imp of mod.imports) {
     if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
-    if (normalizeCsharpQualifiedName(imp.from).replace(/^global::/u, "") !== namespaceName) continue;
+    if (csharpImportNamespace(imp) !== namespaceName) continue;
     const hit = resolveImported(index, imp, typeName, options);
     if (!hit) return null;
     return "namespace" in hit ? { kind: "namespace", file: hit.namespace } : { kind: "resolved", def: hit };
@@ -1089,6 +1103,7 @@ export function resolveImported(
   exportedName: string,
   opts?: ResolveExportOptions,
 ): SymbolDef | { namespace: FileId } | null {
+  if (!csharpGlobalNamespaceMayExport(imp, exportedName, opts?.csharpGenericArity)) return null;
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
   if (imp.kind === "named" && imp.jvmPackageIncomplete && imp.jvmPackageLanguageId === "kotlin") {
