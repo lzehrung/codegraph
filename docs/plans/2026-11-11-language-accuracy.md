@@ -29,16 +29,49 @@ A checked-in script that indexes pinned open-source repositories, samples sites 
 asks a compiler or language-service oracle for the answer, and reports wrong answers and misses per
 language, repository, and syntax form.
 
-- [ ] Benchmark harness: pinned corpus manifest (repository URL and commit), deterministic sampling,
+- [x] Benchmark harness: pinned corpus manifest (repository URL and commit), deterministic sampling,
       scoring for go-to-definition, references, and call edges, JSON and Markdown reports
-- [ ] TypeScript and JavaScript oracle (TypeScript language service)
-- [ ] C# oracle (Roslyn)
-- [ ] Baseline results for TypeScript and C# recorded in this plan
+      (`npm run accuracy`, `docs/benchmarks/accuracy.md`)
+- [x] TypeScript and JavaScript oracle (TypeScript language service)
+- [x] C# oracle (Roslyn)
+- [x] Baseline results for TypeScript and C# recorded in this plan (below)
 - [ ] Python oracle (pyright or jedi)
 - [ ] Go oracle (`gopls`)
 - [ ] Java and Kotlin: compiler checks only (no scriptable reference oracle)
 - [ ] Swift and Ruby: no oracle; rely on the edge corpus
 - [ ] Re-rank Phase 2 by measured frequency
+
+### Baseline (seed 1, 400 sites and 80 declarations per repository, main at v3.2.1)
+
+| Repository      | Language   | Correct | Wrong | Missed | External OK | Excluded | Refs precision / recall | Overclaims |
+| --------------- | ---------- | ------: | ----: | -----: | ----------: | -------: | ----------------------- | ---------: |
+| Zod             | TypeScript |     129 |    11 |     56 |          23 |      181 | 86.1% / 5.2%            |          5 |
+| Hono            | TypeScript |     208 |     1 |    123 |          60 |        8 | 74.3% / 40.5%           |          2 |
+| Spectre.Console | C#         |     245 |     3 |     78 |          60 |       14 | 89.0% / 23.4%           |          0 |
+| Humanizer       | C#         |     263 |     0 |     48 |          83 |        6 | 97.0% / 49.0%           |          0 |
+
+Highest miss rates by syntax form: TypeScript type references (58%) and member accesses (52%); C#
+member calls (26%), member accesses (27%), and type references (27%). Wrong answers are rare
+(1.1% overall); misses and low reference recall dominate.
+
+### Real-code gaps found by the benchmark
+
+Not covered by the edge corpus. Each fix adds a corpus case first.
+
+- [ ] C#: a `global using` directive in one file applies to every file of the project
+      (Spectre.Console `Properties/Usings.cs`); also project-file `<Using Include="..." />`.
+      Reproduced: a type reached only through another file's `global using` is `not_found`.
+- [ ] TypeScript: a same-file `type` alias declared after its use (Hono `src/types.ts:2354` uses
+      `MergeTypedResponse` from `:2653`). Reproduced: `not_found`.
+- [ ] TypeScript: `#private` members. Reproduced: references miss `this.#name(...)` calls and still
+      report `complete` coverage.
+- [ ] TypeScript: interface members through a typed parameter (`c.value` with
+      `c: Context<number>`). Reproduced: `not_found` for go-to-definition and references.
+- [ ] TypeScript: a namespace import used as a type qualifier (`import * as schemas` then
+      `schemas.X`) resolves to an unrelated module member instead of the import (all 11 Zod wrong
+      answers, for example `packages/zod/src/v4/core/api.ts:218`).
+- [ ] C#: object-initializer member names resolve to members of the enclosing type (2 Spectre.Console
+      wrong answers).
 
 ## Phase 2: Known edge-corpus gaps
 
