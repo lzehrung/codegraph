@@ -90,6 +90,7 @@
     "graph:snapshot": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/graph-edge-snapshot.mjs",
     "graph:snapshot:check": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/graph-edge-snapshot.mjs --check",
     "bench:query": "node ./scripts/benchmarks/measure-query-substrate.mjs",
+    "accuracy": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/accuracy/accuracy-benchmark.mjs",
     "build:standalone": "node ./scripts/standalone/build-standalone.mjs",
     "smoke:onboarding": "node ./scripts/onboarding/run-funnel-smoke.mjs",
     "test:ui": "node ./scripts/ensure-dist-for-tests.mjs && vitest --ui",

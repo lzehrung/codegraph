@@ -1,0 +1,31 @@
+[
+  {
+    "id": "zod",
+    "language": "typescript",
+    "url": "https://github.com/colinhacks/zod.git",
+    "commit": "19c40d2072288b4cafec851e9d056a72a88e5973",
+    "include": ["packages/zod/src/**/*.ts"]
+  },
+  {
+    "id": "hono",
+    "language": "typescript",
+    "url": "https://github.com/honojs/hono.git",
+    "commit": "f6fbaf0299c48eea9e656e03e2ffe7ac755e8823",
+    "include": ["src/**/*.{ts,tsx}"],
+    "exclude": ["src/**/*.test.{ts,tsx}", "src/**/__tests__/**", "src/**/benchmarks/**"]
+  },
+  {
+    "id": "spectre-console",
+    "language": "csharp",
+    "url": "https://github.com/spectreconsole/spectre.console.git",
+    "commit": "e8045f7c53c3c217a7f93f362f5256f1fadc0020",
+    "include": ["src/Spectre.Console/**/*.cs", "src/Spectre.Console.Ansi/**/*.cs"]
+  },
+  {
+    "id": "humanizer",
+    "language": "csharp",
+    "url": "https://github.com/Humanizr/Humanizer.git",
+    "commit": "4574b93883bf48e3f0f3bca73297054537317ab2",
+    "include": ["src/Humanizer/**/*.cs"]
+  }
+]
