@@ -71,6 +71,9 @@ export function resolveCacheAnchor(projectRoot: string, opts?: BuildOptions): Ca
     }
     return { anchor: path.resolve(location), layer: "explicit" };
   }
+  const pendingLifecycleAnchor =
+    opts?.cachePendingManifest && isWritableDirectory(projectRoot) && !isForbiddenAnchor(projectRoot);
+  if (pendingLifecycleAnchor) return { anchor: path.resolve(projectRoot), layer: "manifest" };
   return findRepositoryAnchor(projectRoot);
 }
 

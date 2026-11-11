@@ -260,6 +260,8 @@ export type BuildOptions = {
    * path: the resolved cache lives in a namespaced subdirectory under the anchor.
    */
   cacheLocation?: CacheLocation;
+  /** @internal Resolve repository metadata as if this build's lifecycle manifest already existed. */
+  cachePendingManifest?: boolean;
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
   graph?: GraphBuildOptions;
