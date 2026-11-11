@@ -13,6 +13,7 @@ import {
 export type LifecycleCommandContext = {
   command: "init" | "status" | "sync" | "uninit";
   root: string;
+  cwd: string;
   buildOptions?: BuildOptions;
   hasFlag: (name: string) => boolean;
   writeJSONLine: (value: unknown) => void;
@@ -41,8 +42,13 @@ export async function handleLifecycleCommand(context: LifecycleCommandContext): 
   }
 
   if (context.command === "uninit") {
-    const result = await uninitCodegraphLifecycle(context.root, { force: context.hasFlag("--force") });
-    writeLifecycleResult(context, result, formatUninitResult(result));
+    const purge = context.hasFlag("--purge");
+    const result = await uninitCodegraphLifecycle(context.root, {
+      force: context.hasFlag("--force"),
+      purge,
+      cwd: context.cwd,
+    });
+    writeLifecycleResult(context, result, formatUninitResult(result, purge));
     return;
   }
 
@@ -81,8 +87,9 @@ function formatSyncResult(label: string, result: CodegraphLifecycleSyncResult): 
   return summary;
 }
 
-function formatUninitResult(result: CodegraphLifecycleUninitResult): string {
+function formatUninitResult(result: CodegraphLifecycleUninitResult, purge: boolean): string {
   if (!result.removed) return `Codegraph is not initialized at ${result.root}.`;
+  if (purge) return `Purged Codegraph state at ${result.root}: ${result.removedEntries.join(", ")}.`;
   return `Removed Codegraph lifecycle state at ${result.root}.`;
 }
 

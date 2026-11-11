@@ -9,6 +9,15 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Added
+
+- `codegraph uninit --purge` also removes the disk cache and server log. It refuses while a shared server is registered (run `codegraph server stop` first) or when run from inside `.codegraph/`, and lists paths it cannot remove. JSON `uninit` results add `removedEntries`.
+- Purge only removes `<root>/.codegraph/`, leaving caches configured with `--cache-dir`, `CODEGRAPH_CACHE_DIR`, or the user cache location. Other projects' cache namespaces under this `.codegraph/cache/` are removed and rebuild on next use.
+
+### Changed
+
+- `codegraph init`, `status`, `sync`, and `uninit` without a path or `--root` use the nearest initialized parent directory, or the project that owns the `.codegraph/` directory or cache they run in. The search stops at a Git repository, home, or filesystem-root boundary. An inaccessible current directory reports an error and asks you to `cd` to the project directory.
+
 ## [3.2.0] - 2026-11-10
 
 ### Changed

@@ -64,6 +64,7 @@ async function runLifecycleCommand(ctx: CliProjectContext, command: LifecycleCom
     await handleLifecycleCommand({
       command,
       root: ctx.projectRootFs,
+      cwd: getCwd(),
       buildOptions: ctx.buildAgentOptions(),
       hasFlag: ctx.hasFlag,
       writeJSONLine,

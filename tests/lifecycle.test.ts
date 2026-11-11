@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codegraphLifecycleManifestPath,
@@ -17,14 +19,21 @@ import {
   type CodegraphLifecycleSyncResult,
   type CodegraphLifecycleUninitResult,
 } from "../src/lifecycle/manifest.js";
+import { discoverCodegraphLifecycleRoot, resolveCliRootPolicy } from "../src/cli/root-policy.js";
 import * as indexerManifest from "../src/indexer/build-cache/manifest.js";
+import { resolveCacheLocation } from "../src/indexer/build-cache/location.js";
 import * as agentSession from "../src/agent/session.js";
 import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
 import { CODEGRAPH_CONFIG_FILE } from "../src/config.js";
-import type { PathLike } from "node:fs";
+import fs, { type PathLike } from "node:fs";
+import {
+  isFileIdentityCaseInsensitive,
+  resetFileIdentityCaseSensitivityForTests,
+  setFileIdentityCaseInsensitive,
+} from "../src/util/paths.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -917,16 +926,11 @@ describe("project lifecycle commands", () => {
     const sentinelPath = path.join(externalDirectory, "sentinel.txt");
     await fsp.writeFile(sentinelPath, "operator data\n", "utf8");
 
-    try {
-      await fsp.symlink(
-        externalDirectory,
-        path.join(root, ".codegraph"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    } catch (error) {
-      if (process.platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM") return;
-      throw error;
-    }
+    await fsp.symlink(
+      externalDirectory,
+      path.join(root, ".codegraph"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     await expect(uninitCodegraphLifecycle(root, { force: true })).rejects.toThrow(
       "Refusing to traverse symbolic link as .codegraph lifecycle directory",
@@ -961,11 +965,1354 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(root)).toEqual(["server.json", "server.log"]);
   });
 
+  describe("lifecycle root discovery", () => {
+    it("does not change or freeze the index filesystem case mode during discovery", async () => {
+      const root = await mkTmpDir("cg-life-discovery-case-mode-");
+      const cache = path.join(root, ".codegraph", "cache", "index-v1");
+      await writeFile(root, ".codegraph/manifest.json", "{}\n");
+      await fsp.mkdir(cache, { recursive: true });
+      const plain = await mkTmpDir("cg-life-discovery-plain-mode-");
+      const git = await mkTmpDir("cg-life-discovery-git-mode-");
+      await fsp.mkdir(path.join(git, ".git"));
+      const home = path.join(plain, "unrelated-home");
+      const originalMode = isFileIdentityCaseInsensitive();
+      try {
+        for (const cwd of [root, cache, plain, git]) {
+          resetFileIdentityCaseSensitivityForTests(false);
+          expect(isFileIdentityCaseInsensitive()).toBe(false);
+          expect(discoverCodegraphLifecycleRoot(cwd, home).status).toBe("ok");
+          expect(isFileIdentityCaseInsensitive()).toBe(false);
+          setFileIdentityCaseInsensitive(true);
+          expect(isFileIdentityCaseInsensitive()).toBe(true);
+        }
+      } finally {
+        resetFileIdentityCaseSensitivityForTests(originalMode);
+      }
+    });
+
+    it.each(["project", "subfolder"] as const)(
+      "preserves the logical spelling of a linked %s cwd for implicit discovery",
+      async (location) => {
+        const root = await mkTmpDir("cg-life-logical-project-");
+        const parent = await mkTmpDir("cg-life-logical-parent-");
+        const logicalRoot = path.join(parent, "project");
+        await writeFile(root, "src/deep/main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await fsp.symlink(root, logicalRoot, process.platform === "win32" ? "junction" : "dir");
+        const cwd = location === "project" ? logicalRoot : path.join(logicalRoot, "src", "deep");
+
+        expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: logicalRoot });
+        const implicit = await captureCli(["status", "--json"], { cwd });
+        const explicit = await captureCli(["status", "--root", logicalRoot, "--json"], { cwd });
+
+        expect(implicit.exitCode).toBeUndefined();
+        expect(explicit.exitCode).toBeUndefined();
+        expect(implicit.stderr).toBe("");
+        expect(explicit.stderr).toBe("");
+        const implicitPayload = JSON.parse(implicit.stdout) as CodegraphLifecycleStatus;
+        const explicitPayload = JSON.parse(explicit.stdout) as CodegraphLifecycleStatus;
+        expect(implicitPayload.root).toBe(logicalRoot);
+        expect(implicitPayload.root).toBe(explicitPayload.root);
+        expect(implicitPayload.root).not.toBe(root);
+        expect(implicitPayload.initialized).toBeTruthy();
+        expect(implicitPayload.manifestPath).toBe(codegraphLifecycleManifestPath(logicalRoot));
+        expect(await readManifest(root)).toEqual(manifest);
+        await expect(fsp.stat(path.join(logicalRoot, "src", "deep", ".codegraph"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+    );
+
+    it("conservatively keeps a direct cache alias as the logical start without touching its physical owner", async () => {
+      const root = await mkTmpDir("cg-life-logical-cache-owner-");
+      const parent = await mkTmpDir("cg-life-logical-cache-parent-");
+      const cwd = path.join(parent, "cache-alias");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      const cache = path.join(root, ".codegraph", "cache", "index-v1");
+      await fsp.symlink(cache, cwd, process.platform === "win32" ? "junction" : "dir");
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: cwd });
+      for (const args of [
+        ["uninit", "--json"],
+        ["uninit", "--purge", "--json"],
+      ]) {
+        const result = await captureCli(args, { cwd });
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, removed: false });
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+      }
+    });
+
+    it("treats a directory link at .git as a boundary and leaves the initialized parent untouched", async () => {
+      const parent = await mkTmpDir("cg-life-linked-git-parent-");
+      await writeFile(parent, "main.ts", "export const parent = 1;\n");
+      const manifest = (await initCodegraphLifecycle(parent)).manifest;
+      const root = path.join(parent, "nested");
+      const cwd = path.join(root, "src", "deep");
+      await writeFile(cwd, "main.ts", "export const nested = 2;\n");
+      await initializeGitRepository(root);
+      const metadata = path.join(await mkTmpDir("cg-life-linked-git-metadata-"), "repository.git");
+      await fsp.rename(path.join(root, ".git"), metadata);
+      await fsp.symlink(metadata, path.join(root, ".git"), process.platform === "win32" ? "junction" : "dir");
+      const head = await fsp.readFile(path.join(metadata, "HEAD"), "utf8");
+
+      for (const start of [root, cwd]) {
+        expect(discoverCodegraphLifecycleRoot(start)).toEqual({ status: "ok", projectRootFs: start });
+        const result = await captureCli(["uninit", "--json"], { cwd: start });
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({ root: start, removed: false });
+        expect(await readManifest(parent)).toEqual(manifest);
+        await expect(fsp.stat(path.join(start, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await fsp.lstat(path.join(root, ".git"))).isSymbolicLink()).toBeTruthy();
+      expect(await fsp.readFile(path.join(metadata, "HEAD"), "utf8")).toBe(head);
+    });
+
+    it("honors an injected linked home from both logical and physical project and cache spellings", async () => {
+      const home = await mkTmpDir("cg-life-physical-home-");
+      const parent = await mkTmpDir("cg-life-linked-home-parent-");
+      const logicalHome = path.join(parent, "home");
+      await writeFile(home, "home.ts", "export const homeValue = 1;\n");
+      const manifest = (await initCodegraphLifecycle(home)).manifest;
+      await writeFile(home, ".codegraph/sentinel.txt", "home state\n");
+      await fsp.symlink(home, logicalHome, process.platform === "win32" ? "junction" : "dir");
+      await writeFile(home, "projects/myrepo/main.ts", "export const project = 2;\n");
+      vi.spyOn(os, "homedir").mockReturnValue(logicalHome);
+
+      for (const spelling of [home, logicalHome]) {
+        expect(discoverCodegraphLifecycleRoot(spelling, logicalHome)).toEqual({
+          status: "ok",
+          projectRootFs: spelling,
+        });
+        for (const relative of ["projects/myrepo", ".codegraph/cache/index-v1"]) {
+          const cwd = path.join(spelling, relative);
+          expect(discoverCodegraphLifecycleRoot(cwd, logicalHome)).toEqual({ status: "ok", projectRootFs: cwd });
+          for (const args of [
+            ["uninit", "--json"],
+            ["uninit", "--purge", "--json"],
+          ]) {
+            const result = await captureCli(args, { cwd });
+            expect(result.exitCode).toBeUndefined();
+            expect(result.stderr).toBe("");
+            expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, removed: false });
+            expect(await readManifest(home)).toEqual(manifest);
+            expect(await fsp.readFile(path.join(home, ".codegraph", "sentinel.txt"), "utf8")).toBe("home state\n");
+            await expectDiskIndexCacheHasArtifacts(home);
+          }
+          await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+      expect((await fsp.lstat(logicalHome)).isSymbolicLink()).toBeTruthy();
+    });
+
+    it.each(["manifest", "Git boundary"] as const)(
+      "%s candidate stat failures return root policy errors and clean CLI errors without changing state",
+      async (kind) => {
+        const root = await mkTmpDir("cg-life-discover-unreadable-");
+        const cwd = path.join(root, "src", "deep");
+        await writeFile(cwd, "main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        if (kind === "manifest") await fsp.mkdir(path.join(cwd, ".codegraph"));
+        const candidatePath = kind === "manifest" ? codegraphLifecycleManifestPath(cwd) : path.join(cwd, ".git");
+        const originalLstatSync = fs.lstatSync.bind(fs);
+        vi.spyOn(fs, "lstatSync").mockImplementation((target, options) => {
+          if (target === candidatePath) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          return originalLstatSync(target, options as never);
+        });
+        const message = `Unable to discover Codegraph lifecycle root at ${candidatePath}: permission denied`;
+        const expected = { status: "error", messages: [message] };
+
+        expect(discoverCodegraphLifecycleRoot(cwd)).toEqual(expected);
+        expect(
+          resolveCliRootPolicy({ command: "status", positionals: [], rootOpt: undefined, cwd: () => cwd }),
+        ).toEqual(expected);
+        const result = await captureCli(["status", "--json"], { cwd });
+
+        expect(result.exitCode).toBe(2);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe(`${message}\n`);
+        expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+        if (kind === "manifest") expect(await fsp.readdir(path.join(cwd, ".codegraph"))).toEqual([]);
+        else await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it.each([
+      { location: "state projects", git: false },
+      { location: "state projects", git: true },
+      { location: "workspace", git: false },
+    ])("does not select initialized home for $location with Git=$git", async ({ location, git }) => {
+      const home = await mkTmpDir("cg-life-home-boundary-");
+      await writeFile(home, "home.ts", "export const homeValue = 1;\n");
+      const manifest = (await initCodegraphLifecycle(home)).manifest;
+      await writeFile(home, ".codegraph/sentinel.txt", "home state\n");
+      await writeFile(home, ".codegraph/server.log", "home diagnostics\n");
+      const relative = location === "workspace" ? "workspace/myrepo" : ".codegraph/projects/myrepo";
+      const cwd = path.join(home, relative);
+      await writeFile(cwd, "main.ts", "export const project = 2;\n");
+      if (git) await initializeGitRepository(cwd);
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+
+      expect(discoverCodegraphLifecycleRoot(cwd, home)).toEqual({ status: "ok", projectRootFs: cwd });
+      expect(discoverCodegraphLifecycleRoot(home, home)).toEqual({ status: "ok", projectRootFs: home });
+      const status = await captureCli(["status", "--json"], { cwd });
+      expect(status.exitCode).toBeUndefined();
+      expect(status.stderr).toBe("");
+      expect(JSON.parse(status.stdout)).toMatchObject({ root: cwd, initialized: false });
+      for (const purge of [false, true]) {
+        const args = ["uninit", "--json"];
+        if (purge) args.push("--purge");
+        const result = await captureCli(args, { cwd });
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, removed: false });
+        expect(await readManifest(home)).toEqual(manifest);
+        expect(await fsp.readFile(path.join(home, ".codegraph", "sentinel.txt"), "utf8")).toBe("home state\n");
+        expect(await fsp.readFile(path.join(home, ".codegraph", "server.log"), "utf8")).toBe("home diagnostics\n");
+        await expectDiskIndexCacheHasArtifacts(home);
+      }
+      await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      if (location === "workspace") {
+        const initialized = await captureCli(["init", "--json", "--no-progress"], { cwd });
+        expect(initialized.exitCode).toBeUndefined();
+        expect(initialized.stderr).toBe("");
+        expect(JSON.parse(initialized.stdout)).toMatchObject({ root: cwd, initialized: true });
+        expect((await readManifest(cwd)).fileCount).toBe(1);
+        expect(await readManifest(home)).toEqual(manifest);
+      }
+    });
+
+    it("does not walk above an uninitialized home when home is the real start", async () => {
+      const parent = await mkTmpDir("cg-life-home-start-boundary-");
+      await writeFile(parent, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(parent)).manifest;
+      const home = path.join(parent, "home");
+      await fsp.mkdir(home);
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+
+      expect(discoverCodegraphLifecycleRoot(home, home)).toEqual({ status: "ok", projectRootFs: home });
+      const result = await captureCli(["status", "--json"], { cwd: home });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({ root: home, initialized: false });
+      expect(await readManifest(parent)).toEqual(manifest);
+      await expect(fsp.stat(path.join(home, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("does not select home through the cache segment rule", async () => {
+      const home = await mkTmpDir("cg-life-home-cache-boundary-");
+      const cwd = path.join(home, ".codegraph", "cache", "index-v1");
+      await writeFile(cwd, "sentinel.txt", "home cache\n");
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+
+      expect(discoverCodegraphLifecycleRoot(cwd, home)).toEqual({ status: "ok", projectRootFs: cwd });
+      for (const args of [
+        ["uninit", "--json"],
+        ["uninit", "--purge", "--json"],
+      ]) {
+        const result = await captureCli(args, { cwd });
+        expect(result.exitCode).toBeUndefined();
+        expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, removed: false });
+        expect(await fsp.readFile(path.join(cwd, "sentinel.txt"), "utf8")).toBe("home cache\n");
+      }
+    });
+
+    it("does not inspect a filesystem-root manifest unless that root is the real start", async () => {
+      const root = await mkTmpDir("cg-life-filesystem-boundary-");
+      const cwd = path.join(root, "project");
+      const home = path.join(root, "unrelated-home");
+      await writeFile(cwd, "main.ts", "export const main = 1;\n");
+      await writeFile(root, "state-fixture/manifest.json", "{}\n");
+      const stateStats = await fsp.lstat(path.join(root, "state-fixture"));
+      const manifestStats = await fsp.lstat(path.join(root, "state-fixture", "manifest.json"));
+      const filesystemRoot = path.parse(root).root;
+      const statePath = path.join(filesystemRoot, ".codegraph");
+      const originalLstatSync = fs.lstatSync.bind(fs);
+      const spy = vi.spyOn(fs, "lstatSync").mockImplementation((target, options) => {
+        if (target === statePath) return stateStats;
+        if (target === path.join(statePath, "manifest.json")) return manifestStats;
+        return originalLstatSync(target, options as never);
+      });
+
+      expect(discoverCodegraphLifecycleRoot(cwd, home)).toEqual({ status: "ok", projectRootFs: cwd });
+      expect(spy).not.toHaveBeenCalledWith(statePath, { throwIfNoEntry: false });
+      expect(discoverCodegraphLifecycleRoot(filesystemRoot, home)).toEqual({
+        status: "ok",
+        projectRootFs: filesystemRoot,
+      });
+    });
+
+    it("does not select a linked ancestor .codegraph or overwrite its external manifest during init", async () => {
+      const root = await mkTmpDir("cg-life-linked-ancestor-");
+      const external = await mkTmpDir("cg-life-linked-state-");
+      const cwd = path.join(root, "src", "deep");
+      await writeFile(cwd, "main.ts", "export const main = 1;\n");
+      await writeFile(external, "manifest.json", "external lifecycle state\n");
+      await fsp.symlink(external, path.join(root, ".codegraph"), process.platform === "win32" ? "junction" : "dir");
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: cwd });
+      const result = await captureCli(["init", "--json", "--no-progress"], { cwd });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, initialized: true });
+      expect((await readManifest(cwd)).fileCount).toBe(1);
+      expect(await fsp.readFile(path.join(external, "manifest.json"), "utf8")).toBe("external lifecycle state\n");
+      expect((await fsp.lstat(path.join(root, ".codegraph"))).isSymbolicLink()).toBeTruthy();
+    });
+
+    it("does not treat a linked manifest as an initialized ancestor", async (context) => {
+      const root = await mkTmpDir("cg-life-linked-manifest-");
+      const cwd = path.join(root, "src", "deep");
+      const external = await mkTmpDir("cg-life-linked-manifest-target-");
+      await writeFile(cwd, "main.ts", "export const main = 1;\n");
+      await writeFile(external, "manifest.json", "external lifecycle state\n");
+      await fsp.mkdir(path.join(root, ".codegraph"));
+      const linked = await tryCreateFileSymlink(
+        path.join(external, "manifest.json"),
+        codegraphLifecycleManifestPath(root),
+      );
+      if (!linked) context.skip();
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: cwd });
+      const result = await captureCli(["status", "--json"], { cwd });
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, initialized: false });
+      expect(await fsp.readFile(path.join(external, "manifest.json"), "utf8")).toBe("external lifecycle state\n");
+      await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each(["init", "status", "sync", "uninit"] as const)(
+      "CLI %s refuses a missing cwd instead of walking into initialized ancestor state",
+      async (command) => {
+        const root = await mkTmpDir("cg-life-deleted-cwd-");
+        await writeFile(root, "main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cwd = path.join(root, "deleted");
+        await fsp.mkdir(cwd);
+        await fsp.rmdir(cwd);
+        const args = [command, "--json"];
+        if (command === "init" || command === "sync") args.push("--no-progress");
+        if (command === "uninit") args.push("--purge");
+
+        const result = await captureCli(args, { cwd });
+
+        expect(result.exitCode).toBe(2);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(`Current directory ${cwd} is not accessible:`);
+        expect(result.stderr).toContain("cd to the project directory and rerun.");
+        expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+        expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      },
+    );
+
+    it("reports a permissions failure resolving the start without walking its ancestors", async () => {
+      const root = await mkTmpDir("cg-life-inaccessible-start-");
+      const cwd = path.join(root, "src", "deep");
+      await writeFile(cwd, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      const originalRealpath = fs.realpathSync.native.bind(fs.realpathSync);
+      vi.spyOn(fs.realpathSync, "native").mockImplementation((target, options) => {
+        if (target === cwd) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        return originalRealpath(target, options as never);
+      });
+
+      const result = await captureCli(["status", "--json"], { cwd });
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        `Current directory ${cwd} is not accessible: permission denied. cd to the project directory and rerun.\n`,
+      );
+      expect(await readManifest(root)).toEqual(manifest);
+    });
+
+    it.runIf(process.platform !== "win32")(
+      "the built CLI reports a cwd deleted by its own process without touching ancestor state",
+      async () => {
+        const root = await mkTmpDir("cg-life-deleted-built-cwd-");
+        await writeFile(root, "main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cwd = path.join(root, "deleted");
+        await fsp.mkdir(cwd);
+        const bundledCli = fileURLToPath(new URL("../dist/bin/cli.js", import.meta.url));
+        expect((await fsp.stat(bundledCli)).isFile()).toBeTruthy();
+        const script = [
+          'import fs from "node:fs";',
+          "const cwd = process.cwd();",
+          "fs.rmdirSync(cwd);",
+          `process.argv = [process.execPath, ${JSON.stringify(bundledCli)}, "uninit", "--purge", "--json"];`,
+          "// Loading the CLI after deleting cwd exercises the startup boundary.",
+          `await import(${JSON.stringify(pathToFileURL(bundledCli).href)});`,
+        ].join("\n");
+        const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+          windowsHide: true,
+          cwd,
+          encoding: "utf8",
+          timeout: 10_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(`Current directory ${cwd} is not accessible:`);
+        expect(result.stderr).toContain("cd to the project directory and rerun.");
+        expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+        expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      },
+    );
+
+    it.runIf(process.platform === "win32")("resolves a .CODEGRAPH cache spelling to its owner", async () => {
+      const root = await mkTmpDir("cg-life-case-discovery-");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      const cwd = path.join(root, ".CODEGRAPH", "cache");
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: root });
+      const result = await captureCli(["status", "--json"], { cwd });
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({ root, initialized: true });
+      expect(await readManifest(root)).toEqual(manifest);
+    });
+
+    it("stops at a Git boundary inside a cache before considering its .codegraph ancestor", async () => {
+      const root = await mkTmpDir("cg-life-cache-git-boundary-");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      const cwd = path.join(root, ".codegraph", "cache", "nested");
+      await fsp.mkdir(path.join(cwd, ".git"), { recursive: true });
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: cwd });
+      const result = await captureCli(["uninit", "--json"], { cwd });
+      expect(result.exitCode).toBeUndefined();
+      expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, removed: false });
+      expect(await readManifest(root)).toEqual(manifest);
+    });
+
+    it.each(["status", "sync", "uninit"] as const)(
+      "CLI %s from a deep non-Git subfolder uses the initialized project root",
+      async (command) => {
+        const root = await mkTmpDir(`cg-life-discover-${command}-`);
+        const cwd = path.join(root, "src", "nested", "deep");
+        await fsp.mkdir(cwd, { recursive: true });
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        await initCodegraphLifecycle(root);
+        await writeFile(root, "src/extra.ts", "export const extra = 2;\n");
+
+        expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: root });
+        const args = [command, "--json"];
+        if (command === "sync") args.push("--no-progress");
+        const result = await captureCli(args, { cwd });
+
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        const payload = JSON.parse(result.stdout) as
+          | CodegraphLifecycleStatus
+          | CodegraphLifecycleSyncResult
+          | CodegraphLifecycleUninitResult;
+        expect(payload.root).toBe(root);
+        if (command === "status") {
+          expect(payload).toMatchObject({ initialized: true, filesChanged: true, fileCount: { then: 1, current: 2 } });
+        } else if (command === "sync") {
+          expect(payload).toMatchObject({ initialized: true, manifest: { fileCount: 2 }, changedFiles: { added: 1 } });
+          expect((await readManifest(root)).fileCount).toBe(2);
+        } else {
+          expect(payload).toMatchObject({ removed: true, removedEntries: ["manifest.json"] });
+          await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+          await expectDiskIndexCacheHasArtifacts(root);
+        }
+        for (const subfolder of ["src", "src/nested", "src/nested/deep"]) {
+          await expect(fsp.stat(path.join(root, subfolder, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+    );
+
+    it("CLI init from an initialized project's subfolder refreshes only the root manifest", async () => {
+      const root = await mkTmpDir("cg-life-discover-init-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const first = await initCodegraphLifecycle(root);
+      const cwd = path.join(root, "src", "nested", "deep");
+      await fsp.mkdir(cwd, { recursive: true });
+      await writeFile(root, "src/extra.ts", "export const extra = 2;\n");
+
+      const result = await captureCli(["init", "--json", "--no-progress"], { cwd });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      const payload = JSON.parse(result.stdout) as CodegraphLifecycleSyncResult;
+      expect(payload.root).toBe(root);
+      expect(payload.manifest.createdAt).toBe(first.manifest.createdAt);
+      expect(payload.manifest.fileCount).toBe(2);
+      expect(payload.changedFiles.added).toBe(1);
+      expect(await readManifest(root)).toEqual(payload.manifest);
+      for (const subfolder of ["src", "src/nested", "src/nested/deep"]) {
+        await expect(fsp.stat(path.join(root, subfolder, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    });
+
+    it.each([false, true])(
+      "CLI uninit from inside the disk cache resolves its owning root and safely handles purge=%s",
+      async (purge) => {
+        const root = await mkTmpDir("cg-life-discover-cache-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await expectDiskIndexCacheHasArtifacts(root);
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cwd = path.join(root, ".codegraph", "cache", "index-v1");
+        const args = ["uninit", "--json"];
+        if (purge) args.push("--purge");
+
+        const result = await captureCli(args, { cwd });
+
+        if (purge) {
+          expect(result.exitCode).toBe(1);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+          expect(result.stderr).toContain(`Run cd "${root}" and rerun codegraph uninit --purge.`);
+          expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+          expect(await readManifest(root)).toEqual(manifest);
+          await expectDiskIndexCacheHasArtifacts(root);
+          expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+
+          const retried = await captureCli(args, { cwd: root });
+          expect(retried.exitCode).toBeUndefined();
+          expect(retried.stderr).toBe("");
+          expect(JSON.parse(retried.stdout)).toMatchObject({
+            root,
+            removed: true,
+            removedEntries: ["cache", "manifest.json", "server.log"],
+          });
+          await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          expect(result.exitCode).toBeUndefined();
+          expect(result.stderr).toBe("");
+          expect(JSON.parse(result.stdout)).toMatchObject({ root, removed: true, removedEntries: ["manifest.json"] });
+          await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+          await expectDiskIndexCacheHasArtifacts(root);
+          expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+          await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+    );
+
+    it("CLI uninit --purge refuses from a cache-only project's cache, then succeeds from its root", async () => {
+      const root = await mkTmpDir("cg-life-discover-cache-only-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root);
+      await uninitCodegraphLifecycle(root);
+      await expectDiskIndexCacheHasArtifacts(root);
+      const cwd = path.join(root, ".codegraph", "cache", "index-v1");
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: root });
+
+      const result = await captureCli(["uninit", "--purge", "--json"], { cwd });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+      expect(result.stderr).toContain(`Run cd "${root}"`);
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      await expectDiskIndexCacheHasArtifacts(root);
+      await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readCodegraphEntries(root)).toEqual([]);
+
+      const retried = await captureCli(["uninit", "--purge", "--json"], { cwd: root });
+      expect(retried.exitCode).toBeUndefined();
+      expect(retried.stderr).toBe("");
+      expect(JSON.parse(retried.stdout)).toMatchObject({ root, removed: true, removedEntries: ["cache"] });
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("finds the nearest initialized project nested inside a cache", async () => {
+      const outer = await mkTmpDir("cg-life-discover-deepest-");
+      const root = path.join(outer, ".codegraph", "cache", "nested");
+      const cwd = path.join(root, ".codegraph", "cache", "index-v1");
+      await writeFile(root, ".codegraph/manifest.json", "operator metadata\n");
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      await writeFile(cwd, "artifact.json", "{}\n");
+
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: root });
+      expect(discoverCodegraphLifecycleRoot(path.join(root, ".codegraph"))).toEqual({
+        status: "ok",
+        projectRootFs: root,
+      });
+      const result = await captureCli(["uninit", "--purge", "--json"], { cwd });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+      expect(result.stderr).toContain(`Run cd "${root}"`);
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect(await fsp.readFile(codegraphLifecycleManifestPath(root), "utf8")).toBe("operator metadata\n");
+      expect(await fsp.readFile(path.join(cwd, "artifact.json"), "utf8")).toBe("{}\n");
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+
+      const retried = await captureCli(["uninit", "--root", root, "--purge", "--json"], { cwd: root });
+      expect(retried.exitCode).toBeUndefined();
+      expect(retried.stderr).toBe("");
+      expect(JSON.parse(retried.stdout)).toMatchObject({
+        root,
+        removedEntries: ["cache", "manifest.json", "server.log"],
+      });
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fsp.stat(path.join(outer, ".codegraph"))).isDirectory()).toBeTruthy();
+    });
+
+    it.each(["directory", "file"] as const)(
+      "a nested Git .git %s boundary excludes an initialized parent, then finds its own manifest",
+      async (kind) => {
+        const parent = await mkTmpDir("cg-life-discover-git-parent-");
+        await writeFile(parent, "main.ts", "export const parent = 1;\n");
+        const parentManifest = (await initCodegraphLifecycle(parent)).manifest;
+        const root = path.join(parent, "nested");
+        const cwd = path.join(root, "src", "deep");
+        await fsp.mkdir(cwd, { recursive: true });
+        await writeFile(root, "src/main.ts", "export const nested = 2;\n");
+        await initializeGitRepository(root);
+        if (kind === "file") {
+          const metadata = path.join(await mkTmpDir("cg-life-discover-git-metadata-"), "repository.git");
+          await fsp.rename(path.join(root, ".git"), metadata);
+          await writeFile(root, ".git", `gitdir: ${metadata.replace(/\\/g, "/")}\n`);
+        }
+
+        for (const start of [root, cwd]) {
+          expect(discoverCodegraphLifecycleRoot(start)).toEqual({ status: "ok", projectRootFs: start });
+          const status = await captureCli(["status", "--json"], { cwd: start });
+          expect(status.exitCode).toBeUndefined();
+          expect(status.stderr).toBe("");
+          expect(JSON.parse(status.stdout)).toMatchObject({ root: start, initialized: false });
+          await expect(fsp.stat(path.join(start, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        const initialized = await captureCli(["init", "--json", "--no-progress"], { cwd: root });
+        expect(initialized.exitCode).toBeUndefined();
+        expect(initialized.stderr).toBe("");
+        const manifest = (JSON.parse(initialized.stdout) as CodegraphLifecycleSyncResult).manifest;
+        expect(JSON.parse(initialized.stdout)).toMatchObject({ root, initialized: true });
+        await writeFile(root, "src/extra.ts", "export const extra = 3;\n");
+
+        const refreshed = await captureCli(["init", "--json", "--no-progress"], { cwd });
+        expect(refreshed.exitCode).toBeUndefined();
+        expect(refreshed.stderr).toBe("");
+        expect(JSON.parse(refreshed.stdout)).toMatchObject({
+          root,
+          manifest: { createdAt: manifest.createdAt, fileCount: 2 },
+        });
+        for (const start of [root, cwd]) {
+          const status = await captureCli(["status", "--json"], { cwd: start });
+          expect(status.exitCode).toBeUndefined();
+          expect(status.stderr).toBe("");
+          expect(JSON.parse(status.stdout)).toMatchObject({ root, initialized: true });
+        }
+        expect(await readManifest(parent)).toEqual(parentManifest);
+        await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it("the nearest initialized nested project wins in a non-Git tree", async () => {
+      const parent = await mkTmpDir("cg-life-discover-nearest-");
+      await writeFile(parent, "main.ts", "export const parent = 1;\n");
+      const parentManifest = (await initCodegraphLifecycle(parent)).manifest;
+      const root = path.join(parent, "nested");
+      const cwd = path.join(root, "src", "deep");
+      await fsp.mkdir(cwd, { recursive: true });
+      await writeFile(root, "src/main.ts", "export const nested = 2;\n");
+      await initCodegraphLifecycle(root);
+
+      expect(discoverCodegraphLifecycleRoot(root)).toEqual({ status: "ok", projectRootFs: root });
+      expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: root });
+      const status = await captureCli(["status", "--json"], { cwd });
+      expect(status.exitCode).toBeUndefined();
+      expect(JSON.parse(status.stdout)).toMatchObject({ root, initialized: true });
+      const removed = await captureCli(["uninit", "--json"], { cwd });
+      expect(removed.exitCode).toBeUndefined();
+      expect(JSON.parse(removed.stdout)).toMatchObject({ root, removed: true });
+      expect(await readManifest(parent)).toEqual(parentManifest);
+      await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("init in an uninitialized Git repository still initializes the current subfolder, not the Git root", async () => {
+      const root = await mkTmpDir("cg-life-discover-uninitialized-git-");
+      await initializeGitRepository(root);
+      const cwd = path.join(root, "src", "deep");
+      await writeFile(cwd, "main.ts", "export const local = 1;\n");
+
+      const result = await captureCli(["init", "--json", "--no-progress"], { cwd });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, manifest: { fileCount: 1 } });
+      expect((await readManifest(cwd)).fileCount).toBe(1);
+      await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+      // Disk cache anchoring remains independent of the lifecycle project boundary.
+      await expectDiskIndexCacheHasArtifacts(root);
+      await expect(fsp.stat(path.join(root, "src", ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each(["cache only", "server.log only", ".codegraph file", "manifest directory"] as const)(
+      "an ancestor with %s does not establish a lifecycle root",
+      async (kind) => {
+        const root = await mkTmpDir("cg-life-discover-exclusion-");
+        const cwd = path.join(root, "src", "deep");
+        await fsp.mkdir(cwd, { recursive: true });
+        if (kind === "cache only") {
+          await writeFile(root, ".codegraph/cache/index-v1/artifact.json", "{}\n");
+        } else if (kind === "server.log only") {
+          await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        } else if (kind === ".codegraph file") {
+          await writeFile(root, ".codegraph", "not a directory\n");
+        } else {
+          await fsp.mkdir(codegraphLifecycleManifestPath(root), { recursive: true });
+        }
+
+        expect(discoverCodegraphLifecycleRoot(cwd)).toEqual({ status: "ok", projectRootFs: cwd });
+        const result = await captureCli(["status", "--json"], { cwd });
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, initialized: false });
+        await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it.each(
+      (["init", "status", "sync", "uninit"] as const).flatMap((command) =>
+        (["positional", "--root"] as const).map((mode) => ({ command, mode })),
+      ),
+    )("$command with an explicit $mode path bypasses discovery", async ({ command, mode }) => {
+      const parent = await mkTmpDir("cg-life-discover-explicit-");
+      const cwd = path.join(parent, "src", "deep");
+      await writeFile(cwd, "main.ts", "export const nested = 1;\n");
+      const parentManifest = (await initCodegraphLifecycle(parent)).manifest;
+      const args = [command, "--json"];
+      if (mode === "positional") args.push(".");
+      else args.push("--root", ".");
+      if (command === "sync") args.push("--init");
+      if (command === "init" || command === "sync") args.push("--no-progress");
+
+      const result = await captureCli(args, { cwd });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      const payload = JSON.parse(result.stdout) as { root: string };
+      expect(payload.root).toBe(cwd);
+      expect(await readManifest(parent)).toEqual(parentManifest);
+      if (command === "init" || command === "sync") {
+        expect((await readManifest(cwd)).fileCount).toBe(1);
+      } else {
+        expect(JSON.parse(result.stdout)).toMatchObject(
+          command === "status" ? { initialized: false } : { removed: false },
+        );
+        await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fsp.stat(path.join(parent, "src", ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("non-lifecycle commands keep the current directory as their default root", async () => {
+      const root = await mkTmpDir("cg-life-discover-non-lifecycle-");
+      const cwd = path.join(root, "src", "deep");
+      await writeFile(cwd, "local.ts", "export const local = 1;\n");
+      await writeFile(root, "parent.ts", "export const parent = 2;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+
+      const result = await captureCli(["orient", "--budget", "small", "--json"], { cwd });
+
+      expect(result.exitCode).toBeUndefined();
+      const payload = JSON.parse(result.stdout) as { root: string; tree: Array<{ path: string }> };
+      expect(payload.root).toBe(cwd);
+      expect(payload.tree.map((entry) => entry.path)).toContain("local.ts");
+      expect(payload.tree.map((entry) => entry.path)).not.toContain("parent.ts");
+      expect(await readManifest(root)).toEqual(manifest);
+    });
+  });
+
+  describe("uninit --purge", () => {
+    async function expectAliasedRootPurgeRefusal(linkType: "junction" | "dir"): Promise<void> {
+      const root = await mkTmpDir("cg-life-purge-physical-root-");
+      const parent = await mkTmpDir("cg-life-purge-root-alias-");
+      const alias = path.join(parent, "project");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      await fsp.symlink(root, alias, linkType);
+      const cwd = path.join(root, ".codegraph", "cache", "index-v1");
+
+      const promise = uninitCodegraphLifecycle(alias, { purge: true, force: true, cwd });
+      await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(promise).rejects.toThrow(`Refusing to purge ${path.join(alias, ".codegraph")} from inside it.`);
+      const result = await captureCli(["uninit", "--root", alias, "--purge", "--force", "--json"], { cwd });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`Refusing to purge ${path.join(alias, ".codegraph")} from inside it.`);
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect(await readManifest(root)).toEqual(manifest);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      expect((await fsp.lstat(alias)).isSymbolicLink()).toBeTruthy();
+    }
+
+    it.runIf(process.platform === "win32")(
+      "refuses purge through a junction-aliased --root from the physical cache",
+      async () => {
+        await expectAliasedRootPurgeRefusal("junction");
+      },
+    );
+
+    it.runIf(process.platform !== "win32")(
+      "refuses purge through a symlinked --root from the physical cache",
+      async () => {
+        await expectAliasedRootPurgeRefusal("dir");
+      },
+    );
+
+    it.runIf(process.platform === "win32")(
+      "refuses purge across drive and accessible UNC administrative-share spellings",
+      async (context) => {
+        const root = await mkTmpDir("cg-life-purge-unc-identity-");
+        const driveRoot = path.win32.parse(root).root;
+        expect(driveRoot).toMatch(/^[A-Za-z]:\\$/);
+        const share = `\\\\localhost\\${driveRoot[0]}$`;
+        try {
+          await fsp.stat(share);
+        } catch {
+          context.skip();
+        }
+        const uncRoot = share + root.slice(2).replaceAll("/", "\\");
+        expect((await fsp.stat(uncRoot)).isDirectory()).toBeTruthy();
+        await writeFile(root, "main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cases = [
+          { projectRoot: uncRoot, cwd: path.join(root, ".codegraph", "cache", "index-v1") },
+          { projectRoot: root, cwd: path.join(uncRoot, ".codegraph", "cache", "index-v1") },
+        ];
+
+        for (const { projectRoot, cwd } of cases) {
+          const promise = uninitCodegraphLifecycle(projectRoot, { purge: true, force: true, cwd });
+          await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+          await expect(promise).rejects.toThrow(
+            `Refusing to purge ${path.join(projectRoot, ".codegraph")} from inside it.`,
+          );
+          const result = await captureCli(["uninit", "--root", projectRoot, "--purge", "--force", "--json"], { cwd });
+          expect(result.exitCode).toBe(1);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(`Refusing to purge ${path.join(projectRoot, ".codegraph")} from inside it.`);
+          expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+          expect(await readManifest(root)).toEqual(manifest);
+          await expectDiskIndexCacheHasArtifacts(root);
+          expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+        }
+      },
+    );
+
+    it("refuses --purge --force from a ..cache child without removing anything", async () => {
+      const root = await mkTmpDir("cg-life-purge-dot-prefix-");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      const cwd = path.join(root, ".codegraph", "..cache");
+      await writeFile(cwd, "sentinel.txt", "operator data\n");
+
+      const result = await captureCli(["uninit", "--purge", "--force", "--json"], { cwd });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect(await readManifest(root)).toEqual(manifest);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      expect(await fsp.readFile(path.join(cwd, "sentinel.txt"), "utf8")).toBe("operator data\n");
+    });
+
+    it.each(["library", "CLI"] as const)(
+      "%s purge reports a newly written server.json instead of reporting success",
+      async (consumer) => {
+        const root = await mkTmpDir("cg-life-purge-concurrent-entry-");
+        await writeFile(root, "main.ts", "export const main = 1;\n");
+        await initCodegraphLifecycle(root);
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cache = path.join(root, ".codegraph", "cache");
+        const registry = path.join(root, ".codegraph", "server.json");
+        const originalRm = fsp.rm.bind(fsp);
+        vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+          await originalRm(target, options);
+          if (target === cache) await fsp.writeFile(registry, '{"owner":"new"}\n', "utf8");
+        });
+
+        if (consumer === "library") {
+          const promise = uninitCodegraphLifecycle(root, { purge: true, force: true, cwd: root });
+          await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+          await expect(promise).rejects.toThrow("unexpected entries remain: server.json");
+        } else {
+          const result = await captureCli(["uninit", "--purge", "--force", "--json"], { cwd: root });
+          expect(result.exitCode).toBe(1);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("unexpected entries remain: server.json");
+          expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+        }
+        expect(await fsp.readdir(path.join(root, ".codegraph"))).toEqual(["server.json"]);
+        expect(await fsp.readFile(registry, "utf8")).toBe('{"owner":"new"}\n');
+        for (const entry of ["cache", "manifest.json", "server.log"]) {
+          await expect(fsp.stat(path.join(root, ".codegraph", entry))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+    );
+
+    it("purges every local cache namespace but leaves a separately configured disk cache intact", async () => {
+      const root = await mkTmpDir("cg-life-purge-cache-scope-");
+      const external = await mkTmpDir("cg-life-purge-external-cache-");
+      await writeFile(root, "main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root);
+      await expectDiskIndexCacheHasArtifacts(root);
+      await writeFile(root, ".codegraph/cache/project-other/sentinel.txt", "other project cache\n");
+      await initCodegraphLifecycle(root, { force: true, buildOptions: { cacheDir: external } });
+      const externalCache = resolveCacheLocation(root, { cacheDir: external }).path;
+      const externalEntries = await fsp.readdir(externalCache);
+      expect(externalEntries.length).toBeGreaterThan(0);
+
+      const result = await captureCli(["uninit", "--purge", "--json"], { cwd: root });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        root,
+        removed: true,
+        removedEntries: ["cache", "manifest.json"],
+      });
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fsp.readdir(externalCache)).toEqual(externalEntries);
+      expect(await fsp.readFile(path.join(root, "main.ts"), "utf8")).toBe("export const main = 1;\n");
+    });
+
+    it.each(["state", "cache", "project", "unrelated", "prefix sibling"] as const)(
+      "library purge honors its cwd option for the %s directory",
+      async (location) => {
+        const root = await mkTmpDir("cg-life-purge-library-cwd-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        let cwd = root;
+        if (location === "state") cwd = path.join(root, ".codegraph");
+        else if (location === "cache") cwd = path.join(root, ".codegraph", "cache", "index-v1");
+        else if (location === "unrelated") cwd = await mkTmpDir("cg-life-purge-unrelated-cwd-");
+        else if (location === "prefix sibling") {
+          cwd = path.join(root, ".codegraph-other");
+          await fsp.mkdir(cwd);
+        }
+        const cwdIsInState = location === "state" || location === "cache";
+
+        const promise = uninitCodegraphLifecycle(root, { purge: true, force: true, cwd });
+
+        if (cwdIsInState) {
+          await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+          await expect(promise).rejects.toThrow(
+            `Refusing to purge ${path.join(root, ".codegraph")} from inside it. Run cd "${root}" and rerun codegraph uninit --purge.`,
+          );
+          expect(await readManifest(root)).toEqual(manifest);
+          await expectDiskIndexCacheHasArtifacts(root);
+          expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+        } else {
+          await expect(promise).resolves.toMatchObject({
+            root,
+            removed: true,
+            removedEntries: ["cache", "manifest.json", "server.log"],
+          });
+          await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect((await fsp.stat(cwd)).isDirectory()).toBeTruthy();
+        expect(await fsp.readFile(path.join(root, "src", "main.ts"), "utf8")).toBe("export const main = 1;\n");
+      },
+    );
+
+    it("library purge defaults cwd to the real process current directory and refuses without deleting state", async () => {
+      const root = await mkTmpDir("cg-life-purge-default-cwd-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(path.join(root, ".codegraph", "cache", "index-v1"));
+        const promise = uninitCodegraphLifecycle(root, { purge: true });
+        await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+        await expect(promise).rejects.toThrow(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+        await expect(promise).rejects.toThrow(`Run cd "${root}"`);
+      } finally {
+        process.chdir(previousCwd);
+      }
+      expect(await readManifest(root)).toEqual(manifest);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+    });
+
+    it.runIf(process.platform === "win32")(
+      "library purge recognizes a differently cased cwd inside .codegraph",
+      async () => {
+        const root = await mkTmpDir("cg-life-purge-case-cwd-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cwd = path.join(root, ".codegraph", "cache", "index-v1").toUpperCase();
+
+        await expect(uninitCodegraphLifecycle(root, { purge: true, cwd })).rejects.toThrow(
+          `Refusing to purge ${path.join(root, ".codegraph")} from inside it.`,
+        );
+
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+        expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      },
+    );
+
+    it("the built CLI refuses purge from a real cache cwd without removing state, then purges from the project root", async () => {
+      const bundledCli = fileURLToPath(new URL("../dist/bin/cli.js", import.meta.url));
+      expect((await fsp.stat(bundledCli)).isFile()).toBeTruthy();
+      const root = await mkTmpDir("cg-life-purge-built-cwd-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      await expectDiskIndexCacheHasArtifacts(root);
+      const cwd = path.join(root, ".codegraph", "cache", "index-v1");
+
+      const result = spawnSync(process.execPath, [bundledCli, "uninit", "--purge", "--json"], {
+        windowsHide: true,
+        cwd,
+        encoding: "utf8",
+        env: process.env,
+        timeout: 10_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`Refusing to purge ${path.join(root, ".codegraph")} from inside it.`);
+      expect(result.stderr).toContain(`Run cd "${root}" and rerun codegraph uninit --purge.`);
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect(await readManifest(root)).toEqual(manifest);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      await expect(fsp.stat(path.join(cwd, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      const retried = spawnSync(process.execPath, [bundledCli, "uninit", "--purge", "--json"], {
+        windowsHide: true,
+        cwd: root,
+        encoding: "utf8",
+        env: process.env,
+        timeout: 10_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      expect(retried.error).toBeUndefined();
+      expect(retried.status, retried.stderr).toBe(0);
+      expect(JSON.parse(retried.stdout)).toMatchObject({
+        root,
+        removed: true,
+        removedEntries: ["cache", "manifest.json", "server.log"],
+      });
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each(["--json", "--pretty"])(
+      "removes real disk artifacts and logs with %s output, leaving the ignore rule",
+      async (format) => {
+        const root = await mkTmpDir("cg-life-purge-artifacts-");
+        await initializeGitRepository(root);
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        await initCodegraphLifecycle(root);
+        await expectDiskIndexCacheHasArtifacts(root);
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+
+        const result = await captureCli(["uninit", "--purge", format], { cwd: root });
+
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        if (format === "--json") {
+          expect(JSON.parse(result.stdout)).toEqual({
+            schemaVersion: 1,
+            root,
+            removed: true,
+            removedEntries: ["cache", "manifest.json", "server.log"],
+            manifestPath: codegraphLifecycleManifestPath(root),
+          });
+        } else {
+          expect(result.stdout).toBe(`Purged Codegraph state at ${root}: cache, manifest.json, server.log.\n`);
+        }
+        await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+        expect(await fsp.readFile(path.join(root, "src", "main.ts"), "utf8")).toBe("export const main = 1;\n");
+      },
+    );
+
+    it.each([false, true])("refuses server.json before deleting anything, including force=%s", async (force) => {
+      const root = await mkTmpDir("cg-life-purge-server-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/server.json", "{}\n");
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      const cacheRoot = path.join(root, ".codegraph", "cache", "index-v1");
+      const cacheEntries = await fsp.readdir(cacheRoot);
+      const promise = uninitCodegraphLifecycle(root, { purge: true, force });
+      await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(promise).rejects.toThrow("codegraph server stop");
+
+      const args = ["uninit", "--purge", "--json"];
+      if (force) args.push("--force");
+      const result = await captureCli(args, { cwd: root });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("codegraph server stop");
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect(await readManifest(root)).toEqual(manifest);
+      expect(await readCodegraphEntries(root)).toEqual(["manifest.json", "server.json", "server.log"]);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.json"), "utf8")).toBe("{}\n");
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      expect(await fsp.readdir(cacheRoot)).toEqual(cacheEntries);
+      await expectDiskIndexCacheHasArtifacts(root);
+    });
+
+    it.runIf(process.platform === "win32")(
+      "respects case-insensitive server.json existence before forced purge",
+      async () => {
+        const root = await mkTmpDir("cg-life-purge-server-case-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        const manifest = (await initCodegraphLifecycle(root)).manifest;
+        await writeFile(root, ".codegraph/SERVER.JSON", "{}\n");
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+
+        const result = await captureCli(["uninit", "--purge", "--force"], { cwd: root });
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("codegraph server stop");
+        expect(await readManifest(root)).toEqual(manifest);
+        await expectDiskIndexCacheHasArtifacts(root);
+        expect(await fsp.readFile(path.join(root, ".codegraph", "SERVER.JSON"), "utf8")).toBe("{}\n");
+        expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+      },
+    );
+
+    it("refuses unknown entries before deleting anything, then --force purges them recursively", async () => {
+      const root = await mkTmpDir("cg-life-purge-unknown-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      await writeFile(root, ".codegraph/operator/note.txt", "operator data\n");
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      await expect(uninitCodegraphLifecycle(root, { purge: true })).rejects.toThrow("unknown entries: operator");
+
+      const refused = await captureCli(["uninit", "--purge", "--json"], { cwd: root });
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stdout).toBe("");
+      expect(refused.stderr).toContain("unknown entries: operator");
+      expect(refused.stderr).toContain("--force");
+      expect(await readManifest(root)).toEqual(manifest);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await readCodegraphEntries(root)).toEqual(["manifest.json", "operator", "server.log"]);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "operator", "note.txt"), "utf8")).toBe("operator data\n");
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+
+      const result = await captureCli(["uninit", "--purge", "--force", "--json"], { cwd: root });
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        root,
+        removed: true,
+        removedEntries: ["cache", "manifest.json", "operator", "server.log"],
+      });
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each(["missing", "empty"])("reports not initialized for a %s .codegraph directory with exit 0", async (kind) => {
+      const root = await mkTmpDir("cg-life-purge-empty-");
+      if (kind === "empty") await fsp.mkdir(path.join(root, ".codegraph"));
+
+      const libraryResult = await uninitCodegraphLifecycle(root, { purge: true });
+      expect(libraryResult).toMatchObject({ root, removed: false, removedEntries: [] });
+      const result = await captureCli(["uninit", "--purge"], { cwd: root });
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(`Codegraph is not initialized at ${root}.\n`);
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("refuses a symlinked .codegraph even with --purge --force without touching the target", async () => {
+      const root = await mkTmpDir("cg-life-purge-symlink-root-");
+      const external = await mkTmpDir("cg-life-purge-symlink-external-");
+      await writeFile(external, "sentinel.txt", "operator data\n");
+      await fsp.symlink(external, path.join(root, ".codegraph"), process.platform === "win32" ? "junction" : "dir");
+
+      await expect(uninitCodegraphLifecycle(root, { purge: true, force: true })).rejects.toThrow(
+        "Refusing to traverse symbolic link as .codegraph lifecycle directory",
+      );
+      const result = await captureCli(["uninit", "--purge", "--force"], { cwd: root });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Refusing to traverse symbolic link");
+      expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+      expect((await fsp.lstat(path.join(root, ".codegraph"))).isSymbolicLink()).toBeTruthy();
+      expect(await fsp.readFile(path.join(external, "sentinel.txt"), "utf8")).toBe("operator data\n");
+    });
+
+    it.each(["cache", "cache/index-v1/external"])(
+      "removes the %s link without traversing its external target",
+      async (entry) => {
+        const root = await mkTmpDir("cg-life-purge-cache-link-");
+        const external = await mkTmpDir("cg-life-purge-cache-target-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        await initCodegraphLifecycle(root);
+        await expectDiskIndexCacheHasArtifacts(root);
+        await writeFile(external, "sentinel.txt", "operator data\n");
+        const link = path.join(root, ".codegraph", entry);
+        if (entry === "cache") await fsp.rm(link, { recursive: true, force: true });
+        await fsp.symlink(external, link, process.platform === "win32" ? "junction" : "dir");
+
+        const result = await captureCli(["uninit", "--purge", "--json"], { cwd: root });
+
+        expect(result.exitCode).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({ removed: true, removedEntries: ["cache", "manifest.json"] });
+        await expect(fsp.lstat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await fsp.stat(external)).isDirectory()).toBeTruthy();
+        expect(await fsp.readdir(external)).toEqual(["sentinel.txt"]);
+        expect(await fsp.readFile(path.join(external, "sentinel.txt"), "utf8")).toBe("operator data\n");
+      },
+    );
+
+    it.each(["EBUSY", "EPERM", "EACCES"])(
+      "continues removing other entries after %s, lists remaining paths, and allows retry",
+      async (code) => {
+        const root = await mkTmpDir("cg-life-purge-in-use-");
+        await writeFile(root, "src/main.ts", "export const main = 1;\n");
+        await initCodegraphLifecycle(root);
+        await writeFile(root, ".codegraph/operator/note.txt", "operator data\n");
+        await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+        const cachePath = path.join(root, ".codegraph", "cache");
+        const blockedPaths = [cachePath];
+        if (code === "EBUSY") blockedPaths.push(path.join(root, ".codegraph", "server.log"));
+        const originalRm = fsp.rm.bind(fsp);
+        const rmSpy = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+          if (blockedPaths.includes(String(target))) throw Object.assign(new Error("file in use"), { code });
+          return await originalRm(target, options);
+        });
+
+        const promise = uninitCodegraphLifecycle(root, { purge: true, force: true });
+        await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+        for (const blockedPath of blockedPaths) await expect(promise).rejects.toThrow(blockedPath);
+        await expect(promise).rejects.toThrow(
+          "may be in use by another process (for example a Codegraph MCP server for this project) or not writable",
+        );
+        await expect(promise).rejects.toThrow("Stop it or make the paths writable and rerun codegraph uninit --purge");
+        await expectDiskIndexCacheHasArtifacts(root);
+        await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fsp.stat(path.join(root, ".codegraph", "operator"))).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await fsp.readdir(path.join(root, ".codegraph"))).sort()).toEqual(
+          blockedPaths.map((target) => path.basename(target)).sort(),
+        );
+
+        const result = await captureCli(["uninit", "--purge", "--force"], { cwd: root });
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe("");
+        for (const blockedPath of blockedPaths) expect(result.stderr).toContain(blockedPath);
+        expect(result.stderr).toContain(
+          "may be in use by another process (for example a Codegraph MCP server for this project) or not writable",
+        );
+        expect(result.stderr).not.toMatch(/^Error:|\n\s+at /m);
+        rmSpy.mockRestore();
+
+        const retried = await uninitCodegraphLifecycle(root, { purge: true });
+        expect(retried.removedEntries).toEqual(blockedPaths.map((target) => path.basename(target)).sort());
+        await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it("reports an in-use .codegraph directory after removing all its entries", async () => {
+      const root = await mkTmpDir("cg-life-purge-rmdir-in-use-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root);
+      const dir = path.join(root, ".codegraph");
+      const originalRmdir = fsp.rmdir.bind(fsp);
+      const spy = vi.spyOn(fsp, "rmdir").mockImplementation(async (target, options) => {
+        if (target === dir) throw Object.assign(new Error("directory in use"), { code: "EACCES" });
+        return await originalRmdir(target, options);
+      });
+
+      const result = await captureCli(["uninit", "--purge"], { cwd: root });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`these paths remain: ${dir}`);
+      expect(result.stderr).toContain(
+        "may be in use by another process (for example a Codegraph MCP server for this project) or not writable",
+      );
+      expect(await fsp.readdir(dir)).toEqual([]);
+      spy.mockRestore();
+      await uninitCodegraphLifecycle(root, { purge: true });
+      await expect(fsp.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("keeps the existing lifecycle wrapping for removal errors other than files in use", async () => {
+      const root = await mkTmpDir("cg-life-purge-io-error-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const manifest = (await initCodegraphLifecycle(root)).manifest;
+      const manifestPath = codegraphLifecycleManifestPath(root);
+      const originalRm = fsp.rm.bind(fsp);
+      vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+        if (target === manifestPath) throw Object.assign(new Error("disk I/O failure"), { code: "EIO" });
+        return await originalRm(target, options);
+      });
+
+      const promise = uninitCodegraphLifecycle(root, { purge: true });
+      await expect(promise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(promise).rejects.toThrow(`Unable to remove ${manifestPath}: disk I/O failure`);
+      const result = await captureCli(["uninit", "--purge"], { cwd: root });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`Unable to remove ${manifestPath}: disk I/O failure`);
+      expect(result.stderr).not.toMatch(/another process|^Error:|\n\s+at /m);
+      expect(await readManifest(root)).toEqual(manifest);
+    });
+
+    it.each([false, true])("without --purge preserves cache, registry, and log with force=%s", async (force) => {
+      const root = await mkTmpDir("cg-life-uninit-preserve-state-");
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root);
+      await writeFile(root, ".codegraph/server.json", "{}\n");
+      await writeFile(root, ".codegraph/server.log", "server diagnostics\n");
+      const args = ["uninit"];
+      if (force) {
+        args.push("--force");
+        await writeFile(root, ".codegraph/operator/note.txt", "operator data\n");
+      }
+
+      const result = await captureCli(args, { cwd: root });
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(`Removed Codegraph lifecycle state at ${root}.\n`);
+      await expectDiskIndexCacheHasArtifacts(root);
+      expect(await readCodegraphEntries(root)).toEqual(["server.json", "server.log"]);
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.json"), "utf8")).toBe("{}\n");
+      expect(await fsp.readFile(path.join(root, ".codegraph", "server.log"), "utf8")).toBe("server diagnostics\n");
+    });
+  });
+
   it("CLI JSON captures cover lifecycle mutating commands with positional roots", async () => {
     const initRoot = await mkTmpDir("cg-life-cli-init-");
     await writeFile(initRoot, "src/main.ts", "export const main = 1;\n");
 
-    const initResult = await captureCli(["init", initRoot, "--force", "--json"]);
+    const initResult = await captureCli(["init", initRoot, "--force", "--json", "--no-progress"]);
 
     expect(initResult.exitCode).toBeUndefined();
     expect(initResult.stderr).toBe("");
@@ -978,7 +2325,7 @@ describe("project lifecycle commands", () => {
     const syncRoot = await mkTmpDir("cg-life-cli-sync-");
     await writeFile(syncRoot, "src/main.ts", "export const main = 1;\n");
 
-    const syncInitResult = await captureCli(["sync", syncRoot, "--init", "--json"]);
+    const syncInitResult = await captureCli(["sync", syncRoot, "--init", "--json", "--no-progress"]);
 
     expect(syncInitResult.exitCode).toBeUndefined();
     expect(syncInitResult.stderr).toBe("");
@@ -989,7 +2336,7 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(syncRoot)).toEqual(["manifest.json"]);
 
     await writeFile(syncRoot, "src/extra.ts", "export const extra = 2;\n");
-    const syncResult = await captureCli(["sync", syncRoot, "--json"]);
+    const syncResult = await captureCli(["sync", syncRoot, "--json", "--no-progress"]);
 
     expect(syncResult.exitCode).toBeUndefined();
     expect(syncResult.stderr).toBe("");
@@ -1086,6 +2433,7 @@ describe("project lifecycle commands", () => {
       const args = [command, "--root", flagRoot, "--json"];
       if (command === "sync") args.push("--init");
       if (command === "uninit") args.push("--force");
+      if (command === "init" || command === "sync") args.push("--no-progress");
 
       const result = await captureCli(args, { cwd });
 
@@ -1590,7 +2938,7 @@ describe("project lifecycle commands", () => {
     await initCodegraphLifecycle(root);
     const manifestPath = codegraphLifecycleManifestPath(root);
 
-    const unchangedResult = await captureCli(["sync", root]);
+    const unchangedResult = await captureCli(["sync", root, "--no-progress"]);
 
     expect(unchangedResult.exitCode).toBeUndefined();
     expect(unchangedResult.stderr).toBe("");
@@ -1601,7 +2949,7 @@ describe("project lifecycle commands", () => {
     await fsp.rm(path.join(root, "src/a.ts"));
     await writeFile(root, "src/c.ts", "export const c = 3;\n");
 
-    const churnedResult = await captureCli(["sync", root]);
+    const churnedResult = await captureCli(["sync", root, "--no-progress"]);
 
     expect(churnedResult.exitCode).toBeUndefined();
     expect(churnedResult.stderr).toBe("");

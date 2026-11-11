@@ -757,11 +757,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "uninit",
-    commandSchema(["--force", "--json", "--pretty"], ["--root"], {
+    commandSchema(["--force", "--purge", "--json", "--pretty"], ["--root"], {
       kind: "max",
       max: 1,
       usage:
-        "Usage: codegraph uninit [path] [--force] [--json | --pretty] OR codegraph uninit --root <path> [--force] [--json | --pretty]",
+        "Usage: codegraph uninit [path] [--force] [--purge] [--json | --pretty] OR codegraph uninit --root <path> [--force] [--purge] [--json | --pretty]",
     }),
   ],
   [

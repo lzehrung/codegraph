@@ -135,6 +135,25 @@ describe("CLI command option validation", () => {
     }
   });
 
+  it("accepts --purge only for uninit, including with --force", () => {
+    for (const flags of [["--purge"], ["--force", "--purge", "--json"]]) {
+      const parsed = parseCliArgs("uninit", flags);
+      expect(parsed.flags.has("--purge")).toBeTruthy();
+      expect(parsed.positionals).toEqual([]);
+      expect(() => validateCliArgs("uninit", parsed)).not.toThrow();
+    }
+    const schema = getCliCommandUsageSchemas().find((entry) => entry.command === "uninit");
+    expect(schema?.usage).toContain("[--purge]");
+  });
+
+  it("rejects --purge for every other command, including init, status, and sync", () => {
+    for (const { command } of getCliCommandUsageSchemas()) {
+      if (command === "uninit") continue;
+      const parsed = parseCliArgs(command, ["--purge"]);
+      expect(() => validateCliArgs(command, parsed), command).toThrow(`Unknown option for ${command}: --purge`);
+    }
+  });
+
   it("accepts JSON and pretty together so JSON can take precedence", () => {
     for (const command of ["doctor", "orient", "install"]) {
       const parsed = parseCliArgs(command, ["--json", "--pretty"]);

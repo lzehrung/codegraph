@@ -138,14 +138,18 @@ Usage:
   codegraph status --root <path> [--json | --pretty]
   codegraph sync [path] [--init] [--no-update-gitignore] [--json | --pretty]
   codegraph sync --root <path> [--init] [--no-update-gitignore] [--json | --pretty]
-  codegraph uninit [path] [--force] [--json | --pretty]
-  codegraph uninit --root <path> [--force] [--json | --pretty]
+  codegraph uninit [path] [--force] [--purge] [--json | --pretty]
+  codegraph uninit --root <path> [--force] [--purge] [--json | --pretty]
 
 State:
   Lifecycle commands own .codegraph/manifest.json metadata; a shared MCP server owns .codegraph/server.json and .codegraph/server.log. In a Git worktree, init and sync --init ensure the .codegraph/ directory is effectively ignored, appending .codegraph/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
-  A tracked manifest is left tracked with a warning. Uninit preserves server.json, server.log, and cache even with --force, so stop a shared server explicitly; it leaves the root .gitignore rule, and ordinary sync never changes ignore policy.
+  A tracked manifest is left tracked with a warning. Uninit removes the manifest, refuses unknown .codegraph entries without --force, and keeps the cache, server.json, and server.log; it leaves the root .gitignore rule, and ordinary sync never changes ignore policy.
+  Uninit --purge also removes the cache and server.log. It refuses while server.json exists (run codegraph server stop first) or when run from inside .codegraph (run it from the project root), and lists paths it cannot remove.
+  Purge only removes <root>/.codegraph/. Caches configured with --cache-dir, CODEGRAPH_CACHE_DIR, or the user cache location remain; other projects' cache namespaces under this .codegraph/cache are removed and rebuild on next use.
   Init and sync may warm or update the disk cache under .codegraph/cache/index-v1/. Existing .codegraph-cache/ directories migrate automatically on the next run. Other commands do not depend on the manifest.
-  Positional paths and --root are alternatives for lifecycle commands; do not combine them.
+  Without a path or --root, lifecycle commands use the nearest parent directory with .codegraph/manifest.json, without crossing a Git repository boundary; from .codegraph itself or its cache, they use the directory that contains it.
+  Home and filesystem roots are also boundaries unless they are the current directory. If the current directory is inaccessible, cd to the project directory and rerun.
+  Positional paths and --root are used as given and are alternatives for lifecycle commands; do not combine them.
 `;
 
 export const AFFECTED_HELP_TEXT = `codegraph affected - List tests likely affected by changed files

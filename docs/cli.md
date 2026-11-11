@@ -164,6 +164,7 @@ codegraph init --root .
 codegraph status --root . --json
 codegraph sync --root .
 codegraph uninit --root . --force
+codegraph uninit --root . --purge
 
 # Build and report diagnostics
 codegraph graph --report
@@ -189,13 +190,16 @@ Config validation can perform Git discovery first and share its results with lat
 - `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.
 - In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json`. If it is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends the missing `.codegraph/` rule to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out. Existing legacy `.codegraph-cache/` rules are retained and recognized.
 - The disk cache lives under `.codegraph/cache/index-v1`; an existing `.codegraph-cache/` directory migrates automatically on the next run.
-- A tracked manifest is left tracked and the ignore policy is unchanged. `uninit` preserves `.codegraph/cache/` and shared server state even with `--force`. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
+- A tracked manifest is left tracked and the ignore policy is unchanged. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
 - Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
-- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It preserves `.codegraph/server.json` and `.codegraph/server.log` even with `--force`, so stop a shared server explicitly.
-- `uninit` refuses unknown `.codegraph/` entries unless `--force` is passed.
-- Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
+- `uninit` removes the manifest and leaves any root `.gitignore` rule. It keeps `.codegraph/cache/`, `server.json`, and `server.log`, even with `--force`, and refuses unknown `.codegraph/` entries unless `--force` is passed.
+- `uninit --purge` also removes the cache, `server.log`, and the empty `.codegraph/` directory. It refuses before deleting anything while `server.json` exists (run `codegraph server stop` first) or when run from inside `.codegraph/` (run it from the project root). Links inside `.codegraph/` are removed, not followed. Paths it cannot remove, such as files an MCP server still holds open, are listed so you can stop that process and rerun. JSON results list `removedEntries`.
+- Purge only removes `<root>/.codegraph/`. Caches configured with `--cache-dir`, `CODEGRAPH_CACHE_DIR`, or the user cache location are not removed; other projects' cache namespaces stored under this `.codegraph/cache/` are removed and rebuild on next use.
+- Without a path or `--root`, lifecycle commands use the nearest directory, starting with the current one, that has a `.codegraph/manifest.json` file. The search stops at the first directory containing `.git`, so a nested repository never uses its parent's state. From `.codegraph/` itself or its cache, they use the directory that contains it. With no match, the current directory is the root.
+- The search also stops at home and filesystem-root boundaries unless that directory is the current one. An inaccessible current directory is an error; `cd` to the project directory and rerun.
+- Lifecycle commands accept either a positional project path or `--root <path>`, used exactly as given. They reject both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary. Other commands do not search parent directories.
 
 ### Shared MCP HTTP server
 

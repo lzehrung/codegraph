@@ -94,6 +94,19 @@ describe("cross-platform path normalization", () => {
     expect(toProjectRelativePath("/workspace/codegraph", "C:/repo/src/main.ts")).toBeNull();
   });
 
+  it.each(["C:/workspace/project", "/workspace/project"])(
+    "distinguishes dot-prefixed children from parent traversal under %s",
+    (root) => {
+      expect(isFilePathWithinRoot(root, "..cache")).toBe(true);
+      expect(isFilePathWithinRoot(root, "..cache/index-v1")).toBe(true);
+      expect(toProjectRelativePath(root, resolveFilePathFromRoot(root, "..cache"))).toBe("..cache");
+      expect(isFilePathWithinRoot(root, "../x")).toBe(false);
+      expect(isFilePathWithinRoot(root, "..")).toBe(false);
+      expect(toProjectRelativePath(root, resolveFilePathFromRoot(root, "../x"))).toBeNull();
+      expect(toProjectRelativePath(root, resolveFilePathFromRoot(root, ".."))).toBeNull();
+    },
+  );
+
   it("accepts Windows drive-letter case differences within the same root", () => {
     const root = "C:/Repo";
     const file = "c:/Repo/src/main.ts";
