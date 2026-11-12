@@ -120,6 +120,61 @@ describe("rename preview", () => {
         }
       },
     );
+
+    it.each(["m", "@dec m", "static m", "@dec static m"])(
+      "lists exact edits for class %s but keeps rename unsafe for partial parse coverage",
+      async (name) => {
+        const root = await mkTmpDir("cg-rename-split-class-");
+        try {
+          const types = `types.${extension}`;
+          const use = `use.${extension}`;
+          const isStatic = name.includes("static");
+          const receiver = isStatic ? "Own" : "x";
+          const wrongReceiver = isStatic ? "x" : "Own";
+          const paths = await writeFixtureFiles(root, {
+            [types]: [
+              "export class Base { m(value: number): void {} static m(value: number): void {} }",
+              "export class Own extends Base {",
+              `  ${name}`,
+              "  <T>(): void {}",
+              "}",
+            ].join("\n"),
+            [use]: [
+              'import { Own } from "./types";',
+              "export function run(x: Own) {",
+              `  ${receiver}.m<string>();`,
+              `  ${receiver}.m();`,
+              `  ${wrongReceiver}.m<string>();`,
+              "}",
+            ].join("\n"),
+          });
+          const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+          const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "m" });
+          const target = symbols.symbols.find(
+            (symbol) => symbol.location.file === types && symbol.location.range.start.line === 3,
+          );
+          if (!target) throw new Error("Missing class split-method rename target");
+          const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "renamed" });
+          // The fork's missing-name recovery keeps reference coverage partial, so
+          // even correct known edits cannot establish a safe, complete rename.
+          expect(result.safe).toBe(false);
+          expect(result.conflicts).toEqual([]);
+          expect(result.unsafeSites).toContainEqual(
+            expect.objectContaining({
+              reason: "unresolved_reference",
+              provenance: expect.objectContaining({ reason: "Reference coverage is partial (parse_error)." }),
+            }),
+          );
+          expect(result.edits.map((edit) => [edit.file, edit.range.start.line, edit.oldText, edit.newText])).toEqual([
+            [types, 3, "m", "renamed"],
+            [use, 3, "m", "renamed"],
+            [use, 4, "m", "renamed"],
+          ]);
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
   });
 
   it("returns exact semantic edits without writing files or touching shadowed locals", async () => {

@@ -155,8 +155,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * property signatures or changing ECMAScript property member selection.
  * Epoch 147 restores optional/modified and class-body split generic methods and excludes
  * split construct signatures from named members.
+ * Epoch 148 restores decorated split class methods and rejects class-only recovery with
+ * invalid readonly, declare, or accessor method modifiers.
  */
-export const CORE_ALGORITHM_EPOCH = 147;
+export const CORE_ALGORITHM_EPOCH = 148;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

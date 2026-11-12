@@ -585,24 +585,40 @@ describe("TypeScript and JavaScript navigation", () => {
 
   describe.each(["ts", "tsx"] as const)("split generic methods in %s", (extension) => {
     it.each([
-      { declaration: ["  m", "  <T>(): void {}"], role: "implementation", abstract: false },
-      {
-        declaration: ["  m? /* name */", "  // signature", "  <T>(): void {}"],
-        role: "implementation",
-        abstract: false,
-      },
-      { declaration: ["  abstract m", "  <T>(): void"], role: "signature", abstract: true },
-    ])("retains class split method kind, arity, and $role metadata", async ({ declaration, role, abstract }) => {
+      { name: "m", role: "implementation" },
+      { name: "m? /* name */", role: "implementation" },
+      { name: "public m", role: "implementation" },
+      { name: "private m", role: "implementation" },
+      { name: "protected m", role: "implementation" },
+      { name: "override m", role: "implementation" },
+      { name: "abstract m", role: "signature" },
+      { name: "abstract override m", role: "signature" },
+      { name: "async m", role: "implementation" },
+      { name: "static m", role: "implementation" },
+      { name: "public static override async m", role: "implementation" },
+      { name: "@dec m", role: "implementation" },
+      { name: "@dec() m", role: "implementation" },
+      { name: "@dec static m", role: "implementation" },
+      { name: "@dec public override m", role: "implementation" },
+      { name: "@dec @dec() static m", role: "implementation" },
+    ])("retains $name class split method kind, arity, navigation, references, and calls", async ({ name, role }) => {
+      const isStatic = name.includes("static");
+      const isAbstract = role === "signature";
+      const returnType = name.includes("async") ? "Promise<void>" : "void";
+      const declaration = [`  ${name}`, "  // signature", `  <T>(): ${returnType}${isAbstract ? "" : " {}"}`];
+      const receiver = isStatic ? "Own" : "x";
+      const wrongReceiver = isStatic ? "x" : "Own";
       const fileName = `class.${extension}`;
       const source = [
-        "class Base { m(value: number): void {} }",
+        `class Base { ${isStatic ? "static " : ""}m(value: number): void {} }`,
         "abstract class Own extends Base {",
         ...declaration,
         "}",
         "declare const x: Own;",
-        "x.m<string>();",
-        "x.m();",
-        "export function wrong(x: Own) { x.m(1); }",
+        `export function run(x: Own) { ${receiver}.m<string>(); }`,
+        `export function again(x: Own) { ${receiver}.m(); }`,
+        `export function wrong(x: Own) { ${receiver}.m(1); }`,
+        `export function wrongReceiver(x: Own) { ${wrongReceiver}.m<string>(); }`,
       ].join("\n");
       const fixture = await project({ [fileName]: source });
       const file = fixture.file(fileName);
@@ -642,16 +658,77 @@ describe("TypeScript and JavaScript navigation", () => {
             expect(target.definition.callable?.arity).toEqual({ minArgs: 0, maxArgs: 0 });
           }
         }
+        const refs = await findReferences(fixture.index, { file, line: 3, column: columnOf(source, 3, "m") });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(refs.references.map((reference) => reference.range.start.line)).toEqual([
+            3,
+            declaration.length + 5,
+            declaration.length + 6,
+          ]);
+        }
         const wrongLine = declaration.length + 7;
         expect(
           (await goToDefinition(fixture.index, { file, line: wrongLine, column: columnOf(source, wrongLine, "m(1)") }))
             .status,
         ).toBe("not_found");
+        const wrongReceiverLine = declaration.length + 8;
+        expect(
+          (
+            await goToDefinition(fixture.index, {
+              file,
+              line: wrongReceiverLine,
+              column: columnOf(source, wrongReceiverLine, "m<string>"),
+            })
+          ).status,
+        ).toBe("not_found");
         const graph = await buildSymbolGraphDetailed(fixture.index);
         expect(callTargetIds(graph, "wrong")).toEqual([]);
+        expect(callTargetIds(graph, "wrongReceiver")).toEqual([]);
+        const targetId = `${file}::m::${ownIndex}`;
+        expect(callTargetIds(graph, "run")).toEqual([targetId]);
+        expect(callTargetIds(graph, "again")).toEqual([targetId]);
         const own = graph.nodes.get(`${file}::m::${ownIndex}`);
         expect(own?.kind).toBe("function");
-        expect(!!own?.implementationTarget).toBe(abstract);
+        expect(!!own?.implementationTarget).toBe(isAbstract || name.includes("override"));
+      } finally {
+        compiler.dispose();
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { modifier: "readonly", diagnostic: 1024 },
+      { modifier: "declare", diagnostic: 1031 },
+      { modifier: "accessor", diagnostic: 1275 },
+    ])("does not recover a class method with invalid $modifier", async ({ modifier, diagnostic }) => {
+      const fileName = `invalid.${extension}`;
+      const source = [
+        "class Base { m(value: number): void {} }",
+        "class Own extends Base {",
+        `  ${modifier} m`,
+        "  <T>(): void {}",
+        "}",
+        "export function run(x: Own) { x.m<string>(); }",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
+      const compiler = ts.createLanguageService({
+        getScriptFileNames: () => [file],
+        getScriptVersion: () => "1",
+        getScriptSnapshot: () => ts.ScriptSnapshot.fromString(source),
+        getCurrentDirectory: () => fixture.root,
+        getCompilationSettings: () => ({ noLib: true }),
+        getDefaultLibFileName: () => "",
+        fileExists: (name) => name === file,
+        readFile: (name) => (name === file ? source : undefined),
+      });
+      try {
+        expect(compiler.getSemanticDiagnostics(file).map((error) => error.code)).toContain(diagnostic);
+        const locals = fixture.index.byFile.get(fileIdentityKey(file))?.locals;
+        expect(locals?.some((local) => local.range.start.line === 3 && local.callable)).toBe(false);
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "run")).toEqual([]);
       } finally {
         compiler.dispose();
         await rm(fixture.root, { recursive: true, force: true });

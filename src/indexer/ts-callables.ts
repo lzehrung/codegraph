@@ -51,12 +51,17 @@ export function typescriptSplitMethodName(signature: SyntaxNodeLike): SyntaxNode
       case "comment":
         break;
       case "?":
-      case "readonly":
+      case "decorator":
       case "accessibility_modifier":
       case "static":
       case "override_modifier":
       case "abstract":
+        hasMethodModifier = true;
+        break;
+      case "readonly":
       case "declare":
+        // These modifiers are accepted on interface signatures, not class methods.
+        if (!callSignature) return undefined;
         hasMethodModifier = true;
         break;
       default:

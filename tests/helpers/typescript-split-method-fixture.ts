@@ -12,9 +12,11 @@ export function typescriptSplitMethodSources(extension: "ts" | "tsx"): Record<st
       "  readonly m?",
       "  <T>(): void",
       "}",
-      "export class Parent { m(value: number): void {} }",
+      "export class Parent { m(value: number): void {} static s(value: number): void {} }",
       "export class Child extends Parent {",
-      "  m",
+      "  @dec m",
+      "  <T>(): void {}",
+      "  static s",
       "  <T>(): void {}",
       "}",
       "",
@@ -26,6 +28,8 @@ export function typescriptSplitMethodSources(extension: "ts" | "tsx"): Record<st
       "  x.m();",
       "  child.m<string>();",
       "  child.m();",
+      "  Child.s<string>();",
+      "  Child.s();",
       "}",
       "",
     ].join("\n"),
@@ -63,19 +67,24 @@ export async function expectTypeScriptSplitMethods(
     const child = parsed.statements[3]!;
     if (!ts.isInterfaceDeclaration(contract) || !ts.isClassDeclaration(child)) throw new Error("Missing owners");
     expect(contract.members.map((member) => ts.SyntaxKind[member.kind])).toEqual(["MethodSignature"]);
-    expect(child.members.map((member) => ts.SyntaxKind[member.kind])).toEqual(["MethodDeclaration"]);
+    expect(child.members.map((member) => ts.SyntaxKind[member.kind])).toEqual([
+      "MethodDeclaration",
+      "MethodDeclaration",
+    ]);
     const module = index.byFile.get(fileIdentityKey(types));
     const graph = await buildSymbolGraphDetailed(index);
     for (const [declarationLine, useLines] of [
       [3, [3, 4]],
       [8, [5, 6]],
+      [10, [7, 8]],
     ] as const) {
       const definition = module?.locals.find((local) => local.range.start.line === declarationLine);
       expect(definition?.kind).toBe("function");
       expect(definition?.callable?.arity).toEqual({ minArgs: 0, maxArgs: 0 });
       const declarationIndex = definition!.range.start.index!;
+      const name = definition!.localName;
       for (const line of useLines) {
-        const column = consumer.split("\n")[line - 1]!.indexOf("m") + 1;
+        const column = consumer.split("\n")[line - 1]!.indexOf(name) + 1;
         const useIndex =
           consumer
             .split("\n")
@@ -99,7 +108,7 @@ export async function expectTypeScriptSplitMethods(
       const references = await findReferences(index, {
         file: types,
         line: declarationLine,
-        column: source.split("\n")[declarationLine - 1]!.indexOf("m") + 1,
+        column: source.split("\n")[declarationLine - 1]!.lastIndexOf(name) + 1,
       });
       expect(references.status).toBe("ok");
       if (references.status === "ok") {
@@ -111,7 +120,7 @@ export async function expectTypeScriptSplitMethods(
           references.references.map((reference) => [path.basename(reference.file), reference.range.start.line]),
         ).toEqual([[`types.${extension}`, declarationLine], ...useLines.map((line) => [`use.${extension}`, line])]);
       }
-      const targetId = `${types}::m::${declarationIndex}`;
+      const targetId = `${types}::${name}::${declarationIndex}`;
       expect(graph.edges.some((edge) => edge.label === "member_of" && edge.from === targetId)).toBe(true);
       expect(graph.edges.some((edge) => edge.label === "calls" && edge.to === targetId)).toBe(true);
     }
