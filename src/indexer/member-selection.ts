@@ -288,6 +288,8 @@ export function selectMember<Owner, Member>(
   const queryName = options.phpCaseInsensitive
     ? foldPhpIdentifierCase(options.name)
     : (options.normalizeIdentifier?.(options.name) ?? options.name);
+  const phpTraits = options.phpCaseInsensitive ? model : undefined;
+  const classOnly = !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.phpCaseInsensitive);
   for (let depth = 0; depth < MAX_DEPTH && level.length; depth += 1) {
     const candidates: Member[] = [];
     let traitCandidates: Member[] | undefined;
@@ -295,12 +297,12 @@ export function selectMember<Owner, Member>(
     let unresolved = false;
     for (const owner of level) {
       const ownerKey = model.ownerKey(owner);
-      const isTraitOwner = options.phpCaseInsensitive && model.isTraitOwner?.(owner);
+      const isTraitOwner = phpTraits?.isTraitOwner?.(owner);
       const composedTrait = isTraitOwner && (depth !== 0 || options.startAtAncestor);
       let ownerNamed = false;
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
-        if (composedTrait && model.isAbstractTraitMember?.(member)) continue;
+        if (composedTrait && phpTraits?.isAbstractTraitMember?.(member)) continue;
         ownerNamed = true;
         const matchesScope = options.scope === "any" || model.scope(member) === options.scope;
         if (matchesScope || !options.separateMemberScopes) named = true;
@@ -314,7 +316,7 @@ export function selectMember<Owner, Member>(
         }
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
-      if (!ownerNamed && model.unresolvedMember?.(owner, queryName)) unresolved = true;
+      if (!ownerNamed && phpTraits?.unresolvedMember?.(owner, queryName)) unresolved = true;
     }
     if (unresolved) return { status: "ambiguous", named: true };
     const distinct = distinctCandidates(traitCandidates ?? candidates, model, options.argumentCount);
@@ -369,7 +371,6 @@ export function selectMember<Owner, Member>(
     const next: Owner[] = [];
     for (const owner of level) {
       const child = model.ownerKey(owner);
-      const classOnly = !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.phpCaseInsensitive);
       for (const parent of model.supertypes(owner, classOnly)) {
         const key = model.ownerKey(parent);
         if (overloadState) {

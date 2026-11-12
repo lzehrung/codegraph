@@ -1899,8 +1899,8 @@ export function emitReceiverCallEdges(
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
   acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
-  phpAbstractTraitMembers: ReadonlySet<string> = new Set(),
-  phpAdaptedTraitMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  phpAbstractTraitMembers?: ReadonlySet<string>,
+  phpAdaptedTraitMembers?: ReadonlyMap<string, ReadonlySet<string>>,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1909,6 +1909,7 @@ export function emitReceiverCallEdges(
   const supertypesByOwner = new Map<string, string[]>();
   const classAncestorsByOwner = new Map<string, string[]>();
   let traitOwnerIds: Set<string> | undefined;
+  let hasPhpTraitCalls: boolean | undefined;
   const pushUnique = (map: Map<string, string[]>, from: string, to: string): void => {
     const list = map.get(from);
     if (!list) map.set(from, [to]);
@@ -1925,8 +1926,11 @@ export function emitReceiverCallEdges(
     pushUnique(supertypesByOwner, edge.from, edge.to);
     if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
     if (label === "trait") {
-      traitOwnerIds ??= new Set();
-      traitOwnerIds.add(edge.to);
+      hasPhpTraitCalls ??= candidates.some((candidate) => candidate.caseInsensitiveMemberName);
+      if (hasPhpTraitCalls) {
+        traitOwnerIds ??= new Set();
+        traitOwnerIds.add(edge.to);
+      }
     }
   }
   // Receiver-local access does not change the nominal type's membership edges.
@@ -1971,10 +1975,10 @@ export function emitReceiverCallEdges(
       return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
     },
     ...(traitOwnerIds ? { isTraitOwner: (id: string) => traitOwnerIds.has(id) } : {}),
-    ...(phpAbstractTraitMembers.size
+    ...(phpAbstractTraitMembers?.size
       ? { isAbstractTraitMember: (id: string) => phpAbstractTraitMembers.has(canonicalMemberId(id, nodeAliases)) }
       : {}),
-    ...(phpAdaptedTraitMembers.size
+    ...(phpAdaptedTraitMembers?.size
       ? { unresolvedMember: (id: string, name: string) => phpAdaptedTraitMembers.get(id)?.has(name) ?? false }
       : {}),
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",

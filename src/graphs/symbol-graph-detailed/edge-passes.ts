@@ -150,9 +150,9 @@ type EdgePassContext = {
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
   /** Names whose adapted PHP trait composition must not fall through to inherited calls. */
-  phpAdaptedTraitMembers: Map<string, ReadonlySet<string>>;
+  phpAdaptedTraitMembers: Map<string, ReadonlySet<string>> | undefined;
   /** Composed abstract PHP trait methods require implementations; trait-body calls name their declarations. */
-  phpAbstractTraitMembers: Set<string>;
+  phpAbstractTraitMembers: Set<string> | undefined;
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Accepted argument-count range for arity-selected members, keyed by graph node id. */
@@ -455,7 +455,7 @@ export async function emitMemberOwnershipEdges(
       owner.container?.type === "trait_declaration" &&
       phpTraitMethodIsAbstract(fn.node)
     ) {
-      context.phpAbstractTraitMembers.add(memberId);
+      context.phpAbstractTraitMembers?.add(memberId);
     }
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
     if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
@@ -2238,7 +2238,7 @@ export async function emitClassInheritanceEdges(
     if (declaring.isInterface) markInterfaceNode(context, fromId);
     if (context.sup.id === "php") {
       const adapted = phpUnresolvedTraitMemberNames(context.index, context.moduleEntry.file, cls.node, context.source);
-      if (adapted.size) context.phpAdaptedTraitMembers.set(fromId, adapted);
+      if (adapted.size) context.phpAdaptedTraitMembers?.set(fromId, adapted);
     }
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {

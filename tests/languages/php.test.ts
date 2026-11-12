@@ -44,7 +44,8 @@ import {
   __setNativeTreeSitterBindingForTests,
 } from "../../src/native/tree-sitter-native.js";
 import { loadBinding } from "../../src/native/runtime.js";
-import { collectPhpModuleImportNames } from "../../src/indexer/php-namespace-symbols.js";
+import { collectPhpModuleImportNames, phpNamespaceSymbolIndexFor } from "../../src/indexer/php-namespace-symbols.js";
+import * as phpNavigation from "../../src/indexer/navigation-php.js";
 import {
   expectPhpTraitCompositionGoto,
   expectPhpTraitCompositionReferences,
@@ -630,6 +631,57 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("PHP-only index work", () => {
+  it.each([false, true])("keeps TypeScript consumers unchanged with PHP present: %s", async (includePhp) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-language-guards-"));
+    const promotionParameter = vi.spyOn(phpNavigation, "phpPropertyPromotionParameter");
+    const promotedVariable = vi.spyOn(phpNavigation, "phpConstructorPromotedVariable");
+    try {
+      const sources: Record<string, string> = {
+        "box.ts": ["export class Box {", "  run() { return this.helper(); }", "  helper() { return 1; }", "}"].join(
+          "\n",
+        ),
+      };
+      if (includePhp) {
+        sources["traits.php"] = [
+          "<?php",
+          "trait Helper { public function WORK() { return 1; } }",
+          "class Uses { use Helper; public function run() { return $this->work(); } }",
+        ].join("\n");
+      }
+      const files = await writeFixtureFiles(root, sources);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      const graph = await buildSymbolGraphDetailed(index);
+      const tsFile = files["box.ts"]!;
+      const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run");
+      expect(
+        calls
+          .filter((edge) => graph.nodes.get(edge.from)?.file === normalizePath(tsFile))
+          .map((edge) => graph.nodes.get(edge.to)?.name),
+      ).toEqual(["helper"]);
+      const target = await goToDefinition(index, { file: tsFile, line: 2, column: 23 });
+      expect(target.status).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected TypeScript member target");
+      expect(target.definition.range.start.line).toBe(3);
+      const references = await findReferences(index, { def: target.definition });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected TypeScript member references");
+      expect(references.references.some((site) => site.file === tsFile && site.range.start.line === 2)).toBe(true);
+      if (includePhp) {
+        expect(phpNamespaceSymbolIndexFor(index)).not.toBeNull();
+        expect(calls.filter((edge) => graph.nodes.get(edge.to)?.name === "WORK")).toHaveLength(1);
+      } else {
+        expect(phpNamespaceSymbolIndexFor(index)).toBeNull();
+        expect(promotionParameter).not.toHaveBeenCalled();
+        expect(promotedVariable).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("PHP import symbol namespaces", () => {
   it("resolves each same-spelled alias declaration by its import role", async () => {
