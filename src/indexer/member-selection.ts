@@ -98,7 +98,7 @@ export type MemberModel<Owner, Member> = {
   name(member: Member): string;
   key(member: Member): string;
   callable(member: Member): CallableIdentity | undefined;
-  /** Kotlin function-valued properties participate in call selection without becoming method declarations. */
+  /** Function-valued or potentially callable properties participate without becoming method declarations. */
   invocationArity?(member: Member): CallableArity | null | undefined;
   scope(member: Member): MemberScope;
   visible(member: Member, useFile: string): boolean;
@@ -171,6 +171,46 @@ export function kotlinPropertyInvocationArity(nameNode: SyntaxNodeLike): Callabl
   if (!lambdaParameters) return null;
   const count = lambdaParameters.namedChildren.length;
   return { minArgs: count, maxArgs: count };
+}
+
+/**
+ * An ECMAScript field or property with no proven non-callable annotation hides inherited methods.
+ * Named types may alias functions; missing annotations, function types, `any`, and `unknown` prove no exclusion.
+ */
+export function ecmaPropertyMayBeCallable(nameNode: SyntaxNodeLike): boolean {
+  const declaration = nameNode.parent;
+  if (
+    declaration?.type !== "property_signature" &&
+    declaration?.type !== "public_field_definition" &&
+    declaration?.type !== "field_definition"
+  )
+    return false;
+  const name = declaration.childForFieldName("name") ?? declaration.childForFieldName("property");
+  if (name?.id !== nameNode.id) return false;
+  let type = declaration.childForFieldName("type");
+  while (type?.type === "type_annotation" || type?.type === "parenthesized_type") {
+    type = type.namedChildren.find((child) => child.type !== "comment") ?? null;
+  }
+  if (type?.type === "predefined_type") return type.text === "any" || type.text === "unknown";
+  return type?.type !== "literal_type" && type?.type !== "array_type" && type?.type !== "tuple_type";
+}
+
+const ECMA_NON_CALLABLE_INITIALIZER_TYPES: Readonly<Record<string, true>> = {
+  number: true,
+  string: true,
+  true: true,
+  false: true,
+  null: true,
+  regex: true,
+  array: true,
+  object: true,
+  template_string: true,
+};
+
+/** A literal field value can hide a method without proving a callable graph target. */
+export function ecmaPropertyHasNonCallableInitializer(nameNode: SyntaxNodeLike): boolean {
+  const value = nameNode.parent?.childForFieldName("value");
+  return !!value && !!ECMA_NON_CALLABLE_INITIALIZER_TYPES[value.type];
 }
 
 /** Fold equivalent declarations only after their overload signatures have been checked. */

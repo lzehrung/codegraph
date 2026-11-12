@@ -7,6 +7,26 @@ export const tsOmissions: readonly CallFormOmission[] = [];
 
 export const tsCells: MatrixCell[] = [
   {
+    id: "ts/split-generic-method-shadowing",
+    language: "ts",
+    callForm: "typed-local-receiver",
+    files: {
+      "split.ts": [
+        "interface B { m(): void }",
+        "interface A extends B {",
+        "  m",
+        "  <T>(): void",
+        "}",
+        "export function run(a: A) { a.m<string>(); }",
+      ].join("\n"),
+    },
+    use: { file: "split.ts", line: 6, token: "m" },
+    expected: { file: "split.ts", line: 3, token: "m" },
+    decoy: { file: "split.ts", line: 1, token: "m" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "split.ts", fromName: "run" },
+  },
+  {
     id: "ts/private-self-member-call",
     language: "ts",
     callForm: "self-member-call",

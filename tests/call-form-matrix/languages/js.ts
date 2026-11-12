@@ -15,6 +15,25 @@ export const jsOmissions: readonly CallFormOmission[] = [
 
 export const jsCells: MatrixCell[] = [
   {
+    id: "js/own-field-shadowing",
+    language: "js",
+    callForm: "typed-local-receiver",
+    files: {
+      "field.js": [
+        "class B { m() {} }",
+        "class A extends B {",
+        "  m;",
+        "}",
+        "export function run() { const a = new A(); a.m(); }",
+      ].join("\n"),
+    },
+    use: { file: "field.js", line: 5, token: "m" },
+    expected: { file: "field.js", line: 3, token: "m" },
+    decoy: { file: "field.js", line: 1, token: "m" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "field.js", fromName: "run" },
+  },
+  {
     id: "js/private-self-member-call",
     language: "js",
     callForm: "self-member-call",

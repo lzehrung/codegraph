@@ -4,4 +4,4 @@ interface A extends B {
   <T>(): void
 }
 declare const a: A;
-a.m<string>(); // @goto ownM=m @known-gap split_generic_method_selects_inherited observed=inheritedM
+a.m<string>(); // @goto ownM=m

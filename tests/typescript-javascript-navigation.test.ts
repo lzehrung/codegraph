@@ -534,88 +534,167 @@ describe("TypeScript and JavaScript navigation", () => {
     }
   });
 
-  it.each(["ts", "tsx"] as const)(
-    "keeps the import-type return and split-method parse limits explicit in %s",
-    async (extension) => {
-      const fileName = `limits.${extension}`;
-      const importType = [
-        "interface H {",
-        "  <T>(): import('x').Foo<string>",
-        "  <U>(): Promise<U>",
-        "}",
-        "type After = number",
-        "let value: After = 1",
-        "",
-      ].join("\n");
-      const fixture = await project({
-        [fileName]: importType,
-        "x.d.ts": "declare module 'x' { export type Foo<T> = T }\n",
+  it.each(["ts", "tsx"] as const)("keeps the import-type return parse limit explicit in %s", async (extension) => {
+    const fileName = `limits.${extension}`;
+    const importType = [
+      "interface H {",
+      "  <T>(): import('x').Foo<string>",
+      "  <U>(): Promise<U>",
+      "}",
+      "type After = number",
+      "let value: After = 1",
+      "",
+    ].join("\n");
+    const fixture = await project({
+      [fileName]: importType,
+      "x.d.ts": "declare module 'x' { export type Foo<T> = T }\n",
+    });
+    try {
+      const goto = await goToDefinition(fixture.index, {
+        file: fixture.file(fileName),
+        line: 6,
+        column: columnOf(importType, 6, "After"),
       });
-      try {
-        const goto = await goToDefinition(fixture.index, {
-          file: fixture.file(fileName),
-          line: 6,
-          column: columnOf(importType, 6, "After"),
-        });
-        const refs = await findReferences(fixture.index, {
-          file: fixture.file(fileName),
-          line: 5,
-          column: columnOf(importType, 5, "After"),
-        });
-        if (extension === "ts") {
-          expect(goto.status).toBe("not_found");
-          expect(refs.status).toBe("not_found");
-        } else {
-          expect(goto.status).toBe("ok");
-          if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(5);
-          expect(refs.status).toBe("ok");
-          if (refs.status === "ok") {
-            expect(referenceSites(refs)).toEqual([`${fileName}:5`, `${fileName}:6`]);
-            expect(refs.referenceCoverage.state).toBe("partial");
-            expect(refs.referenceCoverage.reasons).toContain("parse_error");
-          }
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file(fileName),
+        line: 5,
+        column: columnOf(importType, 5, "After"),
+      });
+      if (extension === "ts") {
+        expect(goto.status).toBe("not_found");
+        expect(refs.status).toBe("not_found");
+      } else {
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(5);
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(referenceSites(refs)).toEqual([`${fileName}:5`, `${fileName}:6`]);
+          expect(refs.referenceCoverage.state).toBe("partial");
+          expect(refs.referenceCoverage.reasons).toContain("parse_error");
         }
-      } finally {
-        await rm(fixture.root, { recursive: true, force: true });
       }
-    },
-  );
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
 
-  it.each(["ts", "tsx"] as const)(
-    "pins the inherited-member misresolution for a split generic interface method in %s",
-    async (extension) => {
+  describe.each(["ts", "tsx"] as const)("own member shadowing in %s", (extension) => {
+    it.each([
+      { label: "split generic method", declaration: ["  m", "  <T>(): void"] },
+      { label: "one-line generic method", declaration: ["  m<T>(): void"] },
+      { label: "unannotated property", declaration: ["  m"] },
+      { label: "function-typed property", declaration: ["  m: <T>() => void"] },
+      { label: "any-typed property", declaration: ["  m: any"] },
+      { label: "unknown-typed property", declaration: ["  m: unknown"] },
+      { label: "aliased function-typed property", declaration: ["  m: Callable"] },
+    ])("keeps an own $label ahead of an inherited method", async ({ declaration }) => {
       const fileName = `split.${extension}`;
       const source = [
         "interface B { m(): void }",
         "interface A extends B {",
-        "  m",
-        "  <T>(): void",
+        ...declaration,
         "}",
-        "declare const a: A",
-        "a.m<string>()",
+        "declare const a: A;",
+        "a.m<string>();",
+        "function run(a: A) { a.m<string>(); }",
+        "type Callable = <T>() => void;",
+        "",
+      ].join("\n");
+      const callLine = declaration.length + 5;
+      const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
+      try {
+        for (const line of [callLine, callLine + 1]) {
+          const goto = await goToDefinition(fixture.index, { file, line, column: columnOf(source, line, "m") });
+          expect(goto.status).toBe("ok");
+          if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+        }
+        const own = await findReferences(fixture.index, { file, line: 3, column: columnOf(source, 3, "m") });
+        expect(own.status).toBe("ok");
+        expect(referenceSites(own)).toEqual([3, callLine, callLine + 1].map((line) => `${fileName}:${line}`));
+        if (own.status === "ok") expect(own.referenceCoverage.state).toBe("complete");
+        const inherited = await findReferences(fixture.index, { file, line: 1, column: columnOf(source, 1, "m") });
+        expect(inherited.status).toBe("ok");
+        expect(referenceSites(inherited)).toEqual([`${fileName}:1`]);
+        if (inherited.status === "ok") expect(inherited.referenceCoverage.state).toBe("complete");
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        const ownId = `${file}::m::${tokenIndex(source, 3, "m")}`;
+        const inheritedId = `${file}::m::${tokenIndex(source, 1, "m")}`;
+        expect(callTargetIds(graph, "run")).toEqual([ownId]);
+        expect(graph.edges.some((edge) => edge.label === "calls" && edge.to === inheritedId)).toBe(false);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("preserves inherited call lookup past a number-typed own property", async () => {
+      const fileName = `number.${extension}`;
+      const source = [
+        "interface B { m(): void }",
+        "interface A extends B {",
+        "  m: number",
+        "}",
+        "declare const a: A;",
+        "a.m();",
+        "function run(a: A) { a.m(); }",
         "",
       ].join("\n");
       const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
       try {
-        const goto = await goToDefinition(fixture.index, {
-          file: fixture.file(fileName),
-          line: 7,
-          column: columnOf(source, 7, "m"),
-        });
+        const goto = await goToDefinition(fixture.index, { file, line: 6, column: columnOf(source, 6, "m") });
         expect(goto.status).toBe("ok");
         if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(1);
-        const refs = await findReferences(fixture.index, {
-          file: fixture.file(fileName),
-          line: 1,
-          column: columnOf(source, 1, "m"),
-        });
-        expect(refs.status).toBe("ok");
-        if (refs.status === "ok") {
-          expect(referenceSites(refs)).toEqual([`${fileName}:1`, `${fileName}:7`]);
-          expect(refs.referenceCoverage.state).toBe("complete");
-        }
+        const inherited = await findReferences(fixture.index, { file, line: 1, column: columnOf(source, 1, "m") });
+        expect(inherited.status).toBe("ok");
+        expect(referenceSites(inherited)).toEqual([`${fileName}:1`, `${fileName}:6`, `${fileName}:7`]);
+        if (inherited.status === "ok") expect(inherited.referenceCoverage.state).toBe("complete");
+        const own = await findReferences(fixture.index, { file, line: 3, column: columnOf(source, 3, "m") });
+        expect(own.status).toBe("ok");
+        expect(referenceSites(own)).toEqual([`${fileName}:3`]);
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "run")).toEqual([`${file}::m::${tokenIndex(source, 1, "m")}`]);
       } finally {
         await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it.each(["ts", "tsx", "js"] as const)(
+    "keeps an unannotated class field ahead of an inherited method in %s",
+    async (extension) => {
+      for (const { declaration, callable } of [
+        { declaration: "  m;", callable: true },
+        { declaration: "  m = () => {};", callable: true },
+        { declaration: "  m = 1;", callable: false },
+      ]) {
+        const source = [
+          "class B { m() {} }",
+          "class A extends B {",
+          declaration,
+          "}",
+          "function run() { const a = new A(); a.m(); }",
+          "",
+        ].join("\n");
+        const fileName = `field.${extension}`;
+        const fixture = await project({ [fileName]: source });
+        const file = fixture.file(fileName);
+        try {
+          const goto = await goToDefinition(fixture.index, { file, line: 5, column: columnOf(source, 5, "m") });
+          expect(goto.status).toBe("ok");
+          if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(3);
+          const own = await findReferences(fixture.index, { file, line: 3, column: columnOf(source, 3, "m") });
+          expect(own.status).toBe("ok");
+          expect(referenceSites(own)).toEqual([`${fileName}:3`, `${fileName}:5`]);
+          const inherited = await findReferences(fixture.index, { file, line: 1, column: columnOf(source, 1, "m") });
+          expect(inherited.status).toBe("ok");
+          expect(referenceSites(inherited)).toEqual([`${fileName}:1`]);
+          const graph = await buildSymbolGraphDetailed(fixture.index);
+          const targets = callable ? [`${file}::m::${tokenIndex(source, 3, "m")}`] : [];
+          expect(callTargetIds(graph, "run")).toEqual(targets);
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
       }
     },
   );

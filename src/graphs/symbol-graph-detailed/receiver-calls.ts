@@ -1888,8 +1888,8 @@ export function emitReceiverCallEdges(
   memberScopes: ReadonlyMap<string, ReceiverMemberScope> = new Map(),
   nodeAliases: ReadonlyMap<string, string> = new Map(),
   memberArities: ReadonlyMap<string, MemberArityRange> = new Map(),
-  kotlinPropertyArities: ReadonlyMap<string, CallableArity | null> = new Map(),
-  kotlinPropertyMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  propertyInvocationArities: ReadonlyMap<string, CallableArity | null> = new Map(),
+  invokablePropertyMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   ownerAnchors: ReadonlyMap<string, string> = new Map(),
   accessibleMembers: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   fileHiddenMemberIds: ReadonlySet<string> = new Set(),
@@ -1926,7 +1926,7 @@ export function emitReceiverCallEdges(
   for (const [ownerId, memberIds] of accessibleMembers) {
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
-  for (const [ownerId, memberIds] of kotlinPropertyMembers) {
+  for (const [ownerId, memberIds] of invokablePropertyMembers) {
     for (const memberId of memberIds) pushUnique(membersByOwner, ownerId, memberId);
   }
 
@@ -1966,7 +1966,7 @@ export function emitReceiverCallEdges(
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
-    invocationArity: (id) => kotlinPropertyArities.get(canonicalMemberId(id, nodeAliases)),
+    invocationArity: (id) => propertyInvocationArities.get(canonicalMemberId(id, nodeAliases)),
     ...(acceptsCallShape
       ? { acceptsCall: (id: string) => acceptsCallShape(canonicalMemberId(id, nodeAliases), activeCandidate) }
       : {}),
@@ -1974,7 +1974,7 @@ export function emitReceiverCallEdges(
     visible: (id, useFile) => {
       const canonicalId = canonicalMemberId(id, nodeAliases);
       const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
-      if (!node || (node.kind !== "function" && !node.callable && !kotlinPropertyArities.has(canonicalId)))
+      if (!node || (node.kind !== "function" && !node.callable && !propertyInvocationArities.has(canonicalId)))
         return false;
       if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
       if (
@@ -2026,7 +2026,7 @@ export function emitReceiverCallEdges(
       useFile: candidate.site.file,
       phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
       normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
-      callSite: languageId === "kotlin",
+      callSite: languageId === "kotlin" || isJsTsLanguage(languageId),
       separateMemberScopes: hasSeparateMemberScopes(languageId),
       startAtAncestor: candidate.viaSupertypes,
       inheritOverloads: inheritsMemberOverloads(languageId),

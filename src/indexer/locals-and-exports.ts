@@ -136,13 +136,12 @@ const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "function_definition",
 ]);
 
-// TypeScript/TSX and JavaScript class field declarations are absent from
-// those languages' native `locals` query (only method-like declarations
-// are queried there), so `#private` and public class fields resolve to
-// zero definitions without this structural supplement.
+// Structural supplementation also covers ECMAScript fields and TypeScript property signatures,
+// including private names and declarations the native locals query does not capture.
 const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
   "public_field_definition", // TypeScript/TSX
   "field_definition", // JavaScript
+  "property_signature", // TypeScript/TSX interfaces and type literals
 ]);
 
 const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {

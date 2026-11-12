@@ -151,8 +151,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 145 re-extracts TypeScript and TSX files whose semicolonless generic call signatures previously
  * put later type aliases under ERROR, restoring their symbols and navigation references, and omits
  * zero-width or empty-name recovery declarations from cached symbols and scope bindings.
+ * Epoch 146 indexes TypeScript property signatures and rebuilds receiver calls where potentially callable
+ * ECMAScript properties were skipped in favor of inherited methods.
  */
-export const CORE_ALGORITHM_EPOCH = 145;
+export const CORE_ALGORITHM_EPOCH = 146;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

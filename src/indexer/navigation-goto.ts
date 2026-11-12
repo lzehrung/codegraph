@@ -163,6 +163,7 @@ import {
 import {
   hasSeparateMemberScopes,
   inheritsMemberOverloads,
+  ecmaPropertyMayBeCallable,
   kotlinPropertyInvocationArity,
   selectMember,
   type MemberModel,
@@ -2266,6 +2267,7 @@ export async function resolveMemberAccessDefinition(params: {
               knownArgumentCount,
               objDef,
               report,
+              isJsTsLanguage(targetContext.sup.id) ? memberAccessUse(sup.id, memberNode) : undefined,
             );
             if (!memberDef && report.named) {
               // Two members that both fit leave the target open. Named members that all reject the call hide the name
@@ -3252,10 +3254,9 @@ async function resolveKeywordReceiverMember(
   const membersByKey = new Map<string, SymbolDef[]>();
   const scopeByMember = new Map<SymbolDef, ReceiverMemberScope>();
   const visible = new Set<SymbolDef>();
-  const propertyInvocationArities =
-    memberUse === "call" && current.context.sup.id === "kotlin"
-      ? new Map<SymbolDef, CallableArity | null | undefined>()
-      : undefined;
+  const callProperties =
+    memberUse === "call" && (current.context.sup.id === "kotlin" || isJsTsLanguage(current.context.sup.id));
+  const propertyInvocationArities = callProperties ? new Map<SymbolDef, CallableArity | null | undefined>() : undefined;
   const trailingLambda = current.context.sup.id === "kotlin" && kotlinHasTrailingLambda(node);
   const lambdaCompatible = trailingLambda ? new Map<SymbolDef, boolean>() : undefined;
   let level: KeywordClassRef[] = [current];
@@ -3326,7 +3327,14 @@ async function resolveKeywordReceiverMember(
           const start = hit.range.start.index;
           if (start !== undefined) {
             const nameNode = ref.context.tree.rootNode.descendantForIndex(start, start);
-            propertyInvocationArities.set(hit, kotlinPropertyInvocationArity(nameNode));
+            if (ref.context.sup.id === "kotlin") {
+              propertyInvocationArities.set(hit, kotlinPropertyInvocationArity(nameNode));
+            } else if (ecmaPropertyMayBeCallable(nameNode)) {
+              propertyInvocationArities.set(hit, null);
+            } else if (nameNode.parent?.type === "property_signature") {
+              // Preserve the existing call lookup for explicitly non-callable interface properties.
+              continue;
+            }
           }
         }
         if (!scopeByMember.has(hit)) {
@@ -3645,6 +3653,9 @@ function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boo
   if (languageId === "java") return memberNode.type === "method_invocation";
   const call = memberNode.parent;
   if (languageId === "kotlin") return call?.type === "call_expression" && call.namedChildren[0]?.id === memberNode.id;
+  if (isJsTsLanguage(languageId)) {
+    return call?.type === "call_expression" && call.childForFieldName("function")?.id === memberNode.id;
+  }
   if (languageId === "csharp") {
     return call?.type === "invocation_expression" && call.childForFieldName("function")?.id === memberNode.id;
   }
@@ -3653,7 +3664,9 @@ function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boo
 
 /** How the member access `memberNode` is used, where the language separates calls from value reads. */
 function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): "call" | "value" | undefined {
-  if (languageId !== "java" && languageId !== "kotlin" && languageId !== "csharp") return undefined;
+  const distinguishesMemberUses =
+    isJsTsLanguage(languageId) || languageId === "java" || languageId === "kotlin" || languageId === "csharp";
+  if (!distinguishesMemberUses) return undefined;
   // Java method references name methods; Kotlin callable references may name properties too.
   if (languageId === "java" && memberNode.type === "method_reference") return "call";
   if (languageId === "kotlin" && (memberNode.type === "callable_reference" || navigationUsesDoubleColon(memberNode)))

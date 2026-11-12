@@ -123,6 +123,7 @@ const BASE_GRAPH = {
     (generator_function_declaration name: (identifier) @name)
     (method_definition name: (property_identifier) @name)
     (public_field_definition name: (property_identifier) @name)
+    (property_signature name: (property_identifier) @name)
     (method_signature name: (property_identifier) @name)
     (abstract_method_signature name: (property_identifier) @name)
     (function_signature name: (identifier) @name)
@@ -180,7 +181,8 @@ const BASE_HELPERS = {
   isDeclarationName: (node: SyntaxNodeLike) => {
     const parent = node.parent;
     if (isEcmaScriptVariableDeclaratorName(node)) return true;
-    if (isNameOrPropertyFieldOnParent(node, ["public_field_definition", "enum_assignment"])) return true;
+    if (isNameOrPropertyFieldOnParent(node, ["public_field_definition", "property_signature", "enum_assignment"]))
+      return true;
     if (parent?.type === "enum_body") {
       return node.type === "property_identifier";
     }

@@ -7,6 +7,26 @@ export const tsxOmissions: readonly CallFormOmission[] = [];
 
 export const tsxCells: MatrixCell[] = [
   {
+    id: "tsx/split-generic-method-shadowing",
+    language: "tsx",
+    callForm: "typed-local-receiver",
+    files: {
+      "split.tsx": [
+        "interface B { m(): void }",
+        "interface A extends B {",
+        "  m",
+        "  <T>(): void",
+        "}",
+        "export function run(a: A) { a.m<string>(); }",
+      ].join("\n"),
+    },
+    use: { file: "split.tsx", line: 6, token: "m" },
+    expected: { file: "split.tsx", line: 3, token: "m" },
+    decoy: { file: "split.tsx", line: 1, token: "m" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "split.tsx", fromName: "run" },
+  },
+  {
     id: "tsx/private-self-member-call",
     language: "tsx",
     callForm: "self-member-call",
