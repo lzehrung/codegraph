@@ -1,3 +1,7 @@
+import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "./helpers/typescript-split-method-fixture.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -580,9 +584,254 @@ describe("TypeScript and JavaScript navigation", () => {
   });
 
   describe.each(["ts", "tsx"] as const)("split generic methods in %s", (extension) => {
+    it.each([
+      { declaration: ["  m", "  <T>(): void {}"], role: "implementation", abstract: false },
+      {
+        declaration: ["  m? /* name */", "  // signature", "  <T>(): void {}"],
+        role: "implementation",
+        abstract: false,
+      },
+      { declaration: ["  abstract m", "  <T>(): void"], role: "signature", abstract: true },
+    ])("retains class split method kind, arity, and $role metadata", async ({ declaration, role, abstract }) => {
+      const fileName = `class.${extension}`;
+      const source = [
+        "class Base { m(value: number): void {} }",
+        "abstract class Own extends Base {",
+        ...declaration,
+        "}",
+        "declare const x: Own;",
+        "x.m<string>();",
+        "x.m();",
+        "export function wrong(x: Own) { x.m(1); }",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
+      const compiler = ts.createLanguageService({
+        getScriptFileNames: () => [file],
+        getScriptVersion: () => "1",
+        getScriptSnapshot: () => ts.ScriptSnapshot.fromString(source),
+        getCurrentDirectory: () => fixture.root,
+        getCompilationSettings: () => ({ noLib: true }),
+        getDefaultLibFileName: () => "",
+        fileExists: (name) => name === file,
+        readFile: (name) => (name === file ? source : undefined),
+      });
+      try {
+        expect(compiler.getSyntacticDiagnostics(file)).toEqual([]);
+        const parsed = compiler.getProgram()!.getSourceFile(file)!;
+        const owner = parsed.statements[1]!;
+        if (!ts.isClassDeclaration(owner)) throw new Error("Expected class");
+        expect(owner.members.map((member) => ts.SyntaxKind[member.kind])).toEqual(["MethodDeclaration"]);
+        const ownIndex = tokenIndex(source, 3, "m");
+        for (const line of [declaration.length + 5, declaration.length + 6]) {
+          const position = tokenIndex(source, line, "m");
+          expect(
+            compiler.getDefinitionAtPosition(file, position)?.map((definition) => definition.textSpan.start),
+          ).toEqual([ownIndex]);
+          expect(
+            compiler
+              .findReferences(file, position)
+              ?.some((group) => group.references.some((reference) => reference.textSpan.start === ownIndex)),
+          ).toBe(true);
+          const target = await goToDefinition(fixture.index, { file, line, column: columnOf(source, line, "m") });
+          expect(target.status).toBe("ok");
+          if (target.status === "ok") {
+            expect(target.definition.kind).toBe("function");
+            expect(target.definition.range.start.index).toBe(ownIndex);
+            expect(target.definition.callable?.role).toBe(role);
+            expect(target.definition.callable?.arity).toEqual({ minArgs: 0, maxArgs: 0 });
+          }
+        }
+        const wrongLine = declaration.length + 7;
+        expect(
+          (await goToDefinition(fixture.index, { file, line: wrongLine, column: columnOf(source, wrongLine, "m(1)") }))
+            .status,
+        ).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "wrong")).toEqual([]);
+        const own = graph.nodes.get(`${file}::m::${ownIndex}`);
+        expect(own?.kind).toBe("function");
+        expect(!!own?.implementationTarget).toBe(abstract);
+      } finally {
+        compiler.dispose();
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps cross-file receivers on their own interface and class methods after reopening", async () => {
+      const fixture = await project(typescriptSplitMethodSources(extension));
+      const options = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+      try {
+        await expectTypeScriptSplitMethods(fixture.index, fixture.root, extension);
+        await expectTypeScriptSplitMethods(
+          await buildProjectIndexIncremental(fixture.root, options),
+          fixture.root,
+          extension,
+        );
+        closeDiskCacheDatabase(fixture.root, options);
+        const report: BuildReport = { timings: {} };
+        await expectTypeScriptSplitMethods(
+          await buildProjectIndexIncremental(fixture.root, { ...options, report }),
+          fixture.root,
+          extension,
+        );
+        expect(report.files?.parsed).toBe(0);
+      } finally {
+        closeDiskCacheDatabase(fixture.root, options);
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(["<T>()", "()"])("does not invent a method from a split new %s construct signature", async (parameters) => {
+      const fileName = `construct.${extension}`;
+      const source = [
+        "interface Base { new(): void }",
+        "interface C extends Base {",
+        "  new",
+        `  ${parameters}: C`,
+        "}",
+        "declare const ctor: C;",
+        "const value = new ctor();",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
+      const compiler = ts.createLanguageService({
+        getScriptFileNames: () => [file],
+        getScriptVersion: () => "1",
+        getScriptSnapshot: () => ts.ScriptSnapshot.fromString(source),
+        getCurrentDirectory: () => fixture.root,
+        getCompilationSettings: () => ({ noLib: true }),
+        getDefaultLibFileName: () => "",
+        fileExists: (name) => name === file,
+        readFile: (name) => (name === file ? source : undefined),
+      });
+      try {
+        expect(compiler.getSyntacticDiagnostics(file)).toEqual([]);
+        const declaration = compiler.getProgram()!.getSourceFile(file)!.statements[1]!;
+        if (!ts.isInterfaceDeclaration(declaration)) throw new Error("Expected construct owner");
+        expect(declaration.members.map((member) => ts.SyntaxKind[member.kind])).toEqual(["ConstructSignature"]);
+        expect(compiler.getDefinitionAtPosition(file, tokenIndex(source, 3, "new")) ?? []).toEqual([]);
+        expect(compiler.findReferences(file, tokenIndex(source, 3, "new"))).toBeUndefined();
+        expect(fixture.index.byFile.get(fileIdentityKey(file))?.locals.some((local) => local.localName === "new")).toBe(
+          false,
+        );
+        const target = await goToDefinition(fixture.index, { file, line: 3, column: 3 });
+        expect(target.status).toBe("not_found");
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect([...graph.nodes.values()].some((node) => node.name === "new")).toBe(false);
+      } finally {
+        compiler.dispose();
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { name: "get", kind: "MethodSignature" },
+      { name: "set", kind: "MethodSignature" },
+      { name: "new?", kind: "MethodSignature", indexedName: "new" },
+      { name: "readonly new", kind: "MethodSignature", indexedName: "new" },
+      { name: "readonly new?", kind: "MethodSignature", indexedName: "new" },
+      { name: '"m"', kind: "MethodSignature" },
+      { name: "1", kind: "MethodSignature" },
+      { name: '["m"]', kind: "MethodSignature" },
+      { name: "[key]", kind: "MethodSignature" },
+      { name: 'readonly "m"?', kind: "MethodSignature", indexedName: '"m"' },
+      { name: 'readonly ["m"]?', kind: "MethodSignature", indexedName: '["m"]' },
+      { name: "get m", kind: "GetAccessor", indexedName: "m" },
+      { name: "set m", kind: "SetAccessor", indexedName: "m" },
+    ])(
+      "preserves TypeScript's $kind parse for $name without inventing an accessor method",
+      async ({ name, kind, indexedName }) => {
+        const fileName = `names.${extension}`;
+        const memberName = indexedName ?? name;
+        let use = "x.m<string>();";
+        if (name === "get" || name === "set") use = `x.${name}<string>();`;
+        if (memberName === "new") use = "x.new<string>();";
+        if (name === "1") use = "x[1]<string>();";
+        const source = [
+          "declare const key: 'm';",
+          "interface Base { m(value: number): void }",
+          "interface Own extends Base {",
+          `  ${name}`,
+          "  <T>(): void",
+          "}",
+          "declare const x: Own;",
+          use,
+        ].join("\n");
+        const fixture = await project({ [fileName]: source });
+        const file = fixture.file(fileName);
+        const compiler = ts.createLanguageService({
+          getScriptFileNames: () => [file],
+          getScriptVersion: () => "1",
+          getScriptSnapshot: () => ts.ScriptSnapshot.fromString(source),
+          getCurrentDirectory: () => fixture.root,
+          getCompilationSettings: () => ({ noLib: true }),
+          getDefaultLibFileName: () => "",
+          fileExists: (candidate) => candidate === file,
+          readFile: (candidate) => (candidate === file ? source : undefined),
+        });
+        try {
+          expect(compiler.getSyntacticDiagnostics(file)).toEqual([]);
+          const parsed = compiler.getProgram()!.getSourceFile(file)!;
+          const owner = parsed.statements[2]!;
+          if (!ts.isInterfaceDeclaration(owner)) throw new Error("Expected named owner");
+          expect(owner.members.map((member) => ts.SyntaxKind[member.kind])).toEqual([kind]);
+          const token = name === "1" ? "1" : ".";
+          const useIndex = source.lastIndexOf(use) + use.indexOf(token) + (name === "1" ? 0 : 1);
+          expect(
+            compiler
+              .getDefinitionAtPosition(file, useIndex)
+              ?.every((definition) => parsed.getLineAndCharacterOfPosition(definition.textSpan.start).line === 3),
+          ).toBe(true);
+          if (name === "[key]") expect(compiler.findReferences(file, useIndex)).toBeUndefined();
+          else expect(compiler.findReferences(file, useIndex)?.length).toBeGreaterThan(0);
+          const local = fixture.index.byFile
+            .get(fileIdentityKey(file))
+            ?.locals.find((definition) => definition.range.start.line === 4 && definition.localName === memberName);
+          expect(local?.kind).toBe("function");
+          expect(local?.callable?.arity).toEqual({ minArgs: 0, maxArgs: 0 });
+          const graph = await buildSymbolGraphDetailed(fixture.index);
+          expect(graph.nodes.get(`${file}::${memberName}::${local!.range.start.index}`)?.kind).toBe("function");
+          if (memberName === "new" || memberName === "get" || memberName === "set") {
+            const target = await goToDefinition(fixture.index, { file, line: 8, column: use.indexOf(".") + 2 });
+            expect(target.status).toBe("ok");
+            if (target.status === "ok") expect(target.definition.range.start.index).toBe(local!.range.start.index);
+            const refs = await findReferences(fixture.index, {
+              file,
+              line: 4,
+              column: local!.range.start.column,
+            });
+            expect(referenceSites(refs)).toEqual([`${fileName}:4`, `${fileName}:8`]);
+          }
+        } finally {
+          compiler.dispose();
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
     for (const owner of ["interface A extends B {", "type A = {"]) {
       it.each([
         { label: "split", declaration: ["  m", "  <T>(): void"], args: "", arity: { minArgs: 0, maxArgs: 0 } },
+        { label: "optional", declaration: ["  m?", "  <T>(): void"], args: "", arity: { minArgs: 0, maxArgs: 0 } },
+        {
+          label: "readonly",
+          declaration: ["  readonly m", "  <T>(): void"],
+          args: "",
+          arity: { minArgs: 0, maxArgs: 0 },
+        },
+        {
+          label: "readonly optional",
+          declaration: ["  readonly m?", "  <T>(): void"],
+          args: "",
+          arity: { minArgs: 0, maxArgs: 0 },
+        },
+        ...["public", "protected", "private", "static", "override"].map((modifier) => ({
+          label: modifier,
+          declaration: [`  ${modifier} m?`, "  <T>(): void"],
+          args: "",
+          arity: { minArgs: 0, maxArgs: 0 },
+        })),
         { label: "one-line", declaration: ["  m<T>(): void"], args: "", arity: { minArgs: 0, maxArgs: 0 } },
         {
           label: "split with parameters",
@@ -606,6 +855,7 @@ describe("TypeScript and JavaScript navigation", () => {
           "declare const a: A;",
           `a.m<string>(${args});`,
           `function run(a: A) { a.m<string>(${args}); }`,
+          `a.m(${args});`,
           "",
         ].join("\n");
         const callLine = declaration.length + 5;
@@ -622,6 +872,15 @@ describe("TypeScript and JavaScript navigation", () => {
           readFile: (name) => (name === file ? source : undefined),
         });
         try {
+          expect(service.getSyntacticDiagnostics(file)).toEqual([]);
+          const parsed = service.getProgram()!.getSourceFile(file)!;
+          const ownerNode = parsed.statements[1]!;
+          let ownMembers: readonly ts.TypeElement[];
+          if (ts.isInterfaceDeclaration(ownerNode)) ownMembers = ownerNode.members;
+          else if (ts.isTypeAliasDeclaration(ownerNode) && ts.isTypeLiteralNode(ownerNode.type)) {
+            ownMembers = ownerNode.type.members;
+          } else throw new Error("Expected a method owner");
+          expect(ownMembers.map((member) => ts.SyntaxKind[member.kind])).toEqual(["MethodSignature"]);
           const ownIndex = tokenIndex(source, 3, "m");
           const useIndex = tokenIndex(source, callLine, "m");
           expect(service.getDefinitionAtPosition(file, useIndex)?.map((def) => [def.kind, def.textSpan.start])).toEqual(
@@ -633,6 +892,7 @@ describe("TypeScript and JavaScript navigation", () => {
             ownIndex,
             useIndex,
             tokenIndex(source, callLine + 1, "m"),
+            tokenIndex(source, callLine + 2, "m"),
           ]);
           const observe = async (index: ProjectIndex) => {
             const mod = index.byFile.get(fileIdentityKey(file));
@@ -640,18 +900,20 @@ describe("TypeScript and JavaScript navigation", () => {
             expect(own?.kind).toBe("function");
             expect(own?.callable?.arity).toEqual(arity);
             expect(own?.callable?.role).toBe("signature");
-            for (const line of [3, callLine, callLine + 1]) {
+            for (const line of [3, callLine, callLine + 1, callLine + 2]) {
               const goto = await goToDefinition(index, { file, line, column: columnOf(source, line, "m") });
               expect(goto.status).toBe("ok");
               if (goto.status === "ok") {
-                expect(goto.definition.range.start.index).toBe(ownIndex);
+                expect(goto.definition.range.start.index, `goto at line ${line}`).toBe(ownIndex);
                 expect(goto.definition.kind).toBe("function");
                 expect(goto.definition.callable?.arity).toEqual(arity);
               }
             }
             const refs = await findReferences(index, { file, line: 3, column: columnOf(source, 3, "m") });
             expect(refs.status).toBe("ok");
-            expect(referenceSites(refs)).toEqual([3, callLine, callLine + 1].map((line) => `${fileName}:${line}`));
+            expect(referenceSites(refs)).toEqual(
+              [3, callLine, callLine + 1, callLine + 2].map((line) => `${fileName}:${line}`),
+            );
             if (refs.status === "ok") expect(refs.referenceCoverage.state).toBe("complete");
             const inherited = await findReferences(index, { file, line: 1, column: columnOf(source, 1, "m") });
             expect(referenceSites(inherited)).toEqual([`${fileName}:1`]);
@@ -681,8 +943,6 @@ describe("TypeScript and JavaScript navigation", () => {
       { label: "explicit comma", declaration: ["  m,", "  <T>(): void"] },
       { label: "separator after a comment", declaration: ["  m /* property */;", "  <T>(): void"] },
       { label: "typed property", declaration: ["  m: number", "  <T>(): void"] },
-      { label: "optional property", declaration: ["  m?", "  <T>(): void"] },
-      { label: "readonly property", declaration: ["  readonly m", "  <T>(): void"] },
       { label: "ordinary property", declaration: ["  m"] },
       { label: "function-typed property", declaration: ["  m: <T>() => void"] },
     ])("keeps an $label unindexed, as on main", async ({ declaration, label }) => {

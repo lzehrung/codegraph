@@ -73,6 +73,55 @@ async function tryCreateFileSymlink(target: string, linkPath: string): Promise<b
 }
 
 describe("rename preview", () => {
+  describe.each(["ts", "tsx"] as const)("split generic method rename in %s", (extension) => {
+    it.each(["m", "m?", "readonly m", "readonly m?"])(
+      "safely renames %s and cross-file calls, not its inherited decoy",
+      async (name) => {
+        const root = await mkTmpDir("cg-rename-split-method-");
+        try {
+          const types = `types.${extension}`;
+          const use = `use.${extension}`;
+          const paths = await writeFixtureFiles(root, {
+            [types]: [
+              "export interface Base { m(value: number): void }",
+              "export interface Own extends Base {",
+              `  ${name}`,
+              "  <T>(): void",
+              "}",
+            ].join("\n"),
+            [use]: [
+              'import { Own } from "./types";',
+              "export function run(x: Own) {",
+              "  x.m<string>();",
+              "  x.m();",
+              "}",
+            ].join("\n"),
+            [`decoy.${extension}`]: "export interface Other { m(): void }\n",
+          });
+          const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+          const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "m" });
+          for (const declaration of [3, 1]) {
+            const target = symbols.symbols.find(
+              (symbol) => symbol.location.file === types && symbol.location.range.start.line === declaration,
+            );
+            if (!target) throw new Error("Missing split-method rename target");
+            const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "renamed" });
+            expect(result.safe).toBe(true);
+            expect(result.conflicts).toEqual([]);
+            expect(result.unsafeSites).toEqual([]);
+            const expected = [[types, declaration, "m", "renamed"]];
+            if (declaration === 3) expected.push([use, 3, "m", "renamed"], [use, 4, "m", "renamed"]);
+            expect(result.edits.map((edit) => [edit.file, edit.range.start.line, edit.oldText, edit.newText])).toEqual(
+              expected,
+            );
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
   it("returns exact semantic edits without writing files or touching shadowed locals", async () => {
     const { root, serviceFile, consumerFile, session, target } = await renameFixture();
     const beforeService = await fsp.readFile(serviceFile, "utf8");

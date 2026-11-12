@@ -1,4 +1,8 @@
 import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "./helpers/typescript-split-method-fixture.js";
+import {
   expectCsharpGlobalUsingNavigation,
   withCsharpGlobalUsingFixture,
 } from "./helpers/csharp-global-using-fixture.js";
@@ -125,6 +129,20 @@ import {
 } from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("Go to Definition", () => {
+  it.each(["ts", "tsx"] as const)(
+    "resolves cross-file %s split methods ahead of inherited decoys",
+    async (extension) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-split-method-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, typescriptSplitMethodSources(extension));
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectTypeScriptSplitMethods(index, root, extension);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("separates Kotlin accessor call targets and factory-named receiver types", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-review-goto-"));
     try {

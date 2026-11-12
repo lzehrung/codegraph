@@ -170,6 +170,58 @@ describe("persistent query index", () => {
     expect(rebuiltSnapshot.buildReport?.queryIndex?.updateMs).toBeGreaterThan(0);
   });
 
+  it.each(["ts", "tsx"])(
+    "rebuilds previous-version %s chunks after reopening and matches a fresh sidecar",
+    async (extension) => {
+      const root = await createRepo();
+      await fs.writeFile(
+        path.join(root, "src", `signatures.${extension}`),
+        [
+          "export interface Handler {",
+          "  <T>(): Forward<T>",
+          "  <U>(): Forward<U>",
+          "}",
+          "export type Forward<T> = T;",
+          "",
+        ].join("\n"),
+      );
+      const initialSession = createSession(root);
+      await search(initialSession, root, "Forward");
+      const initialSnapshot = await initialSession.loadProject();
+      const sidecar = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).sidecar;
+      disposeSessionQueryIndex(initialSession);
+      const readChunks = () => {
+        const database = new SqliteDatabase(sidecar, { readonly: true });
+        try {
+          return database
+            .prepare(
+              `SELECT files.path, chunks.ordinal, chunks.kind, chunks.name, chunks.start_line,
+                    chunks.end_line, hex(chunks.text) AS text, chunks.normalized_text
+             FROM chunks JOIN files USING (file_id) ORDER BY files.path, chunks.ordinal`,
+            )
+            .all();
+        } finally {
+          database.close();
+        }
+      };
+      const freshChunks = readChunks();
+      const database = new SqliteDatabase(sidecar);
+      database.prepare("UPDATE metadata SET value = ? WHERE key = ?").run("2", "chunkerVersion");
+      // A previous grammar can leave coarse recovery chunks even when source identities match.
+      database.prepare("UPDATE chunks SET kind = 'misc', name = NULL, start_line = 1").run();
+      database.close();
+      expect(readChunks()).not.toEqual(freshChunks);
+
+      const reopenedSession = createSession(root);
+      await search(reopenedSession, root, "Forward");
+      const rebuiltSnapshot = await reopenedSession.loadProject();
+      expect(rebuiltSnapshot.buildReport?.queryIndex?.sidecarState).toBe("rebuilt");
+      expect(rebuiltSnapshot.buildReport?.queryIndex?.filesRead).toBeGreaterThan(0);
+      disposeSessionQueryIndex(reopenedSession);
+      expect(readChunks()).toEqual(freshChunks);
+    },
+  );
+
   it("reports both candidate files and candidate chunks for sidecar searches", async () => {
     const root = await createRepo();
     const session = createSession(root);

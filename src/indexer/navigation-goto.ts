@@ -5295,6 +5295,10 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
     column: local.range.start.column - 1,
   };
   let current: SyntaxNodeLike | null = targetContext.tree.rootNode.descendantForPosition(position, position);
+  // Only recovered type-body methods have a property-signature name and persisted
+  // instance-method facts. TypeScript ignores `static` on that MethodSignature.
+  const splitTypeMethod = current.parent?.type === "property_signature" && local.callable?.kind === "instance-method";
+  if (splitTypeMethod) return false;
   if (declarationIsStaticEquivalent(targetContext.sup.id, current)) return true;
   while (current && current !== container) {
     if (targetContext.sup.id === "php" && (current.type === "const_declaration" || current.type === "enum_case"))

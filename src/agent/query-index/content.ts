@@ -6,7 +6,7 @@ import { supportForFile, supportForFileWithSource, type LanguageSupport } from "
 
 export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;
 export const QUERY_INDEX_NORMALIZER_VERSION = 2;
-export const QUERY_INDEX_CHUNKER_VERSION = 2;
+export const QUERY_INDEX_CHUNKER_VERSION = 3;
 
 function compressQueryText(text: string): Uint8Array {
   const compressed = brotliCompressSync(text, {

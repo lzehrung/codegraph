@@ -26,6 +26,32 @@ export const tsCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "split.ts", fromName: "run" },
   },
+  ...[
+    { label: "optional", name: "m?", call: "m<string>()" },
+    { label: "readonly", name: "readonly m", call: "m()" },
+    { label: "readonly-optional", name: "readonly m?", call: "m<string>()" },
+  ].map(
+    ({ label, name, call }): MatrixCell => ({
+      id: `ts/split-generic-method-${label}`,
+      language: "ts",
+      callForm: "typed-local-receiver",
+      files: {
+        "types.ts": [
+          "export interface B { m(value: number): void }",
+          "export interface A extends B {",
+          `  ${name}`,
+          "  <T>(): void",
+          "}",
+        ].join("\n"),
+        "use.ts": ['import { A } from "./types";', `export function run(a: A) { a.${call}; }`].join("\n"),
+      },
+      use: { file: "use.ts", line: 2, token: "m" },
+      expected: { file: "types.ts", line: 3, token: "m" },
+      decoy: { file: "types.ts", line: 1, token: "m" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: "use.ts", fromName: "run" },
+    }),
+  ),
   {
     id: "ts/private-self-member-call",
     language: "ts",

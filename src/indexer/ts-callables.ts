@@ -20,19 +20,53 @@ const OVERLOAD_IMPLEMENTATION_NODE_TYPES: Record<string, true> = {
 export type TypeScriptCallableRole = "signature" | "implementation" | "other";
 
 /**
- * The fork splits `m` newline `<T>()` into a bare property and a generic call signature.
- * Explicit separators, annotations, optional markers, and other property forms stay separate.
+ * The fork splits a method's name/modifiers from its generic signature at a newline.
+ * Join only adjacent untyped properties and generic signatures, never explicit separators.
  * Called only while extracting module locals or walking detailed declarations.
  */
 export function typescriptSplitMethodName(signature: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  if (signature.type !== "call_signature" || !signature.childForFieldName("type_parameters")) return undefined;
+  const callSignature = signature.type === "call_signature";
+  if (!callSignature) {
+    const recoveryMethod =
+      signature.type === "method_definition" ||
+      signature.type === "method_signature" ||
+      signature.type === "abstract_method_signature";
+    if (!recoveryMethod) return undefined;
+    const missingName = signature.childForFieldName("name");
+    if (!missingName || missingName.startIndex !== missingName.endIndex) return undefined;
+  }
+  if (!signature.childForFieldName("type_parameters")) return undefined;
   let property = signature.previousSibling;
   while (property?.type === "comment") property = property.previousSibling;
-  if (property?.type !== "property_signature") return undefined;
+  const propertyType = callSignature ? "property_signature" : "public_field_definition";
+  if (property?.type !== propertyType) return undefined;
   const name = property.childForFieldName("name");
-  if (name?.type !== "property_identifier" || name.startIndex === name.endIndex) return undefined;
-  // A bare name is the property's only token; even `m?` or `readonly m` is excluded.
-  if (property.startIndex !== name.startIndex || property.endIndex !== name.endIndex) return undefined;
+  if (!name || name.startIndex === name.endIndex) return undefined;
+  let hasMethodModifier = false;
+  for (let index = 0; ; index += 1) {
+    const token = property.child(index);
+    if (!token) break;
+    if (token.startIndex === name.startIndex && token.endIndex === name.endIndex) continue;
+    switch (token.type) {
+      case "comment":
+        break;
+      case "?":
+      case "readonly":
+      case "accessibility_modifier":
+      case "static":
+      case "override_modifier":
+      case "abstract":
+      case "declare":
+        hasMethodModifier = true;
+        break;
+      default:
+        return undefined;
+    }
+  }
+  // Bare `new` is a construct signature; `new?` and `readonly new` are methods.
+  const constructSignature =
+    callSignature && name.type === "property_identifier" && name.text === "new" && !hasMethodModifier;
+  if (constructSignature) return undefined;
   return name;
 }
 

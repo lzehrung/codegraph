@@ -153,8 +153,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * zero-width or empty-name recovery declarations from cached symbols and scope bindings.
  * Epoch 146 restores split generic method identities and arities without indexing ordinary TypeScript
  * property signatures or changing ECMAScript property member selection.
+ * Epoch 147 restores optional/modified and class-body split generic methods and excludes
+ * split construct signatures from named members.
  */
-export const CORE_ALGORITHM_EPOCH = 146;
+export const CORE_ALGORITHM_EPOCH = 147;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

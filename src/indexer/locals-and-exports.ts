@@ -839,7 +839,9 @@ export function collectLocalsAndExportsFromSource(
     };
     // Only split-method recovery indexes a property-signature name as a function.
     // Persist membership so type-literal references need no query-time syntax recovery.
-    const splitMethod = kind === SymbolKind.Function && node?.parent?.type === "property_signature";
+    const splitMethod =
+      kind === SymbolKind.Function &&
+      (node?.parent?.type === "property_signature" || node?.parent?.type === "public_field_definition");
     if (splitMethod || (node && isTypeMemberDeclaration(node))) base.isMember = true;
     if (support.id === "csharp" && node) {
       const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
@@ -941,7 +943,7 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const locals: SymbolDef[] = [];
-  const seenLocals = new Set<string>();
+  const seenLocals = new Map<string, number>();
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
     if (s === "method") return SymbolKind.Function;
@@ -965,8 +967,16 @@ export function collectLocalsAndExportsFromSource(
     if (!localName) return;
     if (range.start.index !== undefined && range.start.index === range.end.index) return;
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
-    if (seenLocals.has(key)) return;
-    seenLocals.add(key);
+    const previous = seenLocals.get(key);
+    if (previous !== undefined) {
+      // A split class method's name was first captured as a field. Replace that
+      // extraction-time placeholder with the adjacent signature's callable facts.
+      if (callable && kind === SymbolKind.Function && locals[previous]?.kind === SymbolKind.Variable) {
+        locals[previous] = buildSymbolDef(localName, kind, range, node, callable);
+      }
+      return;
+    }
+    seenLocals.set(key, locals.length);
     locals.push(buildSymbolDef(localName, kind, range, node, callable));
   };
 
@@ -1057,7 +1067,8 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
+  const recoverSplitMethods = support.id === "ts" || support.id === "tsx";
+  if (recoverSplitMethods || support.id === "js") {
     const methodSupplementTree = ensureTree();
     if (methodSupplementTree) {
       supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
@@ -1065,10 +1076,40 @@ export function collectLocalsAndExportsFromSource(
   }
 
   function supplementMethodLocalsFromSyntaxTree(node: SyntaxNodeLike): void {
-    if (METHOD_LIKE_BINDING_NODE_TYPES.has(node.type)) {
-      const name = node.childForFieldName("name");
-      if (name) {
-        pushLocal(sliceText(name, source), SymbolKind.Function, toRange(name), name);
+    const methodLike = METHOD_LIKE_BINDING_NODE_TYPES.has(node.type);
+    const methodName = methodLike ? node.childForFieldName("name") : undefined;
+    const missingName = methodName && methodName.startIndex === methodName.endIndex;
+    const splitCandidate = missingName || node.type === "call_signature";
+    const splitName = recoverSplitMethods && splitCandidate ? typescriptSplitMethodName(node) : undefined;
+    if (splitName) {
+      const localName = sliceText(splitName, source);
+      const range = toRange(splitName);
+      const callable = callableIdentityForDeclaration({
+        file,
+        name: localName,
+        range,
+        languageId: support.id,
+        source,
+        node,
+      });
+      // Type-body modifiers are syntactic only in TypeScript; even `static m`
+      // remains an instance MethodSignature. Class modifiers retain their scope.
+      callable.kind = "instance-method";
+      const property = splitName.parent;
+      if (property?.type === "public_field_definition") {
+        for (let index = 0; ; index += 1) {
+          const token = property.child(index);
+          if (!token) break;
+          if (token.type === "static") {
+            callable.kind = "static-method";
+            break;
+          }
+        }
+      }
+      pushLocal(localName, SymbolKind.Function, range, splitName, callable);
+    } else if (methodLike) {
+      if (methodName) {
+        pushLocal(sliceText(methodName, source), SymbolKind.Function, toRange(methodName), methodName);
       }
     } else if (FIELD_LIKE_BINDING_NODE_TYPES.has(node.type)) {
       // TypeScript exposes the field name via the "name" field; JavaScript exposes
@@ -1076,21 +1117,6 @@ export function collectLocalsAndExportsFromSource(
       const name = node.childForFieldName("name") ?? node.childForFieldName("property");
       if (name) {
         pushLocal(sliceText(name, source), SymbolKind.Variable, toRange(name), name);
-      }
-    } else if (node.type === "call_signature" && (support.id === "ts" || support.id === "tsx")) {
-      const name = typescriptSplitMethodName(node);
-      if (name) {
-        const localName = sliceText(name, source);
-        const range = toRange(name);
-        const callable = callableIdentityForDeclaration({
-          file,
-          name: localName,
-          range,
-          languageId: support.id,
-          source,
-          node,
-        });
-        pushLocal(localName, SymbolKind.Function, range, name, callable);
       }
     }
     for (const child of node.namedChildren) {
