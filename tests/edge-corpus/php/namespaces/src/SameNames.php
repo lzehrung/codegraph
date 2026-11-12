@@ -15,7 +15,7 @@ namespace App\UsesBox;
 
 function useSecond(): string
 {
-    $box = new \App\SecondBox\Box(); // @goto secondBox=Box @known-gap namespace_class_goto observed=not_found
+    $box = new \App\SecondBox\Box(); // @goto secondBox=Box
     return $box->RUN(); // @ref secondRun
-    return $box->RUN(); // @goto secondRun=RUN @known-gap case_variant_method_goto observed=not_found
+    return $box->RUN(); // @goto secondRun=RUN
 }

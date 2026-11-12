@@ -1436,7 +1436,7 @@ export function keywordReceiverMemberScope(
   if (!hasStaticMemberDistinction(sup.id)) return "any";
   if (nodeInStaticMemberContext(node, source)) return "static";
   const kind = keywordReceiverKind(sup.id, receiverName);
-  if (kind === "supertype") return "instance";
+  if (kind === "supertype") return sup.id === "php" ? "any" : "instance";
   return ownReceiverMemberScope(sup.id, receiverName) ?? "any";
 }
 
@@ -1906,6 +1906,7 @@ export function emitReceiverCallEdges(
   const ownerByMember = new Map<string, string>();
   const supertypesByOwner = new Map<string, string[]>();
   const classAncestorsByOwner = new Map<string, string[]>();
+  let traitOwnerIds: Set<string> | undefined;
   const pushUnique = (map: Map<string, string[]>, from: string, to: string): void => {
     const list = map.get(from);
     if (!list) map.set(from, [to]);
@@ -1921,6 +1922,10 @@ export function emitReceiverCallEdges(
     if (!label || !HIERARCHY_LABELS[label]) continue;
     pushUnique(supertypesByOwner, edge.from, edge.to);
     if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
+    if (label === "trait") {
+      traitOwnerIds ??= new Set();
+      traitOwnerIds.add(edge.to);
+    }
   }
   // Receiver-local access does not change the nominal type's membership edges.
   for (const [ownerId, memberIds] of accessibleMembers) {
@@ -1963,6 +1968,7 @@ export function emitReceiverCallEdges(
       if (!classOnly) return supertypesByOwner.get(id) ?? [];
       return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
     },
+    ...(traitOwnerIds ? { isTraitOwner: (id: string) => traitOwnerIds.has(id) } : {}),
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),

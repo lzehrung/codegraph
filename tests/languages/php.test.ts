@@ -1286,6 +1286,184 @@ describe("PHP inherited member lookup", () => {
   });
 });
 
+describe("PHP trait composition", () => {
+  it("binds a trait property read to the sole using class's promoted property, not a same-named decoy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-trait-property-"));
+    try {
+      const traitLines = [
+        "<?php",
+        "namespace App;",
+        "trait HasLabel {",
+        "  public function label(): string { return $this->name; }",
+        "}",
+      ];
+      const recordLines = [
+        "<?php",
+        "namespace App;",
+        "class Record {",
+        "  use HasLabel;",
+        "  public function __construct(public string $name) {}",
+        "  public function describe(): string { $obj = new Record('ok'); return $this->label() . $obj->label() . $this->name; }",
+        "}",
+      ];
+      const decoyLines = [
+        "<?php",
+        "namespace Other;",
+        "class Ghost { public function __construct(public string $name) {} }",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "trait.php": traitLines.join("\n"),
+        "record.php": recordLines.join("\n"),
+        "decoy.php": decoyLines.join("\n"),
+      });
+      const traitProperty = { file: paths["trait.php"]!, line: 4, column: columnOf(traitLines, 4, "name") };
+      const property = { file: paths["record.php"]!, line: 5, column: columnOf(recordLines, 5, "$name") };
+      const decoyProperty = { file: paths["decoy.php"]!, line: 3, column: columnOf(decoyLines, 3, "$name") };
+      const objectProperty = { file: paths["record.php"]!, line: 6, column: columnOf(recordLines, 6, "name") };
+      const referenceSites = [
+        `${normalizePath(paths["trait.php"]!)}:4:${traitProperty.column}`,
+        `${normalizePath(paths["record.php"]!)}:5:${property.column}`,
+        `${normalizePath(paths["record.php"]!)}:6:${objectProperty.column}`,
+      ].sort();
+      const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const firstDisk = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const reopenedDisk = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      for (const index of [cold, firstDisk, reopenedDisk]) {
+        const target = await goToDefinition(index, traitProperty);
+        expect(target.status).toBe("ok");
+        if (target.status !== "ok") throw new Error("Expected trait property to bind to using class");
+        expect(normalizePath(target.definition.file)).toBe(normalizePath(property.file));
+        expect(target.definition.range.start.line).toBe(property.line);
+        const references = await findReferences(index, property);
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected promoted property references");
+        expect(references.referenceCoverage?.state).toBe("complete");
+        expect(
+          references.references
+            .map((reference) => {
+              const start = reference.range.start;
+              return `${normalizePath(reference.file)}:${start.line}:${start.column}`;
+            })
+            .sort(),
+        ).toEqual(referenceSites);
+        const decoyReferences = await findReferences(index, decoyProperty);
+        expect(decoyReferences.status).toBe("ok");
+        if (decoyReferences.status !== "ok") throw new Error("Expected decoy property's declaration");
+        expect(
+          decoyReferences.references.every(
+            (reference) => normalizePath(reference.file) === normalizePath(decoyProperty.file),
+          ),
+        ).toBe(true);
+        const graph = await buildSymbolGraphDetailed(index);
+        const calls = graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "describe")
+          .map(
+            (edge) =>
+              `${graph.nodes.get(edge.to)?.name}:${normalizePath(graph.nodes.get(edge.to)!.file)}:${edge.site?.range.start.line}`,
+          );
+        expect(calls).toEqual([
+          `label:${normalizePath(paths["trait.php"]!)}:6`,
+          `label:${normalizePath(paths["trait.php"]!)}:6`,
+        ]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("does not guess a promoted property when two classes use the same trait", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-trait-ambiguous-"));
+    try {
+      const traitLines = ["<?php", "trait Label {", "  public function label(): string { return $this->name; }", "}"];
+      const firstLines = [
+        "<?php",
+        "class First {",
+        "  use Label;",
+        "  public function __construct(public string $name) {}",
+        "}",
+      ];
+      const secondLines = [
+        "<?php",
+        "class Second {",
+        "  use Label;",
+        "  public function __construct(public string $name) {}",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "trait.php": traitLines.join("\n"),
+        "first.php": firstLines.join("\n"),
+        "second.php": secondLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const traitProperty = { file: paths["trait.php"]!, line: 3, column: columnOf(traitLines, 3, "name") };
+      expect((await goToDefinition(index, traitProperty)).status).toBe("not_found");
+      for (const [file, lines] of [
+        [paths["first.php"]!, firstLines],
+        [paths["second.php"]!, secondLines],
+      ] as const) {
+        const references = await findReferences(index, {
+          file,
+          line: 4,
+          column: columnOf(lines, 4, "$name"),
+        });
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected each promoted property declaration");
+        expect(references.referenceCoverage?.state).toBe("partial");
+        expect(references.references.map((reference) => normalizePath(reference.file))).toEqual([normalizePath(file)]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps adapted trait method aliases unresolved rather than inventing a call target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-trait-adapted-"));
+    try {
+      const traitLines = [
+        "<?php",
+        "trait A { public function label(): string { return 'A'; } }",
+        "trait B { public function label(): string { return 'B'; } }",
+      ];
+      const recordLines = [
+        "<?php",
+        "class Record {",
+        "  use A, B { A::label insteadof B; B::label as alternate; }",
+        "  public function call(): string { return $this->alternate(); }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "traits.php": traitLines.join("\n"),
+        "record.php": recordLines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(
+        (
+          await goToDefinition(index, {
+            file: paths["record.php"]!,
+            line: 4,
+            column: columnOf(recordLines, 4, "alternate"),
+          })
+        ).status,
+      ).toBe("not_found");
+      const references = await findReferences(index, {
+        file: paths["traits.php"]!,
+        line: 3,
+        column: columnOf(traitLines, 3, "label"),
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected the trait method's declaration");
+      expect(references.referenceCoverage?.state).toBe("partial");
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some((edge) => {
+          if (edge.label !== "calls") return false;
+          return graph.nodes.get(edge.from)?.name === "call";
+        }),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PHP removed duplicate declarations", () => {
   it.each(DUPLICATE_DECLARATION_CASES.filter((candidate) => candidate.languageId === "php"))(
     "follows the first declaring file after the $declarer duplicate is removed by $mutation, then restores it",

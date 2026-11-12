@@ -102,6 +102,8 @@ export type MemberModel<Owner, Member> = {
   invocationArity?(member: Member): CallableArity | null | undefined;
   scope(member: Member): MemberScope;
   visible(member: Member, useFile: string): boolean;
+  /** PHP traits compose into a class ahead of inherited base members. */
+  isTraitOwner?(owner: Owner): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
   sameSignature?(derived: Member, inherited: Member): boolean;
   /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
@@ -284,21 +286,27 @@ export function selectMember<Owner, Member>(
     : (options.normalizeIdentifier?.(options.name) ?? options.name);
   for (let depth = 0; depth < MAX_DEPTH && level.length; depth += 1) {
     const candidates: Member[] = [];
+    let traitCandidates: Member[] | undefined;
     const owners = overloadState ? new Map<Member, string>() : undefined;
     for (const owner of level) {
       const ownerKey = model.ownerKey(owner);
+      const isTraitOwner = options.phpCaseInsensitive && model.isTraitOwner?.(owner);
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
         const matchesScope = options.scope === "any" || model.scope(member) === options.scope;
         if (matchesScope || !options.separateMemberScopes) named = true;
         if (matchesScope) {
           candidates.push(member);
+          if (isTraitOwner) {
+            traitCandidates ??= [];
+            traitCandidates.push(member);
+          }
           owners?.set(member, ownerKey);
         }
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
     }
-    const distinct = distinctCandidates(candidates, model, options.argumentCount);
+    const distinct = distinctCandidates(traitCandidates ?? candidates, model, options.argumentCount);
     const byUse = preferByUse(distinct, model, options);
     const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
     if (!overloadState) {

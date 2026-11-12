@@ -158,6 +158,7 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   interface_declaration: true,
   impl_item: true,
   trait_item: true,
+  trait_declaration: true,
   enum_declaration: true,
   enum_item: true,
   // Zig has no implicit member scope of its own; a function nested in one of these container

@@ -5,7 +5,7 @@ namespace App\Model;
 trait HasLabel
 {
     // @def label
-    public function label(): string { return $this->name; } // @ref name @known-gap trait-promoted-property observed=none
+    public function label(): string { return $this->name; } // @ref name
 }
 
 class ParentRecord
@@ -25,13 +25,13 @@ class Record extends ParentRecord
 
     public function describe(): string
     {
-        $current = $this;
-        $current->label(); // @ref label @known-gap trait-receiver-reference observed=none
-        $current->label(); // @goto label @known-gap trait-receiver-goto observed=not_found
+        $obj = new Record('constructed');
+        $this->label(); // @ref label
+        $obj->label(); // @goto label
         $parentValue = $this->inherited(); // @ref inherited @goto inherited
         $fromSelf = self::factory(); // @ref factory @goto factory
-        $fromParentReference = parent::factory(); // @ref factory @known-gap parent-static-reference observed=none
-        $fromParentGoto = parent::factory(); // @goto factory @known-gap parent-static-goto observed=not_found
+        $fromParentReference = parent::factory(); // @ref factory
+        $fromParentGoto = parent::factory(); // @goto factory
         $fromLateStatic = static::factory(); // @ref factory @goto factory
         $name = $this->name; // @ref name
         $count = $this->count; // @ref count

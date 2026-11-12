@@ -2,6 +2,7 @@
  * PHP additions to the shared name lookup order. Classes, functions, and constants occupy
  * separate namespaces, so the syntactic role of the use selects which one a name can bind.
  */
+import { getMemberAccessParts, isMemberAccessNode } from "../../util/member-access.js";
 import { findClosestBinding } from "../navigation-local.js";
 import {
   findPhpImportAlias,
@@ -49,7 +50,14 @@ export const phpLookupPolicy: NameLookupPolicy = {
       (local) => local.range.start.index === node.startIndex && local.range.end.index === node.endIndex,
     );
     if (declaration) return okGoToResult(index, declaration, { resolution: "exact", confidence: "high" });
-    const role = use.phpImportType ?? "const";
+    const access = node.parent;
+    if (access && isMemberAccessNode(parsed.sup, access)) {
+      const { property } = getMemberAccessParts(parsed.sup, access);
+      if (property?.startIndex === node.startIndex) {
+        return { status: "not_found", reason: "No matching PHP receiver member" };
+      }
+    }
+    const role = use.phpImportType ?? inferPhpQualifiedReferenceImportType(node) ?? "const";
     const binding = findPhpImportAlias(mod.imports, name, role);
     const alias = binding ? resolvePhpExplicitImport(index, binding, role) : null;
     if (alias) {
@@ -60,21 +68,28 @@ export const phpLookupPolicy: NameLookupPolicy = {
       });
     }
     const qualified = getPhpQualifiedReference(node, parsed.source);
-    if (qualified?.includes("\\") && inferPhpQualifiedReferenceImportType(node) === "function") {
+    if (role === "function") {
       const target = resolvePhpNamespaceSymbol(
         index,
         parsed.source,
         parsed.tree,
         node,
-        qualified,
+        qualified ?? name,
         mod.imports,
         "function",
       );
       if (target) return okGoToResult(index, target, { resolution: "php-qualified", confidence: "high" });
-      return { status: "not_found", reason: "No matching PHP qualified function" };
+      if (qualified?.includes("\\")) return { status: "not_found", reason: "No matching PHP qualified function" };
     }
     if (!isClassReference(use)) return undefined;
-    const phpClass = resolveIndexedPhpClassReference(index, parsed.source, parsed.tree, node, lookupName, mod.imports);
+    const phpClass = resolveIndexedPhpClassReference(
+      index,
+      parsed.source,
+      parsed.tree,
+      node,
+      qualified ?? lookupName,
+      mod.imports,
+    );
     if (!phpClass) return undefined;
     return okGoToResult(index, phpClass, {
       via: { exportedName: phpClass.localName },

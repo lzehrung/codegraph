@@ -122,6 +122,7 @@ import {
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
 } from "./helpers/php-path-fallback-fixture.js";
+import { PHP_ACCURACY_LINES, PHP_ACCURACY_SOURCES } from "./helpers/php-accuracy-fixture.js";
 import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
@@ -4746,6 +4747,66 @@ nativeDescribe("PHP path-fallback native graph parity", () => {
       },
     );
   }
+});
+
+nativeDescribe("PHP language accuracy native parity", () => {
+  it("retains namespaced, case-folded, parent, and trait targets after reopening disk cache", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-accuracy-native-"));
+    tempDirs.push(root);
+    const files = await writeFixtureFiles(root, PHP_ACCURACY_SOURCES);
+    const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+    const firstDisk = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const reopened = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshots: Array<{ targets: string[]; references: string[]; calls: string[] }> = [];
+    for (const index of [cold, firstDisk, reopened]) {
+      const targets: string[] = [];
+      for (const [file, line, token, expectedLine] of [
+        ["client.php", 5, "Target", 7],
+        ["client.php", 5, "AliasRENDER", 3],
+        ["client.php", 5, "LABEL", 6],
+        ["app.php", 10, "FaCtOrY", 4],
+        ["app.php", 6, "name", 9],
+      ] as const) {
+        const target = await goToDefinition(index, {
+          file: files[file],
+          line,
+          column: columnOf(PHP_ACCURACY_LINES[file], line, token),
+        });
+        expect(target.status, `${file}:${token}`).toBe("ok");
+        if (target.status !== "ok") throw new Error("Expected PHP native parity target");
+        expect(normalizeFile(target.definition.file)).toBe(normalizeFile(files["app.php"]!));
+        expect(target.definition.range.start.line).toBe(expectedLine);
+        targets.push(`${file}:${line}:${token}->${target.definition.range.start.line}`);
+      }
+      const refs = await findReferences(index, {
+        file: files["app.php"]!,
+        line: 6,
+        column: columnOf(PHP_ACCURACY_LINES["app.php"], 6, "label"),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected PHP native parity references");
+      expect(refs.referenceCoverage?.state).toBe("complete");
+      const references = refs.references.map((ref) => `${path.basename(ref.file)}:${ref.range.start.line}`).sort();
+      expect(references).toEqual(["app.php:10", "app.php:6", "client.php:5"]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges
+        .filter((edge) => edge.label === "calls")
+        .filter((edge) => ["run", "call"].includes(graph.nodes.get(edge.from)?.name ?? ""))
+        .map((edge) => `${graph.nodes.get(edge.from)?.name}->${graph.nodes.get(edge.to)?.name}`)
+        .sort();
+      expect(calls).toEqual(["call->factory", "call->label", "run->Render", "run->call", "run->label"]);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.label === "calls" &&
+            normalizeFile(graph.nodes.get(edge.to)?.file ?? "") === normalizeFile(files["decoy.php"]!),
+        ),
+      ).toBe(false);
+      snapshots.push({ targets, references, calls });
+    }
+    expect(snapshots[1]).toEqual(snapshots[0]);
+    expect(snapshots[2]).toEqual(snapshots[0]);
+  });
 });
 
 nativeDescribe("Type-parameter receiver native parity", () => {

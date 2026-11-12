@@ -35,7 +35,11 @@ import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/
 import { bindsTypeParameter } from "../../indexer/type-parameters.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
-import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
+import {
+  findPhpImportAlias,
+  inferPhpQualifiedReferenceImportType,
+  phpTraitUseIsAdapted,
+} from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
   resolveImportTypeMember,
@@ -2243,6 +2247,7 @@ export async function emitClassInheritanceEdges(
     for (const rule of rules.clauses) {
       const clauses = ownClauseNodes(cls.node, rule);
       for (const clause of clauses) {
+        if (context.sup.id === "php" && phpTraitUseIsAdapted(clause)) continue;
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
         await recordIdentifierRelations(
           context,

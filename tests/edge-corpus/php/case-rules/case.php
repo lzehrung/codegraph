@@ -18,6 +18,6 @@ function exercise(): string
     $value = 'lower'; /* Value */ // @not-ref Value
     $sameVariable = $VALUE; /* Value */
     $class = new wIDGET(); // @ref Widget @goto Widget=wIDGET
-    $one = RENDER(); // @goto render=RENDER @known-gap case-insensitive-function-goto observed=not_found
+    $one = RENDER(); // @goto render=RENDER
     return $Value . $value . $sameVariable . get_class($class) . $one;
 }

@@ -5,6 +5,11 @@ import { containsNode, sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { SymbolKind } from "./types.js";
 
+/** A trait-use adaptation may rename or select a member, so plain composition is not proof. */
+export function phpTraitUseIsAdapted(node: SyntaxNodeLike): boolean {
+  return node.type === "use_declaration" && node.namedChildren.some((child) => child.type === "use_list");
+}
+
 /** Promotion parameter that contains `node`, or null once a method or class boundary is crossed. */
 export function phpPropertyPromotionParameter(node: SyntaxNodeLike): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = node;
