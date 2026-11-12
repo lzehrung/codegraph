@@ -7671,3 +7671,11 @@ it("resolves C# global usings from other files and project items before same-nam
     await expectCsharpGlobalUsingNavigation(await buildProjectIndex(root, { cache: "off" }), files);
   });
 });
+
+import { expectPhpTraitCompositionGoto, withPhpTraitComposition } from "./helpers/php-trait-composition-fixture.js";
+
+it("retains unadapted PHP trait members and blocks adapted inherited decoys after cache reload", async () => {
+  await withPhpTraitComposition(async (index, files) => {
+    await expectPhpTraitCompositionGoto(index, files);
+  });
+});

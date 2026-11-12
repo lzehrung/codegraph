@@ -326,7 +326,7 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
-  const phpAdaptedTraitMembers = new Map<string, Set<string>>();
+  const phpAdaptedTraitMembers = new Map<string, ReadonlySet<string>>();
   const phpAbstractTraitMembers = new Set<string>();
   const fileHiddenMemberIds = new Set<string>();
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
@@ -887,13 +887,6 @@ export async function buildSymbolGraphDetailed(
         (derived, inherited) => sameParameterTypes(index, derived, inherited),
       )
     : undefined;
-  let phpMemberOwnerById: Map<string, string> | undefined;
-  if (phpAdaptedTraitMembers.size) {
-    phpMemberOwnerById = new Map();
-    for (const edge of edges) {
-      if (edge.label === "member_of") phpMemberOwnerById.set(edge.from, edge.to);
-    }
-  }
   const removedReceiverEdges = emitReceiverCallEdges(
     { nodes, edges },
     callableReceiverCalls,
@@ -907,12 +900,6 @@ export async function buildSymbolGraphDetailed(
     sharedOwnerAccessibleMembers,
     fileHiddenMemberIds,
     (targetId, candidate) => {
-      if (candidate.caseInsensitiveMemberName && !candidate.viaSupertypes && candidate.ownerId) {
-        const adapted = phpAdaptedTraitMembers.get(candidate.ownerId);
-        if (adapted?.has(foldPhpIdentifierCase(candidate.memberName))) {
-          if (phpMemberOwnerById?.get(targetId) !== candidate.ownerId) return false;
-        }
-      }
       if (pythonReceiverTargets.has(candidate) && pythonReceiverTargets.get(candidate) !== targetId) {
         return false;
       }
@@ -943,6 +930,7 @@ export async function buildSymbolGraphDetailed(
       ? (targetId, candidate) => !trailingLambdaCalls.has(candidate) || !lambdaRejectedTargets.has(targetId)
       : undefined,
     phpAbstractTraitMembers,
+    phpAdaptedTraitMembers,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

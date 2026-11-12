@@ -45,6 +45,12 @@ import {
 } from "../../src/native/tree-sitter-native.js";
 import { loadBinding } from "../../src/native/runtime.js";
 import { collectPhpModuleImportNames } from "../../src/indexer/php-namespace-symbols.js";
+import {
+  expectPhpTraitCompositionGoto,
+  expectPhpTraitCompositionReferences,
+  expectPhpTraitCompositionGraph,
+  withPhpTraitComposition,
+} from "../helpers/php-trait-composition-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",
@@ -1322,6 +1328,19 @@ describe("PHP inherited member lookup", () => {
 });
 
 describe("PHP trait composition", () => {
+  it("preserves adapted-use hierarchy and ordinary members across cold and reopened caches", async () => {
+    await withPhpTraitComposition(async (index, files) => {
+      await expectPhpTraitCompositionGoto(index, files);
+      await expectPhpTraitCompositionGraph(index, files);
+    });
+  });
+
+  it("preserves trait reference inclusions and exclusions with partial adapted-name coverage after cache reload", async () => {
+    await withPhpTraitComposition(async (index, files, root) => {
+      await expectPhpTraitCompositionReferences(index, files, root);
+    });
+  });
+
   it("selects concrete inherited and own implementations over abstract trait requirements", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-abstract-trait-"));
     try {

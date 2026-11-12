@@ -9512,3 +9512,14 @@ it("finds C# global-using references without counting nearer declarations or oth
     await expectCsharpGlobalUsingReferences(await buildProjectIndex(root, { cache: "off" }), files);
   });
 });
+
+import {
+  expectPhpTraitCompositionReferences,
+  withPhpTraitComposition,
+} from "./helpers/php-trait-composition-fixture.js";
+
+it("keeps PHP trait-body requirements and composed-member references separate from inherited decoys", async () => {
+  await withPhpTraitComposition(async (index, files, root) => {
+    await expectPhpTraitCompositionReferences(index, files, root);
+  });
+});

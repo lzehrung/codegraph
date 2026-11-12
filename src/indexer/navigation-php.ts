@@ -3,30 +3,56 @@ import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
 import { containsNode, sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
-import { SymbolKind } from "./types.js";
+import { fileIdentityKey } from "../util/paths.js";
+import { SymbolKind, type ProjectIndex } from "./types.js";
 
 /** A trait-use adaptation may rename or select a member, so plain composition is not proof. */
 export function phpTraitUseIsAdapted(node: SyntaxNodeLike): boolean {
   return node.type === "use_declaration" && node.namedChildren.some((child) => child.type === "use_list");
 }
 
-/** Names whose lookup is uncertain until a PHP trait adaptation is applied. */
-export function phpTraitUseAdaptedMemberNames(node: SyntaxNodeLike, source: string): Set<string> {
-  const names = new Set<string>();
-  const adaptations = node.namedChildren.find((child) => child.type === "use_list");
-  if (!adaptations) return names;
-  for (const clause of adaptations.namedChildren) {
-    const access = clause.namedChildren.find((child) => child.type === "class_constant_access_expression");
-    const method = access?.childForFieldName("name") ?? access?.namedChildren[1];
-    if (method) names.add(foldPhpIdentifierCase(sliceText(method, source)));
-    if (clause.type !== "use_as_clause") continue;
-    const alias = clause.namedChildren.find((child) => child.type === "name");
-    if (alias) names.add(foldPhpIdentifierCase(sliceText(alias, source)));
+const phpAdaptedMemberCache = new WeakMap<ProjectIndex, Map<string, ReadonlySet<string>>>();
+
+/** Precompute each composing class's uncertain names once per index, not once per call. */
+export function phpUnresolvedTraitMemberNames(
+  index: ProjectIndex,
+  file: string,
+  container: SyntaxNodeLike,
+  source: string,
+): ReadonlySet<string> {
+  let cache = phpAdaptedMemberCache.get(index);
+  const key = `${fileIdentityKey(file)}:${container.startIndex}`;
+  const cached = cache?.get(key);
+  if (cached) return cached;
+  if (!cache) {
+    cache = new Map();
+    phpAdaptedMemberCache.set(index, cache);
   }
+  const names = new Set<string>();
+  const body = container.childForFieldName("body");
+  for (const use of body?.namedChildren ?? []) {
+    if (use.type !== "use_declaration") continue;
+    const adaptations = use.namedChildren.find((child) => child.type === "use_list");
+    for (const clause of adaptations?.namedChildren ?? []) {
+      const access = clause.namedChildren.find((child) => child.type === "class_constant_access_expression");
+      if (clause.type === "use_instead_of_clause") {
+        const method = access?.childForFieldName("name") ?? access?.namedChildren[1];
+        if (method) names.add(foldPhpIdentifierCase(sliceText(method, source)));
+      } else if (clause.type === "use_as_clause") {
+        // `as` retains the original method; only a new alias needs adaptation-aware lookup.
+        const directNames = clause.namedChildren.filter((child) => child.type === "name");
+        const alias = directNames.at(-1);
+        if (alias && (access || directNames.length > 1)) {
+          names.add(foldPhpIdentifierCase(sliceText(alias, source)));
+        }
+      }
+    }
+  }
+  cache.set(key, names);
   return names;
 }
 
-/** An abstract trait method is a requirement, not an implementation of a call. */
+/** A composed abstract trait method requires an implementation; trait-body calls still name its declaration. */
 export function phpTraitMethodIsAbstract(node: SyntaxNodeLike): boolean {
   return node.type === "method_declaration" && node.namedChildren.some((child) => child.type === "abstract_modifier");
 }

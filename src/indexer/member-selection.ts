@@ -106,6 +106,8 @@ export type MemberModel<Owner, Member> = {
   isTraitOwner?(owner: Owner): boolean;
   /** An abstract PHP trait method requires an implementation from the class or its ancestors. */
   isAbstractTraitMember?(member: Member): boolean;
+  /** A PHP adaptation with no own declaration blocks only that name, including through subclasses. */
+  unresolvedMember?(owner: Owner, name: string): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
   sameSignature?(derived: Member, inherited: Member): boolean;
   /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
@@ -290,12 +292,16 @@ export function selectMember<Owner, Member>(
     const candidates: Member[] = [];
     let traitCandidates: Member[] | undefined;
     const owners = overloadState ? new Map<Member, string>() : undefined;
+    let unresolved = false;
     for (const owner of level) {
       const ownerKey = model.ownerKey(owner);
       const isTraitOwner = options.phpCaseInsensitive && model.isTraitOwner?.(owner);
+      const composedTrait = isTraitOwner && (depth !== 0 || options.startAtAncestor);
+      let ownerNamed = false;
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
-        if (isTraitOwner && model.isAbstractTraitMember?.(member)) continue;
+        if (composedTrait && model.isAbstractTraitMember?.(member)) continue;
+        ownerNamed = true;
         const matchesScope = options.scope === "any" || model.scope(member) === options.scope;
         if (matchesScope || !options.separateMemberScopes) named = true;
         if (matchesScope) {
@@ -308,7 +314,9 @@ export function selectMember<Owner, Member>(
         }
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
       }
+      if (!ownerNamed && model.unresolvedMember?.(owner, queryName)) unresolved = true;
     }
+    if (unresolved) return { status: "ambiguous", named: true };
     const distinct = distinctCandidates(traitCandidates ?? candidates, model, options.argumentCount);
     const byUse = preferByUse(distinct, model, options);
     const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
@@ -361,7 +369,8 @@ export function selectMember<Owner, Member>(
     const next: Owner[] = [];
     for (const owner of level) {
       const child = model.ownerKey(owner);
-      for (const parent of model.supertypes(owner, !!options.classAncestorsOnly || !!options.startAtAncestor)) {
+      const classOnly = !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.phpCaseInsensitive);
+      for (const parent of model.supertypes(owner, classOnly)) {
         const key = model.ownerKey(parent);
         if (overloadState) {
           const descendants = overloadState.subclasses.get(key) ?? new Set<string>();

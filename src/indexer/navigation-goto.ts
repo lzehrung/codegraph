@@ -145,7 +145,7 @@ import {
   comparePhpReferenceNames,
   findPhpImportAlias,
   phpTraitMethodIsAbstract,
-  phpTraitUseAdaptedMemberNames,
+  phpUnresolvedTraitMemberNames,
   phpTraitUseIsAdapted,
 } from "./navigation-php.js";
 import {
@@ -2622,6 +2622,7 @@ function collectDeclaredBaseTypes(
     bases.push({ kind: "unproven" });
   };
   const collectType = (node: SyntaxNodeLike): void => {
+    if (sup.id === "php" && node.type === "use_list") return;
     // A dotted Kotlin or Swift type reads through its qualifier; its first segment alone would name the qualifier.
     const dotted = dottedUserTypeSegments(sup, node);
     if (dotted) {
@@ -2688,7 +2689,6 @@ function collectDeclaredBaseTypes(
     }
   };
   const consider = (node: SyntaxNodeLike): void => {
-    if (sup.id === "php" && phpTraitUseIsAdapted(node)) return;
     for (const rule of ancestry.clauses) {
       if (node.type !== rule.nodeType) continue;
       if (superclassOnly && !rule.supertype) continue;
@@ -3360,34 +3360,6 @@ async function resolveKeywordReceiverMember(
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
-  if (current.context.sup.id === "php" && !startAtAncestor && memberUse !== "value") {
-    const body = current.container.childForFieldName("body");
-    for (const use of body?.namedChildren ?? []) {
-      if (!phpTraitUseIsAdapted(use)) continue;
-      if (!phpTraitUseAdaptedMemberNames(use, current.context.source).has(foldPhpIdentifierCase(member))) continue;
-      const ownMembers: SymbolDef[] = [];
-      appendDirectKeywordMembers(
-        current.module.locals,
-        member,
-        current.container,
-        current.context,
-        current.context.sup.normalizeIdentifier,
-        undefined,
-        ownMembers,
-      );
-      const hasOwnImplementation = ownMembers.some((candidate) => {
-        if (candidate.kind !== SymbolKind.Function) return false;
-        const nameNode = nameNodeForDef(current.context, candidate);
-        return !!nameNode && !phpTraitMethodIsAbstract(nameNode.parent ?? nameNode);
-      });
-      if (hasOwnImplementation) break;
-      if (report) {
-        report.named = true;
-        report.ambiguous = true;
-      }
-      return undefined;
-    }
-  }
   const spansHierarchy = inheritsMemberOverloads(current.context.sup.id);
   const ownerKey = (ref: KeywordClassRef): string => keywordContainerKey(ref.file, ref.container);
   const preloadHiddenNames = isJsTsLanguage(current.context.sup.id) && knownArgumentCount !== undefined;
@@ -3486,7 +3458,7 @@ async function resolveKeywordReceiverMember(
         }
         if (depth && isUninheritedJavaInterfaceStaticMethod(hit, ref, scopeByMember.get(hit))) continue;
         visible.add(hit);
-        nameFound = true;
+        if (!depth || !abstractTraitMembers?.has(hit)) nameFound = true;
       }
       if (nameFound && !spansHierarchy && !preloadHiddenNames) continue;
       const bases = await baseRefsFromContainer(
@@ -3495,7 +3467,7 @@ async function resolveKeywordReceiverMember(
         ref.container,
         ref.context.source,
         ref.context.sup,
-        startAtAncestor,
+        startAtAncestor && (ref.context.sup.id !== "php" || depth === 0),
         ref.context.tree,
       );
       parentsByKey.set(key, bases);
@@ -3529,7 +3501,15 @@ async function resolveKeywordReceiverMember(
     ownerKey,
     members: (ref) => membersByKey.get(ownerKey(ref)) ?? [],
     ...(current.context.sup.id === "php"
-      ? { isTraitOwner: (ref: KeywordClassRef) => ref.container.type === "trait_declaration" }
+      ? {
+          isTraitOwner: (ref: KeywordClassRef) => ref.container.type === "trait_declaration",
+          ...(memberUse !== "value"
+            ? {
+                unresolvedMember: (ref: KeywordClassRef, name: string) =>
+                  phpUnresolvedTraitMemberNames(index, ref.file, ref.container, ref.context.source).has(name),
+              }
+            : {}),
+        }
       : {}),
     ...(abstractTraitMembers ? { isAbstractTraitMember: (def: SymbolDef) => abstractTraitMembers.has(def) } : {}),
     supertypes: (ref) => parentsByKey.get(ownerKey(ref)) ?? [],

@@ -16,6 +16,8 @@ import {
   SWIFT_NOMINAL_HANDLE,
 } from "./helpers/swift-extension-owner-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { PHP_TRAIT_COMPOSITION_FILES } from "./helpers/php-trait-composition-fixture.js";
+import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -2259,4 +2261,39 @@ describe("rename preview", () => {
       session.invalidate();
     }
   });
+});
+
+it("keeps inherited decoy rename unsafe through an ancestor's adapted PHP trait use after cache reload", async () => {
+  const temporary = await mkTmpDir("cg-rename-php-adapted-");
+  const root = path.join(temporary, "project");
+  const diskOptions = { cache: "disk", cacheDir: path.join(temporary, "cache") } as const;
+  try {
+    await writeFixtureFiles(root, PHP_TRAIT_COMPOSITION_FILES);
+    for (const cache of ["off", "disk", "disk"] as const) {
+      if (cache === "disk") closeDiskCacheDatabase(root, diskOptions);
+      const session = createAgentSession({
+        root,
+        freshness: { policy: "check" },
+        buildOptions: { ...diskOptions, cache, threads: 1 },
+      });
+      try {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: "shared" });
+        const decoy = symbols.symbols.find((symbol) => symbol.location.file === "base.php");
+        expect(decoy).toBeDefined();
+        const result = await previewRenameWithSession(session, {
+          root,
+          handle: decoy!.handle,
+          newName: "renamedShared",
+        });
+        expect(result.safe).toBe(false);
+        expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "unresolved_reference" }));
+        expect(result.edits.map((edit) => [edit.file, edit.range.start.line])).toEqual([["base.php", 3]]);
+      } finally {
+        session.invalidate();
+      }
+    }
+  } finally {
+    closeDiskCacheDatabase(root, diskOptions);
+    await fsp.rm(temporary, { recursive: true, force: true });
+  }
 });

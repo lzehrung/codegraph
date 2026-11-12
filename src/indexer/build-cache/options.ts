@@ -159,6 +159,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * invalid readonly, declare, or accessor method modifiers.
  * Epoch 152 rebuilds PHP function/class resolution, trait-member ownership, composed properties, parent-static
  * dispatch, and their verified references and detailed call edges.
+ * Adapted trait uses retain hierarchy and unadapted members; subclasses keep adaptation uncertainty and trait-body
+ * calls retain their own abstract declarations.
  */
 export const CORE_ALGORITHM_EPOCH = 152;
 /**

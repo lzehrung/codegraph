@@ -9,6 +9,7 @@ import { mkTmpDir } from "./helpers/filesystem.js";
 import { INTERFACE_INHERITANCE_FIXTURES, expectInterfaceInheritance } from "./helpers/interface-inheritance-fixture.js";
 import { expectKotlinSecondaryConstructorHierarchyInProject } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { withPhpTraitComposition } from "./helpers/php-trait-composition-fixture.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const roots: string[] = [];
@@ -870,5 +871,31 @@ nativeDescribe("type hierarchy language parity", () => {
     expect(implementations.implementations.map((match) => graph.nodes.get(match.symbolId)?.name)).toEqual([
       "RustWidget",
     ]);
+  });
+});
+
+nativeDescribe("PHP adapted trait hierarchy", () => {
+  it("keeps only the declared trait relationships for as and insteadof clauses after cache reload", async () => {
+    await withPhpTraitComposition(async (index) => {
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const [name, expected] of [
+        ["MixedRecord", ["A:trait", "B:trait", "Base:extends"]],
+        ["Record", ["A:trait", "Base:extends", "Conflict:trait"]],
+        ["Unrelated", ["AllA:trait", "Base:extends"]],
+        ["VisibilityRecord", ["A:trait", "Base:extends"]],
+        ["Child", ["Record:extends"]],
+      ] as const) {
+        const node = [...graph.nodes.values()].find(
+          (candidate) => candidate.kind === "class" && candidate.name === name,
+        );
+        expect(node, name).toBeDefined();
+        const result = findTypeHierarchy(graph, node!.id, "super");
+        expect(result.status, name).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected the ${name} hierarchy`);
+        expect(
+          result.relations.map((relation) => `${graph.nodes.get(relation.targetId)?.name}:${relation.relation}`).sort(),
+        ).toEqual(expected);
+      }
+    });
   });
 });

@@ -4826,3 +4826,20 @@ it("shares native C# global-using answers across navigation, references, and det
     await expectCsharpGlobalUsingGraph(index, files);
   });
 });
+
+import {
+  expectPhpTraitCompositionGoto,
+  expectPhpTraitCompositionReferences,
+  expectPhpTraitCompositionGraph,
+  withPhpTraitComposition,
+} from "./helpers/php-trait-composition-fixture.js";
+
+nativeDescribe("PHP adapted trait and abstract-requirement native parity", () => {
+  it("agrees on cold and reopened navigation, references, and every call and trait edge", async () => {
+    await withPhpTraitComposition(async (index, files, root) => {
+      await expectPhpTraitCompositionGoto(index, files);
+      await expectPhpTraitCompositionReferences(index, files, root);
+      await expectPhpTraitCompositionGraph(index, files);
+    });
+  });
+});

@@ -39,8 +39,7 @@ import {
   findPhpImportAlias,
   inferPhpQualifiedReferenceImportType,
   phpTraitMethodIsAbstract,
-  phpTraitUseAdaptedMemberNames,
-  phpTraitUseIsAdapted,
+  phpUnresolvedTraitMemberNames,
 } from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
@@ -151,8 +150,8 @@ type EdgePassContext = {
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
   /** Names whose adapted PHP trait composition must not fall through to inherited calls. */
-  phpAdaptedTraitMembers: Map<string, Set<string>>;
-  /** Abstract PHP trait method IDs are requirements, never callable implementations. */
+  phpAdaptedTraitMembers: Map<string, ReadonlySet<string>>;
+  /** Composed abstract PHP trait methods require implementations; trait-body calls name their declarations. */
   phpAbstractTraitMembers: Set<string>;
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
@@ -1911,6 +1910,7 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
   if (isUnprovenHeritageExpression(node)) return;
   if (isNonBaseHeritageArgument(node)) return;
+  if (sup.id === "php" && node.type === "use_list") return;
   if (sup.id === "cpp" && node.type === "qualified_identifier") {
     out.push(node);
     return;
@@ -2236,6 +2236,10 @@ export async function emitClassInheritanceEdges(
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
     const declaring: DeclaringType = { node: cls.node, isInterface: declaredSupertypeKind(cls.node) === "interface" };
     if (declaring.isInterface) markInterfaceNode(context, fromId);
+    if (context.sup.id === "php") {
+      const adapted = phpUnresolvedTraitMemberNames(context.index, context.moduleEntry.file, cls.node, context.source);
+      if (adapted.size) context.phpAdaptedTraitMembers.set(fromId, adapted);
+    }
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
       extensionNominal = null;
@@ -2260,15 +2264,6 @@ export async function emitClassInheritanceEdges(
     for (const rule of rules.clauses) {
       const clauses = ownClauseNodes(cls.node, rule);
       for (const clause of clauses) {
-        if (context.sup.id === "php" && phpTraitUseIsAdapted(clause)) {
-          const adapted = phpTraitUseAdaptedMemberNames(clause, context.source);
-          if (adapted.size) {
-            const names = context.phpAdaptedTraitMembers.get(fromId);
-            if (names) for (const name of adapted) names.add(name);
-            else context.phpAdaptedTraitMembers.set(fromId, adapted);
-          }
-          continue;
-        }
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
         await recordIdentifierRelations(
           context,

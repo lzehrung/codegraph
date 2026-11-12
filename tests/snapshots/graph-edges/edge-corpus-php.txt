@@ -55,3 +55,28 @@ symbol namespaces/src/SameNames.php::run@5:21 -[member_of]-> namespaces/src/Same
 symbol namespaces/src/SameNames.php::useSecond@16:10 -[calls]-> namespaces/src/SameNames.php::run@11:21 site=19:18
 symbol namespaces/src/SameNames.php::useSecond@16:10 -[calls]-> namespaces/src/SameNames.php::run@11:21 site=20:18
 symbol namespaces/src/SameNames.php::useSecond@16:10 -[instantiates]-> namespaces/src/SameNames.php::Box@10:7 site=18:16
+symbol trait-adaptations/model.php::Child@45:7 -[extends]-> trait-adaptations/model.php::Record@40:7 site=45:21
+symbol trait-adaptations/model.php::Implementation@66:7 -[trait]-> trait-adaptations/model.php::Requirement@56:7 site=68:9
+symbol trait-adaptations/model.php::Record@40:7 -[extends]-> trait-adaptations/model.php::Base@17:7 site=40:22
+symbol trait-adaptations/model.php::Record@40:7 -[trait]-> trait-adaptations/model.php::A@2:7 site=42:9
+symbol trait-adaptations/model.php::Record@40:7 -[trait]-> trait-adaptations/model.php::B@12:7 site=42:12
+symbol trait-adaptations/model.php::Unrelated@27:7 -[extends]-> trait-adaptations/model.php::Base@17:7 site=27:25
+symbol trait-adaptations/model.php::Unrelated@27:7 -[trait]-> trait-adaptations/model.php::A@2:7 site=29:9
+symbol trait-adaptations/model.php::alt@24:21 -[member_of]-> trait-adaptations/model.php::Base@17:7
+symbol trait-adaptations/model.php::child@47:21 -[calls]-> trait-adaptations/model.php::other@7:21 site=51:31
+symbol trait-adaptations/model.php::child@47:21 -[member_of]-> trait-adaptations/model.php::Child@45:7
+symbol trait-adaptations/model.php::get@60:21 -[calls]-> trait-adaptations/model.php::request@59:30 site=62:23
+symbol trait-adaptations/model.php::get@60:21 -[member_of]-> trait-adaptations/model.php::Requirement@56:7
+symbol trait-adaptations/model.php::only@9:21 -[member_of]-> trait-adaptations/model.php::A@2:7
+symbol trait-adaptations/model.php::other@22:21 -[member_of]-> trait-adaptations/model.php::Base@17:7
+symbol trait-adaptations/model.php::other@7:21 -[member_of]-> trait-adaptations/model.php::A@2:7
+symbol trait-adaptations/model.php::request@59:30 -[member_of]-> trait-adaptations/model.php::Requirement@56:7
+symbol trait-adaptations/model.php::request@69:21 -[implements_member]-> trait-adaptations/model.php::request@59:30 site=68:9
+symbol trait-adaptations/model.php::request@69:21 -[member_of]-> trait-adaptations/model.php::Implementation@66:7
+symbol trait-adaptations/model.php::run@30:21 -[calls]-> trait-adaptations/model.php::only@9:21 site=33:29
+symbol trait-adaptations/model.php::run@30:21 -[calls]-> trait-adaptations/model.php::other@7:21 site=32:30
+symbol trait-adaptations/model.php::run@30:21 -[calls]-> trait-adaptations/model.php::shared@5:21 site=34:31
+symbol trait-adaptations/model.php::run@30:21 -[member_of]-> trait-adaptations/model.php::Unrelated@27:7
+symbol trait-adaptations/model.php::shared@14:21 -[member_of]-> trait-adaptations/model.php::B@12:7
+symbol trait-adaptations/model.php::shared@20:21 -[member_of]-> trait-adaptations/model.php::Base@17:7
+symbol trait-adaptations/model.php::shared@5:21 -[member_of]-> trait-adaptations/model.php::A@2:7
