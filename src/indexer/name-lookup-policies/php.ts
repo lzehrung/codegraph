@@ -51,7 +51,8 @@ export const phpLookupPolicy: NameLookupPolicy = {
     );
     if (declaration) return okGoToResult(index, declaration, { resolution: "exact", confidence: "high" });
     const access = node.parent;
-    if (access && isMemberAccessNode(parsed.sup, access)) {
+    // PHP qualified names are namespace paths, not receiver member accesses.
+    if (access && access.type !== "qualified_name" && isMemberAccessNode(parsed.sup, access)) {
       const { property } = getMemberAccessParts(parsed.sup, access);
       if (property?.startIndex === node.startIndex) {
         return { status: "not_found", reason: "No matching PHP receiver member" };

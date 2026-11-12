@@ -720,7 +720,13 @@ nativeDescribe("receiver method call edges", () => {
     expect(baseShared).toHaveLength(1);
     expect(traitShared).toHaveLength(1);
     expect(callsiteTexts(graph, baseShared[0]!, run, files)).toEqual(["shared"]);
-    expect(callsiteTexts(graph, traitShared[0]!, run, files)).toBeNull();
+    expect(callsiteTexts(graph, traitShared[0]!, run, files)).toEqual(["shared"]);
+    const callsiteLines = (callee: string): number[] =>
+      graph.edges
+        .filter((edge) => edge.label === "calls" && edge.from === run && edge.to === callee)
+        .map((edge) => edge.site?.range.start.line ?? -1);
+    expect(callsiteLines(traitShared[0]!)).toEqual([7]);
+    expect(callsiteLines(baseShared[0]!)).toEqual([8]);
   });
 });
 

@@ -10,6 +10,27 @@ export function phpTraitUseIsAdapted(node: SyntaxNodeLike): boolean {
   return node.type === "use_declaration" && node.namedChildren.some((child) => child.type === "use_list");
 }
 
+/** Names whose lookup is uncertain until a PHP trait adaptation is applied. */
+export function phpTraitUseAdaptedMemberNames(node: SyntaxNodeLike, source: string): Set<string> {
+  const names = new Set<string>();
+  const adaptations = node.namedChildren.find((child) => child.type === "use_list");
+  if (!adaptations) return names;
+  for (const clause of adaptations.namedChildren) {
+    const access = clause.namedChildren.find((child) => child.type === "class_constant_access_expression");
+    const method = access?.childForFieldName("name") ?? access?.namedChildren[1];
+    if (method) names.add(foldPhpIdentifierCase(sliceText(method, source)));
+    if (clause.type !== "use_as_clause") continue;
+    const alias = clause.namedChildren.find((child) => child.type === "name");
+    if (alias) names.add(foldPhpIdentifierCase(sliceText(alias, source)));
+  }
+  return names;
+}
+
+/** An abstract trait method is a requirement, not an implementation of a call. */
+export function phpTraitMethodIsAbstract(node: SyntaxNodeLike): boolean {
+  return node.type === "method_declaration" && node.namedChildren.some((child) => child.type === "abstract_modifier");
+}
+
 /** Promotion parameter that contains `node`, or null once a method or class boundary is crossed. */
 export function phpPropertyPromotionParameter(node: SyntaxNodeLike): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = node;

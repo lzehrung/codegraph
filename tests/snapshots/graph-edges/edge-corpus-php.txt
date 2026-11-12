@@ -4,14 +4,20 @@ file namespaces/src/AliasRoles.php -> namespaces/src/Library.php raw=App\Library
 file namespaces/src/Consumer.php -> namespaces/src/Library.php raw=\aPP\lIBRARY\gAdGeT
 file namespaces/src/SameNames.php -> namespaces/src/SameNames.php raw=\App\SecondBox\Box
 symbol case-rules/case.php::ContractConsumer@12:7 -[implements]-> case-rules/case.php::ApiContract@10:11 site=12:35
+symbol case-rules/case.php::exercise@15:10 -[calls]-> case-rules/case.php::render@8:10 site=21:12
 symbol case-rules/case.php::exercise@15:10 -[instantiates]-> case-rules/case.php::Widget@5:7 site=20:18
 symbol case-rules/case.php::take@12:65 -[member_of]-> case-rules/case.php::ContractConsumer@12:7
 symbol members/model.php::Record@20:7 -[extends]-> members/model.php::ParentRecord@11:7 site=20:22
 symbol members/model.php::Record@20:7 -[trait]-> members/model.php::HasLabel@5:7 site=22:9
 symbol members/model.php::__construct@24:21 -[member_of]-> members/model.php::Record@20:7
 symbol members/model.php::describe@26:21 -[calls]-> members/model.php::factory@14:28 site=32:27
+symbol members/model.php::describe@26:21 -[calls]-> members/model.php::factory@14:28 site=33:40
+symbol members/model.php::describe@26:21 -[calls]-> members/model.php::factory@14:28 site=34:35
 symbol members/model.php::describe@26:21 -[calls]-> members/model.php::factory@14:28 site=35:35
 symbol members/model.php::describe@26:21 -[calls]-> members/model.php::inherited@17:24 site=31:31
+symbol members/model.php::describe@26:21 -[calls]-> members/model.php::label@8:21 site=29:16
+symbol members/model.php::describe@26:21 -[calls]-> members/model.php::label@8:21 site=30:15
+symbol members/model.php::describe@26:21 -[instantiates]-> members/model.php::Record@20:7 site=28:20
 symbol members/model.php::describe@26:21 -[member_of]-> members/model.php::Record@20:7
 symbol members/model.php::factory@14:28 -[instantiates]-> members/model.php::ParentRecord@11:7 site=14:59
 symbol members/model.php::factory@14:28 -[member_of]-> members/model.php::ParentRecord@11:7
@@ -30,6 +36,7 @@ symbol namespaces/src/AliasRoles.php::exercise@8:10 -[uses]-> namespaces/src/Lib
 symbol namespaces/src/Consumer.php::DEFAULT_MODE@import:const -[MODE]-> namespaces/src/Library.php::MODE@14:7
 symbol namespaces/src/Consumer.php::Tool@import:class -[Gadget]-> namespaces/src/Library.php::Gadget@5:7
 symbol namespaces/src/Consumer.php::clean@import:function -[normalize]-> namespaces/src/Library.php::normalize@11:10
+symbol namespaces/src/Consumer.php::run@14:10 -[calls]-> namespaces/src/Consumer.php::Helper@12:10 site=34:15
 symbol namespaces/src/Consumer.php::run@14:10 -[calls]-> namespaces/src/Library.php::name@7:21 site=18:26
 symbol namespaces/src/Consumer.php::run@14:10 -[calls]-> namespaces/src/Library.php::name@7:21 site=35:19
 symbol namespaces/src/Consumer.php::run@14:10 -[calls]-> namespaces/src/Library.php::name@7:21 site=35:40
@@ -42,6 +49,7 @@ symbol namespaces/src/Consumer.php::run@14:10 -[uses]-> namespaces/src/Library.p
 symbol namespaces/src/Consumer.php::run@14:10 -[uses]-> namespaces/src/Library.php::MODE@14:7
 symbol namespaces/src/Consumer.php::run@14:10 -[uses]-> namespaces/src/Library.php::normalize@11:10
 symbol namespaces/src/Library.php::name@7:21 -[member_of]-> namespaces/src/Library.php::Gadget@5:7
+symbol namespaces/src/OtherConsumer.php::run@4:10 -[calls]-> namespaces/src/GlobalFunctions.php::HELPER@3:10 site=6:15
 symbol namespaces/src/SameNames.php::run@11:21 -[member_of]-> namespaces/src/SameNames.php::Box@10:7
 symbol namespaces/src/SameNames.php::run@5:21 -[member_of]-> namespaces/src/SameNames.php::Box@4:7
 symbol namespaces/src/SameNames.php::useSecond@16:10 -[calls]-> namespaces/src/SameNames.php::run@11:21 site=19:18

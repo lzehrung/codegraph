@@ -38,6 +38,8 @@ import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
 import {
   findPhpImportAlias,
   inferPhpQualifiedReferenceImportType,
+  phpTraitMethodIsAbstract,
+  phpTraitUseAdaptedMemberNames,
   phpTraitUseIsAdapted,
 } from "../../indexer/navigation-php.js";
 import {
@@ -148,6 +150,10 @@ type EdgePassContext = {
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
+  /** Names whose adapted PHP trait composition must not fall through to inherited calls. */
+  phpAdaptedTraitMembers: Map<string, Set<string>>;
+  /** Abstract PHP trait method IDs are requirements, never callable implementations. */
+  phpAbstractTraitMembers: Set<string>;
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Accepted argument-count range for arity-selected members, keyed by graph node id. */
@@ -445,6 +451,13 @@ export async function emitMemberOwnershipEdges(
       if (declarationDef) memberDef = declarationDef;
     }
     const memberId = ensureNode(context, memberDef);
+    if (
+      context.sup.id === "php" &&
+      owner.container?.type === "trait_declaration" &&
+      phpTraitMethodIsAbstract(fn.node)
+    ) {
+      context.phpAbstractTraitMembers.add(memberId);
+    }
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
     if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
       const declarationNode = outOfLineDeclaration?.node ?? fn.node;
@@ -2247,7 +2260,15 @@ export async function emitClassInheritanceEdges(
     for (const rule of rules.clauses) {
       const clauses = ownClauseNodes(cls.node, rule);
       for (const clause of clauses) {
-        if (context.sup.id === "php" && phpTraitUseIsAdapted(clause)) continue;
+        if (context.sup.id === "php" && phpTraitUseIsAdapted(clause)) {
+          const adapted = phpTraitUseAdaptedMemberNames(clause, context.source);
+          if (adapted.size) {
+            const names = context.phpAdaptedTraitMembers.get(fromId);
+            if (names) for (const name of adapted) names.add(name);
+            else context.phpAdaptedTraitMembers.set(fromId, adapted);
+          }
+          continue;
+        }
         const specifiers = rule.field ? (clause.childForFieldName(rule.field) ?? clause) : clause;
         await recordIdentifierRelations(
           context,

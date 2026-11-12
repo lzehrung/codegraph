@@ -141,7 +141,13 @@ import {
 import { fileBindingIsUnshadowed, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { comparePhpReferenceNames, findPhpImportAlias, phpTraitUseIsAdapted } from "./navigation-php.js";
+import {
+  comparePhpReferenceNames,
+  findPhpImportAlias,
+  phpTraitMethodIsAbstract,
+  phpTraitUseAdaptedMemberNames,
+  phpTraitUseIsAdapted,
+} from "./navigation-php.js";
 import {
   phpNamespaceSymbolIndexFor,
   resolveIndexedPhpClassReference,
@@ -3354,6 +3360,34 @@ async function resolveKeywordReceiverMember(
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
+  if (current.context.sup.id === "php" && !startAtAncestor && memberUse !== "value") {
+    const body = current.container.childForFieldName("body");
+    for (const use of body?.namedChildren ?? []) {
+      if (!phpTraitUseIsAdapted(use)) continue;
+      if (!phpTraitUseAdaptedMemberNames(use, current.context.source).has(foldPhpIdentifierCase(member))) continue;
+      const ownMembers: SymbolDef[] = [];
+      appendDirectKeywordMembers(
+        current.module.locals,
+        member,
+        current.container,
+        current.context,
+        current.context.sup.normalizeIdentifier,
+        undefined,
+        ownMembers,
+      );
+      const hasOwnImplementation = ownMembers.some((candidate) => {
+        if (candidate.kind !== SymbolKind.Function) return false;
+        const nameNode = nameNodeForDef(current.context, candidate);
+        return !!nameNode && !phpTraitMethodIsAbstract(nameNode.parent ?? nameNode);
+      });
+      if (hasOwnImplementation) break;
+      if (report) {
+        report.named = true;
+        report.ambiguous = true;
+      }
+      return undefined;
+    }
+  }
   const spansHierarchy = inheritsMemberOverloads(current.context.sup.id);
   const ownerKey = (ref: KeywordClassRef): string => keywordContainerKey(ref.file, ref.container);
   const preloadHiddenNames = isJsTsLanguage(current.context.sup.id) && knownArgumentCount !== undefined;
@@ -3362,6 +3396,7 @@ async function resolveKeywordReceiverMember(
   const membersByKey = new Map<string, SymbolDef[]>();
   const scopeByMember = new Map<SymbolDef, ReceiverMemberScope>();
   const visible = new Set<SymbolDef>();
+  const abstractTraitMembers = current.context.sup.id === "php" ? new Set<SymbolDef>() : undefined;
   const propertyInvocationArities =
     memberUse === "call" && current.context.sup.id === "kotlin"
       ? new Map<SymbolDef, CallableArity | null | undefined>()
@@ -3431,6 +3466,10 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (abstractTraitMembers && ref.container.type === "trait_declaration") {
+          const nameNode = nameNodeForDef(ref.context, hit);
+          if (nameNode && phpTraitMethodIsAbstract(nameNode.parent ?? nameNode)) abstractTraitMembers.add(hit);
+        }
         if (lambdaCompatible) lambdaCompatible.set(hit, await kotlinCallableAcceptsTrailingLambda(index, hit));
         if (propertyInvocationArities && !hit.callable) {
           const start = hit.range.start.index;
@@ -3492,6 +3531,7 @@ async function resolveKeywordReceiverMember(
     ...(current.context.sup.id === "php"
       ? { isTraitOwner: (ref: KeywordClassRef) => ref.container.type === "trait_declaration" }
       : {}),
+    ...(abstractTraitMembers ? { isAbstractTraitMember: (def: SymbolDef) => abstractTraitMembers.has(def) } : {}),
     supertypes: (ref) => parentsByKey.get(ownerKey(ref)) ?? [],
     name: (def) => def.localName,
     key: (def) => def.callable?.key ?? memberKey(def),

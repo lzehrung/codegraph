@@ -63,7 +63,7 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | TSX        | 17    | 0          |
 | JavaScript | 12    | 0          |
 | Python     | 16    | 0          |
-| PHP        | 12    | 0          |
+| PHP        | 20    | 0          |
 | Go         | 9     | 0          |
 | Java       | 16    | 0          |
 | C          | 1     | 0          |

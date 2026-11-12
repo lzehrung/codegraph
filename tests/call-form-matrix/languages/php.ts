@@ -580,4 +580,22 @@ export const phpCells: MatrixCell[] = [
     decoyKind: "callable",
     edge: { label: "calls", fromFile: "members.php", fromName: "run" },
   },
+  {
+    id: "php/adapted-trait-blocks-parent",
+    language: "php",
+    callForm: "inherited-member",
+    files: {
+      "traits.php":
+        "<?php\ntrait A { public function shared(): string { return 'A'; } }\ntrait B { public function shared(): string { return 'B'; } }\n",
+      "base.php": "<?php\nclass Base { public function shared(): string { return 'base'; } }\n",
+      "use.php":
+        "<?php\nclass Record extends Base { use A, B { A::shared insteadof B; B::shared as alternate; } public function run(): string { return $this->shared(); } }\n",
+    },
+    use: { file: "use.php", line: 2, token: "shared", occurrence: 3 },
+    expected: "not_found",
+    decoy: { file: "base.php", line: 2, token: "shared" },
+    decoyKind: "callable",
+    decoyAmbiguous: true,
+    edge: { label: "calls", fromFile: "use.php", fromName: "run" },
+  },
 ];

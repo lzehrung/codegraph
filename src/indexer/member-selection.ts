@@ -104,6 +104,8 @@ export type MemberModel<Owner, Member> = {
   visible(member: Member, useFile: string): boolean;
   /** PHP traits compose into a class ahead of inherited base members. */
   isTraitOwner?(owner: Owner): boolean;
+  /** An abstract PHP trait method requires an implementation from the class or its ancestors. */
+  isAbstractTraitMember?(member: Member): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
   sameSignature?(derived: Member, inherited: Member): boolean;
   /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
@@ -293,6 +295,7 @@ export function selectMember<Owner, Member>(
       const isTraitOwner = options.phpCaseInsensitive && model.isTraitOwner?.(owner);
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
+        if (isTraitOwner && model.isAbstractTraitMember?.(member)) continue;
         const matchesScope = options.scope === "any" || model.scope(member) === options.scope;
         if (matchesScope || !options.separateMemberScopes) named = true;
         if (matchesScope) {
