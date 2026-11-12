@@ -149,7 +149,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 144 applies C# global and project Using items with project-bounded visibility, rebuilds record-member
  * classifications, and keeps project Using facts out of per-module cache keys.
  * Epoch 145 re-extracts TypeScript and TSX files whose semicolonless generic call signatures previously
- * put later type aliases under ERROR, restoring their symbols and navigation references.
+ * put later type aliases under ERROR, restoring their symbols and navigation references, and omits
+ * zero-width or empty-name recovery declarations from cached symbols and scope bindings.
  */
 export const CORE_ALGORITHM_EPOCH = 145;
 /**

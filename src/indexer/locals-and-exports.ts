@@ -959,6 +959,8 @@ export function collectLocalsAndExportsFromSource(
     node?: SyntaxNodeLike,
     callable?: CallableIdentity,
   ) => {
+    if (!localName) return;
+    if (range.start.index !== undefined && range.start.index === range.end.index) return;
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
     seenLocals.add(key);

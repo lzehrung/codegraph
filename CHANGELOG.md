@@ -17,6 +17,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - The MCP HTTP server now requires `@hono/node-server` 2.1.6 or later, which fixes a process crash on a reset socket during a WebSocket upgrade (GHSA-qv5m-9pm6-hqp3) and backslash path parsing that could bypass path-based access control at a reverse proxy (GHSA-jpvv-r467-5p4w).
 - The MCP HTTP server now requires `hono` 4.13.16 or later, which fixes middleware bypasses through `mount()` and the RegExp router (GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq), a `csrf()` gap for hyperlink-auditing requests (GHSA-46wx-v44x-9hh2), skipped `multipart/form-data` validation (GHSA-4h7h-rv7c-7m2v), and unescaped closing tags in the `css` helper (GHSA-3gg2-335m-rxc6).
 - TypeScript and TSX now parse adjacent generic call signatures without semicolons, so a later type alias resolves in go-to-definition and references instead of disappearing under a parse error. Cached index data rebuilds with the pinned grammar.
+- Parse-recovery declarations with missing names no longer produce empty-named symbols.
 
 ## [3.2.1] - 2026-11-11
 

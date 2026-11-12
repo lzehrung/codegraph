@@ -1250,10 +1250,12 @@ fn typescript_pins_split_generic_method_parse_limit() {
         ),
     ];
     for (label, source, expected, has_error) in cases {
-        let tree = parse_root(source, "ts");
-        let root = tree.root_node();
-        assert_eq!(root.to_sexp(), expected, "{label}");
-        assert_eq!(root.has_error(), has_error, "{label}");
+        for language_id in ["ts", "tsx"] {
+            let tree = parse_root(source, language_id);
+            let root = tree.root_node();
+            assert_eq!(root.to_sexp(), expected, "{label} {language_id}");
+            assert_eq!(root.has_error(), has_error, "{label} {language_id}");
+        }
     }
 }
 
@@ -1313,6 +1315,62 @@ fn typescript_and_tsx_pin_semicolonless_generic_member_contexts() {
             &["interface_declaration", "type_alias_declaration"],
             &["call_signature", "call_signature"],
             2,
+        ),
+        (
+            "multiline JSDoc with less-than at line start",
+            "interface H {\n <T>(): Promise<T>\n /**\n  * <U>(): Alias\n  * @example <div />\n  */\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            1,
+        ),
+        (
+            "consecutive line comments",
+            "interface H {\n <T>(): Promise<T>\n // first\n // second\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            2,
+        ),
+        (
+            "TypeScript ignore directive",
+            "interface H {\n <T>(): Promise<T>\n // @ts-ignore\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            1,
+        ),
+        (
+            "index signature before call",
+            "interface H {\n [key: string]: unknown\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["index_signature", "call_signature"],
+            0,
+        ),
+        (
+            "construct signature before call",
+            "interface H {\n new(name: string): H\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["construct_signature", "call_signature"],
+            0,
+        ),
+        (
+            "getter signature before call",
+            "interface H {\n get name(): string\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["method_signature", "call_signature"],
+            0,
+        ),
+        (
+            "optional method before call",
+            "interface H {\n method?(): void\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["method_signature", "call_signature"],
+            0,
+        ),
+        (
+            "readonly property before call",
+            "interface H {\n readonly name: string\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["property_signature", "call_signature"],
+            0,
         ),
     ];
     for &(label, source, top_kinds, member_kinds, expected_comments) in cases {
@@ -1449,15 +1507,31 @@ fn typescript_and_tsx_pin_statement_start_and_return_asi_trees() {
 }
 
 #[test]
-fn typescript_pins_import_type_before_semicolonless_signature_parse_limit() {
-    let source = "interface H {\n <T>(): import('x').Foo<string>\n <U>(): Promise<U>\n}\n";
-    let tree = parse_root(source, "ts");
-    let root = tree.root_node();
-    assert!(root.has_error());
+fn javascript_keeps_jsx_on_the_return_statement_after_a_newline() {
+    let source = "function render() { return\n<div /> }\n";
+    let root = parse_root(source, "js");
     assert_eq!(
-        root.to_sexp(),
-        "(program (interface_declaration name: (type_identifier) body: (interface_body (call_signature type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (member_expression object: (call_expression function: (import) arguments: (arguments (string (string_fragment)))) property: (property_identifier)))) (MISSING \"}\"))) (ERROR (type_arguments (predefined_type)) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (generic_type name: (type_identifier) type_arguments: (type_arguments (type_identifier))))))",
+        root.root_node().to_sexp(),
+        "(program (function_declaration name: (identifier) parameters: (formal_parameters) body: (statement_block (return_statement (jsx_self_closing_element name: (identifier))))))",
     );
+}
+
+#[test]
+fn typescript_and_tsx_pin_import_type_before_semicolonless_signature_parse_limit() {
+    let source = "interface H {\n <T>(): import('x').Foo<string>\n <U>(): Promise<U>\n}\n";
+    for language_id in ["ts", "tsx"] {
+        let tree = parse_root(source, language_id);
+        let root = tree.root_node();
+        assert!(root.has_error(), "{language_id}: {}", root.to_sexp());
+        if language_id == "ts" {
+            assert_eq!(
+                root.to_sexp(),
+                "(program (interface_declaration name: (type_identifier) body: (interface_body (call_signature type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (member_expression object: (call_expression function: (import) arguments: (arguments (string (string_fragment)))) property: (property_identifier)))) (MISSING \"}\"))) (ERROR (type_arguments (predefined_type)) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (generic_type name: (type_identifier) type_arguments: (type_arguments (type_identifier))))))",
+            );
+        } else {
+            assert!(root.to_sexp().contains("(jsx_opening_element"), "tsx: {}", root.to_sexp());
+        }
+    }
 }
 
 #[test]
@@ -1505,8 +1579,16 @@ fn typescript_preserves_non_declaration_less_than_trees() {
         ),
     ];
     for (label, source, expected) in cases {
-        let tree = parse_root(source, "ts");
-        assert_eq!(tree.root_node().to_sexp(), expected, "{label}");
+        for language_id in ["ts", "tsx"] {
+            let tree = parse_root(source, language_id);
+            let root = tree.root_node();
+            if language_id == "tsx" && label == "angle-bracket assertion" {
+                assert!(root.has_error(), "{label}: {}", root.to_sexp());
+                assert!(root.to_sexp().contains("(jsx_opening_element"), "{label}: {}", root.to_sexp());
+            } else {
+                assert_eq!(root.to_sexp(), expected, "{label} {language_id}");
+            }
+        }
     }
 }
 

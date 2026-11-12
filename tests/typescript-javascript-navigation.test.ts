@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectIndex,
   buildSymbolGraphDetailed,
   buildSymbolGraph,
   buildProjectIndexIncremental,
@@ -133,6 +134,487 @@ describe("TypeScript and JavaScript navigation", () => {
         expect(await observe(warm)).toEqual(result);
       } finally {
         closeDiskCacheDatabase(fixture.root, cacheOptions);
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["ts", "tsx"] as const)(
+    "keeps overloaded router members and exports after adjacent call signatures in %s through cache reload",
+    async (extension) => {
+      const routerFile = `router.${extension}`;
+      const consumerFile = `consumer.${extension}`;
+      const router = [
+        "export type Handler = () => void",
+        "export interface Router {",
+        "  <T>(path: string): T",
+        "  <U>(path: string, fallback: U): U",
+        "  /** Registers a GET route. */",
+        "  get(path: string): Router",
+        "  get(path: string, handler: Handler): Router",
+        "  new (name: string): Router",
+        "  readonly name: string",
+        "  [route: string]: unknown",
+        "  <V>(): V",
+        "  post(path: string): Router",
+        "}",
+        "export function createRouter(): Router { return null as never }",
+        "",
+        "export const DEFAULT_PATH = '/'",
+        "",
+      ].join("\n");
+      const consumer = [
+        "import { createRouter, DEFAULT_PATH, type Handler, type Router } from './router'",
+        "export function wire(h: Handler): Router {",
+        "  const r: Router = createRouter()",
+        "  r.get(DEFAULT_PATH)",
+        "  r.get(DEFAULT_PATH, h)",
+        "  return r.post(DEFAULT_PATH)",
+        "}",
+        "",
+      ].join("\n");
+      const decoy = [
+        "export interface Other { get(path: string): Other; post(path: string): Other }",
+        "export function useOther(o: Other): Other { return o.get('/').post('/') }",
+        "",
+      ].join("\n");
+      const fixture = await project({ [routerFile]: router, [consumerFile]: consumer, "decoy.ts": decoy });
+      const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+      try {
+        const observe = async (index: ProjectIndex) => {
+          const goto = async (file: string, source: string, line: number, name: string) => {
+            const result = await goToDefinition(index, {
+              file: fixture.file(file),
+              line,
+              column: columnOf(source, line, name),
+            });
+            return result.status === "ok"
+              ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+              : result.status;
+          };
+          const postRefs = await findReferences(index, {
+            file: fixture.file(routerFile),
+            line: 12,
+            column: columnOf(router, 12, "post"),
+          });
+          const routerRefs = await findReferences(index, {
+            file: fixture.file(routerFile),
+            line: 2,
+            column: columnOf(router, 2, "Router"),
+          });
+          const graph = await buildSymbolGraphDetailed(index);
+          const routerId = fixture.file(routerFile) + "::Router::" + tokenIndex(router, 2, "Router");
+          const members = graph.edges
+            .filter((edge) => edge.label === "member_of" && edge.to === routerId)
+            .map((edge) => edge.from)
+            .sort();
+          const gets = listSymbols(index, { file: fixture.file(routerFile) })
+            .filter((symbol) => symbol.name === "get")
+            .map((symbol) => ({ line: symbol.range?.start.line, docstring: symbol.docstring ?? null }));
+          const exports = index.byFile
+            .get(fileIdentityKey(fixture.file(routerFile)))
+            ?.exports.filter((entry) => entry.type === "local")
+            .map((entry) => entry.exportedAs);
+          return {
+            gotos: await Promise.all([
+              goto(consumerFile, consumer, 4, "get"),
+              goto(consumerFile, consumer, 5, "get"),
+              goto(consumerFile, consumer, 6, "post"),
+              goto(consumerFile, consumer, 3, "createRouter"),
+              goto(consumerFile, consumer, 4, "DEFAULT_PATH"),
+              goto("decoy.ts", decoy, 2, "get"),
+            ]),
+            post: {
+              status: postRefs.status,
+              sites: referenceSites(postRefs).sort(),
+              coverage: postRefs.status === "ok" ? postRefs.referenceCoverage?.state : null,
+              reasons: postRefs.status === "ok" ? postRefs.referenceCoverage?.reasons : undefined,
+              affectedFiles:
+                postRefs.status === "ok"
+                  ? postRefs.referenceCoverage?.affectedFiles?.map((file) => path.basename(file))
+                  : undefined,
+            },
+            router: {
+              status: routerRefs.status,
+              sites: referenceSites(routerRefs).sort(),
+              coverage: routerRefs.status === "ok" ? routerRefs.referenceCoverage?.state : null,
+            },
+            calls: callTargetIds(graph, "wire").sort(),
+            members,
+            gets,
+            exports,
+          };
+        };
+        const expected = {
+          gotos: [
+            `${routerFile}:6`,
+            `${routerFile}:7`,
+            `${routerFile}:12`,
+            `${routerFile}:14`,
+            `${routerFile}:16`,
+            "decoy.ts:1",
+          ],
+          post: {
+            status: "ok",
+            sites: [`${consumerFile}:6`, `${routerFile}:12`],
+            coverage: "partial",
+            reasons: ["strategy_unavailable"],
+            affectedFiles: ["decoy.ts"],
+          },
+          router: {
+            status: "ok",
+            sites: [
+              `${consumerFile}:1`,
+              `${consumerFile}:2`,
+              `${consumerFile}:3`,
+              `${routerFile}:12`,
+              `${routerFile}:14`,
+              `${routerFile}:2`,
+              `${routerFile}:6`,
+              `${routerFile}:7`,
+              `${routerFile}:8`,
+            ],
+            coverage: "complete",
+          },
+        };
+        const result = await observe(fixture.index);
+        expect(result.gotos).toEqual(expected.gotos);
+        expect(result.post).toEqual(expected.post);
+        expect(result.router).toEqual(expected.router);
+        expect(result.calls).toEqual([
+          fixture.file(routerFile) + "::createRouter::" + tokenIndex(router, 14, "createRouter"),
+          fixture.file(routerFile) + "::get::" + tokenIndex(router, 6, "get"),
+          fixture.file(routerFile) + "::get::" + tokenIndex(router, 7, "get"),
+          fixture.file(routerFile) + "::post::" + tokenIndex(router, 12, "post"),
+        ]);
+        expect(result.members).toEqual(
+          expect.arrayContaining([
+            fixture.file(routerFile) + "::get::" + tokenIndex(router, 6, "get"),
+            fixture.file(routerFile) + "::get::" + tokenIndex(router, 7, "get"),
+            fixture.file(routerFile) + "::post::" + tokenIndex(router, 12, "post"),
+          ]),
+        );
+        expect(result.calls.every((id) => id.startsWith(fixture.file(routerFile) + "::"))).toBe(true);
+        expect(result.gets).toEqual([
+          { line: 6, docstring: "Registers a GET route." },
+          { line: 7, docstring: null },
+        ]);
+        expect(result.exports).toEqual(["createRouter", "DEFAULT_PATH"]);
+        const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+        expect(await observe(cold)).toEqual(result);
+        closeDiskCacheDatabase(fixture.root, cacheOptions);
+        const warmReport: BuildReport = { timings: {} };
+        const warm = await buildProjectIndexIncremental(fixture.root, { ...cacheOptions, report: warmReport });
+        expect(warmReport.files?.parsed).toBe(0);
+        expect(await observe(warm)).toEqual(result);
+      } finally {
+        closeDiskCacheDatabase(fixture.root, cacheOptions);
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["js", "ts", "tsx"] as const)("does not index missing method names in %s", async (extension) => {
+    const fileName = `missing.${extension}`;
+    const source = ["class A {", "  () {}", "  valid() {}", "}", ""].join("\n");
+    const fixture = await project({ [fileName]: source });
+    try {
+      const symbols = listSymbols(fixture.index, { file: fixture.file(fileName) });
+      expect(symbols.map((symbol) => symbol.name)).toEqual(expect.arrayContaining(["A", "valid"]));
+      expect(symbols.some((symbol) => !symbol.name)).toBe(false);
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect([...graph.nodes.values()].some((node) => !node.name)).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["ts", "tsx"] as const)(
+    "discovers forward aliases and methods in TypeScript declarations from %s",
+    async (extension) => {
+      const declaration = [
+        "export interface Handler {",
+        "  <T>(): Alias<T>",
+        "  <U>(): Alias<U>",
+        "  get(): void",
+        "}",
+        "export type Alias<T> = T",
+        "",
+      ].join("\n");
+      const use = [
+        "import type { Handler, Alias } from './types'",
+        "export const value: Alias<string> = 'ok'",
+        "declare const handler: Handler",
+        "handler.get()",
+        "",
+      ].join("\n");
+      const fixture = await project({ "types.d.ts": declaration, [`use.${extension}`]: use });
+      try {
+        const index = await buildProjectIndex(fixture.root, { cache: "off" });
+        const goto = async (file: string, source: string, line: number, name: string) => {
+          const result = await goToDefinition(index, {
+            file: fixture.file(file),
+            line,
+            column: columnOf(source, line, name),
+          });
+          return result.status === "ok"
+            ? `${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+            : result.status;
+        };
+        expect(await goto("types.d.ts", declaration, 2, "Alias")).toBe("types.d.ts:6");
+        expect(await goto("types.d.ts", declaration, 3, "Alias")).toBe("types.d.ts:6");
+        expect(await goto(`use.${extension}`, use, 2, "Alias")).toBe("types.d.ts:6");
+        expect(await goto(`use.${extension}`, use, 4, "get")).toBe("types.d.ts:4");
+        const refs = await findReferences(index, {
+          file: fixture.file("types.d.ts"),
+          line: 6,
+          column: columnOf(declaration, 6, "Alias"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") return;
+        expect(refs.referenceCoverage.state).toBe("complete");
+        expect(referenceSites(refs).sort()).toEqual([
+          "types.d.ts:2",
+          "types.d.ts:3",
+          "types.d.ts:6",
+          `use.${extension}:1`,
+          `use.${extension}:2`,
+        ]);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["ts", "tsx"] as const)(
+    "excludes missing-name declarations without losing later aliases in %s",
+    async (extension) => {
+      const fileName = `split.${extension}`;
+      const source = [
+        "class A {",
+        "  fixed() {}",
+        "  m",
+        "  <T>() {}",
+        "  other() {}",
+        "}",
+        "type After = number",
+        "let value: After = 1",
+        "",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      try {
+        const symbols = listSymbols(fixture.index, { file: fixture.file(fileName) });
+        expect(symbols.map((symbol) => symbol.name)).toEqual(
+          expect.arrayContaining(["A", "fixed", "m", "other", "After", "value"]),
+        );
+        expect(symbols.some((symbol) => !symbol.name)).toBe(false);
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect([...graph.nodes.values()].some((node) => !node.name)).toBe(false);
+        const goto = await goToDefinition(fixture.index, {
+          file: fixture.file(fileName),
+          line: 8,
+          column: columnOf(source, 8, "After"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(7);
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file(fileName),
+          line: 7,
+          column: columnOf(source, 7, "After"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(referenceSites(refs)).toEqual([`${fileName}:7`, `${fileName}:8`]);
+          expect(refs.referenceCoverage.state).toBe("partial");
+          expect(refs.referenceCoverage.reasons).toContain("parse_error");
+        }
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { wrapper: "declare module 'pkg'", prelude: [] },
+    { wrapper: "declare global", prelude: ["export {}"] },
+    { wrapper: "declare namespace NS", prelude: [] },
+    { wrapper: "namespace NS", prelude: [] },
+  ])("keeps a later alias inside $wrapper distinct from a following file alias", async ({ wrapper, prelude }) => {
+    const prefix = [...prelude, `${wrapper} {`];
+    const memberExport = wrapper === "declare global" ? "" : "export ";
+    const source = [
+      ...prefix,
+      `  ${memberExport}interface Handler {`,
+      "    <T0>(): Alias<T0>",
+      "    <T1>(): Alias<T1>",
+      "    <T2>(): Alias<T2>",
+      "  }",
+      `  ${memberExport}type Alias<T> = T`,
+      "}",
+      "type Outer = number",
+      "let o: Outer = 1",
+      "",
+    ].join("\n");
+    const fixture = await project({ "ambient.ts": source });
+    try {
+      const aliasLine = prefix.length + 6;
+      for (let line = prefix.length + 2; line <= prefix.length + 4; line++) {
+        const result = await goToDefinition(fixture.index, {
+          file: fixture.file("ambient.ts"),
+          line,
+          column: columnOf(source, line, "Alias"),
+        });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(aliasLine);
+      }
+      const refs = await findReferences(fixture.index, {
+        file: fixture.file("ambient.ts"),
+        line: aliasLine,
+        column: columnOf(source, aliasLine, "Alias"),
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status === "ok") {
+        expect(refs.referenceCoverage.state).toBe("complete");
+        expect(referenceSites(refs)).toEqual(
+          [prefix.length + 2, prefix.length + 3, prefix.length + 4, aliasLine].map((line) => `ambient.ts:${line}`),
+        );
+      }
+      const outerLine = prefix.length + 8;
+      const outerUseLine = prefix.length + 9;
+      const outerGoto = await goToDefinition(fixture.index, {
+        file: fixture.file("ambient.ts"),
+        line: outerUseLine,
+        column: columnOf(source, outerUseLine, "Outer"),
+      });
+      expect(outerGoto.status).toBe("ok");
+      if (outerGoto.status === "ok") expect(outerGoto.definition.range.start.line).toBe(outerLine);
+      const outerRefs = await findReferences(fixture.index, {
+        file: fixture.file("ambient.ts"),
+        line: outerLine,
+        column: columnOf(source, outerLine, "Outer"),
+      });
+      expect(outerRefs.status).toBe("ok");
+      if (outerRefs.status === "ok") {
+        expect(outerRefs.referenceCoverage.state).toBe("complete");
+        expect(referenceSites(outerRefs)).toEqual([`ambient.ts:${outerLine}`, `ambient.ts:${outerUseLine}`]);
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes a method after generic signatures inside a TypeScript module augmentation", async () => {
+    const router = "export interface Router { base(): void }\n";
+    const augmentation = [
+      "import './router'",
+      "declare module './router' {",
+      "  interface Router {",
+      "    <T0>(): T0",
+      "    <T1>(): T1",
+      "    <T2>(): T2",
+      "    extra(): void",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const fixture = await project({ "router.ts": router, "augment.ts": augmentation });
+    try {
+      const extra = listSymbols(fixture.index, { file: fixture.file("augment.ts") }).find(
+        (symbol) => symbol.name === "extra",
+      );
+      expect(extra?.range?.start.line).toBe(7);
+      const graph = await buildSymbolGraphDetailed(fixture.index);
+      expect(
+        [...graph.nodes.values()].some(
+          (node) => node.name === "extra" && fileIdentityKey(node.file) === fileIdentityKey(fixture.file("augment.ts")),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["ts", "tsx"] as const)(
+    "keeps the import-type return and split-method parse limits explicit in %s",
+    async (extension) => {
+      const fileName = `limits.${extension}`;
+      const importType = [
+        "interface H {",
+        "  <T>(): import('x').Foo<string>",
+        "  <U>(): Promise<U>",
+        "}",
+        "type After = number",
+        "let value: After = 1",
+        "",
+      ].join("\n");
+      const fixture = await project({
+        [fileName]: importType,
+        "x.d.ts": "declare module 'x' { export type Foo<T> = T }\n",
+      });
+      try {
+        const goto = await goToDefinition(fixture.index, {
+          file: fixture.file(fileName),
+          line: 6,
+          column: columnOf(importType, 6, "After"),
+        });
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file(fileName),
+          line: 5,
+          column: columnOf(importType, 5, "After"),
+        });
+        if (extension === "ts") {
+          expect(goto.status).toBe("not_found");
+          expect(refs.status).toBe("not_found");
+        } else {
+          expect(goto.status).toBe("ok");
+          if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(5);
+          expect(refs.status).toBe("ok");
+          if (refs.status === "ok") {
+            expect(referenceSites(refs)).toEqual([`${fileName}:5`, `${fileName}:6`]);
+            expect(refs.referenceCoverage.state).toBe("partial");
+            expect(refs.referenceCoverage.reasons).toContain("parse_error");
+          }
+        }
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["ts", "tsx"] as const)(
+    "pins the inherited-member misresolution for a split generic interface method in %s",
+    async (extension) => {
+      const fileName = `split.${extension}`;
+      const source = [
+        "interface B { m(): void }",
+        "interface A extends B {",
+        "  m",
+        "  <T>(): void",
+        "}",
+        "declare const a: A",
+        "a.m<string>()",
+        "",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      try {
+        const goto = await goToDefinition(fixture.index, {
+          file: fixture.file(fileName),
+          line: 7,
+          column: columnOf(source, 7, "m"),
+        });
+        expect(goto.status).toBe("ok");
+        if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(1);
+        const refs = await findReferences(fixture.index, {
+          file: fixture.file(fileName),
+          line: 1,
+          column: columnOf(source, 1, "m"),
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status === "ok") {
+          expect(referenceSites(refs)).toEqual([`${fileName}:1`, `${fileName}:7`]);
+          expect(refs.referenceCoverage.state).toBe("complete");
+        }
+      } finally {
         await rm(fixture.root, { recursive: true, force: true });
       }
     },

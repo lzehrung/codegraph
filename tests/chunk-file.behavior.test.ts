@@ -66,6 +66,45 @@ describe("chunkFile detailed behavior", () => {
     expect(nativeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { language: LANG_CONFIGS.typescript, extension: "ts" },
+    { language: LANG_CONFIGS.tsx, extension: "tsx" },
+  ])("keeps declaration chunks after adjacent generic signatures in $extension", ({ language, extension }) => {
+    const source = [
+      "export interface Handler {",
+      "  <T0>(): Forward<T0>",
+      "  <T1>(): Forward<T1>",
+      "  <T2>(): Forward<T2>",
+      "}",
+      "type Forward<T> = T",
+      "export function run(): number {",
+      "  return 1",
+      "}",
+      "export class Svc {",
+      "  go(): void {}",
+      "}",
+      "",
+    ].join("\n");
+    const chunks = chunkFile({
+      language,
+      source,
+      filePath: `forward.${extension}`,
+      minTokens: 1,
+      maxTokens: 400,
+      tokenizer: tokenize,
+    });
+    const declarations = chunks
+      .filter((chunk) => ["Handler", "Forward", "run", "Svc", "go"].includes(chunk.name ?? ""))
+      .map((chunk) => `${chunk.type}:${chunk.name}[${chunk.startLine}-${chunk.endLine}]`);
+    expect(declarations).toEqual([
+      "interface:Handler[1-5]",
+      "type_alias:Forward[6-6]",
+      "function:run[7-9]",
+      "class:Svc[10-12]",
+      "method:go[11-11]",
+    ]);
+  });
+
   it("uses public chunking language ids while keeping internal support ids", () => {
     expect(LANG_CONFIGS.javascript.id).toBe("javascript");
     expect(LANG_CONFIGS.javascript.supportId).toBe("js");
