@@ -1658,8 +1658,8 @@ describe("project lifecycle commands", () => {
       expect(JSON.parse(result.stdout)).toMatchObject({ root: cwd, manifest: { fileCount: 1 } });
       expect((await readManifest(cwd)).fileCount).toBe(1);
       await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
-      // Disk cache anchoring remains independent of the lifecycle project boundary.
-      await expectDiskIndexCacheHasArtifacts(root);
+      await expectDiskIndexCacheHasArtifacts(cwd);
+      await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fsp.stat(path.join(root, "src", ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
     });
 

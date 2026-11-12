@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Fixed
+
+- `codegraph init` and `codegraph sync --init` in a Git subdirectory warm the same cache that later commands reuse, without leaving an unused cache namespace at the repository root.
+
 ## [3.2.1] - 2026-11-11
 
 ### Added

@@ -349,6 +349,9 @@ async function buildLifecycleManifest(
   const sessionBuildOptions = {
     ...withIndexTeardownProgress(buildOptions),
     cache: "disk" as const,
+    // The manifest written after this build will make this project its own repository anchor.
+    // Keep the hint session-local so later builds and lifecycle option hashes stay unchanged.
+    ...(!existing ? { cachePendingManifest: true } : {}),
   };
   const forcedSessionBuildOptions = options.force
     ? { ...sessionBuildOptions, cacheStrict: true, cacheVerify: true }
