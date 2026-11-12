@@ -14,6 +14,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - `codegraph init` and `codegraph sync --init` in a Git subdirectory warm the same cache that later commands reuse, without leaving an unused cache namespace at the repository root.
 - TypeScript, TSX, and JavaScript private class names now resolve lexically in navigation, references, and detailed call edges, including nested classes, overloads, and brand checks. Rename previews require the `#` prefix and report private-name collisions and capture.
 - C# global namespace, alias, and static usings now apply across their nearest project in navigation, references, and detailed graphs, including literal project and Directory.Build.props `Using` items with XML preambles or child metadata. Using-only edits retain source modules, with shared compilation lookup indexes and stat-validated metadata snapshots. C# and Java record-body members stay out of namespace/package exports.
+- The MCP HTTP server now requires `@hono/node-server` 2.1.6 or later, which fixes a process crash on a reset socket during a WebSocket upgrade (GHSA-qv5m-9pm6-hqp3) and backslash path parsing that could bypass path-based access control at a reverse proxy (GHSA-jpvv-r467-5p4w).
 
 ## [3.2.1] - 2026-11-11
 
