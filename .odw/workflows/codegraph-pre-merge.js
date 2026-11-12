@@ -224,14 +224,25 @@ const cacheFocus = `Run if the diff touches indexed/derived data, caching, incre
 On separate real scratch project copies, for each compiled version, compare warm memory and reopened disk-cache answers with a fresh cold index after an edit, delete, rename-back sequence, and restoration of affected files. Include both the intermediate rename and the rename back. Check goto, references with referenceCoverage.state, and detailed-graph edges after EACH operation; compare canonical answers, not just file counts. Never mutate source, baseline, or supplied corpora, and keep scripts/caches outside the indexed copies. Record the operations and observed equalities.
 Inspect CORE_ALGORITHM_EPOCH and LANGUAGE_BEHAVIOR_EPOCH in base and head. Require the appropriate epoch change when persisted facts or language hooks changed, following AGENTS.md, and explain when no bump is needed. A reserved epoch is not evidence unless the actual relevant constant changed. Report stale persisted-data or incremental discrepancies with exact outputs.`;
 const performanceFocus = `Run if the diff touches indexing, incremental updates, or graph-build hot paths; otherwise return skipped with inspected paths and reason and timings: [].
-Measure the exact largest corpus selected in preparation: ${JSON.stringify(context.performanceCorpus)} (${context.performanceCorpusFiles} eligible files). Do not replace it with a smaller affected-language corpus. Each timing must use that exact original absolute corpus string and file count, even when indexing a scratch copy. Supplemental affected-language measurements can go in evidence, not replace these four timings. Use paired interleaved base/head medians for cold build, no-change update, one-file update, and buildSymbolGraphDetailed graph build: at least THREE alternating rounds (base/head, head/base, base/head), separate processes for every measured version/round, identical Node flags, native runtime, options, input bytes, and cache state. Prepare indexes outside timed no-change/one-file operations and change only a scratch copy. Include raw round times, medians in milliseconds, slowerPercent = (headMs/baseMs - 1)*100, commands, and environment in scratch evidence.
-Flag head medians >10% slower. Compare incremental work counters or paired smaller/larger subsets to detect work growing with project size instead of changed files; report observed evidence, not speculation. Return four timings, one per operation. Do not replace measurements with estimates.`;
+Measure the exact largest corpus selected in preparation: ${JSON.stringify(context.performanceCorpus)} (${context.performanceCorpusFiles} eligible files). Do not replace it with a smaller affected-language corpus. Each timing must use that exact original absolute corpus string and file count, even when indexing a scratch copy. Supplemental affected-language measurements can go in evidence, not replace these four timings. Use paired interleaved base/head medians for cold build, no-change update, one-file update, and buildSymbolGraphDetailed graph build: at least FIVE alternating rounds per operation (base/head, head/base, ...), separate processes for every measured version/round, identical Node flags, native runtime, options, input bytes, and cache state. Prepare indexes outside timed no-change/one-file operations and change only a scratch copy. Include raw round times, medians in milliseconds, slowerPercent = (headMs/baseMs - 1)*100, commands, and environment in scratch evidence.
+This lane runs alone after the other lanes finish; do not start other heavy work while measuring. A head median slower than base by more than the larger of 2% and the base rounds' relative spread ((max-min)/median), with head slower in most paired rounds, is a P0 performance regression: performance must not regress. Report a smaller but consistent slowdown as P1. Compare incremental work counters or paired smaller/larger subsets to detect work growing with project size instead of changed files; report observed evidence, not speculation. Return four timings, one per operation. Do not replace measurements with estimates.`;
 
 phase("Review");
 const focuses = [regressionFocus, gapFocus, cacheFocus, performanceFocus];
-const lanes = await parallel(
-  LANES.map((lane, index) => () => agent(reviewPrompt(lane, focuses[index]), agentOptions(laneSchema(lane), lane))),
+// Timing runs alone after the other lanes so their CPU and disk load cannot skew it.
+const correctnessLanes = await parallel(
+  LANES.slice(0, 3).map(
+    (lane, index) => () => agent(reviewPrompt(lane, focuses[index]), agentOptions(laneSchema(lane), lane)),
+  ),
 );
+phase("Performance");
+let performanceLane = null;
+try {
+  performanceLane = await agent(reviewPrompt(LANES[3], focuses[3]), agentOptions(laneSchema(LANES[3]), LANES[3]));
+} catch {
+  performanceLane = null;
+}
+const lanes = [...correctnessLanes, performanceLane];
 for (let index = 0; index < lanes.length; index++) {
   const result = lanes[index];
   if (!result || result.status === "incomplete")
