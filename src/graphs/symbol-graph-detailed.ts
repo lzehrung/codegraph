@@ -926,14 +926,16 @@ export async function buildSymbolGraphDetailed(
     memberIdentities,
     index.languageExtensions,
     overridingSignatures,
-    (memberId, useFile) => {
-      const member = receiverMemberDefinitions?.get(memberId);
-      if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
-      const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
-      const memberPackage = getPackageDeclarationName(index, member.file, "java");
-      const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
-      return memberPackage === usePackage;
-    },
+    receiverMemberDefinitions
+      ? (memberId, useFile) => {
+          const member = receiverMemberDefinitions.get(memberId);
+          if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
+          const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
+          const memberPackage = getPackageDeclarationName(index, member.file, "java");
+          const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
+          return memberPackage === usePackage;
+        }
+      : undefined,
     trailingLambdaCalls.size
       ? (targetId, candidate) => !trailingLambdaCalls.has(candidate) || !lambdaRejectedTargets.has(targetId)
       : undefined,

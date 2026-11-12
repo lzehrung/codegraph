@@ -21,6 +21,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - PHP function and method calls ignore declaration letter case, namespaced class uses choose the right class, `parent::` calls reach ancestor methods, and using classes resolve ordinary trait methods and uniquely composed promoted properties. Full-project `use` declarations retain their imported targets. Abstract trait requirements defer to concrete class or parent methods; adapted trait calls cannot fall through to a same-named inherited method. Multiply used trait properties stay conservative.
 - PHP adapted trait uses retain their hierarchy and unaffected methods, including in subclasses and `parent::` calls. Unproven adaptations keep inherited-decoy renames unsafe, and trait-body calls to abstract methods retain matching navigation, reference, and call-graph targets.
 - PHP-only declaration and trait setup is skipped for other languages during indexing and detailed graph builds, without changing navigation, reference coverage, or resolved edges.
+- PHP detailed graphs reuse per-tree namespace positions and per-class trait call selections without changing resolved nodes, edges, navigation, or reference coverage.
 
 ## [3.2.1] - 2026-11-11
 

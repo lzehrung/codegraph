@@ -106,23 +106,30 @@ export function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: stri
   return namespaceName ? sliceText(namespaceName, source).trim() : null;
 }
 
+const phpNamespaceDefinitions = new WeakMap<SyntaxNodeLike, readonly SyntaxNodeLike[]>();
+
 function findClosestPhpNamespaceDefinition(root: SyntaxNodeLike, targetIndex: number): SyntaxNodeLike | null {
-  let bestMatch: SyntaxNodeLike | null = null;
-
-  const visit = (node: SyntaxNodeLike): void => {
-    if (node.startIndex > targetIndex) {
-      return;
-    }
-    if (node.type === "namespace_definition" && (!bestMatch || node.startIndex >= bestMatch.startIndex)) {
-      bestMatch = node;
-    }
-    for (const child of node.namedChildren) {
-      visit(child);
-    }
-  };
-
-  visit(root);
-  return bestMatch;
+  let namespaces = phpNamespaceDefinitions.get(root);
+  if (!namespaces) {
+    const declarations: SyntaxNodeLike[] = [];
+    const visit = (node: SyntaxNodeLike): void => {
+      if (node.type === "namespace_definition") declarations.push(node);
+      for (const child of node.namedChildren) visit(child);
+    };
+    visit(root);
+    namespaces = declarations;
+    phpNamespaceDefinitions.set(root, namespaces);
+  }
+  // Semicolon namespaces are siblings of their declarations. Index them once per
+  // immutable tree instead of revisiting every preceding statement at each use.
+  let low = 0;
+  let high = namespaces.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (namespaces[middle]!.startIndex <= targetIndex) low = middle + 1;
+    else high = middle;
+  }
+  return namespaces[low - 1] ?? null;
 }
 
 function readPhpNamespaceFromNode(tree: SyntaxTreeLike, node: SyntaxNodeLike | null, source: string): string | null {

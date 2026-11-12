@@ -6,6 +6,7 @@ import {
   inheritsMemberOverloads,
   selectMember,
   type MemberModel,
+  type MemberSelection,
 } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
@@ -2020,6 +2021,11 @@ export function emitReceiverCallEdges(
   const rejectedCallSites = new Set<string>();
 
   const sourceCache = new Map<string, string>();
+  // The graph's PHP owner/composition facts are immutable. Repeated call shapes
+  // in a class share the selector's precedence/adaptation walk, not a new rule.
+  // Site-dependent callbacks must still run selection independently.
+  const cachePhpLookups = hasPhpTraitCalls && !isReceiverMemberVisible && !acceptsCallShape;
+  const phpLookupsByOwner = cachePhpLookups ? new Map<string, Map<string, MemberSelection<string>>>() : undefined;
   for (const candidate of candidates) {
     const siteKey = callSiteKey(candidate.callerId, candidate.site);
     const existingTargets = callTargetsBySite.get(siteKey) ?? new Set<string>();
@@ -2037,18 +2043,34 @@ export function emitReceiverCallEdges(
     const languageId = support?.id ?? "";
     activeCandidate = candidate;
     activeOwner = owner;
-    const lookup = selectMember([owner], model, {
-      name: candidate.memberName,
-      argumentCount: candidate.argumentCount,
-      scope: memberScope,
-      useFile: candidate.site.file,
-      phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
-      normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
-      callSite: languageId === "kotlin",
-      separateMemberScopes: hasSeparateMemberScopes(languageId),
-      startAtAncestor: candidate.viaSupertypes,
-      inheritOverloads: inheritsMemberOverloads(languageId),
-    });
+    let phpLookupKey: string | undefined;
+    if (phpLookupsByOwner && candidate.caseInsensitiveMemberName && !candidate.goPackagePeerFiles) {
+      const visibilityFile = fileHiddenMemberIds.size ? fileIdentityKey(candidate.site.file) : "";
+      phpLookupKey = `${visibilityFile}\0${foldPhpIdentifierCase(candidate.memberName)}\0${memberScope}\0${candidate.argumentCount}\0${candidate.viaSupertypes}`;
+    }
+    let ownerLookups = phpLookupKey === undefined ? undefined : phpLookupsByOwner?.get(owner);
+    let lookup = phpLookupKey === undefined ? undefined : ownerLookups?.get(phpLookupKey);
+    if (!lookup) {
+      lookup = selectMember([owner], model, {
+        name: candidate.memberName,
+        argumentCount: candidate.argumentCount,
+        scope: memberScope,
+        useFile: candidate.site.file,
+        phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+        normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
+        callSite: languageId === "kotlin",
+        separateMemberScopes: hasSeparateMemberScopes(languageId),
+        startAtAncestor: candidate.viaSupertypes,
+        inheritOverloads: inheritsMemberOverloads(languageId),
+      });
+      if (phpLookupKey !== undefined) {
+        if (!ownerLookups) {
+          ownerLookups = new Map();
+          phpLookupsByOwner!.set(owner, ownerLookups);
+        }
+        ownerLookups.set(phpLookupKey, lookup);
+      }
+    }
     let receiverDisposition: "none" | "resolved" | "ambiguous" =
       lookup.status === "unique" ? "resolved" : lookup.status;
     if (lookup.status === "unique") {
@@ -2095,6 +2117,7 @@ export function emitReceiverCallEdges(
 }
 
 function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
+  if (!aliases.has(id)) return id;
   let current = id;
   const seen = new Set<string>();
   while (aliases.has(current) && !seen.has(current)) {

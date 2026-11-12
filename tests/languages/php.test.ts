@@ -46,6 +46,9 @@ import {
 import { loadBinding } from "../../src/native/runtime.js";
 import { collectPhpModuleImportNames, phpNamespaceSymbolIndexFor } from "../../src/indexer/php-namespace-symbols.js";
 import * as phpNavigation from "../../src/indexer/navigation-php.js";
+import { closeDiskCacheDatabase } from "../../src/indexer/build-cache.js";
+import { findUnusedExports } from "../../src/indexer/unused-exports.js";
+import { workspaceSymbols } from "../../src/indexer/workspace-symbols.js";
 import {
   expectPhpTraitCompositionGoto,
   expectPhpTraitCompositionReferences,
@@ -1380,6 +1383,119 @@ describe("PHP inherited member lookup", () => {
 });
 
 describe("PHP trait composition", () => {
+  it.each([false, true])("keeps trait members out of bare lookup and file exports (globals: %s)", async (globals) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-trait-bare-"));
+    const diskOptions = { cache: "disk", cacheDir: path.join(root, "cache") } as const;
+    try {
+      const traitLines = [
+        "<?php",
+        "trait A {",
+        "  public function helper() { return 'trait'; }",
+        "  public $conf = 'property';",
+        "}",
+      ];
+      const useLines = [
+        "<?php",
+        "function f() { return helper(); }",
+        "function constantValue() { return conf; }",
+        "class K {",
+        "  use A;",
+        "  public function run() { return helper(); }",
+        "  public function read() { return conf; }",
+        "  public function method() { return $this->helper(); }",
+        "  public function property() { return $this->conf; }",
+        "}",
+      ];
+      const paths = await writeFixtureFiles(root, {
+        "trait.php": traitLines.join("\n"),
+        "use.php": useLines.join("\n"),
+        "globals.php": globals
+          ? "<?php\nfunction helper() { return 'global'; }\nconst conf = 'constant';\nfunction orphan() {}\n"
+          : "<?php\nfunction orphan() {}\n",
+      });
+      const traitFile = paths["trait.php"]!;
+      const useFile = paths["use.php"]!;
+      for (const cache of ["off", "disk", "disk"] as const) {
+        closeDiskCacheDatabase(root, diskOptions);
+        const index = await buildProjectIndex(root, { ...diskOptions, cache, threads: 1 });
+        expect(index.byFile.get(fileIdentityKey(traitFile))?.nativeOutcome).toBe("used");
+        for (const line of [2, 6]) {
+          const result = await goToDefinition(index, {
+            file: useFile,
+            line,
+            column: columnOf(useLines, line, "helper"),
+          });
+          expect(result.status).toBe(globals ? "ok" : "not_found");
+          if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["globals.php"]);
+        }
+        for (const line of [3, 7]) {
+          const result = await goToDefinition(index, { file: useFile, line, column: columnOf(useLines, line, "conf") });
+          // Bare constants can stay unresolved, but a property is never their declaration.
+          if (result.status === "ok") expect(normalizePath(result.definition.file)).toBe(paths["globals.php"]);
+          else expect(result.status).toBe("not_found");
+        }
+        for (const [name, declarationLine, callLine] of [
+          ["helper", 3, 8],
+          ["$conf", 4, 9],
+        ] as const) {
+          const declaration = {
+            file: traitFile,
+            line: declarationLine,
+            column: columnOf(traitLines, declarationLine, name),
+          };
+          const token = name.replace("$", "");
+          const member = { file: useFile, line: callLine, column: columnOf(useLines, callLine, token) };
+          const result = await goToDefinition(index, member);
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected the explicit trait member");
+          expect(normalizePath(result.definition.file)).toBe(traitFile);
+          expect(result.definition.range.start.line).toBe(declarationLine);
+          const references = await findReferences(index, declaration);
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected trait member references");
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(
+            references.references
+              .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+              .sort(),
+          ).toEqual([`trait.php:${declarationLine}`, `use.php:${callLine}`]);
+        }
+        if (globals) {
+          const references = await findReferences(index, { file: paths["globals.php"]!, line: 2, column: 10 });
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected the global function");
+          expect(references.referenceCoverage.state).toBe("complete");
+          expect(
+            references.references
+              .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+              .sort(),
+          ).toEqual(["globals.php:2", "use.php:2", "use.php:6"]);
+        }
+        const symbols = await workspaceSymbols(index, { query: "", fileGlob: "**/trait.php" });
+        expect(symbols.symbols.map((symbol) => [symbol.name, !!symbol.def.isMember, symbol.exported]).sort()).toEqual([
+          ["$conf", true, false],
+          ["A", false, true],
+          ["helper", true, false],
+        ]);
+        const exported = await workspaceSymbols(index, { query: "", fileGlob: "**/trait.php", exportedOnly: true });
+        expect(exported.symbols.map((symbol) => symbol.name)).toEqual(["A"]);
+        const unused = await findUnusedExports(index);
+        expect(unused.some((candidate) => candidate.name === "orphan")).toBe(true);
+        expect(unused.filter((candidate) => normalizePath(candidate.file) === traitFile)).toEqual([]);
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges
+            .filter((edge) => edge.label === "calls")
+            .map((edge) => `${edge.site!.range.start.line}->${path.basename(graph.nodes.get(edge.to)!.file)}`)
+            .sort(),
+        ).toEqual(globals ? ["2->globals.php", "6->globals.php", "8->trait.php"] : ["8->trait.php"]);
+      }
+    } finally {
+      closeDiskCacheDatabase(root, diskOptions);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves adapted-use hierarchy and ordinary members across cold and reopened caches", async () => {
     await withPhpTraitComposition(async (index, files) => {
       await expectPhpTraitCompositionGoto(index, files);
