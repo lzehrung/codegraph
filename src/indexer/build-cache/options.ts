@@ -146,8 +146,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * project functions and aliases, and binds accessible cross-file receiver extensions and extension-property accessor
  * calls.
  * Epoch 143 resolves ECMAScript private names lexically and rebuilds their detailed call edges.
+ * Epoch 144 applies C# global and project Using items with project-bounded visibility, rebuilds record-member
+ * classifications, and keeps project Using facts out of per-module cache keys.
  */
-export const CORE_ALGORITHM_EPOCH = 143;
+export const CORE_ALGORITHM_EPOCH = 144;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

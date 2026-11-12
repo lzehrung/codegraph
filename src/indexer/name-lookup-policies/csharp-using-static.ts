@@ -15,6 +15,7 @@ import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { csharpGenericArity, csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceAt } from "../compilation-units.js";
+import { AMBIGUOUS_STAR_IMPORT_REASON } from "../ambiguous-resolution.js";
 import { isCsharpAccessibleOutsideType } from "../declaration-visibility.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { BareNameUse, NameResolution } from "../name-resolution-types.js";
@@ -34,7 +35,7 @@ function usingStaticImports(mod: ModuleIndex): UsingStaticImport[] {
     imports.push({
       file: imp.resolved,
       binding: imp,
-      namespace: imp.staticMembersOf.slice(0, separator),
+      namespace: separator < 0 ? "" : imp.staticMembersOf.slice(0, separator),
       typeName: imp.staticMembersOf.slice(separator + 1),
     });
   }
@@ -125,9 +126,9 @@ function usingStaticCandidates(
       const nestedType = NESTED_TYPE_DECLARATIONS.has(declaration.type);
       if (typesOnly && !nestedType) continue;
       if (nestedType && csharpGenericArity(declaration) !== typeArity) continue;
-      if (importsMember(use, parsed, declaration, imp)) {
-        candidates.push({ def, declaration, source: parsed.source });
-      }
+      if (!importsMember(use, parsed, declaration, imp)) continue;
+      const alreadyImported = candidates.some((candidate) => sameDefinition(candidate.def, def));
+      if (!alreadyImported) candidates.push({ def, declaration, source: parsed.source });
     }
   }
   return complete ? candidates : null;
@@ -176,8 +177,8 @@ export function withCsharpUsingStatic(
   const selected = selectCandidate(use, candidates);
   if (resolved?.status === "ok") {
     if (selected && sameDefinition(selected, resolved.definition)) return resolved;
-    return { status: "not_found", reason: "Ambiguous name: a namespace member and a using static member" };
+    return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
   }
-  if (!selected) return { status: "not_found", reason: "No unique using static member" };
+  if (!selected) return { status: "not_found", reason: AMBIGUOUS_STAR_IMPORT_REASON };
   return okGoToResult(use.index, selected, { resolution: "import", confidence: "high" });
 }

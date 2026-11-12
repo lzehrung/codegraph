@@ -271,6 +271,7 @@ type CsharpDeclaredNames = {
   size: number;
   /** Importer directory to its project boundary key: the directory its namespace imports scan, `""` for the root. */
   boundaries: Map<string, string>;
+  rootProject: boolean;
   /** Project boundary to the declarations its C# files record. */
   names: Map<string, CsharpProjectDeclarations>;
 };
@@ -278,12 +279,10 @@ type CsharpDeclaredNames = {
 const csharpDeclaredNameCaches = new WeakMap<ProjectIndex, CsharpDeclaredNames>();
 
 /**
- * The names the indexed C# files under `boundaryKey` declare (every indexed C# file when it is empty), from the
- * namespace regions and types each module records. A file with no recorded facts leaves the scan incomplete; the
- * names of the other files still count.
+ * The C# names under a proven project boundary. Only the implicit no-project root retains
+ * every indexed name for shared-source visibility. Missing own-file facts leave the scan incomplete.
  */
-function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string): CsharpProjectDeclarations {
-  const boundaryPrefix = boundaryKey.endsWith("/") ? boundaryKey : `${boundaryKey}/`;
+function aggregateCsharpDeclaredNames(index: ProjectIndex, files?: ReadonlySet<FileId>): CsharpProjectDeclarations {
   const names = new Map<string, CsharpDeclaredNameKind>();
   let complete = true;
   // Declaring `A.B.T` also makes `A` and `A.B` exist, so each prefix is a declared name too.
@@ -297,10 +296,10 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string):
     }
     addName(name, kind);
   };
-  for (const moduleEntry of index.byFile.values()) {
-    if (supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions)?.id !== "csharp") continue;
-    if (boundaryKey && !fileIdentityKey(moduleEntry.file).startsWith(boundaryPrefix)) continue;
-    const facts = moduleEntry.csharpNamespaceFacts;
+  for (const mod of index.byFile.values()) {
+    if (files && !files.has(mod.file)) continue;
+    if (supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id !== "csharp") continue;
+    const facts = mod.csharpNamespaceFacts;
     if (!facts) {
       complete = false;
       continue;
@@ -325,7 +324,11 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex, boundaryKey: string):
 function csharpProjectDeclaredNames(index: ProjectIndex, file: FileId): CsharpProjectDeclarations {
   let cached = csharpDeclaredNameCaches.get(index);
   if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
-    cached = { source: index.byFile, size: index.byFile.size, boundaries: new Map(), names: new Map() };
+    const rootProject =
+      index.csharpProjectUsings?.some(
+        (fact) => fact.file.toLowerCase().endsWith(".csproj") && path.dirname(fact.file) === ".",
+      ) ?? false;
+    cached = { source: index.byFile, size: index.byFile.size, rootProject, boundaries: new Map(), names: new Map() };
     csharpDeclaredNameCaches.set(index, cached);
   }
   const directoryKey = fileIdentityKey(path.dirname(file));
@@ -335,13 +338,13 @@ function csharpProjectDeclaredNames(index: ProjectIndex, file: FileId): CsharpPr
     const projectKey = projectRoot
       ? fileIdentityKey(resolveNearestManifestRootSync(projectRoot, file, CSHARP_PACKAGE_MANIFEST_NAMES))
       : "";
-    // The project root bounds every indexed file, so only a project below it restricts which files count.
-    boundaryKey = projectRoot && projectKey === fileIdentityKey(projectRoot) ? "" : projectKey;
+    const implicitRoot = projectRoot && projectKey === fileIdentityKey(projectRoot) && !cached.rootProject;
+    boundaryKey = implicitRoot ? "" : projectKey;
     cached.boundaries.set(directoryKey, boundaryKey);
   }
   let names = cached.names.get(boundaryKey);
   if (names === undefined) {
-    names = aggregateCsharpDeclaredNames(index, boundaryKey);
+    names = aggregateCsharpDeclaredNames(index, boundaryKey ? csharpProjectPeers(index, file).files : undefined);
     cached.names.set(boundaryKey, names);
   }
   return names;
@@ -731,6 +734,50 @@ function csharpRelatedNamespaceOutside(
   return false;
 }
 
+const csharpProjectPeerCaches = new WeakMap<
+  ProjectIndex,
+  { source: ProjectIndex["byFile"]; size: number; byFile: Map<string, CompilationUnitPeers> }
+>();
+
+/**
+ * Project-wide C# facts use the same nearest-csproj boundary as using-target resolution. Nested
+ * projects are distinct compilations, even when they sit underneath another project's directory.
+ * Compile items, linked files, and several projects sharing one directory are not inferred.
+ */
+function csharpProjectPeers(index: ProjectIndex, file: FileId): CompilationUnitPeers {
+  let cached = csharpProjectPeerCaches.get(index);
+  if (!cached || cached.source !== index.byFile || cached.size !== index.byFile.size) {
+    const projects = new Map<string, { files: Set<FileId>; complete: boolean }>();
+    const manifestRoots = new Map<string, string>();
+    const byFile = new Map<string, CompilationUnitPeers>();
+    const boundaries = new Map<string, string>();
+    for (const mod of index.byFile.values()) {
+      if (supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id !== "csharp") continue;
+      const directory = fileIdentityKey(path.dirname(mod.file));
+      let boundary = boundaries.get(directory);
+      if (boundary === undefined) {
+        boundary = fileIdentityKey(
+          resolveNearestManifestRootSync(
+            index.projectRoot ?? path.dirname(file),
+            mod.file,
+            CSHARP_PACKAGE_MANIFEST_NAMES,
+            manifestRoots,
+          ),
+        );
+        boundaries.set(directory, boundary);
+      }
+      let project = projects.get(boundary);
+      if (!project) projects.set(boundary, (project = { files: new Set(), complete: true }));
+      project.files.add(mod.file);
+      if (!mod.csharpNamespaceFacts) project.complete = false;
+      byFile.set(fileIdentityKey(mod.file), project);
+    }
+    cached = { source: index.byFile, size: index.byFile.size, byFile };
+    csharpProjectPeerCaches.set(index, cached);
+  }
+  return cached.byFile.get(fileIdentityKey(file)) ?? { files: new Set([file]), complete: false };
+}
+
 /**
  * Every indexed file that shares a proven compilation unit with `file`, including `file`
  * itself. `complete` is `false` when the unit boundary cannot be proven: the identity is
@@ -743,12 +790,15 @@ function csharpRelatedNamespaceOutside(
  * same-directory files whose namespaces are not related for bare names are still searched.
  * Qualified names can also cross otherwise unrelated namespaces outside the directory,
  * so those files leave the qualified candidate set incomplete. Other languages ignore the flag.
+ * `csharpProject` instead returns every indexed C# file within the same nearest-project boundary,
+ * regardless of namespace or directory, for compilation-wide global usings and declaration facts.
  */
 export function getCompilationUnitPeers(
   index: ProjectIndex,
   file: FileId,
-  options?: { csharpQualifiedName?: boolean },
+  options?: { csharpQualifiedName?: boolean; csharpProject?: boolean },
 ): CompilationUnitPeers {
+  if (options?.csharpProject) return csharpProjectPeers(index, file);
   const cached = cachedUnitFactIndexFor(index);
   const fileKey = fileIdentityKey(file);
   const cacheKey = options?.csharpQualifiedName ? `${fileKey}::qualified` : fileKey;

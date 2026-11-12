@@ -1,3 +1,7 @@
+import {
+  expectCsharpGlobalUsingReferences,
+  withCsharpGlobalUsingFixture,
+} from "./helpers/csharp-global-using-fixture.js";
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
@@ -9448,5 +9452,11 @@ describe("qualified reopening and dotted import references", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+it("finds C# global-using references without counting nearer declarations or other projects", async () => {
+  await withCsharpGlobalUsingFixture(async ({ root, files }) => {
+    await expectCsharpGlobalUsingReferences(await buildProjectIndex(root, { cache: "off" }), files);
   });
 });

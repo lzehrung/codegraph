@@ -15,6 +15,7 @@ import { buildReferenceCandidateIndex } from "./reference-candidates.js";
 import { cacheRoot } from "./build-cache/location.js";
 import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex, ProjectIndexManifestEntry } from "./types.js";
 
+import { readCsharpProjectUsingFacts } from "../util/csharp-project-usings.js";
 export async function finalizeProjectIndex(args: {
   projectRoot: string;
   normalizedProjectRoot: string;
@@ -51,6 +52,11 @@ export async function finalizeProjectIndex(args: {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);
   const parsed = retainedParsedCache(args.parsedMap, args.opts);
+  const csharpProjectUsings = await readCsharpProjectUsingFacts(
+    args.projectRoot,
+    [...args.modules.values()].map((mod) => mod.file),
+    languageExtensions,
+  );
   return {
     projectRoot: args.normalizedProjectRoot,
     graph: args.graph,
@@ -63,6 +69,7 @@ export async function finalizeProjectIndex(args: {
     ...(parsed ? { parsed } : {}),
     ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
     projectFiles,
+    ...(csharpProjectUsings.length ? { csharpProjectUsings } : {}),
     referenceCandidates: buildReferenceCandidateIndex(args.modules),
     ...(args.manifestEntries ? { manifestEntries: args.manifestEntries } : {}),
     ...(args.manifestEntries ? { manifestSignaturesFresh: true } : {}),

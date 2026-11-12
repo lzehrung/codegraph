@@ -184,6 +184,76 @@ describe("reference candidate selection", () => {
     expect(submoduleHelper).not.toContain("use_deep.py");
   });
 
+  it.each([false, true])(
+    "enumerates compilation globals for nested consumers but not another project (csproj: %s)",
+    async (hasProject) => {
+      const declarations = {
+        "types/Widget.cs": "namespace Lib;\npublic class Widget {}",
+        "types/Aliased.cs": "namespace Models;\npublic class Aliased {}",
+        "types/Tools.cs": "namespace Helpers;\npublic static class Tools { public static void Run() {} }",
+      };
+      const body = [
+        "public class Use {",
+        "  public Widget field;",
+        "  public Alias alias;",
+        "  public void Call() => Run();",
+        "}",
+      ];
+      const foreignDeclarations = Object.fromEntries(
+        Object.entries(declarations).map(([file, source]) => [`Foreign/${file}`, source]),
+      );
+      const root = await writeProject({
+        ...declarations,
+        ...foreignDeclarations,
+        ...(hasProject ? { "App.csproj": "<Project />" } : {}),
+        "Usings.cs": [
+          "global using Lib;",
+          "global using Alias = Models.Aliased;",
+          "global using static Helpers.Tools;",
+        ].join("\n"),
+        "nested/Use.cs": ["namespace Consumer;", ...body].join("\n"),
+        "Foreign/Foreign.csproj": "<Project />",
+        "Foreign/nested/Use.cs": [
+          "using Lib;",
+          "using Alias = Models.Aliased;",
+          "using static Helpers.Tools;",
+          "namespace ForeignConsumer;",
+          ...body,
+        ].join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      for (const [name, file] of [
+        ["Widget", "types/Widget.cs"],
+        ["Aliased", "types/Aliased.cs"],
+        ["Run", "types/Tools.cs"],
+      ] as const) {
+        const def = definitionOf(index, name, `${root}/${file}`);
+        const exported = exportedNamesOf(index, def);
+        const names = exported.length ? exported : [def.localName];
+        const actual = getCachedReferenceCandidateFiles(coldClone(index), def, names, false, "csharp");
+        expect(actual).toEqual(referenceCandidatesByFullScan(coldClone(index), def, names, "csharp"));
+        const files = actual.map((candidate) => relativeTo(root, candidate));
+        expect(files).toContain("nested/Use.cs");
+        expect(files.some((candidate) => candidate.startsWith("Foreign/"))).toBe(false);
+
+        const refs = await findReferences(index, { def });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error(`Expected global references to ${name}`);
+        const referencedFiles = refs.references.map((ref) => relativeTo(root, ref.file));
+        expect(referencedFiles).toContain("nested/Use.cs");
+        expect(referencedFiles.some((candidate) => candidate.startsWith("Foreign/"))).toBe(false);
+
+        const foreign = definitionOf(index, name, `${root}/Foreign/${file}`);
+        const foreignRefs = await findReferences(index, { def: foreign });
+        expect(foreignRefs.status).toBe("ok");
+        if (foreignRefs.status !== "ok") throw new Error(`Expected foreign references to ${name}`);
+        const foreignFiles = foreignRefs.references.map((ref) => relativeTo(root, ref.file));
+        expect(foreignFiles).toContain("Foreign/nested/Use.cs");
+        expect(foreignFiles).not.toContain("nested/Use.cs");
+      }
+    },
+  );
+
   it("lists exactly what a scan of every module lists, for every definition of the sample and edge projects", async () => {
     const testsDirectory = path.resolve(process.cwd(), "tests");
     const projectRoots: string[] = [];

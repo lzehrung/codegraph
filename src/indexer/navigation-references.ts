@@ -1,3 +1,4 @@
+import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -45,6 +46,7 @@ import {
   referenceModuleTable,
   reverseReachableModules,
   type FlaggedModule,
+  csharpGlobalUsingImporters,
 } from "./reference-query-index.js";
 import type { Binding, ScopeIndex } from "./scope.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
@@ -108,7 +110,8 @@ function importClosure(index: ProjectIndex, file: FileId): ReadonlySet<string> {
   const startModule = index.byFile.get(startKey);
   const pending: ModuleIndex[] = startModule ? [startModule] : [];
   while (pending.length) {
-    for (const imp of pending.pop()!.imports) {
+    const mod = withCsharpGlobalUsings(index, pending.pop()!);
+    for (const imp of mod.imports) {
       if (typeof imp.resolved !== "string") continue;
       const key = fileIdentityKey(imp.resolved);
       if (reached.has(key)) continue;
@@ -1364,6 +1367,12 @@ export function getCachedReferenceCandidateFiles(
       candidates.set(fileIdentityKey(unitPeer), unitPeer);
     }
   }
+  if (languageId === "csharp") {
+    for (const importer of csharpGlobalUsingImporters(index, def)) {
+      if (fileIdentityKey(importer.file) !== definitionKey)
+        candidates.set(fileIdentityKey(importer.file), importer.file);
+    }
+  }
   const reach = reverseReachableModules(index, [def.file], { danglingNames: exportedNames });
   const exportingFileIds = filesExportingDefinition(index, def, exportedNames, languageId, reach.modules);
   const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));
@@ -1811,8 +1820,9 @@ export function buildIndexedCandidateCoverage(args: {
 
   const unresolvedFiles: FileId[] = [];
   for (const fileId of candidateFiles) {
-    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
-    if (!moduleIndex) continue;
+    const indexedModule = index.byFile.get(fileIdentityKey(fileId));
+    if (!indexedModule) continue;
+    const moduleIndex = withCsharpGlobalUsings(index, indexedModule);
     if (moduleIndex.imports.some((imp) => isUnresolvedIndexedImport(index, imp, def, exportedNames, languageId))) {
       unresolvedFiles.push(fileId);
     }

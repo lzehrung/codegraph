@@ -1,3 +1,4 @@
+import { withCsharpGlobalUsings } from "../indexer/csharp-global-usings.js";
 import {
   moduleAliasIsUnshadowed,
   nameResolutionPreloadFiles,
@@ -397,7 +398,8 @@ export async function buildSymbolGraphDetailed(
   };
 
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
-  for (const moduleEntry of index.byFile.values()) {
+  for (const indexedModule of index.byFile.values()) {
+    const moduleEntry = withCsharpGlobalUsings(index, indexedModule);
     const file = moduleEntry.file;
     if (optionFileKeys && !optionFileKeys.has(fileIdentityKey(file))) continue;
     assertQuerySourceForIndex(index, file);
@@ -621,7 +623,7 @@ export async function buildSymbolGraphDetailed(
             const imported = aliasToTargetDef.get(aliasKey(name));
             if (imported && defNodeId(imported) !== defNodeId(root.definition)) return false;
           }
-          return csharpAliasTableAnswers(moduleEntry, name, node) && unshadowedModuleAlias(name, node);
+          return csharpAliasTableAnswers(index, moduleEntry, name, node) && unshadowedModuleAlias(name, node);
         }
         if (sup.id !== "kotlin") return true;
         const target = aliasToTargetDef.get(aliasKey(name));

@@ -1349,7 +1349,7 @@ export async function emitFunctionBodyEdges(
 
     const classifyImport = (name: string, node: SyntaxNodeLike): "module-import" | "static-type" | null => {
       if (context.sup.id === "csharp") {
-        const alias = csharpAliasAt(context.moduleEntry, name, node);
+        const alias = csharpAliasAt(context.index, context.moduleEntry, name, node);
         if (alias?.kind === "named" && context.moduleAliasIsUnshadowed(name, node)) {
           const target = context.resolveIdentifier(name, node);
           if (target && declaresMembers(target)) return "static-type";

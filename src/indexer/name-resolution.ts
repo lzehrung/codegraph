@@ -8,6 +8,7 @@
  * steps. Navigation settles immediately; the graph settles after its body walk.
  */
 
+import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 
@@ -175,6 +176,8 @@ export function resolveBareName(
   jvmTypeOnly = false,
   skipKotlinQualifiedExpression = false,
 ): NameResolution | null {
+  const effectiveModule = withCsharpGlobalUsings(use.index, use.mod);
+  if (effectiveModule !== use.mod) use = { ...use, mod: effectiveModule };
   const { index, mod, file, parsed, scopeIndex, node } = use;
   const { sup, source, tree } = parsed;
   if (sup.id === "java" || sup.id === "kotlin") {
@@ -281,7 +284,7 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   const lookup = await csharpAliasMemberLookup(index, mod, node, lookupName);
   if (lookup.status === "none") return undefined;
   if (lookup.status === "unproven") {
-    if (!csharpAliasAt(mod, lookupName, node)) return undefined;
+    if (!csharpAliasAt(index, mod, lookupName, node)) return undefined;
     return { status: "not_found", reason: UNPROVEN_CSHARP_ALIAS_MEMBER_REASON };
   }
   if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON };

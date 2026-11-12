@@ -1,3 +1,4 @@
+import { csharpImportsForName, withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import type { LanguageSupport } from "../languages.js";
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -200,6 +201,7 @@ export function getOrBuildScopeIndex(
   mod: ModuleIndex,
   tree: SyntaxTreeLike,
 ): ScopeIndex {
+  mod = withCsharpGlobalUsings(index, mod);
   let scopeIndex = cachedScopeIndexForIndex(index, file);
   if (scopeIndex) return scopeIndex;
   const shared = cachedParsedContextForIndexSync(index, file);
@@ -536,6 +538,7 @@ export function resolveNamedDefinition(
   callSite?: { node: SyntaxNodeLike; source: string; typeOnly?: boolean },
   scopeIndex?: ScopeIndex,
 ): GoToResult | null {
+  mod = withCsharpGlobalUsings(index, mod);
   const callArgumentCount = callSite
     ? explicitCallArgumentCount(support.id, callSite.source, callSite.node)
     : undefined;
@@ -556,6 +559,8 @@ export function resolveNamedDefinition(
     ...(kotlinTypeUse ? { typeOnly: true } : {}),
   };
   const normalizedName = support.normalizeIdentifier(name);
+  const lookupImports =
+    support.id === "csharp" ? csharpImportsForName(mod, normalizedName, arityOptions.csharpGenericArity) : mod.imports;
   const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
   const directExport =
     requiresExplicitReceiver && support.id !== "c"
@@ -614,7 +619,7 @@ export function resolveNamedDefinition(
     }
   }
   const effectiveBinding = effectiveExplicitOrLocalBinding(
-    mod.imports,
+    lookupImports,
     support.id,
     matchesExplicitBinding,
     pendingOwnFunction ? undefined : localDefinition?.range.start.index,
@@ -675,7 +680,7 @@ export function resolveNamedDefinition(
     return result;
   };
 
-  for (const imp of mod.imports) {
+  for (const imp of lookupImports) {
     // Star expansion republishes the same names. Judging those copies as explicit
     // imports would hide a second star import behind the first expanded binding.
     if (isExpandedStarBinding(imp, mod.imports)) continue;

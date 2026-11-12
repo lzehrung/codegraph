@@ -1,3 +1,9 @@
+import {
+  expectCsharpGlobalUsingGraph,
+  expectCsharpGlobalUsingNavigation,
+  expectCsharpGlobalUsingReferences,
+  withCsharpGlobalUsingFixture,
+} from "./helpers/csharp-global-using-fixture.js";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -4731,4 +4737,13 @@ nativeDescribe("Type-parameter receiver native parity", () => {
       await expectTypeParameterReceiverRow(row, "off");
     },
   );
+});
+
+it("shares native C# global-using answers across navigation, references, and detailed edges", async () => {
+  await withCsharpGlobalUsingFixture(async ({ root, files }) => {
+    const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: true, nativeThreads: 1 });
+    await expectCsharpGlobalUsingNavigation(index, files);
+    await expectCsharpGlobalUsingReferences(index, files);
+    await expectCsharpGlobalUsingGraph(index, files);
+  });
 });

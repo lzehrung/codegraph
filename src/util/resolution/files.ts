@@ -19,6 +19,65 @@ export const PHP_PACKAGE_MANIFEST_NAMES = ["composer.json"] as const;
 
 export const PYTHON_PACKAGE_MANIFEST_NAMES = ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"] as const;
 
+/** Directory listings shared by source and manifest discovery within one build. */
+export type ManifestDirectoryListings = Map<string, Promise<Dirent[]>>;
+
+type ManifestSearchScope = {
+  root: string;
+  rootKey: string;
+  prefix: string;
+  directoryKeys: Map<string, string>;
+  containedDirectories: Map<string, boolean>;
+};
+const manifestSearchScopes = new WeakMap<Map<string, string | null>, Map<string, ManifestSearchScope>>();
+
+function manifestSearchScope(
+  stopDir: string,
+  names: readonly string[],
+  cache?: Map<string, string | null>,
+): ManifestSearchScope | undefined {
+  if (!cache) return undefined;
+  let scopes = manifestSearchScopes.get(cache);
+  if (!scopes) {
+    scopes = new Map();
+    manifestSearchScopes.set(cache, scopes);
+  }
+  const root = path.resolve(stopDir);
+  const key = `${root}\0${names.join("\0")}`;
+  let scope = scopes.get(key);
+  if (!scope) {
+    const rootKey = fileIdentityKey(root);
+    scope = {
+      root,
+      rootKey,
+      prefix: `${rootKey}\0${names.join("\0")}\0`,
+      directoryKeys: new Map([[root, rootKey]]),
+      containedDirectories: new Map([[root, true]]),
+    };
+    scopes.set(key, scope);
+  }
+  return scope;
+}
+
+function manifestDirectoryKey(directory: string, scope: ManifestSearchScope): string {
+  let key = scope.directoryKeys.get(directory);
+  if (key === undefined) {
+    key = fileIdentityKey(directory);
+    scope.directoryKeys.set(directory, key);
+  }
+  return key;
+}
+
+function manifestDirectoryWithinRoot(directory: string, scope: ManifestSearchScope): boolean {
+  let withinRoot = scope.containedDirectories.get(directory);
+  if (withinRoot === undefined) {
+    withinRoot =
+      isFilePathWithinRoot(scope.root, directory) || manifestDirectoryKey(directory, scope) === scope.rootKey;
+    scope.containedDirectories.set(directory, withinRoot);
+  }
+  return withinRoot;
+}
+
 function isExtensionManifestPattern(name: string): boolean {
   return name.startsWith("*.") && !name.includes("/") && !name.includes("\\");
 }
@@ -38,10 +97,20 @@ async function direntIsManifestFile(entry: Dirent, fullPath: string): Promise<bo
   }
 }
 
-async function findExtensionManifestInDir(dir: string, suffix: string): Promise<string | null> {
-  let entries: Dirent[];
+async function findExtensionManifestInDir(
+  dir: string,
+  suffix: string,
+  directoryListings?: ManifestDirectoryListings,
+): Promise<string | null> {
+  let entries: readonly Dirent[];
   try {
-    entries = await fsp.readdir(dir, { withFileTypes: true });
+    const key = fileIdentityKey(dir);
+    let listing = directoryListings?.get(key);
+    if (!listing) {
+      listing = fsp.readdir(dir, { withFileTypes: true });
+      directoryListings?.set(key, listing);
+    }
+    entries = await listing;
   } catch {
     return null;
   }
@@ -83,16 +152,21 @@ export async function findNearestFile(startDir: string, stopDir: string, fileNam
  * The directories from `startDir` up to `stopDir`, nearest first. The walk ends at `stopDir`, at the file
  * system root, or where the next parent would leave `stopDir`. The async and sync manifest lookups share it.
  */
-function* ancestorDirectories(startDir: string, stopDir: string): Generator<string> {
+function* ancestorDirectories(startDir: string, stopDir: string, scope?: ManifestSearchScope): Generator<string> {
   let dir = path.resolve(startDir);
-  const stop = path.resolve(stopDir);
-  const stopKey = fileIdentityKey(stop);
+  const stop = scope?.root ?? path.resolve(stopDir);
+  const stopKey = scope?.rootKey ?? fileIdentityKey(stop);
   while (true) {
     yield dir;
-    if (dir === stop || fileIdentityKey(dir) === stopKey) return;
+    if (dir === stop) return;
+    const key = scope ? manifestDirectoryKey(dir, scope) : fileIdentityKey(dir);
+    if (key === stopKey) return;
     const parent = path.dirname(dir);
     if (parent === dir) return;
-    if (!isFilePathWithinRoot(stop, parent) && fileIdentityKey(parent) !== stopKey) return;
+    const withinRoot = scope
+      ? manifestDirectoryWithinRoot(parent, scope)
+      : isFilePathWithinRoot(stop, parent) || fileIdentityKey(parent) === stopKey;
+    if (!withinRoot) return;
     dir = parent;
   }
 }
@@ -101,20 +175,34 @@ export async function findNearestManifest(
   startDir: string,
   stopDir: string,
   names: readonly string[],
+  cache?: Map<string, string | null>,
+  directoryListings?: ManifestDirectoryListings,
 ): Promise<string | null> {
-  for (const dir of ancestorDirectories(startDir, stopDir)) {
+  const scope = manifestSearchScope(stopDir, names, cache);
+  const prefix = scope?.prefix ?? "";
+  const checked: string[] = [];
+  const remember = (result: string | null): string | null => {
+    if (cache) for (const key of checked) cache.set(key, result);
+    return result;
+  };
+  for (const dir of ancestorDirectories(startDir, stopDir, scope)) {
+    if (cache) {
+      const key = prefix + (scope ? manifestDirectoryKey(dir, scope) : fileIdentityKey(dir));
+      const previous = cache.get(key);
+      if (previous !== undefined) return remember(previous);
+      checked.push(key);
+    }
     for (const name of names) {
       if (isExtensionManifestPattern(name)) {
-        const suffix = name.slice(1).toLowerCase();
-        const hit = await findExtensionManifestInDir(dir, suffix);
-        if (hit) return hit;
+        const hit = await findExtensionManifestInDir(dir, name.slice(1).toLowerCase(), directoryListings);
+        if (hit) return remember(hit);
         continue;
       }
       const candidate = path.join(dir, name);
-      if (await fileExists(candidate)) return candidate;
+      if (await fileExists(candidate)) return remember(candidate);
     }
   }
-  return null;
+  return remember(null);
 }
 
 /**
@@ -172,13 +260,26 @@ export function resolveNearestManifestRootSync(
   projectRoot: string,
   fromFile: string,
   names: readonly string[],
+  cache?: Map<string, string>,
 ): string {
   const { root, startDir } = manifestSearchStart(projectRoot, fromFile);
   if (!startDir) return root;
+  const prefix = cache ? `${fileIdentityKey(root)}\0${names.join("\0")}\0` : "";
+  const checked: string[] = [];
+  const remember = (result: string): string => {
+    if (cache) for (const key of checked) cache.set(key, result);
+    return result;
+  };
   for (const dir of ancestorDirectories(startDir, root)) {
-    if (names.some((name) => directoryHasManifestSync(dir, name))) return dir;
+    if (cache) {
+      const key = prefix + fileIdentityKey(dir);
+      const previous = cache.get(key);
+      if (previous !== undefined) return remember(previous);
+      checked.push(key);
+    }
+    if (names.some((name) => directoryHasManifestSync(dir, name))) return remember(dir);
   }
-  return root;
+  return remember(root);
 }
 
 export async function isDirectory(p: string): Promise<boolean> {

@@ -1,11 +1,17 @@
+import {
+  withCsharpGlobalUsings,
+  csharpGlobalUsingSource,
+  csharpProjectUsingNamespaceFiles,
+  csharpImportNamespace,
+} from "./csharp-global-usings.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import { IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
-import { csharpNamespaceImportDirectories } from "./navigation-resolve.js";
+import { csharpNamespaceAt, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
+import { csharpNamespaceImportDirectories, resolveImported } from "./navigation-resolve.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
-import type { ExportEntry, ModuleIndex, ProjectIndex } from "./types.js";
+import type { ExportEntry, ImportBinding, ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
 
 /**
  * Query-time reverse indexes for reference lookups.
@@ -293,15 +299,57 @@ export function localExportsNamed(index: ProjectIndex, exportedAs: string): read
 export const csharpNamespaceImporters = perIndexCache((index): ReadonlyMap<string, readonly ModuleIndex[]> => {
   const targets = csharpNamespaceImportDirectories(index);
   const byDirectory = new Map<string, ModuleIndex[]>();
-  for (const module of index.byFile.values()) {
+  for (const indexedModule of index.byFile.values()) {
+    const module = withCsharpGlobalUsings(index, indexedModule);
     for (const imp of module.imports) {
-      for (const target of targets.get(imp) ?? []) {
+      if (imp.csharpGlobal && typeof imp.resolved === "string") {
+        const directory = fileIdentityKey(path.posix.dirname(normalizePath(imp.resolved)));
+        pushDistinct(byDirectory, directory, module);
+      }
+      for (const target of csharpProjectUsingNamespaceFiles(imp) ?? targets.get(csharpGlobalUsingSource(imp)) ?? []) {
         pushDistinct(byDirectory, fileIdentityKey(path.posix.dirname(normalizePath(target))), module);
       }
     }
   }
   return byDirectory;
 });
+
+/** Per-definition reach proof for one compilation-global import, independent of candidate enumeration. */
+export function csharpGlobalUsingReferenceMatcher(
+  index: ProjectIndex,
+  def: SymbolDef,
+): ((binding: ImportBinding) => boolean) | undefined {
+  const start = def.range.start.index;
+  if (start === undefined) return undefined;
+  const namespace = csharpNamespaceAt(index, def.file, start);
+  if (namespace === null) return undefined;
+  const definitionFile = fileIdentityKey(def.file);
+  return (binding: ImportBinding): boolean => {
+    if (!binding.csharpGlobal || typeof binding.resolved !== "string") return false;
+    if (binding.kind === "named") {
+      const target = resolveImported(index, binding, binding.imported);
+      if (!target || "namespace" in target) return false;
+      if (fileIdentityKey(target.file) !== definitionFile) return false;
+      return target.range.start.index === start;
+    }
+    if (binding.kind === "star" && binding.staticMembersOf) {
+      return !!def.isMember && fileIdentityKey(binding.resolved) === definitionFile;
+    }
+    const imported = csharpImportNamespace(binding);
+    if (binding.kind === "namespace") return namespace === imported || namespace.startsWith(`${imported}.`);
+    return binding.kind === "star" && namespace === imported;
+  };
+}
+
+/** Global imports that can name this declaration, not every file that merely has a global System using. */
+export function csharpGlobalUsingImporters(index: ProjectIndex, def: SymbolDef): readonly ModuleIndex[] {
+  const importsDefinition = csharpGlobalUsingReferenceMatcher(index, def);
+  if (!importsDefinition) return [];
+  const directory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
+  return (csharpNamespaceImporters(index).get(directory) ?? []).filter((module) =>
+    module.imports.some(importsDefinition),
+  );
+}
 
 export type FlaggedModule = {
   readonly file: FileId;

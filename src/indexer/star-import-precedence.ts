@@ -118,7 +118,7 @@ export function effectiveExplicitBinding(
   const candidates = starImportPrecedence(languageId) === "last-wins" ? [...imports].reverse() : imports;
   return candidates.find((binding) => {
     if (isExpandedStarBinding(binding, imports) || !matches(binding)) return false;
-    if (referenceIndex === undefined) return true;
+    if (referenceIndex === undefined || binding.csharpGlobal) return true;
     const startIndex = explicitBindingStartIndex(binding);
     return startIndex !== undefined && startIndex <= referenceIndex;
   });

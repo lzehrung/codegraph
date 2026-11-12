@@ -13,6 +13,8 @@ import {
 import { hasNamespaceReexport, resolveExport } from "../../src/indexer/navigation-resolve.js";
 import { candidateFilesImportingTarget } from "../../src/indexer/reference-candidates.js";
 import { sameDef } from "../../src/indexer/reference-context.js";
+import { withCsharpGlobalUsings } from "../../src/indexer/csharp-global-usings.js";
+import { csharpGlobalUsingReferenceMatcher } from "../../src/indexer/reference-query-index.js";
 import type { ProjectIndex, SymbolDef } from "../../src/indexer/types.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../../src/util/bloom-filter.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
@@ -99,6 +101,17 @@ export function referenceCandidatesByFullScan(
     languageId === "csharp" ? { csharpQualifiedName: true } : undefined,
   ).files) {
     if (fileIdentityKey(unitPeer) !== definitionKey) candidates.set(fileIdentityKey(unitPeer), unitPeer);
+  }
+  // Compilation globals can reach types and qualified member uses without a file-local import edge.
+  const globalUsingMatches = languageId === "csharp" ? csharpGlobalUsingReferenceMatcher(index, def) : undefined;
+  if (globalUsingMatches) {
+    for (const indexedModule of index.byFile.values()) {
+      if (fileIdentityKey(indexedModule.file) === definitionKey) continue;
+      const moduleIndex = withCsharpGlobalUsings(index, indexedModule);
+      if (moduleIndex.imports.some(globalUsingMatches)) {
+        candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
+      }
+    }
   }
   const exportingFileIds = exportingFilesByFullScan(index, def, exportedNames, languageId);
   const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));

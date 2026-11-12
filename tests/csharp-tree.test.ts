@@ -1,3 +1,7 @@
+import {
+  collectCsharpProjectUsings,
+  csharpProjectConfigurationWithoutUsings,
+} from "../src/util/csharp-project-usings.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
@@ -742,6 +746,7 @@ describe("C# namespace resolution failures and parser reporting", () => {
   it.each([
     ["an alias of a type", "using B = N.Box;\nclass Main { B value; }\n"],
     ["a static using of a type", "using static N.Box;\nclass Main {}\n"],
+    ["a global static using of a type", "global using static N.Box;\nclass Main {}\n"],
   ])(
     "marks the imports incomplete when a candidate file cannot be read while resolving %s, and resolves it once the file reads",
     async (_form, source) => {
@@ -799,13 +804,8 @@ describe("C# namespace resolution failures and parser reporting", () => {
       setNativeTreeParseFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# lookup parse failure");
 
       // A plain using binds to any file that declares the namespace, so one unreadable file leaves it as proven as before.
-      // An alias of a type outside the project, and a global static using, need no unique project type either.
-      for (const directive of [
-        "using N;",
-        "using System.Text;",
-        "using Json = System.Text.Json.JsonSerializer;",
-        "global using static N.Box;",
-      ]) {
+      // An alias of a type outside the project needs no unique project type either.
+      for (const directive of ["using N;", "using System.Text;", "using Json = System.Text.Json.JsonSerializer;"]) {
         const onDegraded = vi.fn();
         await collectImportsForFile(main, root, {
           source: `${directive}\nclass Main {}\n`,
@@ -1668,4 +1668,154 @@ describe("C# lowercase alias call syntax", () => {
       }
     },
   );
+});
+
+it("reads literal project Using items from syntax nodes without comments, conditions, or MSBuild expansion", () => {
+  const source = `<Project>
+    <!-- <Using Include="Comment.Decoy" /> -->
+    <PropertyGroup><Using Include="Property.Decoy" /></PropertyGroup>
+    <ItemGroup>
+      <Using Include="Lib.Rendering" />
+      <Using Include="Lib.Tools" Static="true" />
+      <Using Include="Lib.Target" Alias="A" />
+      <Using Include="Conditional.Decoy" Condition="false" />
+      <Using Include="$(Dynamic).Decoy" />
+    </ItemGroup>
+    <ItemGroup Condition="false"><Using Include="Group.Decoy" /></ItemGroup>
+    <Choose><When Condition="false"><ItemGroup><Using Include="Choose.Decoy" /></ItemGroup></When></Choose>
+  </Project>`;
+  expect(collectCsharpProjectUsings(source)).toEqual([
+    { from: "Lib.Rendering", isStatic: false },
+    { from: "Lib.Tools", isStatic: true },
+    { from: "Lib.Target", alias: "A", isStatic: false },
+  ]);
+});
+
+it("decodes XML entities and splits Include and Remove item identities", () => {
+  const source = `<Project><ItemGroup>
+    <Using Include="NsA; Ns&#x42;;Ns&#67;" />
+    <Using Include="System.ReadOnlySpan&lt;char&gt;" Alias="Span" />
+    <Using Include="A&amp;B&quot;C&apos;D" />
+    <Using Remove="NsA;NsB" />
+  </ItemGroup></Project>`;
+  expect(collectCsharpProjectUsings(source)).toEqual([
+    { from: "NsA", isStatic: false },
+    { from: "NsB", isStatic: false },
+    { from: "NsC", isStatic: false },
+    { from: "System.ReadOnlySpan<char>", alias: "Span", isStatic: false },
+    { from: "A&B\"C'D", isStatic: false },
+    { from: "NsA", isStatic: false, remove: true },
+    { from: "NsB", isStatic: false, remove: true },
+  ]);
+});
+
+it("excludes query-time Using items from project configuration without ignoring other settings", () => {
+  const project =
+    '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Package" Version="1.0"/></ItemGroup></Project>';
+  const usings = project.replace("</Project>", '<ItemGroup><Using Include="One"/></ItemGroup></Project>');
+  const edited = usings.replace('Include="One"', 'Include="Two" Alias="T"');
+  expect(csharpProjectConfigurationWithoutUsings(usings)).toBe(csharpProjectConfigurationWithoutUsings(project));
+  expect(csharpProjectConfigurationWithoutUsings(edited)).toBe(csharpProjectConfigurationWithoutUsings(project));
+  expect(csharpProjectConfigurationWithoutUsings(project.replace('Version="1.0"', 'Version="2.0"'))).not.toBe(
+    csharpProjectConfigurationWithoutUsings(project),
+  );
+  expect(
+    csharpProjectConfigurationWithoutUsings('<Project><ItemGroup><Using Include="One"/></ItemGroup></Project>'),
+  ).toBeUndefined();
+  expect(csharpProjectConfigurationWithoutUsings("<Project/>")).toBeUndefined();
+});
+
+it.each(['<?xml version="1.0"?>', '\uFEFF<?xml version="1.0" encoding="utf-8"?>', "\uFEFF"])(
+  "normalizes Using-only XML declarations and BOMs (%s)",
+  (preamble) => {
+    const project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><Version>1</Version></PropertyGroup></Project>';
+    const withUsing = project.replace("</Project>", '<ItemGroup><Using Include="One"/></ItemGroup></Project>');
+    const expected = csharpProjectConfigurationWithoutUsings(project);
+    expect(expected).toBeDefined();
+    expect(csharpProjectConfigurationWithoutUsings(preamble + withUsing)).toBe(expected);
+    expect(csharpProjectConfigurationWithoutUsings(preamble + withUsing)).not.toBe(preamble + withUsing);
+    expect(
+      csharpProjectConfigurationWithoutUsings(
+        preamble + '<Project><ItemGroup><Using Include="One"/></ItemGroup></Project>',
+      ),
+    ).toBeUndefined();
+    expect(collectCsharpProjectUsings(preamble + withUsing)).toEqual([{ from: "One", isStatic: false }]);
+  },
+);
+
+it("reads literal child Alias and Static metadata without inventing namespace imports", () => {
+  expect(
+    collectCsharpProjectUsings(`<Project><ItemGroup>
+      <Using Include="Lib.Widget"><Alias>A</Alias></Using>
+      <Using Include="Lib.Tools"><Static>true</Static></Using>
+      <Using Include="Lib.Widget" Alias="Old"><Alias>New</Alias></Using>
+      <Using Include="Conditional"><Alias Condition="false">A</Alias></Using>
+      <Using Include="Expanded"><Static>$(Flag)</Static></Using>
+      <Using Include="Unknown"><Other>metadata</Other></Using>
+    </ItemGroup></Project>`),
+  ).toEqual([
+    { from: "Lib.Widget", alias: "A", isStatic: false },
+    { from: "Lib.Tools", isStatic: true },
+    { from: "Lib.Widget", alias: "New", isStatic: false },
+  ]);
+});
+
+it("keeps ordinary XML shapes, invalid entities, and unsupported build forms distinct", () => {
+  expect(
+    collectCsharpProjectUsings(`<Project><ItemGroup Label="Imports">
+      <Using Include='A.B' Alias='X'></Using>
+      <Using Include="
+        C.D
+      " Static="True"/>
+      <Using Include="Bad&#0;Name;Bad&#xD800;Name"/>
+      <Using Include="Lib.Widget" Alias="Bad&#0;Alias"/>
+      <Using Include="Lib.Widget"><Alias>Bad&#xD800;Alias</Alias></Using>
+      <Using Include="Conditional" Condition="false"/>
+      <Using Include="@(Names)"/>
+    </ItemGroup>
+    <Target Name="Build"><ItemGroup><Using Include="Target.Decoy"/></ItemGroup></Target>
+    <Choose><When Condition="true"><ItemGroup><Using Include="Choose.Decoy"/></ItemGroup></When></Choose>
+    </Project>`),
+  ).toEqual([
+    { from: "A.B", alias: "X", isStatic: false },
+    { from: "C.D", isStatic: true },
+  ]);
+});
+
+it("keeps incomplete project XML as configuration instead of hiding its error", () => {
+  const malformed = '<Project><ItemGroup><Using Include="One"/><Broken';
+  expect(csharpProjectConfigurationWithoutUsings(malformed)).toBe(malformed);
+});
+
+it("keeps type and static global aliases unproven beside missing file facts", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-incomplete-"));
+  try {
+    setNativeIndexingFailureFor("CSHARP_LOOKUP_DEGRADED", "forced C# global facts failure");
+    const use = "public class Use { public A a; public Gadget g; public int F() => Run(); }";
+    const files = await writeFixtureFiles(root, {
+      "App.csproj": "<Project/>",
+      "Usings.cs": "global using A = Lib.Widget;\nglobal using static Lib.Tools;\nglobal using Lib;",
+      "Lib.cs":
+        "namespace Lib;\npublic class Widget {}\npublic class Gadget {}\npublic static class Tools { public static int Run() => 1; }",
+      "Unparsed.cs": "// CSHARP_LOOKUP_DEGRADED\nnamespace Elsewhere; public class Other {}",
+      "Use.cs": use,
+    });
+    const index = await buildProjectIndex(root, { cache: "off", useNativeWorkers: false });
+    for (const token of ["A a", "Run"]) {
+      expect(
+        (await goToDefinition(index, { file: files["Use.cs"]!, line: 1, column: use.indexOf(token) + 1 })).status,
+      ).toBe("not_found");
+    }
+    const gadget = await goToDefinition(index, { file: files["Use.cs"]!, line: 1, column: use.indexOf("Gadget") + 1 });
+    expect(gadget.status).toBe("ok");
+    if (gadget.status !== "ok") throw new Error("Expected the known namespace-imported type");
+    expect(gadget.definition.file).toBe(files["Lib.cs"]);
+    const references = await findReferences(index, { file: files["Lib.cs"]!, line: 3, column: 14 });
+    expect(references.status).toBe("ok");
+    if (references.status !== "ok") throw new Error("Expected incomplete global reference coverage");
+    expect(references.referenceCoverage.state).toBe("partial");
+    expect(references.references.some((ref) => ref.file === files["Use.cs"])).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

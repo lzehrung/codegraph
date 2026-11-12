@@ -2498,3 +2498,68 @@ describe("Java interface inheritance", () => {
   });
 });
 describeTypeParameterReceiverRows("java", "Java type parameter beside a same-named class");
+
+describe("Java record member identity", () => {
+  it("keeps record methods as members for goto, references, and graph calls", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-record-members-"));
+    try {
+      const record = [
+        "package p;",
+        "public record Rec(int value) {",
+        "  public static int Build() { return 1; }",
+        "  public int Read() { return value; }",
+        "}",
+      ];
+      const use = [
+        "import p.Rec;",
+        "public class Use {",
+        "  public int Call() { return Rec.Build(); }",
+        "  public int Wrong() { return Build(); }",
+        "}",
+      ];
+      const files = await writeFixtureFiles(root, { "Rec.java": record.join("\n"), "Use.java": use.join("\n") });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect(
+        index.byFile
+          .get(fileIdentityKey(files["Rec.java"]!))!
+          .locals.find((definition) => definition.localName === "value")?.isMember,
+      ).toBe(true);
+      const members = index.byFile
+        .get(fileIdentityKey(files["Rec.java"]!))!
+        .locals.filter((definition) => ["Build", "Read"].includes(definition.localName));
+      expect(members.map((member) => member.isMember)).toEqual([true, true]);
+      const found = await goToDefinition(index, {
+        file: files["Use.java"]!,
+        line: 3,
+        column: use[2]!.indexOf("Build") + 1,
+      });
+      expect(found.status).toBe("ok");
+      if (found.status !== "ok") throw new Error("Expected Java record static member");
+      expect(normalizePath(found.definition.file)).toBe(files["Rec.java"]);
+      expect(
+        (await goToDefinition(index, { file: files["Use.java"]!, line: 4, column: use[3]!.indexOf("Build") + 1 }))
+          .status,
+      ).toBe("not_found");
+      const references = await findReferences(index, {
+        file: files["Rec.java"]!,
+        line: 3,
+        column: record[2]!.indexOf("Build") + 1,
+      });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected record method references");
+      expect(
+        references.references
+          .filter((reference) => normalizePath(reference.file) === files["Use.java"])
+          .map((reference) => reference.range.start.line),
+      ).toEqual([3]);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges
+          .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === files["Use.java"])
+          .map((edge) => graph.nodes.get(edge.from)?.name),
+      ).toEqual(["Call"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

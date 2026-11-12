@@ -4,5 +4,5 @@ namespace Edge.App;
 
 public class GlobalStaticConsumer
 {
-    public int Call() => Mix(1); // @goto staticMix=Mix @known-gap global_static_import_unsupported observed=not_found
+    public int Call() => Mix(1); // @ref staticMix @goto staticMix=Mix
 }

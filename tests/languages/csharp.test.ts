@@ -1,11 +1,19 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { csharpImportsForName, withCsharpGlobalUsings } from "../../src/indexer/csharp-global-usings.js";
+import * as localsAndExports from "../../src/indexer/locals-and-exports.js";
+import { getCachedReferenceCandidateFiles } from "../../src/indexer/navigation-references.js";
+import type { BuildReport } from "../../src/indexer/types.js";
+import fsp, { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runQuery } from "@lzehrung/codegraph-native";
 import { CSHARP_SUPPORT, type LanguageExtensionMap } from "../../src/languages.js";
 import { fileIdentityKey, normalizePath } from "../../src/util/paths.js";
-import { clearMemoryCache } from "../../src/indexer/build-cache.js";
+import {
+  clearMemoryCache,
+  tryLoadDetailedSymbolGraphSnapshot,
+  writeDetailedSymbolGraphSnapshot,
+} from "../../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { findImplementations, findTypeHierarchy } from "../../src/indexer/type-hierarchy.js";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
@@ -76,6 +84,12 @@ import {
 import { CSHARP_QUALIFIED_TYPE_SOURCES } from "../helpers/qualified-type-import-fixture.js";
 import { CSHARP_SCOPE_READ_FILES, CSHARP_SCOPE_READ_LINES } from "../helpers/scope-binding-read-fixtures.js";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
+import {
+  expectCsharpGlobalUsingGraph,
+  expectCsharpGlobalUsingNavigation,
+  expectCsharpGlobalUsingReferences,
+  withCsharpGlobalUsingFixture,
+} from "../helpers/csharp-global-using-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "csharp",
@@ -1200,7 +1214,7 @@ describe("C# namespace aliases", () => {
 });
 
 describe("C# record components", () => {
-  it("indexes positional record parameters as variable locals and leaves a body property alone", async () => {
+  it("indexes positional record parameters as variable-kind members and leaves a body property alone", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-record-components-"));
     const file = path.join(root, "Records.cs");
     const source = [
@@ -1220,10 +1234,13 @@ describe("C# record components", () => {
         locals.filter((local) => local.localName === name).map((local) => local.kind);
 
       // Positional parameters of plain, `record class`, and `record struct` declarations are
-      // variable locals, and the two `Size` parameters stay distinct declarations.
+      // variable-kind members, and the two `Size` parameters stay distinct declarations.
       expect(kindsByName("Size")).toEqual(["variable", "variable"]);
       expect(kindsByName("Name")).toEqual(["variable"]);
       expect(kindsByName("Width")).toEqual(["variable"]);
+      for (const name of ["Size", "Name", "Width"]) {
+        expect(locals.filter((local) => local.localName === name).every((local) => local.isMember)).toBe(true);
+      }
       // A non-positional property in the record body is unaffected and stays a variable local.
       expect(kindsByName("Extra")).toEqual(["variable"]);
 
@@ -4742,7 +4759,7 @@ describe("C# using static", () => {
         "}",
         "",
       ];
-      // A global directive applies to the whole project; module-local bindings cannot express it.
+      // The global directive also joins the ordinary static directives in Use.cs.
       const globalLines = [
         "global using static P.Util;",
         "namespace Q;",
@@ -4788,7 +4805,7 @@ describe("C# using static", () => {
       expect(await gotoTarget(use, useLines, "O() =>", "PrivProt")).toBeNull();
       expect(await gotoTarget(use, useLines, "P() =>", "Inter")).toBe(at(util, utilLines, "int Inter()"));
       expect(await gotoTarget(use, useLines, "R() =>", "ProtInter")).toBe(at(util, utilLines, "int ProtInter()"));
-      expect(await gotoTarget(useGlobal, globalLines, "A() =>", "Go")).toBeNull();
+      expect(await gotoTarget(useGlobal, globalLines, "A() =>", "Go")).toBe(at(util, utilLines, "int Go()"));
 
       const pickLine = lineOf(utilLines, "Pick(int a)");
       const references = await findReferences(index, {
@@ -4827,7 +4844,10 @@ describe("C# using static", () => {
         .map((edge) => Number(edge.to.slice(edge.to.lastIndexOf("::") + 2)))
         .sort((left, right) => left - right);
       expect(pickTargets).toEqual([utilSource.indexOf("Pick(int a)"), utilSource.indexOf("Pick(int a, int b)")]);
-      expect(graph.edges.some((edge) => edge.label === "calls" && edge.from.startsWith(useGlobal))).toBe(false);
+      const globalCalls = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === useGlobal)
+        .map((edge) => `${graph.nodes.get(edge.to)?.name}@${path.basename(graph.nodes.get(edge.to)!.file)}`);
+      expect(globalCalls).toEqual(["Go@Util.cs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -6063,3 +6083,807 @@ describe("C# interface inheritance", () => {
   });
 });
 describeTypeParameterReceiverRows("csharp", "C# type parameter beside a same-named class");
+
+describe("C# project-wide global usings", () => {
+  it("shares source, project, and props directives without importing a nested project's globals", async () => {
+    await withCsharpGlobalUsingFixture(async ({ root, files }) => {
+      const options = { cache: "disk" as const, cacheDir: path.join(root, ".cache"), threads: 1 };
+      for (const index of [
+        await buildProjectIndex(root, { cache: "off", threads: 1 }),
+        await buildProjectIndex(root, options),
+      ]) {
+        await expectCsharpGlobalUsingNavigation(index, files);
+        await expectCsharpGlobalUsingReferences(index, files);
+        await expectCsharpGlobalUsingGraph(index, files);
+      }
+      clearMemoryCache();
+      const loaded = await buildProjectIndex(root, options);
+      await expectCsharpGlobalUsingNavigation(loaded, files);
+      await expectCsharpGlobalUsingReferences(loaded, files);
+      await expectCsharpGlobalUsingGraph(loaded, files);
+    });
+  });
+
+  it("shares global namespace lookup results only within one compilation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-shared-index-"));
+    try {
+      const types = Array.from({ length: 32 }, (_, at) => `public class Type${at} {}`).join("\n");
+      const files = await writeFixtureFiles(root, {
+        "One/One.csproj": "<Project />",
+        "One/Usings.cs": "global using Big;",
+        "One/Types.cs": `namespace Big;\n${types}`,
+        "One/A.cs": "namespace App;\npublic class A { public Type7 Make() => new Type7(); }",
+        "One/B.cs": "namespace App;\npublic class B { public Type7 Make() => new Type7(); }",
+        "Two/Two.csproj": "<Project />",
+        "Two/Usings.cs": "global using Big;",
+        "Two/Types.cs": `namespace Big;\n${types}`,
+        "Two/A.cs": "namespace App;\npublic class A { public Type7 Make() => new Type7(); }",
+      });
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1 });
+      const view = (file: string) => {
+        const mod = index.byFile.get(fileIdentityKey(file));
+        if (!mod) throw new Error("Expected indexed global-using consumer");
+        return withCsharpGlobalUsings(index, mod);
+      };
+      const first = view(files["One/A.cs"]!);
+      const second = view(files["One/B.cs"]!);
+      const otherProject = view(files["Two/A.cs"]!);
+      for (let at = 0; at < 32; at += 1) {
+        const name = `Type${at}`;
+        const imports = csharpImportsForName(first, name);
+        expect(imports).toHaveLength(1);
+        expect(csharpImportsForName(second, name)).toBe(imports);
+        expect(csharpImportsForName(otherProject, name)).not.toBe(imports);
+      }
+      for (const file of ["One/A.cs", "One/B.cs", "Two/A.cs"]) {
+        const line = `public class ${path.basename(file, ".cs")} { public Type7 Make() => new Type7(); }`;
+        const result = await goToDefinition(index, {
+          file: files[file]!,
+          line: 2,
+          column: line.indexOf("Type7") + 1,
+        });
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error("Expected project-bounded type reference");
+        expect(normalizePath(result.definition.file)).toBe(files[`${file.split("/")[0]}/Types.cs`]);
+      }
+      const refs = await findReferences(index, { file: files["One/Types.cs"]!, line: 9, column: 14 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected shared global type references");
+      const consumers = refs.references.filter((ref) => ref.file.endsWith("/A.cs") || ref.file.endsWith("/B.cs"));
+      expect(new Set(consumers.map((ref) => normalizePath(ref.file)))).toEqual(
+        new Set([files["One/A.cs"], files["One/B.cs"]]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("avoids duplicate metadata reads on unchanged disk rebuilds and detects restored-mtime Using edits", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-warm-metadata-"));
+    const readFile = vi.spyOn(fsp, "readFile");
+    try {
+      const props = (namespace: string) => `<Project><ItemGroup><Using Include="${namespace}" /></ItemGroup></Project>`;
+      const files = await writeFixtureFiles(root, {
+        "App.csproj": "<Project />",
+        "Directory.Build.props": props("One"),
+        "One.cs": "namespace One; public class Target {}",
+        "Two.cs": "namespace Two; public class Target {}",
+        "Use.cs": "public class Use { public Target field; }",
+      });
+      const timestamp = Date.UTC(2020, 0, 1) / 1000;
+      await fsp.utimes(files["Directory.Build.props"]!, timestamp, timestamp);
+      const options = { cache: "disk" as const, cacheDir: path.join(root, ".cache"), threads: 1 };
+      await buildProjectIndexIncremental(root, options);
+      let previousFacts: ProjectIndex["csharpProjectUsings"];
+      for (let at = 0; at < 2; at += 1) {
+        readFile.mockClear();
+        const warm = await buildProjectIndexIncremental(root, options);
+        const facts = warm.csharpProjectUsings;
+        expect(facts).toHaveLength(2);
+        if (!facts) throw new Error("Expected cached project Using facts");
+        if (previousFacts) {
+          for (let at = 0; at < facts.length; at += 1) expect(facts[at]).toBe(previousFacts[at]);
+        }
+        previousFacts = facts;
+        const propsReads = readFile.mock.calls.filter(([target, encoding]) => {
+          if (typeof target !== "string" || encoding !== "utf8") return false;
+          return fileIdentityKey(target) === fileIdentityKey(files["Directory.Build.props"]!);
+        });
+        // Configuration hashing reads UTF8 once; byte hashing is separate from metadata parsing.
+        expect(propsReads).toHaveLength(1);
+        const target = await goToDefinition(warm, { file: files["Use.cs"]!, line: 1, column: 27 });
+        expect(target.status).toBe("ok");
+        if (target.status !== "ok") throw new Error("Expected unchanged global Using target");
+        expect(normalizePath(target.definition.file)).toBe(files["One.cs"]);
+      }
+      const before = await fsp.stat(files["Directory.Build.props"]!);
+      await writeFile(files["Directory.Build.props"]!, props("Two"));
+      await fsp.utimes(files["Directory.Build.props"]!, timestamp, timestamp);
+      const after = await fsp.stat(files["Directory.Build.props"]!);
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      const changed = await buildProjectIndexIncremental(root, options);
+      const target = await goToDefinition(changed, { file: files["Use.cs"]!, line: 1, column: 27 });
+      expect(target.status).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected refreshed global Using target");
+      expect(normalizePath(target.definition.file)).toBe(files["Two.cs"]);
+      const refs = await findReferences(changed, { file: files["One.cs"]!, line: 1, column: 29 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected excluded previous global target");
+      expect(refs.references.some((ref) => normalizePath(ref.file) === files["Use.cs"])).toBe(false);
+    } finally {
+      readFile.mockRestore();
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["namespace", "static"])(
+    "keeps ambiguous global %s imports unresolved with partial coverage",
+    async (form) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-ambiguous-"));
+      try {
+        const name = form === "static" ? "Run" : "Target";
+        const use =
+          form === "static"
+            ? "public class Use { public int Call() => Run(); }"
+            : "public class Use { public Target field = null; }";
+        const declaration = "public class Target { public static int Run() => 1; }";
+        const usings =
+          form === "static"
+            ? "global using static Left.Target;\nglobal using static Right.Target;\n"
+            : "global using Left;\nglobal using Right;\n";
+        const files = await writeFixtureFiles(root, {
+          "Usings.cs": usings,
+          "Left.cs": `namespace Left;\n${declaration}\n`,
+          "Right.cs": `namespace Right;\n${declaration}\n`,
+          "Use.cs": `namespace App;\n${use}\n`,
+        });
+        const index = await buildProjectIndex(root, { cache: "off" });
+        const result = await goToDefinition(index, { file: files["Use.cs"]!, line: 2, column: use.indexOf(name) + 1 });
+        expect(result.status).toBe("not_found");
+        for (const file of ["Left.cs", "Right.cs"]) {
+          const refs = await findReferences(index, {
+            file: files[file]!,
+            line: 2,
+            column: declaration.indexOf(name) + 1,
+          });
+          expect(refs.status).toBe("ok");
+          if (refs.status !== "ok") throw new Error("Expected ambiguous target references");
+          expect(refs.references.some((ref) => normalizePath(ref.file) === files["Use.cs"])).toBe(false);
+          expect(refs.referenceCoverage.state).toBe("partial");
+        }
+        const graph = await buildSymbolGraphDetailed(index);
+        expect(
+          graph.edges.some((edge) => {
+            const from = graph.nodes.get(edge.from);
+            const to = graph.nodes.get(edge.to);
+            return from?.file === files["Use.cs"] && to?.name === name;
+          }),
+        ).toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("gives nearer and enclosing namespace declarations precedence over global aliases", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-alias-shadow-"));
+    try {
+      const use = "public class Use { public A field; }";
+      const files = await writeFixtureFiles(root, {
+        "Usings.cs": "global using A = N.Imported;\n",
+        "Imported.cs": "namespace N;\npublic class Imported {}\n",
+        "Near.cs": "namespace App;\npublic class A {}\n",
+        "Use.cs": `namespace App.Child;\n${use}\n`,
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const result = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 2,
+        column: use.indexOf("A field") + 1,
+      });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected enclosing namespace type before global alias");
+      expect(normalizePath(result.definition.file)).toBe(files["Near.cs"]);
+      expect(normalizePath(result.definition.file)).not.toBe(files["Imported.cs"]);
+      const refs = await findReferences(index, { file: files["Imported.cs"]!, line: 2, column: 14 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected global alias references");
+      expect(refs.references.some((ref) => normalizePath(ref.file) === files["Use.cs"])).toBe(false);
+      const graph = await buildSymbolGraphDetailed(index);
+      expect(
+        graph.edges.some(
+          (edge) =>
+            graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+            graph.nodes.get(edge.to)?.file === files["Imported.cs"],
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["memory", "disk"] as const)(
+    "updates add, edit, and removal across unchanged consumers with %s caches",
+    async (cache) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-incremental-"));
+      const extract = vi.spyOn(localsAndExports, "collectLocalsAndExportsFromSource");
+      try {
+        const files = await writeFixtureFiles(root, {
+          "App.csproj": "<Project />",
+          "One.cs": "namespace One;\npublic class Target { public static int Run() => 1; }\n",
+          "Two.cs": "namespace Two;\npublic class Target { public static int Run() => 2; }\n",
+          "Use.cs":
+            "namespace App;\npublic class Use { public Target field; public A alias; public int Call() => Run(); }\n",
+        });
+        const usings = path.join(root, "Usings.cs");
+        const options = { cache, cacheDir: path.join(root, ".cache"), threads: 1 };
+        const answers = async (index: ProjectIndex) => {
+          const source = "public class Use { public Target field; public A alias; public int Call() => Run(); }";
+          const navigation = [];
+          for (const name of ["Target", "A alias", "Run"]) {
+            const result = await goToDefinition(index, {
+              file: files["Use.cs"]!,
+              line: 2,
+              column: source.indexOf(name) + 1,
+            });
+            navigation.push(result.status === "ok" ? path.basename(result.definition.file) : result.status);
+          }
+          const refs = [];
+          for (const file of ["One.cs", "Two.cs"]) {
+            const result = await findReferences(index, { file: files[file]!, line: 2, column: 14 });
+            if (result.status !== "ok") throw new Error("Expected incremental references");
+            refs.push(
+              result.references
+                .filter((ref) => normalizePath(ref.file) === files["Use.cs"])
+                .map((ref) => ref.range.start.column),
+            );
+          }
+          const graph = await buildSymbolGraphDetailed(index);
+          const edges = graph.edges
+            .flatMap((edge) => {
+              if (edge.label !== "uses" && edge.label !== "calls") return [];
+              const from = graph.nodes.get(edge.from);
+              const to = graph.nodes.get(edge.to);
+              return from?.file === files["Use.cs"] && to ? [`${edge.label}:${to.name}@${path.basename(to.file)}`] : [];
+            })
+            .sort();
+          return { navigation, refs, edges };
+        };
+        await buildProjectIndex(root, options);
+        for (const target of ["One", "Two", null]) {
+          if (target)
+            await writeFile(
+              usings,
+              `global using ${target};\nglobal using A = ${target}.Target;\nglobal using static ${target}.Target;\n`,
+            );
+          else await rm(usings);
+          extract.mockClear();
+          const report: BuildReport = { timings: {} };
+          const warm = await buildProjectIndexIncremental(root, { ...options, files: [usings], report });
+          const extractedCsharp = extract.mock.calls
+            .map(([file]) => path.basename(file))
+            .filter((file) => file.endsWith(".cs"));
+          expect(extractedCsharp).toEqual(target ? ["Usings.cs"] : []);
+          expect(report.files?.cached).toBeGreaterThanOrEqual(3);
+          const actual = await answers(warm);
+          expect(actual).toEqual(await answers(await buildProjectIndex(root, { cache: "off", threads: 1 })));
+          expect(actual.navigation).toEqual(Array(3).fill(target ? `${target}.cs` : "not_found"));
+          if (target) {
+            expect(actual.edges).toContain(`calls:Run@${target}.cs`);
+            expect(actual.refs[target === "One" ? 0 : 1]?.length).toBeGreaterThan(0);
+            expect(actual.refs[target === "One" ? 1 : 0]).toEqual([]);
+          } else {
+            expect(actual.edges).toEqual([]);
+            expect(actual.refs).toEqual([[], []]);
+          }
+          if (cache === "disk") {
+            clearMemoryCache();
+            expect(await answers(await buildProjectIndex(root, options))).toEqual(actual);
+          }
+        }
+      } finally {
+        extract.mockRestore();
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(
+    (
+      [
+        ["memory", "App.csproj", "incremental"],
+        ["disk", "App.csproj", "incremental"],
+        ["memory", "Directory.Build.props", "incremental"],
+        ["disk", "Directory.Build.props", "incremental"],
+        ["disk", "App.csproj", "full"],
+        ["disk", "Directory.Build.props", "full"],
+      ] as const
+    ).flatMap((row) => ([false, true] as const).map((xml) => [...row, xml] as const)),
+  )(
+    "refreshes %s snapshots after changing %s Using items through %s builds without extracting consumers (XML: %s)",
+    async (cache, manifestName, build, xml) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-project-using-change-"));
+      const extract = vi.spyOn(localsAndExports, "collectLocalsAndExportsFromSource");
+      try {
+        const files = await writeFixtureFiles(root, {
+          "App.csproj": "<Project />",
+          "One.cs": "namespace One;\npublic class Target { public static int Run() => 1; }\n",
+          "Two.cs": "namespace Two;\npublic class Target { public static int Run() => 2; }\n",
+          "Use.cs": "namespace App;\npublic class Use { public Target field; public int Call() => Run(); }\n",
+        });
+        const manifest = path.join(root, manifestName);
+        const options = { cache, cacheDir: path.join(root, ".cache"), threads: 1 };
+        let previous = await buildProjectIndexIncremental(root, options);
+        if (cache === "disk")
+          await writeDetailedSymbolGraphSnapshot(root, options, previous, await buildSymbolGraphDetailed(previous));
+        for (const target of ["One", "Two", null]) {
+          const item = target ? `<Using Include="${target}" /><Using Include="${target}.Target" Static="true" />` : "";
+          const preamble = xml ? '\uFEFF<?xml version="1.0" encoding="utf-8"?>' : "";
+          await writeFile(manifest, `${preamble}<Project><ItemGroup>${item}</ItemGroup></Project>`);
+          extract.mockClear();
+          const report: BuildReport = { timings: {} };
+          const warm =
+            build === "full"
+              ? await buildProjectIndex(root, { ...options, report })
+              : await buildProjectIndexIncremental(root, { ...options, files: [manifest], report });
+          expect(extract.mock.calls.filter(([file]) => file.endsWith(".cs"))).toEqual([]);
+          expect(report.files?.cached).toBeGreaterThanOrEqual(3);
+          if (cache === "disk") {
+            expect(warm.projectSnapshotIdentity).not.toBe(previous.projectSnapshotIdentity);
+            expect(await tryLoadDetailedSymbolGraphSnapshot(root, options, warm)).toBeNull();
+          }
+          const graph = await buildSymbolGraphDetailed(warm);
+          const calls = graph.edges
+            .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.file === files["Use.cs"])
+            .map((edge) => path.basename(graph.nodes.get(edge.to)!.file));
+          expect(calls).toEqual(target ? [`${target}.cs`] : []);
+          if (cache === "disk") await writeDetailedSymbolGraphSnapshot(root, options, warm, graph);
+          const request = { file: files["Use.cs"]!, line: 2, column: 27 };
+          const expected = target ? `${target}.cs` : "not_found";
+          for (const index of [warm, await buildProjectIndex(root, { cache: "off" })]) {
+            const result = await goToDefinition(index, request);
+            expect(result.status === "ok" ? path.basename(result.definition.file) : result.status).toBe(expected);
+          }
+          if (cache === "disk") clearMemoryCache();
+          const loadedIndex = await buildProjectIndexIncremental(root, options);
+          const loaded = await goToDefinition(loadedIndex, request);
+          expect(loaded.status === "ok" ? path.basename(loaded.definition.file) : loaded.status).toBe(expected);
+          if (cache === "disk") {
+            expect(loadedIndex.projectSnapshotIdentity).toBe(warm.projectSnapshotIdentity);
+            expect(await tryLoadDetailedSymbolGraphSnapshot(root, options, loadedIndex)).not.toBeNull();
+          }
+          previous = warm;
+        }
+      } finally {
+        extract.mockRestore();
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("C# global using review regressions", () => {
+  it("retains nested-project namespace declarations for shared source outside every project", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-shared-source-"));
+    try {
+      const lines = [
+        "using Lib.Types;",
+        "namespace Tests.Helpers {",
+        "public static class Helper {",
+        "  public static int F(Frame frame) {",
+        "    var k = Kind.A;",
+        "    var n = frame.Length;",
+        "    return Util.Twice(n) + (int)frame.K;",
+        "  }",
+        "}",
+        "}",
+      ];
+      const declarations = [
+        "namespace Lib.Types {",
+        "public enum Kind { A, B }",
+        "public class Frame { public Kind K; public int Length; }",
+        "public static class Util { public static int Twice(int x) => x * 2; }",
+        "}",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "src/Lib/Lib.csproj": "<Project />",
+        "src/Lib/Types.cs": declarations.join("\n"),
+        "test/Tests/Tests.csproj": "<Project />",
+        "test/shared/Helper.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [line, token, targetLine] of [
+        [5, "A", 2],
+        [6, "Length", 3],
+        [7, "Twice", 4],
+        [7, "K", 3],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["test/shared/Helper.cs"]!,
+          line,
+          column: lines[line - 1]!.lastIndexOf(token) + 1,
+        });
+        expect(result.status, token).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Expected shared-source member ${token}`);
+        expect(normalizePath(result.definition.file)).toBe(files["src/Lib/Types.cs"]);
+        expect(result.definition.range.start.line).toBe(targetLine);
+      }
+      const refs = await findReferences(index, {
+        file: files["src/Lib/Types.cs"]!,
+        line: 3,
+        column: declarations[2]!.indexOf("Length") + 1,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected shared-source references");
+      expect(
+        refs.references
+          .filter((ref) => normalizePath(ref.file) === files["test/shared/Helper.cs"])
+          .map((ref) => ref.range.start.line),
+      ).toEqual([6]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["record", "record struct"])("keeps %s body declarations out of global namespace imports", async (kind) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-record-import-"));
+    try {
+      const lines = [
+        "namespace App;",
+        "public class DemoAttribute : System.Attribute { public int Height { get; set; } }",
+        "public class Settings { public int Height { get; set; } }",
+        "[Demo(Height = 1)]",
+        "public class Use {",
+        "  public void F() {",
+        "    var bare = Height;",
+        "    Build();",
+        "    var settings = new Settings { Height = 2 };",
+        "    var record = new Rec();",
+        "    var measured = record.Height;",
+        "    Rec.Build();",
+        "  }",
+        "  public void NotARecordMethod() => Build();",
+        "}",
+      ];
+      const files = await writeFixtureFiles(root, {
+        "Usings.cs": "global using Rendering;\n",
+        "Rec.cs": `namespace Rendering;\npublic ${kind} Rec { public int Height { get; init; } public static void Build() {} }\n`,
+        "Use.cs": lines.join("\n"),
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      for (const [line, token] of [
+        [4, "Height"],
+        [7, "Height"],
+        [8, "Build"],
+        [9, "Height"],
+        [14, "Build"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line,
+          column: lines[line - 1]!.indexOf(token) + 1,
+        });
+        expect(result.status, `${line}:${token}`).toBe("not_found");
+      }
+      const type = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 10,
+        column: lines[9]!.indexOf("Rec") + 1,
+      });
+      expect(type.status).toBe("ok");
+      if (type.status !== "ok") throw new Error("Expected imported record type");
+      expect(normalizePath(type.definition.file)).toBe(files["Rec.cs"]);
+      const record = index.byFile.get(fileIdentityKey(files["Rec.cs"]!))!;
+      expect(
+        record.locals.filter((def) => ["Height", "Build"].includes(def.localName)).map((def) => def.isMember),
+      ).toEqual([true, true]);
+      for (const [name, useLine] of [
+        ["Height", 11],
+        ["Build", 12],
+      ] as const) {
+        const source = `public ${kind} Rec { public int Height { get; init; } public static void Build() {} }`;
+        const refs = await findReferences(index, { file: files["Rec.cs"]!, line: 2, column: source.indexOf(name) + 1 });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error(`Expected record ${name} references`);
+        expect(
+          refs.references
+            .filter((ref) => normalizePath(ref.file) === files["Use.cs"])
+            .map((ref) => ref.range.start.line),
+        ).toEqual([useLine]);
+        const target = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: useLine,
+          column: lines[useLine - 1]!.indexOf(name) + 1,
+        });
+        expect(target.status).toBe("ok");
+        if (target.status !== "ok") throw new Error(`Expected proven record member ${name}`);
+        expect(normalizePath(target.definition.file)).toBe(files["Rec.cs"]);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const calls = graph.edges.filter(
+        (edge) =>
+          edge.label === "calls" &&
+          graph.nodes.get(edge.from)?.file === files["Use.cs"] &&
+          graph.nodes.get(edge.to)?.name === "Build",
+      );
+      expect(calls.map((edge) => edge.site?.range.start.line)).toEqual([12]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("makes positioned global aliases and their complete references match local-using controls", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-alias-positions-"));
+    try {
+      const aliases = [
+        "using Alias = NsA.T;",
+        "using NsAlias = NsA;",
+        "using IFooA = NsA.IFoo;",
+        "using EnA = NsA.En;",
+      ];
+      const use = [
+        "class U : IFooA {",
+        "  public void Run() {}",
+        "  Alias a;",
+        "  NsAlias.T b;",
+        "  NsAlias::T c;",
+        "  void F(object x) {",
+        "    var d = new Alias();",
+        "    Alias.SM();",
+        "    var k = Alias.Const;",
+        "    Alias e = Alias.Create();",
+        "    var t = typeof(Alias);",
+        "    var n = nameof(Alias);",
+        "    if (x is Alias) {}",
+        "    var y = x as Alias;",
+        "    var z = (Alias)x;",
+        "    NsAlias.T.SM();",
+        "    NsAlias::T.SM();",
+        "    var i = NsAlias.T.Const;",
+        "    Alias.Inner.ISM();",
+        "    var en = EnA.X;",
+        "  }",
+        "}",
+      ];
+      const target = [
+        "namespace NsA {",
+        "public class T { public static void SM() {} public const int Const = 1; public static T Create() => new T(); public class Inner { public static void ISM() {} } }",
+        "public interface IFoo { void Run(); }",
+        "public enum En { X, Y }",
+        "}",
+      ];
+      const answers = [];
+      const references = [];
+      for (const global of [false, true]) {
+        const directory = path.join(root, global ? "global" : "local");
+        const files = await writeFixtureFiles(directory, {
+          "App.csproj": "<Project />",
+          "G.cs": global ? aliases.map((line) => `global ${line}`).join("\n") : "",
+          "Target.cs": target.join("\n"),
+          "Use.cs": (global ? aliases.map(() => "") : aliases).concat(use).join("\n"),
+        });
+        const index = await buildProjectIndex(directory, { cache: "off" });
+        const sites = [
+          [1, "IFooA"],
+          [4, "T b"],
+          [5, "T c"],
+          [8, "Alias"],
+          [8, "SM"],
+          [9, "Alias"],
+          [9, "Const"],
+          [10, "Create"],
+          [12, "Alias"],
+          [16, "SM"],
+          [17, "SM"],
+          [18, "Const"],
+          [19, "ISM"],
+          [20, "X"],
+        ] as const;
+        const actual = [];
+        for (const [line, token] of sites) {
+          const result = await goToDefinition(index, {
+            file: files["Use.cs"]!,
+            line: line + aliases.length,
+            column: use[line - 1]!.indexOf(token) + 1,
+          });
+          expect(result.status, `${global}:${line}:${token}`).toBe("ok");
+          if (result.status !== "ok") throw new Error(`Expected positioned alias ${line}:${token}`);
+          actual.push(
+            `${path.basename(result.definition.file)}:${result.definition.range.start.line}:${result.definition.range.start.column}`,
+          );
+        }
+        answers.push(actual);
+        const refs = await findReferences(index, {
+          file: files["Target.cs"]!,
+          line: 2,
+          column: target[1]!.indexOf("T {") + 1,
+        });
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error("Expected complete alias references");
+        expect(refs.referenceCoverage.state).toBe("complete");
+        references.push(
+          refs.references
+            .filter((ref) => normalizePath(ref.file) === files["Use.cs"] && ref.range.start.line > aliases.length)
+            .map((ref) => `${ref.range.start.line}:${ref.range.start.column}`)
+            .sort(),
+        );
+        for (const [name, line, expectedLines] of [
+          ["IFoo", 3, [5]],
+          ["SM", 2, [12, 20, 21]],
+        ] as const) {
+          const memberRefs = await findReferences(index, {
+            file: files["Target.cs"]!,
+            line,
+            column: target[line - 1]!.indexOf(name) + 1,
+          });
+          expect(memberRefs.status, name).toBe("ok");
+          if (memberRefs.status !== "ok") throw new Error(`Expected positioned alias references for ${name}`);
+          expect(
+            memberRefs.references
+              .filter((ref) => normalizePath(ref.file) === files["Use.cs"] && ref.range.start.line > aliases.length)
+              .map((ref) => ref.range.start.line)
+              .sort((left, right) => left - right),
+            name,
+          ).toEqual(expectedLines);
+        }
+      }
+      expect(answers[1]).toEqual(answers[0]);
+      expect(references[1]).toEqual(references[0]);
+      expect(references[1]?.length).toBeGreaterThan(10);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not apply parent global usings inside a nested project", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-reverse-boundary-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "Parent.csproj": "<Project />",
+        "Usings.cs": "global using N;\n",
+        "N.cs": "namespace N; public class Target {}",
+        "Use.cs": "public class Use { public Target field; }",
+        "Nested/Nested.csproj": "<Project />",
+        "Nested/Use.cs": "public class NestedUse { public Target field; }",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const parent = await goToDefinition(index, { file: files["Use.cs"]!, line: 1, column: 27 });
+      const nested = await goToDefinition(index, { file: files["Nested/Use.cs"]!, line: 1, column: 33 });
+      expect(parent.status).toBe("ok");
+      expect(nested.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps file-level and global namespace imports ambiguous instead of preferring either", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-local-global-ambiguous-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "Global.cs": "global using Left;\n",
+        "Left.cs": "namespace Left; public class Target {}",
+        "Right.cs": "namespace Right; public class Target {}",
+        "Use.cs": "using Right;\npublic class Use { public Target field; }",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      expect((await goToDefinition(index, { file: files["Use.cs"]!, line: 2, column: 27 })).status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies semicolon/entity Using items and project removals after props", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-msbuild-using-items-"));
+    try {
+      const files = await writeFixtureFiles(root, {
+        "Directory.Build.props": '<Project><ItemGroup><Using Include="NsA;NsB"/></ItemGroup></Project>',
+        "App.csproj":
+          '<Project><ItemGroup><Using Include="Ns&#67;"/><Using Include="NsA.TA" Alias="Alias"/><Using Remove="NsB"/></ItemGroup></Project>',
+        "A.cs": "namespace NsA; public class TA {}",
+        "B.cs": "namespace NsB; public class TB {}",
+        "C.cs": "namespace NsC; public class TC {}",
+        "Use.cs": "class Use { TA a; TB b; TC c; Alias d; }",
+      });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const source = "class Use { TA a; TB b; TC c; Alias d; }";
+      for (const [name, expected] of [
+        ["TA", "A.cs"],
+        ["TB", null],
+        ["TC", "C.cs"],
+        ["Alias", "A.cs"],
+      ] as const) {
+        const result = await goToDefinition(index, {
+          file: files["Use.cs"]!,
+          line: 1,
+          column: source.indexOf(name) + 1,
+        });
+        expect(result.status === "ok" ? path.basename(result.definition.file) : null, name).toBe(expected);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not widen ordinary reference candidates for global System imports or polyfills", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-global-reference-scope-"));
+    try {
+      const sources: Record<string, string> = {
+        "App.csproj": "<Project />",
+        "G.cs": "global using System;\n",
+        "poly/Any.cs": "namespace System; public class Any {}",
+        "lib/Target.cs": "namespace Lib; public class Target {}",
+        "use/Use.cs": "using Lib; public class Use { public Target field; }",
+      };
+      for (let at = 0; at < 20; at += 1) sources[`other${at}/Other.cs`] = `namespace Other${at}; public class Other {}`;
+      const files = await writeFixtureFiles(root, sources);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const definition = index.byFile
+        .get(fileIdentityKey(files["lib/Target.cs"]!))!
+        .locals.find((def) => def.localName === "Target")!;
+      const candidates = getCachedReferenceCandidateFiles(index, definition, ["Target"], false, "csharp");
+      expect(candidates.map(normalizePath)).toEqual([files["use/Use.cs"]]);
+      const refs = await findReferences(index, {
+        file: definition.file,
+        line: definition.range.start.line,
+        column: definition.range.start.column,
+      });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected ordinary import references");
+      expect(
+        refs.references
+          .filter((ref) => fileIdentityKey(ref.file) !== fileIdentityKey(definition.file))
+          .map((ref) => normalizePath(ref.file)),
+      ).toEqual([files["use/Use.cs"]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores unrelated nested csproj edits but invalidates Using fact changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-fingerprint-"));
+    try {
+      const project = (version: string, namespace: string) =>
+        `<Project><ItemGroup><PackageReference Include="Package" Version="${version}"/><Using Include="${namespace}"/></ItemGroup></Project>`;
+      const files = await writeFixtureFiles(root, {
+        "App/App.csproj": project("1.0.0", "One"),
+        "App/One.cs": "namespace One; public class Target {}",
+        "App/Two.cs": "namespace Two; public class Target {}",
+        "App/Use.cs": "public class Use { public Target field; }",
+        "Other.ts": "export const untouched = 1;",
+      });
+      const options = { cache: "disk" as const, cacheDir: path.join(root, ".cache"), threads: 1 };
+      await buildProjectIndexIncremental(root, options);
+      await writeFile(files["App/App.csproj"]!, project("2.0.0", "One"));
+      const unchanged: BuildReport = { timings: {} };
+      const same = await buildProjectIndexIncremental(root, {
+        ...options,
+        report: unchanged,
+        files: [files["App/App.csproj"]!],
+      });
+      // Only the edited manifest is re-read; the C# sources and unrelated TypeScript stay cached.
+      expect(unchanged.files?.parsed).toBe(1);
+      expect(unchanged.files?.cached).toBe(4);
+      expect((await goToDefinition(same, { file: files["App/Use.cs"]!, line: 1, column: 27 })).status).toBe("ok");
+      await writeFile(files["App/App.csproj"]!, project("2.0.0", "Two"));
+      const changed: BuildReport = { timings: {} };
+      const updated = await buildProjectIndexIncremental(root, {
+        ...options,
+        report: changed,
+        files: [files["App/App.csproj"]!],
+      });
+      const target = await goToDefinition(updated, { file: files["App/Use.cs"]!, line: 1, column: 27 });
+      expect(target.status).toBe("ok");
+      if (target.status !== "ok") throw new Error("Expected updated Using target");
+      expect(normalizePath(target.definition.file)).toBe(files["App/Two.cs"]);
+      expect(changed.files?.parsed).toBe(1);
+      expect(changed.files?.cached).toBe(4);
+    } finally {
+      clearMemoryCache();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

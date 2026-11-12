@@ -1,3 +1,7 @@
+import {
+  expectCsharpGlobalUsingNavigation,
+  withCsharpGlobalUsingFixture,
+} from "./helpers/csharp-global-using-fixture.js";
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
@@ -3335,7 +3339,7 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("resolves using static members by owner namespace and argument count, and ignores global using static", async () => {
+    it("resolves local and global static usings by owner and arity and rejects their conflicting members", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-using-static-goto-"));
       try {
         const utilFile = path.join(root, "Util.cs").replace(/\\/g, "/");
@@ -3387,13 +3391,21 @@ describe("Go to Definition", () => {
         await testGoToDefinition(index, useFile, 4, useLines[3]!.indexOf("Go") + 1, utilFile, 3);
         await testGoToDefinition(index, useFile, 5, useLines[4]!.indexOf("Two") + 1, utilFile, 4);
         await testGoToDefinition(index, useFile, 6, useLines[5]!.indexOf("Two") + 1, utilFile, 5);
-        await testGoToDefinition(index, decoyUseFile, 4, decoyUseLines[3]!.indexOf("Go") + 1, utilFile, 10);
+        const conflicting = await goToDefinition(index, {
+          file: decoyUseFile,
+          line: 4,
+          column: decoyUseLines[3]!.indexOf("Go") + 1,
+        });
+        expect(conflicting.status).toBe("not_found");
         const globalGoto = await goToDefinition(index, {
           file: globalFile,
           line: 4,
           column: globalLines[3]!.indexOf("Go") + 1,
         });
-        expect(globalGoto.status).toBe("not_found");
+        expect(globalGoto.status).toBe("ok");
+        if (globalGoto.status !== "ok") throw new Error("Expected global static target");
+        expect(globalGoto.definition.file).toBe(utilFile);
+        expect(globalGoto.definition.range.start.line).toBe(3);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -7603,5 +7615,11 @@ describe("qualified reopening and dotted import binding navigation", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+it("resolves C# global usings from other files and project items before same-named decoys", async () => {
+  await withCsharpGlobalUsingFixture(async ({ root, files }) => {
+    await expectCsharpGlobalUsingNavigation(await buildProjectIndex(root, { cache: "off" }), files);
   });
 });

@@ -15,6 +15,7 @@ symbol AliasOnly.cs::UUtils@import -[UtilsClass]-> Utils.cs::UtilsClass@2:23
 symbol GlobalUsings.cs::Build@import -[Build]-> Shared.cs::Build@7:28
 symbol GlobalUsings.cs::Format@import -[Format]-> Shared.cs::Format@12:28
 symbol GlobalUsings.cs::Main@8:17 -[calls]-> Shared.cs::Build@7:28 site=11:21
+symbol GlobalUsings.cs::Main@8:17 -[calls]-> Shared.cs::Format@12:28 site=12:9
 symbol GlobalUsings.cs::Main@8:17 -[member_of]-> GlobalUsings.cs::GlobalUsingProgram@6:7
 symbol GlobalUsings.cs::Main@8:17 -[uses]-> Shared.cs::SharedType@3:18
 symbol GlobalUsings.cs::Main@8:17 -[uses]-> Shared.cs::TextBuilder@5:18

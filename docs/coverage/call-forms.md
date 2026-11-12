@@ -68,14 +68,14 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | Java       | 16    | 0          |
 | C          | 1     | 0          |
 | C++        | 15    | 0          |
-| C#         | 152   | 0          |
+| C#         | 153   | 0          |
 | Kotlin     | 36    | 0          |
 | Ruby       | 10    | 0          |
 | Rust       | 10    | 0          |
 | Swift      | 16    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 343 cells across 15 languages, 0 known gaps.
+Total: 344 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

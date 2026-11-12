@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -11,6 +11,7 @@ import {
   findNearestManifest,
   resolveNearestManifestRoot,
   resolveNearestManifestRootSync,
+  type ManifestDirectoryListings,
 } from "../src/util/resolution/files.js";
 import { resolveJvmImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
@@ -208,6 +209,42 @@ describe("monorepo resolution boundaries", () => {
     // on `readdir` order or on which file happened to be written first.
     expect(posix(firstChoice ?? "")).toBe(posix(path.join(firstProject, "App.csproj")));
     expect(posix(secondChoice ?? "")).toBe(posix(path.join(secondProject, "App.csproj")));
+  });
+
+  it("shares directory listings without mixing manifest kinds or project boundaries", async () => {
+    const root = await mkTmpDir("dg-mono-shared-manifest-listings-");
+    const app = path.join(root, "App");
+    const source = path.join(app, "src");
+    const leaf = path.join(source, "deep");
+    const project = path.join(app, "App.csproj");
+    const props = path.join(app, "Directory.Build.props");
+    await fsp.mkdir(leaf, { recursive: true });
+    await fsp.mkdir(path.join(app, "Decoy.csproj"));
+    await writeFile(project, "<Project />");
+    await writeFile(props, "<Project />");
+    const listings: ManifestDirectoryListings = new Map();
+    for (const directory of [root, app, source, leaf]) {
+      const entries = await fsp.readdir(directory, { withFileTypes: true });
+      listings.set(fileIdentityKey(directory), Promise.resolve(entries));
+    }
+    const cache = new Map<string, string | null>();
+    const readdir = vi.spyOn(fsp, "readdir");
+    try {
+      await expect(
+        findNearestManifest(leaf, source, CSHARP_PACKAGE_MANIFEST_NAMES, cache, listings),
+      ).resolves.toBeNull();
+      await expect(findNearestManifest(leaf, root, CSHARP_PACKAGE_MANIFEST_NAMES, cache, listings)).resolves.toBe(
+        project,
+      );
+      await expect(findNearestManifest(source, app, CSHARP_PACKAGE_MANIFEST_NAMES, cache, listings)).resolves.toBe(
+        project,
+      );
+      await expect(findNearestManifest(leaf, root, ["Directory.Build.props"], cache, listings)).resolves.toBe(props);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("finds the same nearest manifest root synchronously and asynchronously", async () => {

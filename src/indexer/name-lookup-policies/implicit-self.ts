@@ -181,7 +181,7 @@ function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoTo
  */
 function namesAliasRequiringMemberLookup({ use, closestBinding }: NameLookupState): boolean {
   if (!closestBinding?.import || isCsharpAliasQualifier(use.node, use.parsed.sup)) return false;
-  return !!csharpAliasAt(use.mod, use.name, use.node);
+  return !!csharpAliasAt(use.index, use.mod, use.name, use.node);
 }
 
 /**
@@ -225,7 +225,7 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     const qualifierName = sliceText(lead.qualifier, parsed.source);
     const boundByOwner =
       csharpTypeRootName(lead.qualifier) &&
-      !csharpAliasAt(mod, qualifierName, lead.qualifier) &&
+      !csharpAliasAt(index, mod, qualifierName, lead.qualifier) &&
       peekCsharpOuterMember(index, use.file, lead.qualifier, qualifierName)?.status === "member";
     if (boundByOwner) return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     const reason = csharpNamespaceFallbackReason(index, mod, lead.qualifier, parsed.source, use.files);
@@ -247,7 +247,7 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   },
   shadowsModuleAlias: (use) => !!csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source),
   moduleAliasIsUnshadowed({ use, closestBinding }) {
-    if (!csharpAliasAt(use.mod, use.name, use.node)) return true;
+    if (!csharpAliasAt(use.index, use.mod, use.name, use.node)) return true;
     return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
   },
   // Enclosing members precede aliases and imports, including nested types of another partial part or a base class.
@@ -266,7 +266,7 @@ export const csharpLookupPolicy: NameLookupPolicy = {
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
     if (!closestBinding?.import || !csharpTypeOnlyName(use.node, true)) return undefined;
-    const alias = csharpAliasAt(use.mod, lookupName, use.node);
+    const alias = csharpAliasAt(use.index, use.mod, lookupName, use.node);
     if (alias?.kind !== "named") return undefined;
     const reason = csharpAliasUnprovenReason(use.index, use.mod, use.node, use.parsed.source);
     if (reason) return { status: "not_found", reason };
