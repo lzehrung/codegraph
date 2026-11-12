@@ -178,9 +178,26 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   singleton_method: true,
 };
 
+/** Anonymous annotation shapes have no indexed owner and must not donate module or enclosing-class locals. */
+function isNamedTypeScriptProperty(node: SyntaxNodeLike): boolean {
+  const declaration = node.parent;
+  if (declaration?.type !== "property_signature") return false;
+  if (declaration.childForFieldName("name")?.id !== node.id) return false;
+  const body = declaration.parent;
+  const owner = body?.parent;
+  if (owner?.type === "interface_declaration") {
+    return body?.type === "interface_body" && owner.childForFieldName("body")?.id === body.id;
+  }
+  if (owner?.type === "type_alias_declaration") {
+    return body?.type === "object_type" && owner.childForFieldName("value")?.id === body.id;
+  }
+  return false;
+}
+
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
   if (phpConstructorPromotedVariable(node)) return true;
+  if (node.parent?.type === "property_signature") return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -960,6 +977,7 @@ export function collectLocalsAndExportsFromSource(
   ) => {
     if (!localName) return;
     if (range.start.index !== undefined && range.start.index === range.end.index) return;
+    if (node?.parent?.type === "property_signature" && !isNamedTypeScriptProperty(node)) return;
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
     seenLocals.add(key);

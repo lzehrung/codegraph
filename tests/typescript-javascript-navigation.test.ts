@@ -16,6 +16,8 @@ import {
   type SymbolGraph,
 } from "../src/index.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import { parseNavigationContext } from "../src/indexer/parse-context.js";
+import { buildScopeIndexFromSource } from "../src/indexer/scope.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 
@@ -654,6 +656,82 @@ describe("TypeScript and JavaScript navigation", () => {
         expect(referenceSites(own)).toEqual([`${fileName}:3`]);
         const graph = await buildSymbolGraphDetailed(fixture.index);
         expect(callTargetIds(graph, "run")).toEqual([`${file}::m::${tokenIndex(source, 1, "m")}`]);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps anonymous annotation properties out of value scopes and enclosing member lookup", async () => {
+      const fileName = `ownership.${extension}`;
+      const source = [
+        "const scope: { refresh?: () => void } = {};",
+        "scope.refresh = function refresh() { refresh(); };",
+        "const outside = refresh;",
+        "function invoke(refresh: () => void) { const local: { refresh?: () => void } = {}; refresh(); }",
+        "class B { m() {} }",
+        "class A extends B {",
+        "  shape: { m: () => void };",
+        "  run() { this.m(); }",
+        "}",
+        "type Named = { m: () => void };",
+        "function callNamed(a: Named) { a.m(); }",
+        "",
+      ].join("\n");
+      const fixture = await project({ [fileName]: source });
+      const file = fixture.file(fileName);
+      try {
+        const mod = fixture.index.byFile.get(fileIdentityKey(file));
+        if (!mod) throw new Error("missing indexed ownership fixture");
+        const parsed = await parseNavigationContext(file);
+        const scopes = buildScopeIndexFromSource(file, source, parsed.sup, mod.imports, {
+          tree: parsed.tree,
+          locals: mod.locals,
+        });
+        expect(scopes.allScopes[0]?.map.has("refresh")).toBe(false);
+        expect(scopes.bindings.get("m")).toBeUndefined();
+        expect(
+          scopes.all
+            .filter((binding) => binding.name === "refresh")
+            .map((binding) => ({ kind: binding.kind, line: binding.def?.start.line })),
+        ).toEqual([
+          { kind: "function", line: 2 },
+          { kind: "param", line: 4 },
+        ]);
+        expect(
+          listSymbols(fixture.index, { file })
+            .filter((symbol) => symbol.name === "refresh")
+            .map((symbol) => symbol.range?.start.line)
+            .sort((left, right) => (left ?? 0) - (right ?? 0)),
+        ).toEqual([2, 4]);
+        expect(
+          mod.locals
+            .filter((definition) => definition.localName === "m")
+            .map((definition) => ({ line: definition.range.start.line, member: definition.isMember })),
+        ).toEqual([
+          { line: 5, member: true },
+          { line: 10, member: true },
+        ]);
+        for (const [line, token, expectedLine] of [
+          [2, "refresh();", 2],
+          [4, "refresh();", 4],
+          [8, "m();", 5],
+          [11, "m();", 10],
+        ] as const) {
+          const goto = await goToDefinition(fixture.index, { file, line, column: columnOf(source, line, token) });
+          expect(goto.status).toBe("ok");
+          if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(expectedLine);
+        }
+        const outside = await goToDefinition(fixture.index, { file, line: 3, column: columnOf(source, 3, "refresh") });
+        expect(outside.status).toBe("not_found");
+        const inherited = await findReferences(fixture.index, { file, line: 5, column: columnOf(source, 5, "m()") });
+        expect(inherited.status).toBe("ok");
+        expect(referenceSites(inherited)).toEqual([`${fileName}:5`, `${fileName}:8`]);
+        const own = await findReferences(fixture.index, { file, line: 10, column: columnOf(source, 10, "m:") });
+        expect(own.status).toBe("ok");
+        expect(referenceSites(own)).toEqual([`${fileName}:10`, `${fileName}:11`]);
+        const graph = await buildSymbolGraphDetailed(fixture.index);
+        expect(callTargetIds(graph, "run")).toEqual([`${file}::m::${tokenIndex(source, 5, "m()")}`]);
+        expect(callTargetIds(graph, "callNamed")).toEqual([`${file}::m::${tokenIndex(source, 10, "m:")}`]);
       } finally {
         await rm(fixture.root, { recursive: true, force: true });
       }
