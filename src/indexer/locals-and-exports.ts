@@ -40,7 +40,7 @@ import {
   isJavaPublicDeclaration,
 } from "./declaration-visibility.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
+import { typescriptCollapsedOverloadTarget, typescriptSplitMethodName } from "./ts-callables.js";
 
 // Missing captured comments prove missing documentation only for these languages.
 // Python captures # comments but not triple-quoted function/class docstrings.
@@ -136,12 +136,13 @@ const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "function_definition",
 ]);
 
-// Structural supplementation also covers ECMAScript fields and TypeScript property signatures,
-// including private names and declarations the native locals query does not capture.
+// TypeScript/TSX and JavaScript class field declarations are absent from
+// those languages' native `locals` query (only method-like declarations
+// are queried there), so `#private` and public class fields resolve to
+// zero definitions without this structural supplement.
 const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
   "public_field_definition", // TypeScript/TSX
   "field_definition", // JavaScript
-  "property_signature", // TypeScript/TSX interfaces and type literals
 ]);
 
 const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
@@ -178,26 +179,9 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   singleton_method: true,
 };
 
-/** Anonymous annotation shapes have no indexed owner and must not donate module or enclosing-class locals. */
-function isNamedTypeScriptProperty(node: SyntaxNodeLike): boolean {
-  const declaration = node.parent;
-  if (declaration?.type !== "property_signature") return false;
-  if (declaration.childForFieldName("name")?.id !== node.id) return false;
-  const body = declaration.parent;
-  const owner = body?.parent;
-  if (owner?.type === "interface_declaration") {
-    return body?.type === "interface_body" && owner.childForFieldName("body")?.id === body.id;
-  }
-  if (owner?.type === "type_alias_declaration") {
-    return body?.type === "object_type" && owner.childForFieldName("value")?.id === body.id;
-  }
-  return false;
-}
-
 function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
   if (phpConstructorPromotedVariable(node)) return true;
-  if (node.parent?.type === "property_signature") return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -853,7 +837,10 @@ export function collectLocalsAndExportsFromSource(
           }
         : {}),
     };
-    if (node && isTypeMemberDeclaration(node)) base.isMember = true;
+    // Only split-method recovery indexes a property-signature name as a function.
+    // Persist membership so type-literal references need no query-time syntax recovery.
+    const splitMethod = kind === SymbolKind.Function && node?.parent?.type === "property_signature";
+    if (splitMethod || (node && isTypeMemberDeclaration(node))) base.isMember = true;
     if (support.id === "csharp" && node) {
       const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
       if (nominalType) {
@@ -977,7 +964,6 @@ export function collectLocalsAndExportsFromSource(
   ) => {
     if (!localName) return;
     if (range.start.index !== undefined && range.start.index === range.end.index) return;
-    if (node?.parent?.type === "property_signature" && !isNamedTypeScriptProperty(node)) return;
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
     seenLocals.add(key);
@@ -1090,6 +1076,21 @@ export function collectLocalsAndExportsFromSource(
       const name = node.childForFieldName("name") ?? node.childForFieldName("property");
       if (name) {
         pushLocal(sliceText(name, source), SymbolKind.Variable, toRange(name), name);
+      }
+    } else if (node.type === "call_signature" && (support.id === "ts" || support.id === "tsx")) {
+      const name = typescriptSplitMethodName(node);
+      if (name) {
+        const localName = sliceText(name, source);
+        const range = toRange(name);
+        const callable = callableIdentityForDeclaration({
+          file,
+          name: localName,
+          range,
+          languageId: support.id,
+          source,
+          node,
+        });
+        pushLocal(localName, SymbolKind.Function, range, name, callable);
       }
     }
     for (const child of node.namedChildren) {

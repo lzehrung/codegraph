@@ -61,6 +61,5 @@ symbol syntax/generics.ts::run@24:17 -[calls]-> syntax/generics.ts::format@21:17
 symbol syntax/generics.ts::wrapper@10:17 -[calls]-> syntax/generics.ts::identity@2:17 site=15:10
 symbol syntax/split-generic-method.ts::A@2:11 -[extends]-> syntax/split-generic-method.ts::B@1:11 site=2:21
 symbol syntax/split-generic-method.ts::m@1:15 -[member_of]-> syntax/split-generic-method.ts::B@1:11
-symbol tsx/field-chain.tsx::FieldChain@7:10 -[calls]-> tsx/field-chain.tsx::open@2:5 site=8:22
-symbol tsx/field-chain.tsx::FieldChain@7:10 -[calls]-> tsx/field-chain.tsx::open@2:5 site=9:22
+symbol syntax/split-generic-method.ts::m@3:3 -[member_of]-> syntax/split-generic-method.ts::A@2:11
 symbol tsx/field-chain.tsx::open@2:5 -[member_of]-> tsx/field-chain.tsx::Controller@1:7

@@ -151,8 +151,8 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 145 re-extracts TypeScript and TSX files whose semicolonless generic call signatures previously
  * put later type aliases under ERROR, restoring their symbols and navigation references, and omits
  * zero-width or empty-name recovery declarations from cached symbols and scope bindings.
- * Epoch 146 indexes TypeScript property signatures and rebuilds receiver calls where potentially callable
- * ECMAScript properties were skipped in favor of inherited methods.
+ * Epoch 146 restores split generic method identities and arities without indexing ordinary TypeScript
+ * property signatures or changing ECMAScript property member selection.
  */
 export const CORE_ALGORITHM_EPOCH = 146;
 /**

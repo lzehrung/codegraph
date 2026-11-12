@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
+import { typescriptSplitMethodName } from "../../indexer/ts-callables.js";
 import { sliceText, unquote } from "../../util/ast.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import {
@@ -191,6 +192,13 @@ export function collectDetailedDeclarations(
         // A declaration is modeled only through the symbol at its own name. Falling back to a
         // same-named symbol elsewhere would give this body another declaration's identity.
         const def = findDefinitionAt(name, nameNode!);
+        if (def) functionNodes.push({ name, node, def });
+      }
+    } else if (node.type === "call_signature" && (sup.id === "ts" || sup.id === "tsx")) {
+      const nameNode = typescriptSplitMethodName(node);
+      if (nameNode) {
+        const name = sliceText(nameNode, source);
+        const def = findDefinitionAt(name, nameNode);
         if (def) functionNodes.push({ name, node, def });
       }
     } else if (sup.id === "kotlin" && node.type === "property_declaration" && kotlinExtensionReceiverType(node)) {

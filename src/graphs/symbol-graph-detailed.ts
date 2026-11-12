@@ -31,12 +31,7 @@ import {
   isGoExportedMemberName,
   languageHasDeclarationVisibility,
 } from "../indexer/declaration-visibility.js";
-import {
-  ecmaPropertyHasNonCallableInitializer,
-  ecmaPropertyMayBeCallable,
-  inheritsMemberOverloads,
-  kotlinPropertyInvocationArity,
-} from "../indexer/member-selection.js";
+import { inheritsMemberOverloads, kotlinPropertyInvocationArity } from "../indexer/member-selection.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
@@ -94,7 +89,6 @@ import {
 import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
 import {
-  declarationNodeIsStatic,
   emitReceiverCallEdges,
   nearestMemberContainer,
   inheritedReceiverMemberSignatures,
@@ -744,59 +738,38 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
-  const propertyInvocationArities = new Map<string, CallableArity | null>();
-  const invokablePropertyMembers = new Map<string, Set<string>>();
-  const nonCallablePropertyTargets = new Set<string>();
-  const propertyCallNames = new Map<string, Set<string>>();
-  for (const candidate of receiverCalls) {
-    const languageId = supportForIndexedFile(candidate.site.file)?.id;
-    if (!languageId || (languageId !== "kotlin" && !isJsTsLanguage(languageId))) continue;
-    let names = propertyCallNames.get(languageId);
-    if (!names) {
-      names = new Set();
-      propertyCallNames.set(languageId, names);
-    }
-    names.add(candidate.memberName);
-  }
-  if (propertyCallNames.size) {
+  const kotlinPropertyArities = new Map<string, CallableArity | null>();
+  const kotlinPropertyMembers = new Map<string, Set<string>>();
+  const kotlinCallNames = new Set(
+    receiverCalls
+      .filter((candidate) => supportForIndexedFile(candidate.site.file)?.id === "kotlin")
+      .map((candidate) => candidate.memberName),
+  );
+  if (kotlinCallNames.size) {
     for (const module of index.byFile.values()) {
-      const languageId = supportForIndexedFile(module.file)?.id;
-      const names = languageId ? propertyCallNames.get(languageId) : undefined;
-      if (!names) continue;
+      if (supportForIndexedFile(module.file)?.id !== "kotlin") continue;
       for (const def of module.locals) {
-        if (def.kind !== SymbolKind.Variable || !names.has(def.localName)) continue;
+        if (def.kind !== SymbolKind.Variable || !kotlinCallNames.has(def.localName)) continue;
         const parsed = await loadParsedFile(def.file);
         const start = def.range.start.index;
         if (!parsed || start === undefined) continue;
         const nameNode = parsed.tree.rootNode.descendantForIndex(start, start);
-        let arity: CallableArity | null | undefined;
-        if (languageId === "kotlin") arity = kotlinPropertyInvocationArity(nameNode);
-        else if (ecmaPropertyMayBeCallable(nameNode)) arity = null;
+        const arity = kotlinPropertyInvocationArity(nameNode);
         if (arity === undefined) continue;
         const container = nearestMemberContainer(nameNode);
         if (!container || !isDirectKeywordMemberDeclaration(nameNode, container)) continue;
         const ownerName =
           container.childForFieldName("name") ?? container.namedChildren.find((child) => child.type === "identifier");
-        const owner = module.locals.find((local) => {
-          const memberOwner =
-            local.kind === SymbolKind.Class ||
-            local.kind === SymbolKind.Interface ||
-            local.kind === SymbolKind.TypeAlias;
-          return memberOwner && local.range.start.index === ownerName?.startIndex;
-        });
+        const owner = module.locals.find(
+          (local) => local.kind === SymbolKind.Class && local.range.start.index === ownerName?.startIndex,
+        );
         if (!owner) continue;
         const ownerId = defNodeId(owner);
-        const memberId = defNodeId(def);
-        const members = invokablePropertyMembers.get(ownerId) ?? new Set<string>();
-        members.add(memberId);
-        invokablePropertyMembers.set(ownerId, members);
-        propertyInvocationArities.set(memberId, arity);
-        if (languageId && isJsTsLanguage(languageId)) {
-          const isStatic = declarationNodeIsStatic(nameNode.parent ?? nameNode, parsed.source);
-          receiverMemberScopes.set(memberId, isStatic ? "static" : "instance");
-          if (ecmaPropertyHasNonCallableInitializer(nameNode)) nonCallablePropertyTargets.add(memberId);
-        }
-        if (languageId === "kotlin" && !isExportedDeclaration("kotlin", nameNode)) fileHiddenMemberIds.add(memberId);
+        const members = kotlinPropertyMembers.get(ownerId) ?? new Set<string>();
+        members.add(defNodeId(def));
+        kotlinPropertyMembers.set(ownerId, members);
+        kotlinPropertyArities.set(defNodeId(def), arity);
+        if (!isExportedDeclaration("kotlin", nameNode)) fileHiddenMemberIds.add(defNodeId(def));
         noteCallableName(def.localName);
       }
     }
@@ -917,13 +890,12 @@ export async function buildSymbolGraphDetailed(
     receiverMemberScopes,
     nodeAliases,
     receiverMemberArities,
-    propertyInvocationArities,
-    invokablePropertyMembers,
+    kotlinPropertyArities,
+    kotlinPropertyMembers,
     sharedOwnerAnchors,
     sharedOwnerAccessibleMembers,
     fileHiddenMemberIds,
     (targetId, candidate) => {
-      if (nonCallablePropertyTargets.has(targetId)) return false;
       if (pythonReceiverTargets.has(candidate) && pythonReceiverTargets.get(candidate) !== targetId) {
         return false;
       }

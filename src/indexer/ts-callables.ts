@@ -5,6 +5,7 @@ import type { SymbolDef } from "./types.js";
 const OVERLOAD_SIGNATURE_NODE_TYPES: Record<string, true> = {
   function_signature: true,
   method_signature: true,
+  call_signature: true,
   abstract_method_signature: true,
 };
 
@@ -17,6 +18,23 @@ const OVERLOAD_IMPLEMENTATION_NODE_TYPES: Record<string, true> = {
 };
 
 export type TypeScriptCallableRole = "signature" | "implementation" | "other";
+
+/**
+ * The fork splits `m` newline `<T>()` into a bare property and a generic call signature.
+ * Explicit separators, annotations, optional markers, and other property forms stay separate.
+ * Called only while extracting module locals or walking detailed declarations.
+ */
+export function typescriptSplitMethodName(signature: SyntaxNodeLike): SyntaxNodeLike | undefined {
+  if (signature.type !== "call_signature" || !signature.childForFieldName("type_parameters")) return undefined;
+  let property = signature.previousSibling;
+  while (property?.type === "comment") property = property.previousSibling;
+  if (property?.type !== "property_signature") return undefined;
+  const name = property.childForFieldName("name");
+  if (name?.type !== "property_identifier" || name.startIndex === name.endIndex) return undefined;
+  // A bare name is the property's only token; even `m?` or `readonly m` is excluded.
+  if (property.startIndex !== name.startIndex || property.endIndex !== name.endIndex) return undefined;
+  return name;
+}
 
 /**
  * TypeScript overload signatures and the following implementation are one callable.
