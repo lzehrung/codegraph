@@ -68,6 +68,76 @@ function callTargetIds(graph: SymbolGraph, caller: string): string[] {
 }
 
 describe("TypeScript and JavaScript navigation", () => {
+  it.each(["ts", "tsx"] as const)(
+    "resolves a forward type alias after semicolonless generic signatures in %s across disk cache reload",
+    async (extension) => {
+      const fileName = `forward.${extension}`;
+      const source = [
+        "export interface Handler {",
+        "  <T0>(): Forward<T0>",
+        "  <T1>(): Forward<T1>",
+        "  <T2>(): Forward<T2>",
+        "}",
+        "type Forward<T> = T;",
+        "",
+      ].join("\n");
+      const decoy = "export type Forward<T> = { unrelated: T };\n";
+      const fixture = await project({ [fileName]: source, "decoy.ts": decoy });
+      const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+      try {
+        const observe = async (index: ProjectIndex) => {
+          const gotos = await Promise.all(
+            [2, 3, 4].map((line) =>
+              goToDefinition(index, { file: fixture.file(fileName), line, column: columnOf(source, line, "Forward") }),
+            ),
+          );
+          const references = await findReferences(index, {
+            file: fixture.file(fileName),
+            line: 6,
+            column: columnOf(source, 6, "Forward"),
+          });
+          const decoyReferences = await findReferences(index, {
+            file: fixture.file("decoy.ts"),
+            line: 1,
+            column: columnOf(decoy, 1, "Forward"),
+          });
+          const graph = await buildSymbolGraphDetailed(index);
+          return {
+            definitions: gotos.map((goto) =>
+              goto.status === "ok"
+                ? `${path.basename(goto.definition.file)}:${goto.definition.range.start.line}`
+                : goto.status,
+            ),
+            references: referenceSites(references),
+            coverage: references.status === "ok" ? references.referenceCoverage?.state : references.status,
+            decoyReferences: referenceSites(decoyReferences),
+            hasAliasNode: [...graph.nodes.values()].some(
+              (node) =>
+                node.name === "Forward" && fileIdentityKey(node.file) === fileIdentityKey(fixture.file(fileName)),
+            ),
+          };
+        };
+        const result = await observe(fixture.index);
+        expect(result.definitions).toEqual([`${fileName}:6`, `${fileName}:6`, `${fileName}:6`]);
+        expect(result.references).toEqual([`${fileName}:2`, `${fileName}:3`, `${fileName}:4`, `${fileName}:6`]);
+        expect(result.coverage).toBe("complete");
+        expect(result.decoyReferences).toEqual(["decoy.ts:1"]);
+        expect(result.hasAliasNode).toBe(true);
+
+        const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+        expect(await observe(cold)).toEqual(result);
+        closeDiskCacheDatabase(fixture.root, cacheOptions);
+        const warmReport: BuildReport = { timings: {} };
+        const warm = await buildProjectIndexIncremental(fixture.root, { ...cacheOptions, report: warmReport });
+        expect(warmReport.files?.parsed).toBe(0);
+        expect(await observe(warm)).toEqual(result);
+      } finally {
+        closeDiskCacheDatabase(fixture.root, cacheOptions);
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps overload signatures and resolves calls to the implementation", async () => {
     const fmt = [
       "export function format(value: string): string;",

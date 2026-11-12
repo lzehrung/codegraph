@@ -148,8 +148,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 143 resolves ECMAScript private names lexically and rebuilds their detailed call edges.
  * Epoch 144 applies C# global and project Using items with project-bounded visibility, rebuilds record-member
  * classifications, and keeps project Using facts out of per-module cache keys.
+ * Epoch 145 re-extracts TypeScript and TSX files whose semicolonless generic call signatures previously
+ * put later type aliases under ERROR, restoring their symbols and navigation references.
  */
-export const CORE_ALGORITHM_EPOCH = 144;
+export const CORE_ALGORITHM_EPOCH = 145;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -165,8 +167,10 @@ export const CORE_ALGORITHM_EPOCH = 144;
  * Epoch 16 re-extracts Kotlin files with the grammar fork's error recovery, which no longer reads the rest of a file as
  * one token: a file with a syntax error keeps the declarations after it, so its symbols, ERROR ranges, and package
  * facts change, and a stray `$` before a keyword-prefixed name with decimal digits above ASCII no longer stalls the parse.
+ * Epoch 17 uses the pinned TypeScript grammar fork to parse adjacent generic call signatures without
+ * semicolons; its syntax tree, ERROR ranges, and downstream language behavior differ from the old grammar.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 16;
+export const LANGUAGE_BEHAVIOR_EPOCH = 17;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

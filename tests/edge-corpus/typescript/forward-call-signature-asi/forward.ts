@@ -1,7 +1,7 @@
 export interface Handler {
-  <T0>(): Forward<T0> // @goto Forward @known-gap generic_call_signature_asi observed=not_found
-  <T1>(): Forward<T1>
-  <T2>(): Forward<T2>
+  <T0>(): Forward<T0> // @ref Forward @goto Forward
+  <T1>(): Forward<T1> // @ref Forward
+  <T2>(): Forward<T2> // @ref Forward
 }
-// @def Forward
+// @def Forward @coverage Forward complete
 type Forward<T> = T;
