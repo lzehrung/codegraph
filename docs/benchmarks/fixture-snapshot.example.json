@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-12T08:54:04.667Z",
+  "generatedAt": "2026-11-12T10:35:39.907Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
   "numTotalTests": 1481,
