@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { it } from "vitest";
+import { scoreDefinition, scoreEdges } from "../scripts/accuracy/accuracy-lib.mjs";
 
 const project = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "accuracy", "oracles", "csharp");
 const files = {
@@ -30,6 +31,10 @@ const files = {
     "    public partial void Part() { }",
     '    public partial string PartProp => "done";',
     "    public partial event System.Action? PartEvent { add { } remove { } }",
+    "}",
+    "public class ExplicitCtor",
+    "{",
+    "    public ExplicitCtor() { }",
     "}",
   ].join("\n"),
   "Extensions.cs": [
@@ -76,8 +81,21 @@ const files = {
     "        int absolute = System.Math.Abs(-1);",
     "        Tick();",
     "        Demo.Sub.One.Child child = new Demo.Sub.One.Child();",
+    "        var explicitCtor = new ExplicitCtor();",
     "        return worker.Name;",
     "    }",
+    "}",
+  ].join("\n"),
+  "Decoy.cs": [
+    "namespace Decoy;",
+    "public class Worker",
+    "{",
+    "    public Worker(int value) { }",
+    "}",
+    "public class DefaultCtor { }",
+    "public class ExplicitCtor",
+    "{",
+    "    public ExplicitCtor() { }",
     "}",
   ].join("\n"),
 };
@@ -188,7 +206,7 @@ it.skipIf(process.env.CODEGRAPH_ACCURACY_ORACLES !== "1")(
       assert.equal(result.schemaVersion, 1);
       assert.equal(result.language, "csharp");
       assert.deepEqual(result.oracle, { name: "roslyn", version: "5.0.0" });
-      assert.equal(result.diagnostics.files, 3);
+      assert.equal(result.diagnostics.files, 4);
       assert.deepEqual(result.diagnostics.errors, []);
       assert.equal(
         result.diagnostics.unresolvedSites,
@@ -205,7 +223,35 @@ it.skipIf(process.env.CODEGRAPH_ACCURACY_ORACLES !== "1")(
       ]);
       const constructor = siteAt(result, "Use.cs", 9, "Worker", 1);
       assert.equal(constructor.form, "constructor");
-      assert.deepEqual(constructor.definitions, [position("Types.cs", 5, "Worker")]);
+      assert.deepEqual(constructor.definitions, [
+        position("Extensions.cs", 2, "Worker"),
+        position("Extensions.cs", 10, "Worker"),
+        position("Types.cs", 2, "Worker"),
+        position("Types.cs", 5, "Worker"),
+        position("Types.cs", 17, "Worker"),
+      ]);
+      for (const definition of constructor.definitions) {
+        assert.equal(scoreDefinition(constructor, { status: "ok", definition }), "correct");
+        assert.equal(
+          scoreEdges(
+            constructor,
+            [{ from: "caller", to: definition, label: "instantiates", site: constructor }],
+            "caller",
+          ),
+          "edge-correct",
+        );
+      }
+      for (const definition of [position("Decoy.cs", 2, "Worker"), position("Decoy.cs", 4, "Worker")]) {
+        assert.equal(scoreDefinition(constructor, { status: "ok", definition }), "wrong");
+        assert.equal(
+          scoreEdges(
+            constructor,
+            [{ from: "caller", to: definition, label: "instantiates", site: constructor }],
+            "caller",
+          ),
+          "edge-wrong",
+        );
+      }
       assert.equal(type.column, 16, "columns count UTF-16 code units");
       assert.deepEqual(siteAt(result, "Use.cs", 10, "Handle").definitions, [position("Types.cs", 6, "Handle")]);
       assert.deepEqual(siteAt(result, "Use.cs", 11, "Handle").definitions, [position("Types.cs", 7, "Handle")]);
@@ -220,6 +266,27 @@ it.skipIf(process.env.CODEGRAPH_ACCURACY_ORACLES !== "1")(
       assert.deepEqual(siteAt(result, "Use.cs", 21, "DefaultCtor").definitions, [
         position("Types.cs", 15, "DefaultCtor"),
       ]);
+      const implicit = siteAt(result, "Use.cs", 21, "DefaultCtor");
+      assert.equal(
+        scoreDefinition(implicit, { status: "ok", definition: position("Types.cs", 15, "DefaultCtor") }),
+        "correct",
+      );
+      assert.equal(
+        scoreDefinition(implicit, { status: "ok", definition: position("Decoy.cs", 6, "DefaultCtor") }),
+        "wrong",
+      );
+      const explicit = siteAt(result, "Use.cs", 25, "ExplicitCtor");
+      assert.equal(explicit.form, "constructor");
+      assert.deepEqual(explicit.definitions, [
+        position("Types.cs", 23, "ExplicitCtor"),
+        position("Types.cs", 25, "ExplicitCtor"),
+      ]);
+      for (const definition of explicit.definitions) {
+        assert.equal(scoreDefinition(explicit, { status: "ok", definition }), "correct");
+      }
+      for (const definition of [position("Decoy.cs", 7, "ExplicitCtor"), position("Decoy.cs", 9, "ExplicitCtor")]) {
+        assert.equal(scoreDefinition(explicit, { status: "ok", definition }), "wrong");
+      }
       assert.equal(siteAt(result, "Use.cs", 23, "Tick").form, "bare-call");
       assert.equal(siteAt(result, "Use.cs", 2, "Worker").form, "import");
       assert.deepEqual(siteAt(result, "Use.cs", 24, "One").definitions, [position("Types.cs", 16, "One")]);
@@ -315,6 +382,222 @@ it.skipIf(process.env.CODEGRAPH_ACCURACY_ORACLES !== "1")(
       assert.equal(siteAt(disabled, "Use.cs", 17, "List").external, false);
       assert.equal(siteAt(disabled, "Use.cs", 18, "Console").external, false);
       assert.equal(siteAt(disabled, "Use.cs", 22, "Abs").external, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+  120_000,
+);
+
+it.skipIf(process.env.CODEGRAPH_ACCURACY_ORACLES !== "1")(
+  "Roslyn constructor sites retain exact record, generic, alias, nested, struct, and derived targets",
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "codegraph-csharp-constructors-"));
+    const sources = {
+      "Models.cs": [
+        "namespace Demo;",
+        "public record Rec(int X);",
+        "public record Rec2(int X)",
+        "{",
+        "    public Rec2() : this(0) { }",
+        "}",
+        "public class P(int x) { }",
+        "public class Box<T>",
+        "{",
+        "    public Box() { }",
+        "}",
+        "public partial class PG<T>",
+        "{",
+        "    public PG() { }",
+        "}",
+        "public partial class Worker",
+        "{",
+        "    public Worker() { }",
+        "}",
+        "public class Outer",
+        "{",
+        "    public class Inner",
+        "    {",
+        "        public Inner() { }",
+        "    }",
+        "}",
+        "public struct PlainStruct { }",
+        "public struct ExplicitStruct",
+        "{",
+        "    public ExplicitStruct() { }",
+        "}",
+        "public abstract class Base",
+        "{",
+        "    protected Base() { }",
+        "}",
+        "public class Derived : Base { }",
+        "public class ExplicitDerived : Base",
+        "{",
+        "    public ExplicitDerived() { }",
+        "}",
+        "public class Plain { }",
+      ].join("\n"),
+      "Parts.cs": ["namespace Demo;", "public partial class PG<T> { }", "public partial class Worker { }"].join("\n"),
+      "Decoy.cs": ["namespace Other;", "public class Worker", "{", "    public Worker() { }", "}"].join("\n"),
+      "Global.cs": "namespace N;\npublic class Plain { }",
+      "Use.cs": [
+        "using Demo;",
+        "using Alias = Demo.Worker;",
+        "namespace Client;",
+        "public class Use",
+        "{",
+        "    public void Run()",
+        "    {",
+        "        _ = new Rec(1);",
+        "        _ = new Rec2(1);",
+        "        _ = new Rec2();",
+        "        _ = new P(1);",
+        "        _ = new Box<int>();",
+        "        _ = new PG<int>();",
+        "        _ = new Alias();",
+        "        _ = new Outer.Inner();",
+        "        _ = new PlainStruct();",
+        "        _ = new ExplicitStruct();",
+        "        Plain e = new();",
+        "        _ = new Derived();",
+        "        _ = new ExplicitDerived();",
+        "        _ = new Plain { };",
+        "        _ = new global::N.Plain();",
+        "    }",
+        "}",
+      ].join("\n"),
+    };
+    const location = (file: keyof typeof sources, line: number, name: string): Position => {
+      const column = sources[file].split("\n")[line - 1].indexOf(name) + 1;
+      assert.ok(column, `${name} not found in ${file}:${line}`);
+      return { file, line, column };
+    };
+    try {
+      for (const [name, text] of Object.entries(sources)) writeFileSync(join(root, name), text);
+      const requestPath = join(root, "request.json");
+      const outputPath = join(root, "response.json");
+      writeFileSync(
+        requestPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          language: "csharp",
+          files: Object.keys(sources),
+          seed: 1,
+          maxSites: 1000,
+          maxDeclarations: 0,
+        }),
+      );
+      execFileSync(
+        "dotnet",
+        [
+          "run",
+          "--project",
+          project,
+          "-c",
+          "Release",
+          "--",
+          "--root",
+          root,
+          "--request",
+          requestPath,
+          "--output",
+          outputPath,
+        ],
+        { encoding: "utf8", windowsHide: true },
+      );
+      const result = JSON.parse(readFileSync(outputPath, "utf8")) as OracleResponse;
+      assert.deepEqual(result.diagnostics.errors, []);
+      const constructors = result.sites.filter((site) => site.file === "Use.cs" && site.form === "constructor");
+      const expected: Array<{ line: number; name: string; definitions: Position[] }> = [
+        { line: 8, name: "Rec", definitions: [location("Models.cs", 2, "Rec")] },
+        { line: 9, name: "Rec2", definitions: [location("Models.cs", 3, "Rec2")] },
+        {
+          line: 10,
+          name: "Rec2",
+          definitions: [location("Models.cs", 3, "Rec2"), location("Models.cs", 5, "Rec2")],
+        },
+        { line: 11, name: "P", definitions: [location("Models.cs", 7, "P")] },
+        {
+          line: 12,
+          name: "Box",
+          definitions: [location("Models.cs", 8, "Box"), location("Models.cs", 10, "Box")],
+        },
+        {
+          line: 13,
+          name: "PG",
+          definitions: [
+            location("Models.cs", 12, "PG"),
+            location("Models.cs", 14, "PG"),
+            location("Parts.cs", 2, "PG"),
+          ],
+        },
+        {
+          line: 14,
+          name: "Alias",
+          definitions: [
+            location("Models.cs", 16, "Worker"),
+            location("Models.cs", 18, "Worker"),
+            location("Parts.cs", 3, "Worker"),
+          ],
+        },
+        {
+          line: 15,
+          name: "Inner",
+          definitions: [location("Models.cs", 22, "Inner"), location("Models.cs", 24, "Inner")],
+        },
+        { line: 16, name: "PlainStruct", definitions: [location("Models.cs", 27, "PlainStruct")] },
+        {
+          line: 17,
+          name: "ExplicitStruct",
+          definitions: [location("Models.cs", 28, "ExplicitStruct"), location("Models.cs", 30, "ExplicitStruct")],
+        },
+        { line: 19, name: "Derived", definitions: [location("Models.cs", 36, "Derived")] },
+        {
+          line: 20,
+          name: "ExplicitDerived",
+          definitions: [location("Models.cs", 37, "ExplicitDerived"), location("Models.cs", 39, "ExplicitDerived")],
+        },
+        { line: 21, name: "Plain", definitions: [location("Models.cs", 41, "Plain")] },
+        { line: 22, name: "Plain", definitions: [location("Global.cs", 2, "Plain")] },
+      ];
+      assert.equal(constructors.length, expected.length, "only terminal constructed names are constructor sites");
+      for (const testCase of expected) {
+        const site = constructors.find((entry) => entry.line === testCase.line && entry.name === testCase.name);
+        assert.ok(site, `missing Use.cs:${testCase.line} ${testCase.name}`);
+        assert.deepEqual(site.definitions, testCase.definitions, `Use.cs:${testCase.line} ${testCase.name}`);
+        assert.equal(site.external, false);
+        for (const definition of testCase.definitions) {
+          assert.equal(scoreDefinition(site, { status: "ok", definition }), "correct");
+          assert.equal(
+            scoreEdges(site, [{ from: "caller", to: definition, label: "instantiates", site }], "caller"),
+            "edge-correct",
+          );
+        }
+      }
+      const alias = constructors.find((site) => site.name === "Alias")!;
+      for (const definition of [location("Decoy.cs", 2, "Worker"), location("Decoy.cs", 4, "Worker")]) {
+        assert.equal(scoreDefinition(alias, { status: "ok", definition }), "wrong");
+        assert.equal(
+          scoreEdges(alias, [{ from: "caller", to: definition, label: "instantiates", site: alias }], "caller"),
+          "edge-wrong",
+        );
+      }
+      for (const site of constructors.filter((entry) => entry.name === "Derived" || entry.name === "ExplicitDerived")) {
+        for (const definition of [location("Models.cs", 32, "Base"), location("Models.cs", 34, "Base")]) {
+          assert.equal(scoreDefinition(site, { status: "ok", definition }), "wrong");
+        }
+      }
+      assert.ok(!constructors.some((site) => site.line === 18), "target-typed new has no constructor identifier");
+      for (const [line, name] of [
+        [15, "Outer"],
+        [22, "N"],
+      ] as const) {
+        const qualifier = result.sites.find(
+          (site) => site.file === "Use.cs" && site.line === line && site.name === name,
+        );
+        assert.ok(qualifier);
+        assert.notEqual(qualifier.form, "constructor");
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

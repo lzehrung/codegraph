@@ -235,10 +235,18 @@ function run(root, request) {
         }
         definitions.push(position(answer.fileName, answer.textSpan.start));
       }
+      const isClassConstructor = candidate.form === "constructor" && targetSymbol?.declarations?.some(ts.isClassLike);
+      let declarationSymbol = targetSymbol;
+      if (isClassConstructor) {
+        const parent = candidate.node.parent;
+        const creation = ts.isPropertyAccessExpression(parent) ? parent.parent : parent;
+        declarationSymbol = checker.getTypeAtLocation(creation).getSymbol();
+      }
       // Overload signatures and implementations (and merged declarations) share one compiler symbol.
       // Keep every proven name token, rather than penalizing a valid implementation target.
-      if (answers.length && targetSymbol?.declarations?.length > 1) {
-        for (const declaration of targetSymbol.declarations) {
+      const includeDeclarations = isClassConstructor || declarationSymbol?.declarations?.length > 1;
+      if (answers.length && includeDeclarations) {
+        for (const declaration of declarationSymbol?.declarations ?? []) {
           const name = declaration.name;
           if (!name || !(ts.isIdentifier(name) || ts.isPrivateIdentifier(name))) continue;
           const source = declaration.getSourceFile();
