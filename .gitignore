@@ -17,5 +17,7 @@ scripts/accuracy/oracles/csharp/bin/
 scripts/accuracy/oracles/csharp/obj/
 .vitest/
 .claude/
+.odw/*
+!.odw/workflows/
 .idea/
 .vscode/
