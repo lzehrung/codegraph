@@ -73,6 +73,20 @@ using syntax and facts proven from source. It must not emulate the full language
   - import specifier targets: `src/util/resolution/specifier-targets.ts`.
 - Never add a resolution rule to one consumer. Add it to the shared module or the language policy, so
   every consumer gives the same answer.
+- Compare names only through the language's identifier normalizer
+  (`LanguageSupport.normalizeIdentifier`), including map keys, alias tables, Bloom and name-set
+  prefilters, and receiver-binding checks. Keep the source spelling for ranges and output. Express
+  a language difference as a `LanguageSupport` hook or table entry, not a `sup.id === "..."` branch
+  in shared code.
+- Each lookup reads only the binding kinds the language allows at that position: value, type, or
+  namespace. Where the language separates them, a parameter, local, field, or property hides an
+  alias or type only in expression position, and type positions skip value bindings. A
+  declaration's own name is not a use, and a type parameter is a type binding scoped to its
+  declaration.
+- A table or prefilter inside one consumer (graph alias maps, callable-name sets, Bloom filters)
+  may only skip candidates that the shared rule would also reject. It never selects a target.
+- A new way to reach a declaration (an alias spelling, a mixin, an extension, an inherited member)
+  also updates reference candidate collection. Until it does, `findReferences` reports `partial`.
 - A fix for a call form adds or updates its cell in `tests/call-form-matrix/`, with the expected
   declaration and a same-named decoy. Regenerate `docs/coverage/call-forms.md` with
   `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
@@ -102,6 +116,8 @@ using syntax and facts proven from source. It must not emulate the full language
     Do not model the full language rule.
   - A miss on a rare form that returns `not_found` or `partial` goes to its own issue or to the
     limits in `docs/language-parity.md`. It does not block the current change.
+  - Before calling a finding a regression, or fixing it, run the same probe on the base build. A
+    gap that the base build also shows goes to its own issue, not into the current change.
 - Before adding a language-specific rule, confirm that it affects common code and fits an existing
   capability table or shared helper. If it needs type inference or cross-file data flow, stop and
   document the limit.
@@ -142,6 +158,13 @@ using syntax and facts proven from source. It must not emulate the full language
 - If a derived cached field changes behavior, invalidate existing snapshots by version or by
   fingerprinting every new input. Legacy snapshot migration MUST drop or recompute affected
   derived fields rather than relabel stale data as current.
+- Persist each per-file fact with its module and combine facts across files at query time. Never
+  store an answer that depends on other files in one file's cache entry. A change to indexed facts
+  needs a test that a warm build (disk and memory) matches a cold build after an edit, a delete, a
+  rename back, and a restore.
+- A change to indexing, incremental update, or graph build reports paired, interleaved base and
+  head medians on a large real project: cold build, no-change update, one-file update, and graph
+  build. Incremental work must grow with the changed files, not with project size.
 - Before extracting an archive, validate its verified location, entry paths, and entry types.
   Reject links and special files before extraction. Report a missing executable as an environment
   failure, not invalid input.
