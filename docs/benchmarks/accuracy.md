@@ -22,6 +22,7 @@ npm run accuracy -- --repo zod --corpus-dir /tmp/accuracy-corpus --output .accur
 The harness indexes a repository, sends the indexed files for one language to the oracle, and queries the built Codegraph API at the sites the oracle samples. Sampling is deterministic: candidates are sorted by file, line, and column, then shuffled with mulberry32 from the seed.
 
 - **Correct, wrong, missed:** `goToDefinition` matches an oracle definition by file and line, returns another project target, or finds nothing for a site the oracle resolves. Any overload or partial declaration counts as a match.
+- **Constructors:** a constructor site accepts the constructed type's declaration names (including merged or partial parts) as well as an explicit constructor, for both definitions and `instantiates` edges. TypeScript expands only class symbols; constructor-valued parameters and properties retain their ordinary language-service definitions.
 - **External OK:** the oracle resolves outside the project and Codegraph returns no project target. **Excluded:** the oracle cannot resolve the site.
 - **Refs P / R:** `findReferences` precision and recall by exact position. The declaration itself and related declarations (overloads, merged or partial declarations, C# constructors) are excluded from both sides. **Overclaims:** Codegraph reports `complete` coverage with recall below 1.
 - **Edges:** whether `buildSymbolGraphDetailed` has a `calls` or `instantiates` edge from the enclosing function to the oracle target at sampled call sites.

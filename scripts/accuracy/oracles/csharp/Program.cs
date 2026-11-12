@@ -160,6 +160,11 @@ internal static class Oracle
                     symbol = constructorSymbol;
             }
             var (definitions, external) = SymbolLocations(symbol, sources);
+            if (form == "constructor" && symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } method)
+            {
+                var (typeDefinitions, _) = SymbolLocations(method.ContainingType, sources);
+                definitions = OrderedPositions(definitions.Concat(typeDefinitions).Distinct());
+            }
             siteResults.Add(new OracleSite(candidate.Position.File, candidate.Position.Line, candidate.Position.Column,
                 candidate.Node.Identifier.ValueText, form, definitions, external));
         }

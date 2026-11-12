@@ -253,6 +253,195 @@ describe("real-code accuracy benchmark pure logic", () => {
 });
 
 describe("TypeScript oracle protocol", () => {
+  it("accepts constructed classes and explicit constructors but rejects same-shaped decoys", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-accuracy-constructors-"));
+    try {
+      const sources = {
+        "lib.ts": [
+          "export class C {",
+          "  constructor() {}",
+          "}",
+          "export namespace C { export const marker = 1; }",
+          "export class Implicit {}",
+          "export class Box<T> {",
+          "  constructor(value?: T) {}",
+          "}",
+          "export namespace NS {",
+          "  export class C {",
+          "    constructor() {}",
+          "  }",
+          "  export class D {}",
+          "}",
+          "export class Impl {}",
+        ].join("\n"),
+        "decoy.ts": ["export class C {", "  constructor() {}", "}", "export class Implicit {}"].join("\n"),
+        "main.ts": [
+          'import { C, Implicit, Box, NS, Impl } from "./lib";',
+          'import * as classes from "./lib";',
+          "new C();",
+          "new Implicit();",
+          "new classes.C();",
+          "new Map();",
+          "new Box<number>();",
+          "new classes.Box<string>(1);",
+          "new NS.C();",
+          "new classes.NS.D();",
+          "const K = class { constructor() {} };",
+          "const K2 = class Named {};",
+          "new K();",
+          "new K2();",
+          "function mk(Ctor: new () => Impl) { return new Ctor(); }",
+          "const o = { C: Box };",
+          "new o.C();",
+          "new (Box as any)();",
+          "new (classes.Box)();",
+          "declare const dyn: any;",
+          "new dyn();",
+          "new dyn.X();",
+        ].join("\n"),
+      };
+      for (const [file, source] of Object.entries(sources)) fs.writeFileSync(path.join(root, file), source);
+      const requestPath = path.join(root, "request.json");
+      const outputPath = path.join(root, "response.json");
+      fs.writeFileSync(
+        requestPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          language: "typescript",
+          files: Object.keys(sources),
+          seed: 1,
+          maxSites: 100,
+          maxDeclarations: 0,
+        }),
+      );
+      const oraclePath = fileURLToPath(new URL("../scripts/accuracy/oracles/typescript/oracle.mjs", import.meta.url));
+      const child = spawnSync(
+        process.execPath,
+        [oraclePath, "--root", root, "--request", requestPath, "--output", outputPath],
+        { windowsHide: true, encoding: "utf8", timeout: 30_000 },
+      );
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      const response = JSON.parse(fs.readFileSync(outputPath, "utf8")) as OracleResponse;
+      expect(response.diagnostics.errors).toEqual([]);
+      const constructors = response.sites.filter((entry) => entry.form === "constructor");
+      expect(constructors).toHaveLength(14);
+      for (const entry of constructors.filter((candidate) => candidate.name === "C" && candidate.line <= 5)) {
+        const accepted = [
+          { file: "lib.ts", line: 1, column: 14 },
+          { file: "lib.ts", line: 2, column: 3 },
+          { file: "lib.ts", line: 4, column: 18 },
+        ];
+        expect(entry.definitions).toEqual(accepted);
+        expect(entry.external).toBe(false);
+        for (const definition of accepted) {
+          expect(scoreDefinition(entry, { status: "ok", definition })).toBe("correct");
+          expect(
+            scoreEdges(entry, [{ from: "caller", to: definition, label: "instantiates", site: entry }], "caller"),
+          ).toBe("edge-correct");
+        }
+        for (const line of [1, 2]) {
+          const decoy = { file: "decoy.ts", line, column: 1 };
+          expect(scoreDefinition(entry, { status: "ok", definition: decoy })).toBe("wrong");
+          expect(scoreEdges(entry, [{ from: "caller", to: decoy, label: "instantiates", site: entry }], "caller")).toBe(
+            "edge-wrong",
+          );
+        }
+      }
+      const implicit = constructors.find((entry) => entry.name === "Implicit")!;
+      const definition = { file: "lib.ts", line: 5, column: 14 };
+      expect(implicit.definitions).toEqual([definition]);
+      expect(scoreDefinition(implicit, { status: "ok", definition })).toBe("correct");
+      expect(scoreDefinition(implicit, { status: "ok", definition: { ...definition, file: "decoy.ts" } })).toBe(
+        "wrong",
+      );
+      expect(constructors.find((entry) => entry.name === "Map")).toMatchObject({
+        definitions: [],
+        external: true,
+      });
+      const at = (line: number, name: string): Site => {
+        const entry = response.sites.find(
+          (candidate) => candidate.file === "main.ts" && candidate.line === line && candidate.name === name,
+        );
+        expect(entry, `missing main.ts:${line} ${name}`).toBeDefined();
+        return entry!;
+      };
+      for (const line of [7, 8]) {
+        expect(at(line, "Box")).toMatchObject({
+          form: "constructor",
+          definitions: [
+            { file: "lib.ts", line: 6, column: 14 },
+            { file: "lib.ts", line: 7, column: 3 },
+          ],
+          external: false,
+        });
+      }
+      expect(at(9, "C")).toMatchObject({
+        form: "constructor",
+        definitions: [
+          { file: "lib.ts", line: 10, column: 16 },
+          { file: "lib.ts", line: 11, column: 5 },
+        ],
+      });
+      expect(at(10, "D")).toMatchObject({
+        form: "constructor",
+        definitions: [{ file: "lib.ts", line: 13, column: 16 }],
+      });
+      for (const [line, name] of [
+        [8, "classes"],
+        [9, "NS"],
+        [10, "classes"],
+        [10, "NS"],
+      ] as const) {
+        expect(at(line, name).form).not.toBe("constructor");
+      }
+      expect(at(13, "K")).toMatchObject({
+        form: "constructor",
+        definitions: [
+          { file: "main.ts", line: 11, column: 7 },
+          { file: "main.ts", line: 11, column: 19 },
+        ],
+      });
+      expect(at(14, "K2")).toMatchObject({
+        form: "constructor",
+        definitions: [{ file: "main.ts", line: 12, column: 7 }],
+      });
+      const parameter = at(15, "Ctor");
+      // The language service points at the parameter's construct signature, not Impl.
+      expect(parameter).toMatchObject({
+        form: "constructor",
+        definitions: [{ file: "main.ts", line: 15, column: 19 }],
+      });
+      const property = at(17, "C");
+      // Preserve both normal language-service answers, without adding Box's class name.
+      expect(property).toMatchObject({
+        form: "constructor",
+        definitions: [
+          { file: "lib.ts", line: 7, column: 3 },
+          { file: "main.ts", line: 16, column: 13 },
+        ],
+      });
+      for (const [entry, definition] of [
+        [parameter, { file: "lib.ts", line: 15, column: 14 }],
+        [property, { file: "lib.ts", line: 6, column: 14 }],
+      ] as const) {
+        expect(scoreDefinition(entry, { status: "ok", definition })).toBe("wrong");
+      }
+      expect(at(18, "Box").form).not.toBe("constructor");
+      expect(at(19, "Box").form).not.toBe("constructor");
+      expect(at(19, "classes").form).not.toBe("constructor");
+      expect(at(21, "dyn")).toMatchObject({
+        form: "constructor",
+        definitions: [{ file: "main.ts", line: 20, column: 15 }],
+        external: false,
+      });
+      expect(at(22, "X")).toMatchObject({ form: "constructor", definitions: [], external: false });
+      expect(response.diagnostics.unresolvedSites).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("uses the real language service for definitions, aliases, references, external and unresolved sites", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-accuracy-oracle-"));
     try {

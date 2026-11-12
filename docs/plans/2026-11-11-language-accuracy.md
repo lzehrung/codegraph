@@ -47,12 +47,14 @@ language, repository, and syntax form.
 | --------------- | ---------- | ------: | ----: | -----: | ----------: | -------: | ----------------------- | ---------: |
 | Zod             | TypeScript |     129 |    11 |     56 |          23 |      181 | 86.1% / 5.2%            |          5 |
 | Hono            | TypeScript |     208 |     1 |    123 |          60 |        8 | 74.3% / 40.5%           |          2 |
-| Spectre.Console | C#         |     245 |     3 |     78 |          60 |       14 | 89.0% / 23.4%           |          0 |
+| Spectre.Console | C#         |     246 |     2 |     78 |          60 |       14 | 89.0% / 23.4%           |          0 |
 | Humanizer       | C#         |     263 |     0 |     48 |          83 |        6 | 97.0% / 49.0%           |          0 |
+
+Constructor sites accept the constructed type (including merged or partial declarations) as well as explicit constructors since the benchmark constructor-site correction.
 
 Highest miss rates by syntax form: TypeScript type references (58%) and member accesses (52%); C#
 member calls (26%), member accesses (27%), and type references (27%). Wrong answers are rare
-(1.1% overall); misses and low reference recall dominate.
+(1.0% overall); misses and low reference recall dominate.
 
 ### Real-code gaps found by the benchmark
 
