@@ -177,9 +177,9 @@
         "tests/languages/php.test.ts"
       ],
       "tests": 133,
-      "passed": 86,
+      "passed": 133,
       "failed": 0,
-      "skipped": 47,
+      "skipped": 0,
       "status": "passing"
     },
     {
