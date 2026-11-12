@@ -162,9 +162,11 @@ using syntax and facts proven from source. It must not emulate the full language
   store an answer that depends on other files in one file's cache entry. A change to indexed facts
   needs a test that a warm build (disk and memory) matches a cold build after an edit, a delete, a
   rename back, and a restore.
-- A change to indexing, incremental update, or graph build reports paired, interleaved base and
-  head medians on a large real project: cold build, no-change update, one-file update, and graph
-  build. Incremental work must grow with the changed files, not with project size.
+- Performance must not regress. A change to indexing, incremental update, graph build, or reference
+  lookup reports paired, interleaved base and head medians (at least five alternating rounds) on a
+  large real project: cold build, no-change update, one-file update, and graph build. A head that
+  is consistently slower beyond run-to-run noise blocks the change, like a wrong answer. Incremental
+  work must grow with the changed files, not with project size.
 - Before extracting an archive, validate its verified location, entry paths, and entry types.
   Reject links and special files before extraction. Report a missing executable as an environment
   failure, not invalid input.
