@@ -295,6 +295,8 @@ const preview = await previewRenameWithSession(session, {
 
 `RenamePreviewResponse` returns the target, proposed name, `safe`, exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, limits, and omissions. Exported concrete types include `RenameEdit`, `RenameEditKind`, `RenameConflict`, `RenameUnsafeSite`, `RenameFilenameSuggestion`, and `RenameCandidateTest`.
 
+For a TypeScript, TSX, or JavaScript private member, `newName` must retain the `#` prefix. `previewRename` reports same-class collisions and private-name capture as conflicts.
+
 `tool_previewRename(root, request, runtimeOptions)` from `@lzehrung/codegraph-core/agent` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
 
 ## Refactor evidence plans

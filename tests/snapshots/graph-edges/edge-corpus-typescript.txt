@@ -40,6 +40,20 @@ symbol modules/error-consumer.ts::ns@import -[visible]-> modules/source.ts::orig
 symbol modules/shorthand.ts::original@import -[original]-> modules/source.ts::original@2:14
 symbol modules/source.ts::create@5:10 -[instantiates]-> modules/source.ts::Widget@4:22 site=5:40
 symbol modules/source.ts::create@5:10 -[member_of]-> modules/source.ts::Widget@4:22
+symbol private-names/private.js::#run@2:3 -[member_of]-> private-names/private.js::JavaScriptOwner@1:14
+symbol private-names/private.js::#run@6:3 -[member_of]-> private-names/private.js::JavaScriptDecoy@5:7
+symbol private-names/private.js::call@3:3 -[calls]-> private-names/private.js::#run@2:3 site=3:17
+symbol private-names/private.js::call@3:3 -[member_of]-> private-names/private.js::JavaScriptOwner@1:14
+symbol private-names/private.ts::#method@16:3 -[member_of]-> private-names/private.ts::Decoy@14:7
+symbol private-names/private.ts::#method@2:3 -[member_of]-> private-names/private.ts::Owner@1:14
+symbol private-names/private.ts::nested@8:3 -[member_of]-> private-names/private.ts::Owner@1:14
+symbol private-names/private.ts::read@10:7 -[member_of]-> private-names/private.ts::Inner@9:18
+symbol private-names/private.ts::run@4:3 -[calls]-> private-names/private.ts::#method@2:3 site=5:10
+symbol private-names/private.ts::run@4:3 -[member_of]-> private-names/private.ts::Owner@1:14
+symbol private-names/private.tsx::#value@2:3 -[member_of]-> private-names/private.tsx::Component@1:14
+symbol private-names/private.tsx::#value@6:3 -[member_of]-> private-names/private.tsx::ComponentDecoy@5:7
+symbol private-names/private.tsx::render@3:3 -[calls]-> private-names/private.tsx::#value@2:3 site=3:33
+symbol private-names/private.tsx::render@3:3 -[member_of]-> private-names/private.tsx::Component@1:14
 symbol reexports-clean/consumer.ts::original@import -[original]-> reexports-clean/source.ts::original@2:14
 symbol syntax/ambient.d.ts::pluginCall@2:19 -[member_of]-> syntax/ambient.d.ts::"virtual-plugin"@1:16
 symbol syntax/decorators.ts::method@7:3 -[member_of]-> syntax/decorators.ts::Decorated@5:14

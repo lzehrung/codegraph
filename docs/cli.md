@@ -315,6 +315,8 @@ Implementation entries identify the exact implementing declaration, inherited de
 
 `rename-preview` accepts a portable symbol handle and new identifier. Optional `--include-comments` and `--include-strings` add low-confidence textual edits; `--include-filenames` requests a suggestion for an eligible exported class, interface, or type whose filename matches its name, and `--max-edits <1-10000>` bounds returned edits.
 
+For a TypeScript, TSX, or JavaScript private member, the new identifier must retain the `#` prefix.
+
 Pretty rename summaries are the default. `--json` reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
 
 `refactor-plan` accepts a portable handle from `symbols` or `search`, or an exact internal changed-symbol handle from review or impact output. It composes the target definition, references, direct callers and callees, type relationships, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot; `--include-source` opts reference context into JSON.

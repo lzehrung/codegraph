@@ -145,8 +145,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * receiver named a member of the enclosing type instead of the receiver's, resolves lambda receivers declared by
  * project functions and aliases, and binds accessible cross-file receiver extensions and extension-property accessor
  * calls.
+ * Epoch 143 resolves ECMAScript private names lexically and rebuilds their detailed call edges.
  */
-export const CORE_ALGORITHM_EPOCH = 140;
+export const CORE_ALGORITHM_EPOCH = 143;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

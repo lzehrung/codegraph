@@ -38,7 +38,8 @@ import {
 } from "./navigation-local.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
-import { AMBIGUOUS_CPP_OVERLOAD_REASON } from "./ambiguous-resolution.js";
+import { AMBIGUOUS_CPP_OVERLOAD_REASON, AMBIGUOUS_RECEIVER_MEMBER_REASON } from "./ambiguous-resolution.js";
+import { resolveEcmaPrivateName } from "./member-selection.js";
 import {
   findRubyReopenedConstantParts,
   isExpandedStarBinding,
@@ -238,6 +239,22 @@ export async function goToDefinition(
 
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
+  if (isJsTsLanguage(sup.id) && node.type === "private_property_identifier") {
+    const declaration = mod.locals.find(
+      (local) => local.range.start.index === node!.startIndex && local.range.end.index === node!.endIndex,
+    );
+    if (declaration) return okGoToResult(index, declaration, { resolution: "exact", confidence: "high" });
+    const privateName = resolveEcmaPrivateName(node, mod.locals);
+    if (privateName.status === "resolved") {
+      if (privateName.target) {
+        return okGoToResult(index, privateName.target, { resolution: "member-access", confidence: "high" });
+      }
+      return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
+    }
+    const reason =
+      privateName.status === "ambiguous" ? AMBIGUOUS_RECEIVER_MEMBER_REASON : "No matching private name declaration";
+    return { status: "not_found", reason };
+  }
 
   if (sup.id === "ruby" && node.type === "super") {
     const target = await resolveRubySuperDefinition(index, mod, node, source, sup);
@@ -866,6 +883,17 @@ async function findReferencesInternal(
   const referenceDef = family.referenceDef;
   const localBinding = family.localBinding;
   pushRef({ file: definitionFile, range: definition.range });
+  const canHavePrivateMember = isJsTsLanguage(parsedContext.sup.id) && definition.isMember;
+  const definitionStart = definition.range.start.index;
+  let privateNameNode: SyntaxNodeLike | null = null;
+  if (canHavePrivateMember && definitionStart !== undefined) {
+    privateNameNode = parsedContext.tree.rootNode.descendantForIndex(definitionStart, definitionStart);
+  }
+  const privateResolution =
+    privateNameNode?.type === "private_property_identifier"
+      ? resolveEcmaPrivateName(privateNameNode, mod.locals)
+      : null;
+  const privateName = privateResolution !== null;
   const receiverMemberDefinition = isReceiverMemberDefinition(definition, parsedContext, !!family.receiverOwner);
   const csharpPartialEquivalents =
     parsedContext.sup.id === "csharp" &&
@@ -876,7 +904,14 @@ async function findReferencesInternal(
       ? await findCsharpPartialTypeEquivalents(index, definition)
       : [];
   const rubyReopen = parsedContext.sup.id === "ruby" ? findRubyReopenedConstantParts(index, definition) : undefined;
-  const equivalentDefinitions = [...family.equivalents, ...csharpPartialEquivalents, ...(rubyReopen?.parts ?? [])];
+  const equivalentDefinitions = [
+    ...family.equivalents,
+    ...csharpPartialEquivalents,
+    ...(rubyReopen?.parts ?? []),
+    ...(privateResolution?.status === "resolved"
+      ? privateResolution.definitions.filter((candidate) => !sameDef(candidate, definition, index.languageExtensions))
+      : []),
+  ];
   for (const equivalent of equivalentDefinitions) {
     pushRef({ file: equivalent.file, range: equivalent.range });
   }
@@ -975,7 +1010,8 @@ async function findReferencesInternal(
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
-  const scansReceiverReferences = shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
+  const scansReceiverReferences =
+    !privateName && shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
   const scansNamespaceReferences =
     parsedContext.sup.id === "csharp" &&
     !definition.isMember &&
@@ -1019,15 +1055,14 @@ async function findReferencesInternal(
     : undefined;
   const kotlinCallableCollision = !!kotlinFileBinding?.earlierSameScope;
 
+  const cFamilyCallable =
+    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
+    definition.kind === SymbolKind.Function &&
+    !receiverMemberDefinition;
+  const bindingNeedsVerifiedScan = requiresTypeScriptOverloadVerifiedScan || requiresRuntimeBindingVerifiedScan;
+  const kotlinNeedsVerifiedScan = kotlinExtension || kotlinCallableCollision;
   const requiresSameFileVerifiedScan =
-    ((parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
-      definition.kind === SymbolKind.Function &&
-      !receiverMemberDefinition) ||
-    scansNamespaceReferences ||
-    requiresTypeScriptOverloadVerifiedScan ||
-    requiresRuntimeBindingVerifiedScan ||
-    kotlinExtension ||
-    kotlinCallableCollision;
+    privateName || cFamilyCallable || scansNamespaceReferences || bindingNeedsVerifiedScan || kotlinNeedsVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;
@@ -1102,21 +1137,27 @@ async function findReferencesInternal(
     }
   }
 
-  let candidateFiles = [
-    ...new Map(
-      [referenceDef, ...equivalentDefinitions]
-        .flatMap((candidate) =>
-          getCachedReferenceCandidateFiles(
-            index,
-            candidate,
-            exportedNames,
-            !!phpQualifiedNames.length,
-            parsedContext.sup.id,
-          ),
-        )
-        .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
-    ).values(),
-  ].sort((left, right) => left.localeCompare(right));
+  let candidateFiles: string[];
+  if (privateName) {
+    // ECMAScript private names cannot be referenced outside their declaring file.
+    candidateFiles = [definitionFile];
+  } else {
+    candidateFiles = [
+      ...new Map(
+        [referenceDef, ...equivalentDefinitions]
+          .flatMap((candidate) =>
+            getCachedReferenceCandidateFiles(
+              index,
+              candidate,
+              exportedNames,
+              !!phpQualifiedNames.length,
+              parsedContext.sup.id,
+            ),
+          )
+          .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
+      ).values(),
+    ].sort((left, right) => left.localeCompare(right));
+  }
   // Candidates that share a compilation unit with the definition (or an equivalent
   // declaration) can name it without an import edge; the per-candidate scan below treats
   // them as bare-name reference sources in addition to the import-derived branches.

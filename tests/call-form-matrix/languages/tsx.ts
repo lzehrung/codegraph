@@ -7,6 +7,25 @@ export const tsxOmissions: readonly CallFormOmission[] = [];
 
 export const tsxCells: MatrixCell[] = [
   {
+    id: "tsx/private-self-member-call",
+    language: "tsx",
+    callForm: "self-member-call",
+    files: {
+      "widget.tsx": [
+        "export class Widget {",
+        "  #helper(): number { return 1; }",
+        "  render() { return <span>{this.#helper()}</span>; }",
+        "}",
+      ].join("\n"),
+      "decoy.tsx": ["export class Other {", "  #helper(): number { return -1; }", "}"].join("\n"),
+    },
+    use: { file: "widget.tsx", line: 3, token: "#helper" },
+    expected: { file: "widget.tsx", line: 2, token: "#helper" },
+    decoy: { file: "decoy.tsx", line: 2, token: "#helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.tsx", fromName: "render" },
+  },
+  {
     id: "tsx/bare-call",
     language: "tsx",
     callForm: "bare-call",

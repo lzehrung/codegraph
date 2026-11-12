@@ -8,6 +8,7 @@ export type { RenameCandidateTest };
 import { canonicalizePythonReceiverAttributeDefinition, findRenameReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
+import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "../indexer/member-selection.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
 import {
   SymbolKind,
@@ -19,10 +20,13 @@ import {
   type SymbolDef,
 } from "../indexer/types.js";
 import { supportForFile, supportForFileWithoutHeaderSample } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
+import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../indexer/parsed-cache.js";
 import { openConfinedReadableFile } from "../util/confined-file.js";
 import { errorMessage } from "../util/errors.js";
+import { toRange } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { classifySensitiveFile } from "./file-view.js";
 import { normalizeAgentFilePath } from "./normalize.js";
@@ -601,11 +605,21 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
   const support = supportForFileWithoutHeaderSample(def.file, snapshot.index.languageExtensions);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
+  const privateMember = allowsDollar && def.isMember && def.localName.startsWith("#");
+  const missingPrivatePrefix = privateMember && !newName.startsWith("#");
+  const reservedPrivateName = privateMember && newName === "#constructor";
+  const identifier = privateMember && !missingPrivatePrefix ? newName.slice(1) : newName;
   let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
   else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
   else if (support?.id === "scss") identifierPattern = SCSS_IDENTIFIER_PATTERN;
-  if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
+  if (
+    !newName ||
+    invalidPathCharacters ||
+    missingPrivatePrefix ||
+    reservedPrivateName ||
+    !identifierPattern.test(identifier)
+  ) {
     const displaySupport = supportForFile(def.file, snapshot.index.languageExtensions);
     conflicts.push({
       file,
@@ -726,6 +740,100 @@ async function addScssConflicts(
   }
 }
 
+/** Check the class-private namespace and any nested or enclosing name capture before a rename. */
+async function addPrivateNameConflicts(
+  snapshot: AgentProjectSnapshot,
+  target: SymbolDef,
+  newName: string,
+  references: readonly Reference[],
+  conflicts: RenameConflict[],
+  unsafeSites: RenameUnsafeSite[],
+  provenance: SemanticProvenance,
+): Promise<void> {
+  if (!newName.startsWith("#")) return;
+  const requestedKey = ecmaPrivateNameKey(newName);
+  if (requestedKey === ecmaPrivateNameKey(target.localName)) return;
+  const file = normalizeAgentFilePath(snapshot.root, target.file);
+  const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
+  if (!moduleIndex) {
+    unsafeSites.push({
+      location: { file, range: target.range },
+      text: target.localName,
+      reason: "unresolved_reference",
+      provenance: { ...provenance, confidence: "low", reason: "Private declaration module could not be found." },
+    });
+    return;
+  }
+  try {
+    const parsed = await ensureParsedContextForIndex(snapshot.index, target.file);
+    const position = { row: target.range.start.line - 1, column: target.range.start.column - 1 };
+    const targetNode = parsed.tree.rootNode.descendantForPosition(position, position);
+    const body = targetNode.parent?.parent;
+    if (targetNode.type !== "private_property_identifier" || body?.type !== "class_body") {
+      unsafeSites.push({
+        location: { file, range: target.range },
+        text: target.localName,
+        reason: "unresolved_reference",
+        provenance: { ...provenance, confidence: "low", reason: "Private declaration owner could not be proven." },
+      });
+      return;
+    }
+    const collision = resolveEcmaPrivateName(targetNode, moduleIndex.locals, newName);
+    if (collision.status !== "not_found" && collision.owner.startIndex === body.startIndex) {
+      const existing = collision.status === "resolved" ? collision.definitions[0] : undefined;
+      conflicts.push({
+        file,
+        location: { file, range: existing?.range ?? target.range },
+        reason: "name_collision",
+        ...(existing ? { existingHandle: semanticSymbolFromDef(snapshot, existing).handle } : {}),
+        message: `The owning class already declares "${newName}".`,
+      });
+      return;
+    }
+    for (const reference of references) {
+      if (fileIdentityKey(reference.file) !== fileIdentityKey(target.file)) continue;
+      const usePosition = { row: reference.range.start.line - 1, column: reference.range.start.column - 1 };
+      const use = parsed.tree.rootNode.descendantForPosition(usePosition, usePosition);
+      const lookup = resolveEcmaPrivateName(use, moduleIndex.locals, newName);
+      if (lookup.status === "not_found") continue;
+      const nearerClass = lookup.owner.startIndex > body.startIndex && lookup.owner.endIndex <= body.endIndex;
+      if (!nearerClass) continue;
+      conflicts.push({
+        file,
+        location: { file, range: reference.range },
+        reason: "shadowing",
+        message: `A nested class declares "${newName}" and would capture this reference.`,
+      });
+      return;
+    }
+    const pending: SyntaxNodeLike[] = [body];
+    while (pending.length) {
+      const node = pending.pop()!;
+      for (const child of node.namedChildren) pending.push(child);
+      if (node.type !== "private_property_identifier") continue;
+      if (ecmaPrivateNameKey(node.text) !== requestedKey || parsed.sup.isDeclarationName(node)) continue;
+      const existing = resolveEcmaPrivateName(node, moduleIndex.locals);
+      const innerOwner = existing.status !== "not_found" && existing.owner.startIndex >= body.startIndex;
+      if (innerOwner) continue;
+      conflicts.push({
+        file,
+        location: { file, range: toRange(node) },
+        reason: "shadowing",
+        message: `The renamed member would capture this use of "${newName}".`,
+      });
+      return;
+    }
+  } catch (error) {
+    rethrowStaleQuerySource(error);
+    unsafeSites.push({
+      location: { file, range: target.range },
+      text: target.localName,
+      reason: "unresolved_reference",
+      provenance: { ...provenance, confidence: "low", reason: "Private name conflicts could not be checked." },
+    });
+  }
+}
+
 async function addScopeConflicts(
   snapshot: AgentProjectSnapshot,
   target: SymbolDef,
@@ -735,6 +843,13 @@ async function addScopeConflicts(
   unsafeSites: RenameUnsafeSite[],
   provenance: SemanticProvenance,
 ): Promise<void> {
+  const support = supportForFileWithoutHeaderSample(target.file, snapshot.index.languageExtensions);
+  const ecmaScriptLanguage = !!support && isJsTsLanguage(support.id);
+  const privateMember = target.isMember && target.localName.startsWith("#");
+  if (ecmaScriptLanguage && privateMember) {
+    await addPrivateNameConflicts(snapshot, target, newName, references, conflicts, unsafeSites, provenance);
+    return;
+  }
   if (isTerraformFile(snapshot.index, target.file)) {
     await addTerraformConflicts(snapshot, target, newName, references, conflicts);
     return;

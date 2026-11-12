@@ -1,8 +1,94 @@
 import type { CallableArity, CallableIdentity } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
+import type { SymbolDef } from "./types.js";
+import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 
 export type MemberScope = "any" | "static" | "instance";
+/** Decode escapes within an already parsed ECMAScript private identifier token. */
+export function ecmaPrivateNameKey(name: string): string {
+  if (!name.includes("\\")) return name;
+  return name.replace(
+    /\\u(?:\{([0-9a-fA-F]{1,6})\}|([0-9a-fA-F]{4}))/gu,
+    (escape: string, braced?: string, fixed?: string) => {
+      const hex = braced ?? fixed;
+      if (!hex) return escape;
+      const codePoint = Number.parseInt(hex, 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : escape;
+    },
+  );
+}
+
+type PrivateNameResolution =
+  | { status: "resolved"; definitions: SymbolDef[]; target: SymbolDef | null; owner: SyntaxNodeLike }
+  | { status: "ambiguous"; owner: SyntaxNodeLike }
+  | { status: "not_found" };
+
+/** Accessor and static modifiers are syntax children before the private declaration's name. */
+function privateMemberModifiers(
+  declaration: SyntaxNodeLike,
+  name: SyntaxNodeLike,
+): { accessor: "get" | "set" | null; isStatic: boolean } {
+  let accessor: "get" | "set" | null = null;
+  let isStatic = false;
+  for (let index = 0; ; index += 1) {
+    const child = declaration.child(index);
+    if (!child || child.startIndex >= name.startIndex) break;
+    if (child.type === "get" || child.type === "set") accessor = child.type;
+    if (child.type === "static") isStatic = true;
+  }
+  return { accessor, isStatic };
+}
+
+/**
+ * Private names belong to the nearest enclosing class body that declares them, independently of
+ * the receiver's type. An unindexed or conflicting declaration still shadows outer classes.
+ */
+export function resolveEcmaPrivateName(
+  node: SyntaxNodeLike,
+  locals: readonly SymbolDef[],
+  requestedName?: string,
+): PrivateNameResolution {
+  if (node.type !== "private_property_identifier") return { status: "not_found" };
+  const name = ecmaPrivateNameKey(requestedName ?? node.text);
+  for (let body = node.parent; body; body = body.parent) {
+    if (body.type !== "class_body") continue;
+    const definitions: SymbolDef[] = [];
+    const accessorKinds: string[] = [];
+    let overloadStatic: boolean | undefined;
+    let validOverloadGroup = true;
+    for (const member of body.namedChildren) {
+      const declaredName = member.childForFieldName("name") ?? member.childForFieldName("property");
+      if (declaredName?.type !== "private_property_identifier") continue;
+      if (ecmaPrivateNameKey(declaredName.text) !== name) continue;
+      const definition = locals.find(
+        (local) =>
+          local.range.start.index === declaredName.startIndex && local.range.end.index === declaredName.endIndex,
+      );
+      if (!definition) return { status: "ambiguous", owner: body };
+      definitions.push(definition);
+      const { accessor, isStatic } = privateMemberModifiers(member, declaredName);
+      if (accessor) accessorKinds.push(`${isStatic ? "static:" : "instance:"}${accessor}`);
+      if (overloadStatic === undefined) overloadStatic = isStatic;
+      if (overloadStatic !== isStatic) validOverloadGroup = false;
+      const signature = member.type === "method_signature" && definition.callable?.role === "signature";
+      const implementation = member.type === "method_definition" && definition.callable?.role === "implementation";
+      if (accessor || (!signature && !implementation)) validOverloadGroup = false;
+    }
+    if (!definitions.length) continue;
+    if (definitions.length === 1) return { status: "resolved", definitions, target: definitions[0]!, owner: body };
+    const instanceAccessorPair = accessorKinds.includes("instance:get") && accessorKinds.includes("instance:set");
+    const staticAccessorPair = accessorKinds.includes("static:get") && accessorKinds.includes("static:set");
+    const accessorPair = definitions.length === 2 && (instanceAccessorPair || staticAccessorPair);
+    if (accessorPair) return { status: "resolved", definitions, target: null, owner: body };
+    if (validOverloadGroup) {
+      const implementation = typescriptCollapsedOverloadTarget(definitions, (definition) => definition.callable);
+      if (implementation) return { status: "resolved", definitions, target: implementation, owner: body };
+    }
+    return { status: "ambiguous", owner: body };
+  }
+  return { status: "not_found" };
+}
 
 /** A consumer supplies indexed owners or graph ownership edges without changing lookup order. */
 export type MemberModel<Owner, Member> = {

@@ -12,6 +12,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 ### Fixed
 
 - `codegraph init` and `codegraph sync --init` in a Git subdirectory warm the same cache that later commands reuse, without leaving an unused cache namespace at the repository root.
+- TypeScript, TSX, and JavaScript private class names now resolve lexically in navigation, references, and detailed call edges, including nested classes, overloads, and brand checks. Rename previews require the `#` prefix and report private-name collisions and capture.
 
 ## [3.2.1] - 2026-11-11
 

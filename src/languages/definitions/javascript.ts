@@ -152,7 +152,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   },
   nodeTypes: {
     identifier: ["identifier"],
-    propertyIdentifier: ["property_identifier"],
+    propertyIdentifier: ["property_identifier", "private_property_identifier"],
     shorthandPropertyIdentifier: ["shorthand_property_identifier", "shorthand_property_identifier_pattern"],
     memberExpression: "member_expression",
   },
