@@ -838,16 +838,12 @@ export function collectLocalsAndExportsFromSource(
           }
         : {}),
     };
-<<<<<<< ours
     // Only split-method recovery indexes a property-signature name as a function.
     // Persist membership so type-literal references need no query-time syntax recovery.
     const splitMethod =
       kind === SymbolKind.Function &&
       (node?.parent?.type === "property_signature" || node?.parent?.type === "public_field_definition");
-    if (splitMethod || (node && isTypeMemberDeclaration(node))) base.isMember = true;
-=======
-    if (node && isTypeMemberDeclaration(node, support.id)) base.isMember = true;
->>>>>>> theirs
+    if (splitMethod || (node && isTypeMemberDeclaration(node, support.id))) base.isMember = true;
     if (support.id === "csharp" && node) {
       const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
       if (nominalType) {
