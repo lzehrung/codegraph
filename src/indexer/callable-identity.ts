@@ -14,6 +14,15 @@ import {
   cppCallableSignatureForNode,
 } from "./cpp-callables.js";
 import { typescriptCallableContainerKeyForNode, typescriptCallableRole } from "./ts-callables.js";
+import { swiftCallableParameters } from "../util/swift-tree.js";
+
+/** Facts a language's callable declaration carries beside its identity key: Swift external labels and defaults. */
+const CALLABLE_FACT_EXTRACTORS: Readonly<Record<string, (declaration: SyntaxNodeLike) => Partial<CallableIdentity>>> = {
+  swift: (declaration) => {
+    const parameters = swiftCallableParameters(declaration);
+    return parameters ? { swiftParameters: parameters } : {};
+  },
+};
 
 function callableDeclaration(node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
   for (let current = node; current; current = current.parent ?? undefined) {
@@ -71,6 +80,8 @@ export function callableIdentityForDeclaration(args: {
     const owner = node ? typescriptCallableContainerKeyForNode(node) : "module";
     return { ...base, owner, key: node ? `${file}\0${owner}\0${name}` : uniqueKey, role: typescriptCallableRole(node) };
   }
+  const languageFacts = CALLABLE_FACT_EXTRACTORS[languageId];
+  if (languageFacts && declaration) return { ...base, owner: "", key: uniqueKey, ...languageFacts(declaration) };
   return { ...base, owner: "", key: uniqueKey };
 }
 
@@ -128,11 +139,30 @@ export function isCallableIdentity(value: unknown): value is CallableIdentity {
       callable.kind === "static-method") &&
     (callable.arity === null || isArity(callable.arity)) &&
     (callable.unboundArity === undefined || isArity(callable.unboundArity)) &&
+    (callable.swiftParameters === undefined ||
+      (Array.isArray(callable.swiftParameters) &&
+        callable.swiftParameters.every(
+          (parameter) =>
+            typeof parameter.label === "string" &&
+            typeof parameter.optional === "boolean" &&
+            typeof parameter.variadic === "boolean",
+        ))) &&
     (callable.signature === undefined || typeof callable.signature === "string") &&
     (callable.role === undefined ||
       callable.role === "signature" ||
       callable.role === "implementation" ||
       callable.role === "other") &&
     (callable.definition === undefined || typeof callable.definition === "boolean")
+  );
+}
+
+/** Whether the facts a language stores beside two callables' identities prove their signatures differ: Swift labels. */
+export function callableFactsDiffer(left: CallableIdentity | undefined, right: CallableIdentity | undefined): boolean {
+  const leftSwift = left?.swiftParameters;
+  const rightSwift = right?.swiftParameters;
+  if (!leftSwift && !rightSwift) return false;
+  if (!leftSwift || !rightSwift || leftSwift.length !== rightSwift.length) return true;
+  return leftSwift.some(
+    (parameter, at) => parameter.label !== rightSwift[at]?.label || parameter.variadic !== rightSwift[at]?.variadic,
   );
 }

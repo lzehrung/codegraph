@@ -52,7 +52,8 @@ import {
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestBinding, findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
@@ -703,6 +704,13 @@ export async function buildSymbolGraphDetailed(
             resolveJvmTypeName,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
+              const policy = memberLookupPolicyFor(sup.id);
+              if (policy.lexicalBinding) {
+                return policy.lexicalBinding({
+                  scopeBindingIsImport: () => !!findClosestScopeBinding(scopeIndex, name, expression, sup)?.import,
+                  binding: () => findClosestBinding(scopeIndex, moduleEntry.file, name, expression, sup, src, tree),
+                });
+              }
               // The receiver lookup selects the alias in scope itself.
               const imported = aliasTableAnswers(name, expression) ? aliasToTargetDef.get(aliasKey(name)) : undefined;
               if (imported) return imported;

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { memberLookupPolicyFor } from "../../indexer/member-lookup-policies/index.js";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
 import {
@@ -827,6 +828,7 @@ function capitalizedCallTypeName(expr: SyntaxNodeLike, source: string, sup: Lang
   if (expr.type !== "call" && expr.type !== "call_expression") return null;
   const callee = expr.childForFieldName("function") ?? expr.namedChildren[0] ?? null;
   if (!callee) return null;
+  if (memberLookupPolicyFor(sup.id).qualifiedConstruction && isMemberAccessNode(sup, callee)) return callee;
   const member =
     sup.id === "kotlin" && callee.type === "navigation_expression"
       ? getMemberAccessParts(sup, callee).property

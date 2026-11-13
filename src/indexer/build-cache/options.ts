@@ -161,8 +161,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * dispatch, and their verified references and detailed call edges.
  * Adapted trait uses retain hierarchy and unadapted members; subclasses keep adaptation uncertainty and trait-body
  * calls retain their own abstract declarations.
+ * Epoch 153 records Swift callable argument labels and rebuilds contextual member and call edges.
  */
-export const CORE_ALGORITHM_EPOCH = 152;
+export const CORE_ALGORITHM_EPOCH = 153;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

@@ -28,6 +28,7 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
 import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
@@ -63,6 +64,7 @@ import {
   KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { expectSwiftAccuracyReferences, SWIFT_ACCURACY_SOURCES } from "./helpers/swift-accuracy-fixture.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { expectKotlinSecondaryConstructorSuperReferences } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
@@ -9521,5 +9523,65 @@ import {
 it("keeps PHP trait-body requirements and composed-member references separate from inherited decoys", async () => {
   await withPhpTraitComposition(async (index, files, root) => {
     await expectPhpTraitCompositionReferences(index, files, root);
+  });
+});
+
+describe("Swift contextual references", () => {
+  it("keeps differently labeled overloads separate", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-accuracy-refs-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
+      await expectSwiftAccuracyReferences(await buildProjectIndex(root, { cache: "off" }), paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift and Java reference coverage", () => {
+  it("ignores unrelated rejected Swift calls while retaining partial Swift overload coverage", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-java-coverage-"));
+    const java = "class Box { int target(int x) { return x; } int use() { return target(1); } }\n";
+    const rejected = "class Other { func target(_ x: Int) -> Int { x }; func use() -> Int { self.target(1, 2) } }\n";
+    const swift = [
+      "struct Choices {",
+      "  func target(_ value: Int) -> Int { value }",
+      "  func target(_ value: String) -> Int { value.count }",
+      "  func run(_ value: Int) -> Int { target(value) }",
+      "}",
+    ];
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "Box.java": java,
+        "Other.swift": rejected,
+        "Choices.swift": `${swift.join("\n")}\n`,
+      });
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        const javaReferences = await findReferences(index, { file: paths["Box.java"]!, line: 1, column: 17 });
+        expect(javaReferences.status).toBe("ok");
+        if (javaReferences.status !== "ok") throw new Error("Missing Java references");
+        expect(javaReferences.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+        expect(javaReferences.references.map((reference) => [reference.file, reference.range.start.column])).toEqual([
+          [paths["Box.java"], 17],
+          [paths["Box.java"], 64],
+        ]);
+
+        const swiftReferences = await findReferences(index, {
+          file: paths["Choices.swift"]!,
+          line: 2,
+          column: columnInLines(swift, 2, "target"),
+        });
+        expect(swiftReferences.status).toBe("ok");
+        if (swiftReferences.status !== "ok") throw new Error("Missing Swift references");
+        expect(swiftReferences.referenceCoverage.state).toBe("partial");
+        expect(swiftReferences.referenceCoverage.reasons).toContain("strategy_unavailable");
+        expect(swiftReferences.referenceCoverage.affectedFiles).toContain(paths["Choices.swift"]);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

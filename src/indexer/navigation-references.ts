@@ -10,6 +10,7 @@ import { isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
+import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import {
   classifyReceiver,
   declaresMembers,
@@ -687,6 +688,8 @@ export async function collectVerifiedNamedNodeReferences(
   const collected = await collectNamedNodeReferences(index, fileId, symbolName, expectedDef.kind);
   if (!collected) return [];
   const { matched, parsed, nameEquivalenceUnavailable } = collected;
+  const policy = memberLookupPolicyFor(parsed.sup.id);
+  if (await policy.hidesMemberFromFile?.(index, fileId, expectedDef, equivalentDefinitions.length > 0)) return [];
   if (nameEquivalenceUnavailable) markPhpNameEquivalenceGap(index, expectedDef);
   const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
   const phpExistingFunctionNames =
@@ -723,8 +726,22 @@ export async function collectVerifiedNamedNodeReferences(
       definitionVisible = [expectedDef, ...equivalentDefinitions].some((definition) =>
         closure.has(fileIdentityKey(definition.file)),
       );
+      if (!definitionVisible && policy.visibleThroughUnit) {
+        definitionVisible = policy.visibleThroughUnit(index, fileId, [expectedDef, ...equivalentDefinitions]);
+      }
     }
     return definitionVisible;
+  };
+  let uncertaintyRelevant: boolean | undefined;
+  const mayReferenceDefinition = (): boolean => {
+    if (!policy.uncertaintyRelevant) return true;
+    uncertaintyRelevant ??= policy.uncertaintyRelevant(
+      index,
+      expectedDef,
+      equivalentDefinitions,
+      definitionVisibleHere,
+    );
+    return uncertaintyRelevant;
   };
   for (const { range, node } of matched) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
@@ -832,8 +849,9 @@ export async function collectVerifiedNamedNodeReferences(
     // imports, C++ overloads, or using targets) is the same kind of gap when this definition
     // (or an equivalent declaration) is visible from this file: one of the candidates may be
     // it. A name with no binding at all is proven unrelated by scope and stays out.
-    if (!recoveredByLanguageFallback && onReceiverProofUnavailable) {
+    if (!recoveredByLanguageFallback && onReceiverProofUnavailable && mayReferenceDefinition()) {
       if (
+        policy.unprovenReference?.(node, resolved.reason) ||
         resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
         // Qualified C# bases are reachable without an import-closure edge.
         resolved.reason === AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON ||

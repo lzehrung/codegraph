@@ -112,6 +112,15 @@ export type MemberModel<Owner, Member> = {
   sameSignature?(derived: Member, inherited: Member): boolean;
   /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
   acceptsCall?(member: Member): boolean;
+  /**
+   * Whether the call's syntax fits this member when only the argument count may differ (labels agree, trailing
+   * parameters are omitted or extra unlabeled arguments are passed). Labels never reject a lone candidate: it stays
+   * the target of a call whose count fits it, and of a miscounted call where `keepUniqueArityMismatch` allows. Among
+   * competing candidates a label that does not fit rejects one; when labels fit none, the one candidate whose argument
+   * count fits stands in, as it did before labels were considered. Defaults to `acceptsCall`, so only a language that
+   * separates a label mismatch from a count mismatch sets it.
+   */
+  fitsCall?(member: Member): boolean;
 };
 
 export type MemberSelection<Member> =
@@ -134,6 +143,12 @@ export type MemberSelectionOptions = {
   classAncestorsOnly?: boolean;
   startAtAncestor?: boolean;
   keepUniqueArityMismatch?: boolean;
+  /**
+   * With `inheritOverloads`, a lone mismatched member stands in only when the receiver's own type declares it. This
+   * moves the stand-in to the first level of the hierarchy that declares the name, as if the walk stopped there: a lone
+   * declaration inherited from an ancestor stands in, and declarations further up do not compete with it.
+   */
+  standInAtFirstDeclaringLevel?: boolean;
   inheritOverloads?: boolean;
   /** Ruby reopening uses the first indexed declaration for a method name. */
   firstDeclarationWins?: boolean;
@@ -159,6 +174,28 @@ export function inheritsMemberOverloads(languageId: string): boolean {
 
 function accepts(range: CallableArity | null | undefined, count: number | null): boolean {
   return count === null || !range || (count >= range.minArgs && (range.maxArgs === null || count <= range.maxArgs));
+}
+/** Whether the call's argument count fits the member, whatever its labels. */
+function acceptsCount<Owner, Member>(model: MemberModel<Owner, Member>, member: Member, count: number | null): boolean {
+  return accepts(model.callable(member)?.arity ?? model.invocationArity?.(member), count);
+}
+/**
+ * Where labels cannot choose a stand-in among competing candidates, the argument count does: the one candidate whose
+ * count fits, as it did before labels were considered. Only a language with labels (`fitsCall`) asks.
+ */
+function onlyCountFit<Owner, Member>(
+  model: MemberModel<Owner, Member>,
+  candidates: readonly Member[],
+  count: number | null,
+): Member | undefined {
+  if (!model.fitsCall || candidates.length < 2) return undefined;
+  let found: Member | undefined;
+  for (const member of candidates) {
+    if (!acceptsCount(model, member, count)) continue;
+    if (found !== undefined) return undefined;
+    found = member;
+  }
+  return found;
 }
 /** A Kotlin property is invokable when its declared function type or initializer proves it. */
 export function kotlinPropertyInvocationArity(nameNode: SyntaxNodeLike): CallableArity | null | undefined {
@@ -284,6 +321,8 @@ export function selectMember<Owner, Member>(
     accepted: Array<{ member: Member; owner: string }>;
   } | null = options.inheritOverloads ? { subclasses: new Map(), declarations: [], accepted: [] } : null;
   let lenient: Member | undefined;
+  // Whether a level nearer the receiver already declares the name.
+  let nameDeclared = false;
   let named = false;
   const queryName = options.phpCaseInsensitive
     ? foldPhpIdentifierCase(options.name)
@@ -322,6 +361,11 @@ export function selectMember<Owner, Member>(
     const distinct = distinctCandidates(traitCandidates ?? candidates, model, options.argumentCount);
     const byUse = preferByUse(distinct, model, options);
     const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
+    // Members that can stand in for a miscounted call. A lone candidate stays whatever its labels; a label that does
+    // not fit rejects a candidate only when another one competes.
+    let standIns = unique;
+    if (model.fitsCall) standIns = byUse.length === 1 ? byUse : byUse.filter((member) => model.fitsCall?.(member));
+    const standsInAlone = standIns.length === 1 && (!model.invocationArity || distinct.length === 1);
     if (!overloadState) {
       if (named) {
         let match: Member | undefined;
@@ -334,11 +378,10 @@ export function selectMember<Owner, Member>(
         if (match !== undefined) return { status: "unique", named: true, member: match };
         // No member accepts the call. A lone mismatched member still stands in for it unless an ancestor declares
         // the name too, which leaves the target open instead of proving the name hidden.
-        const loneArityMismatch =
-          options.keepUniqueArityMismatch && unique.length === 1 && (!model.invocationArity || distinct.length === 1);
+        const loneArityMismatch = options.keepUniqueArityMismatch && standsInAlone;
         if (loneArityMismatch) {
           if (hasNamedAncestor(level, model, options, queryName)) return { status: "ambiguous", named: true };
-          return { status: "unique", named: true, member: unique[0]! };
+          return { status: "unique", named: true, member: standIns[0]! };
         }
         return { status: "ambiguous", named: true, inapplicable: true };
       }
@@ -359,14 +402,19 @@ export function selectMember<Owner, Member>(
           overloadState.accepted.push({ member, owner });
         }
       }
-      if (
-        lenient === undefined &&
-        depth === 0 &&
-        options.keepUniqueArityMismatch &&
-        unique.length === 1 &&
-        (!model.invocationArity || distinct.length === 1)
-      )
-        lenient = unique[0];
+      // A lone stand-in serves a miscounted call only where the language keeps one. A call that merely mislabels it
+      // always reaches it: its count fits, and labels never reject a lone candidate.
+      const standIn = standsInAlone ? standIns[0] : undefined;
+      const mislabeledOnly =
+        !!model.fitsCall && standIn !== undefined && acceptsCount(model, standIn, options.argumentCount);
+      const mayStandIn = standIn !== undefined && (options.keepUniqueArityMismatch || mislabeledOnly);
+      // The receiver's own type offers the stand-in, or, where the walk allows, the first level that declares the name.
+      const standInLevel = options.standInAtFirstDeclaringLevel ? !nameDeclared : depth === 0;
+      if (lenient === undefined && standInLevel) {
+        const countPool = model.fitsCall && standIns.length ? standIns : byUse;
+        lenient = mayStandIn ? standIn : onlyCountFit(model, countPool, options.argumentCount);
+      }
+      if (byUse.length) nameDeclared = true;
     }
     const next: Owner[] = [];
     for (const owner of level) {

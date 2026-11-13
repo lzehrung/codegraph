@@ -46,6 +46,7 @@ import {
   KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import { expectSwiftAccuracyGoto, SWIFT_ACCURACY_SOURCES } from "./helpers/swift-accuracy-fixture.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { expectKotlinSecondaryConstructorSuperCalls } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
@@ -7677,5 +7678,17 @@ import { expectPhpTraitCompositionGoto, withPhpTraitComposition } from "./helper
 it("retains unadapted PHP trait members and blocks adapted inherited decoys after cache reload", async () => {
   await withPhpTraitComposition(async (index, files) => {
     await expectPhpTraitCompositionGoto(index, files);
+  });
+});
+
+describe("Swift contextual navigation", () => {
+  it("selects enum cases and callable labels through their declared types", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-accuracy-goto-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
+      await expectSwiftAccuracyGoto(await buildProjectIndex(root, { cache: "off" }), paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

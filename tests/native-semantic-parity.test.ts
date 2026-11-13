@@ -48,6 +48,12 @@ import {
 } from "./helpers/kotlin-quoted-fixture.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
+import {
+  expectSwiftAccuracyGoto,
+  expectSwiftAccuracyGraph,
+  expectSwiftAccuracyReferences,
+  SWIFT_ACCURACY_SOURCES,
+} from "./helpers/swift-accuracy-fixture.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
 import { KOTLIN_UNREAD_TAIL_LINE } from "./helpers/kotlin-unread-tail-fixture.js";
@@ -4841,5 +4847,24 @@ nativeDescribe("PHP adapted trait and abstract-requirement native parity", () =>
       await expectPhpTraitCompositionReferences(index, files, root);
       await expectPhpTraitCompositionGraph(index, files);
     });
+  });
+});
+
+nativeDescribe("Swift contextual native parity", () => {
+  it("preserves goto, references, and call edges after reopening the disk cache", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-accuracy-native-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        await expectSwiftAccuracyGoto(index, paths);
+        await expectSwiftAccuracyReferences(index, paths);
+        await expectSwiftAccuracyGraph(index, paths);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

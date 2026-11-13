@@ -38,6 +38,7 @@ import {
   csharpQualifiedNameNode,
   csharpQualifiedThroughGenericOwner,
   definitionForBinding,
+  findDeclarationNameNode,
 } from "../navigation-local.js";
 import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
@@ -51,10 +52,15 @@ import {
   type NameResolution,
 } from "../name-resolution-types.js";
 import type { GoToResult, SymbolDef } from "../types.js";
-import { isSwiftExtensionTypeName, isSwiftQualifiedExtensionSuffix } from "../../util/swift-tree.js";
+import {
+  isSwiftExtensionTypeName,
+  isSwiftQualifiedExtensionSuffix,
+  isSwiftShorthandCase,
+} from "../../util/swift-tree.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
 import type { Binding } from "../scope-types.js";
 import { csharpTypeOnlyName } from "../scope-nodes.js";
+import { swiftFreeCallableLookup } from "./swift-callable.js";
 
 const implicitSelf = (state: NameLookupState, fallback: NameResolution | null): NameResolution => ({
   status: "deferred",
@@ -123,6 +129,25 @@ function namesEnclosingSwiftType(state: NameLookupState, def: SymbolDef): boolea
   return sliceText(owner?.childForFieldName("name"), state.use.parsed.source) === state.lookupName;
 }
 
+/**
+ * A keyword or other token in a declaration header is not a use of the declared name. Resolving it as that name
+ * reaches member selection and can prefer a same-named property (`var count` for the `func` of `count(of:)`).
+ * The header token names its own declaration.
+ */
+function swiftHeaderNamesOwnDeclaration(use: BareNameUse): NameResolution | undefined {
+  if (use.parsed.sup.nodeTypes.identifier?.includes(use.node.type)) return undefined;
+  const nameNode = findDeclarationNameNode(use.parsed.sup, use.node);
+  if (!nameNode) return undefined;
+  const own = use.mod.locals.find(
+    (local) =>
+      !local.swiftExtensionOwner &&
+      local.range.start.index === nameNode.startIndex &&
+      local.range.end.index === nameNode.endIndex,
+  );
+  if (!own) return { status: "not_found", reason: "A keyword token is not a name" };
+  return okGoToResult(use.index, own, { resolution: "exact", confidence: "high" });
+}
+
 /** An extension header names a type: a function or variable of that spelling is in another namespace. */
 function extensionOwnerTypeOnly(resolved: GoToResult | null): GoToResult | null {
   if (resolved?.status !== "ok" || declaresMembers(resolved.definition)) return resolved;
@@ -133,10 +158,22 @@ export const swiftLookupPolicy: NameLookupPolicy = {
   beforeLexical(use) {
     // A later segment of a dotted owner (`Inner` in `extension Outer.Inner`) is a member of the segment before it.
     // No Swift nested-type lookup proves it, and a bare lookup of its own spelling would match any other `Inner`.
-    if (!isSwiftQualifiedExtensionSuffix(use.node)) return undefined;
-    return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    if (isSwiftQualifiedExtensionSuffix(use.node)) {
+      return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+    }
+    return swiftHeaderNamesOwnDeclaration(use);
   },
   fromClosestBinding: ownOverloadDeclaration,
+  wrapRest(state, rest) {
+    const resolution = swiftFreeCallableLookup(state, rest(), bindsTypeMethod(state));
+    if (!isSwiftShorthandCase(state.use.node)) return resolution;
+    // A leading-dot name needs its contextual type; a bare lookup alone proves only a static member.
+    return {
+      status: "deferred",
+      request: { kind: "swift-enum-case", staticFallback: resolution },
+      fallback: { status: "not_found", reason: "Swift enum case type is unproven" },
+    };
+  },
   // Swift checks every bare name through `self`; method-local bindings still win.
   onLocal(state, local) {
     // An extension header sits outside the extension's members, so its name never reaches one through `self`.

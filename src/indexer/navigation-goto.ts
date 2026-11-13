@@ -27,6 +27,8 @@ import {
   csharpTypeNameWithArity,
   type CsharpNamespaceRegion,
 } from "../util/csharp-tree.js";
+import { callableFactsDiffer } from "./callable-identity.js";
+import { memberLookupPolicyFor, type MemberLookupDeps, type MemberUse } from "./member-lookup-policies/index.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -167,9 +169,10 @@ import {
 } from "./navigation-resolve.js";
 import {
   CSHARP_PARTIAL_CONTAINER_TYPES,
+  getSharedOwnerFacts,
   getSharedOwnerIdentity,
-  isSwiftExtensionContainer,
   sharedOwnerCanUseMembers,
+  sharedOwnerPartsShareMembers,
 } from "./shared-owner-identity.js";
 import {
   hasSeparateMemberScopes,
@@ -309,7 +312,8 @@ export async function resolveSharedOwnerContainers(params: {
 }): Promise<SharedOwnerContainer[]> {
   const { index, ownerFile, ownerContainer, ownerSource, languageId } = params;
   if (languageId !== "csharp" && languageId !== "swift") return [];
-  const ownerIdentity = getSharedOwnerIdentity(ownerContainer, ownerSource, languageId, ownerFile);
+  const ownerFacts = getSharedOwnerFacts(index, ownerContainer, ownerSource, languageId, ownerFile);
+  const ownerIdentity = ownerFacts.identity;
   if (!ownerIdentity) return [];
   // A C# `file` owner has only same-file parts, so no other file is a candidate peer.
   const peers = ownerIdentity.fileLocalTo
@@ -317,7 +321,6 @@ export async function resolveSharedOwnerContainers(params: {
     : getCompilationUnitPeers(index, ownerFile);
   const out: SharedOwnerContainer[] = [];
   const seen = new Set<string>();
-  const ownerIsExtension = languageId === "swift" ? isSwiftExtensionContainer(ownerContainer, ownerSource) : false;
   const ownerKey = fileIdentityKey(ownerFile);
   // Every part of a C# type declares a type of its simple name, so a peer without one is never read.
   const normalizeName = CSHARP_SUPPORT.normalizeIdentifier;
@@ -347,12 +350,10 @@ export async function resolveSharedOwnerContainers(params: {
       ) {
         continue;
       }
-      const identity = getSharedOwnerIdentity(container, peerContext.source, languageId, peer.file);
+      const peerFacts = getSharedOwnerFacts(index, container, peerContext.source, languageId, peer.file);
+      const identity = peerFacts.identity;
       if (!identity || !sharedOwnerCanUseMembers(ownerIdentity, identity)) continue;
-      if (languageId === "swift") {
-        const peerIsExtension = isSwiftExtensionContainer(container, peerContext.source);
-        if (!ownerIsExtension && !peerIsExtension) continue;
-      }
+      if (!sharedOwnerPartsShareMembers(ownerFacts, peerFacts)) continue;
       const key = fileIdentityKey(peer.file) + ":" + container.startIndex + ":" + container.endIndex;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -471,7 +472,35 @@ export async function findSharedOwnerMemberDefinitions(params: {
   return out;
 }
 
-function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null {
+/** The navigation helpers a language policy may call; it cannot import them without a dependency cycle. */
+export const memberLookupDeps: MemberLookupDeps = {
+  nameNodeForDef: (context, def) => nameNodeForDef(context, def),
+  sameParameterTypes: (index, left, right) => sameParameterTypes(index, left, right),
+  memberAcceptsCallAt: (index, member, callee, source, languageId) =>
+    memberAcceptsCallAt(index, member, callee, source, languageId),
+  nestedTypeOf: (index, owner, name) => resolveSwiftNestedTypePath(index, owner, [name]),
+  declaresMembers: (def) => declaresMembers(def),
+  nearestMemberContainer: (node) => nearestMemberContainer(node),
+  keywordClassRefFromDef: (index, def) => keywordClassRefFromDef(index, def),
+  keywordClassRefFromNode: (index, mod, node) => keywordClassRefFromNode(index, mod, node),
+  baseOwnersOf: (index, owner) =>
+    baseRefsFromContainer(
+      index,
+      owner.module,
+      owner.container,
+      owner.context.source,
+      owner.context.sup,
+      false,
+      owner.context.tree,
+    ),
+  resolveSharedOwnerContainers: (params) => resolveSharedOwnerContainers(params),
+  findDirectLocalsWithinNode: (locals, name, container, context, normalize) =>
+    findDirectLocalsWithinNode(locals, name, container, context, normalize),
+  hasStaticModifier: (local, context, container) => hasStaticModifier(local, context, container),
+  typeAliasTarget: (index, def) => swiftBaseDeclaration(index, def),
+};
+
+export function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null {
   const start = def.range.start;
   const index = start.index;
   if (index !== undefined) return context.tree.rootNode.descendantForIndex(index, index);
@@ -1935,6 +1964,13 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
+          const nestedMember = await memberLookupPolicyFor(sup.id).nestedMember?.(
+            index,
+            base.def,
+            memberName,
+            memberLookupDeps,
+          );
+          if (nestedMember) return { kind: "resolved", def: nestedMember };
           if (sup.id === "go") {
             const receiver = await resolveReceiverDefinition(
               index,
@@ -2233,7 +2269,12 @@ export async function resolveMemberAccessDefinition(params: {
         receiverProof?.kind === "named-type" &&
         receiverProof.proof === "static-type" &&
         navigationUsesDoubleColon(memberNode);
-      const memberScope = kotlinTypeReference ? "any" : receiver.memberScope;
+      const accessRules = memberLookupPolicyFor(sup.id).memberAccessRules?.({
+        memberNode,
+        receiverIsStaticType: receiverProof?.kind === "named-type" && receiverProof.proof === "static-type",
+        receiver: objDef,
+      });
+      const memberScope = kotlinTypeReference || accessRules?.anyScope ? "any" : receiver.memberScope;
       const targetContext = await ensureParsedContextForIndex(index, objDef.file);
       const start = objDef.range.start;
       const targetPosition = {
@@ -2262,6 +2303,7 @@ export async function resolveMemberAccessDefinition(params: {
           const knownArgumentCount =
             getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined;
           let memberDef: SymbolDef | undefined;
+          const receiverNamesNoType = !!accessRules?.receiverNamesNoType;
           const hierarchyLanguage =
             isJsTsLanguage(targetContext.sup.id) ||
             targetContext.sup.id === "ruby" ||
@@ -2273,6 +2315,7 @@ export async function resolveMemberAccessDefinition(params: {
             targetContext.sup.id === "swift";
           if (hierarchyLanguage && declaresMembers(objDef) && !receiver.runtimeTypeOnly) {
             const report: KeywordMemberReport = { named: false, ambiguous: false };
+
             memberDef = await resolveKeywordReceiverMember(
               index,
               mod,
@@ -2283,6 +2326,7 @@ export async function resolveMemberAccessDefinition(params: {
               knownArgumentCount,
               objDef,
               report,
+              accessRules?.use,
             );
             if (!memberDef && report.named) {
               // Two members that both fit leave the target open. Named members that all reject the call hide the name
@@ -2292,6 +2336,7 @@ export async function resolveMemberAccessDefinition(params: {
                 : AMBIGUOUS_RECEIVER_MEMBER_REASON;
               return { status: "not_found", reason };
             }
+            if (!memberDef && accessRules?.missReason) return { status: "not_found", reason: accessRules.missReason };
           }
           if (
             !memberDef &&
@@ -2328,7 +2373,7 @@ export async function resolveMemberAccessDefinition(params: {
               keepUniqueArityMismatch: true,
             });
             memberDef = selected.status === "unique" ? selected.member : undefined;
-          } else if (!memberDef) {
+          } else if (!memberDef && !receiverNamesNoType) {
             memberDef = await findReceiverMemberDefinition(
               index,
               targetModule.locals,
@@ -2345,6 +2390,10 @@ export async function resolveMemberAccessDefinition(params: {
             memberDef && fileIdentityKey(memberDef.file) !== fileIdentityKey(objDef.file)
               ? await ensureParsedContextForIndex(index, memberDef.file)
               : targetContext;
+          const found = memberDef;
+          const unnameable =
+            found && accessRules?.unnameableMember(found, () => hasStaticModifier(found, memberContext, container));
+          if (unnameable) return { status: "not_found", reason: unnameable };
           if (
             memberDef &&
             (sup.id === "cpp" ||
@@ -3354,13 +3403,21 @@ async function resolveKeywordReceiverMember(
   knownArgumentCount?: number,
   explicitClassDef?: SymbolDef,
   report?: KeywordMemberReport,
-  memberUse?: "call" | "value",
+  memberUse?: MemberUse,
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
     : await keywordClassRefFromNode(index, mod, node);
   if (!current) return undefined;
-  const spansHierarchy = inheritsMemberOverloads(current.context.sup.id);
+  const walkRules = await memberLookupPolicyFor(current.context.sup.id).memberWalk?.({
+    index,
+    mod,
+    node,
+    member,
+    start: current,
+    deps: memberLookupDeps,
+  });
+  const spansHierarchy = !!walkRules?.spansHierarchy || inheritsMemberOverloads(current.context.sup.id);
   const ownerKey = (ref: KeywordClassRef): string => keywordContainerKey(ref.file, ref.container);
   const preloadHiddenNames = isJsTsLanguage(current.context.sup.id) && knownArgumentCount !== undefined;
   const memberKey = (def: SymbolDef): string => `${fileIdentityKey(def.file)}:${def.range.start.index}`;
@@ -3438,6 +3495,13 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (walkRules) {
+          const hitContext =
+            fileIdentityKey(hit.file) === fileIdentityKey(ref.file)
+              ? ref.context
+              : await ensureParsedContextForIndex(index, hit.file);
+          if (!walkRules.memberVisible(hit, hitContext)) continue;
+        }
         if (abstractTraitMembers && ref.container.type === "trait_declaration") {
           const nameNode = nameNodeForDef(ref.context, hit);
           if (nameNode && phpTraitMethodIsAbstract(nameNode.parent ?? nameNode)) abstractTraitMembers.add(hit);
@@ -3453,13 +3517,19 @@ async function resolveKeywordReceiverMember(
         if (!scopeByMember.has(hit)) {
           scopeByMember.set(hit, hasStaticModifier(hit, ref.context, ref.container) ? "static" : "instance");
         }
-        if (spansHierarchy && (startAtAncestor || depth) && (await isUninheritedPrivateMember(index, mod, node, hit))) {
+        if (
+          !walkRules &&
+          spansHierarchy &&
+          (startAtAncestor || depth) &&
+          (await isUninheritedPrivateMember(index, mod, node, hit))
+        ) {
           continue;
         }
         if (depth && isUninheritedJavaInterfaceStaticMethod(hit, ref, scopeByMember.get(hit))) continue;
         visible.add(hit);
         if (!depth || !abstractTraitMembers?.has(hit)) nameFound = true;
       }
+      if (walkRules) await walkRules.afterOwnerMatches(ref, current, matches, visible, scopeByMember);
       if (nameFound && !spansHierarchy && !preloadHiddenNames) continue;
       const bases = await baseRefsFromContainer(
         index,
@@ -3481,6 +3551,7 @@ async function resolveKeywordReceiverMember(
     if (nameFound && !spansHierarchy && !preloadHiddenNames) break;
     level = next;
   }
+  const selectionUse = walkRules ? walkRules.selectionUse(visible, memberUse, scopeByMember) : memberUse;
   const sameSignatures = new Map<string, Set<string>>();
   if (spansHierarchy) {
     const all = [...membersByKey.values()].flat().filter((candidate) => visible.has(candidate));
@@ -3488,7 +3559,7 @@ async function resolveKeywordReceiverMember(
       for (let right = left + 1; right < all.length; right += 1) {
         const a = all[left]!;
         const b = all[right]!;
-        if (!(await sameParameterTypes(index, a, b))) continue;
+        if (!walkRules?.hidesInherited(a, b) && !(await sameParameterTypes(index, a, b))) continue;
         const aKey = memberKey(a);
         const bKey = memberKey(b);
         const identical = sameSignatures.get(aKey) ?? new Set<string>();
@@ -3521,7 +3592,15 @@ async function resolveKeywordReceiverMember(
       return facts.unboundArity ? { ...facts, arity: facts.unboundArity } : facts;
     },
     ...(propertyInvocationArities ? { invocationArity: (def: SymbolDef) => propertyInvocationArities.get(def) } : {}),
-    ...(lambdaCompatible ? { acceptsCall: (def: SymbolDef) => lambdaCompatible.get(def) ?? true } : {}),
+    ...(lambdaCompatible || walkRules
+      ? {
+          acceptsCall: (def: SymbolDef) => {
+            if (lambdaCompatible && !lambdaCompatible.get(def)) return false;
+            return !walkRules || walkRules.acceptsCall(def);
+          },
+        }
+      : {}),
+    ...(walkRules ? { fitsCall: (def: SymbolDef) => walkRules.fitsCall(def) } : {}),
     scope: (def) => scopeByMember.get(def) ?? "any",
     visible: (def) => visible.has(def),
     sameSignature: (a, b) => sameSignatures.get(memberKey(a))?.has(memberKey(b)) ?? false,
@@ -3533,8 +3612,9 @@ async function resolveKeywordReceiverMember(
     useFile: mod.file,
     startAtAncestor,
     keepUniqueArityMismatch: !startAtAncestor,
-    callSite: memberUse === "call",
-    valueRead: memberUse === "value",
+    standInAtFirstDeclaringLevel: !!walkRules?.standInAtFirstDeclaringLevel,
+    callSite: selectionUse === "call",
+    valueRead: selectionUse === "value",
     inheritOverloads: spansHierarchy,
     phpCaseInsensitive: current.context.sup.id === "php",
     normalizeIdentifier: current.context.sup.id === "swift" ? current.context.sup.normalizeIdentifier : undefined,
@@ -3554,6 +3634,8 @@ async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise
   const start = def.range.start.index;
   if (!context || start === undefined) return null;
   const declaration = context.tree.rootNode.descendantForIndex(start, def.range.end.index ?? start).parent;
+  if (declaration && memberLookupPolicyFor(context.sup.id).parametersAreDirectChildren?.(declaration))
+    return declaration;
   return (
     declaration?.childForFieldName("parameters") ??
     declaration?.namedChildren.find((child) => child.type === "function_value_parameters") ??
@@ -3561,12 +3643,15 @@ async function memberParameterList(index: ProjectIndex, def: SymbolDef): Promise
   );
 }
 
-/** Parameter type texts of a Java, Kotlin, or C# method; null when a type cannot be read. */
+/** Parameter type texts of a Java, Kotlin, C#, or Swift method; null when a type cannot be read. */
 async function memberParameterTypes(index: ProjectIndex, def: SymbolDef): Promise<string[] | null> {
   const parameters = await memberParameterList(index, def);
   if (!parameters) return null;
+  const languageId = supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id ?? "";
+  const directChildren = !!memberLookupPolicyFor(languageId).parametersAreDirectChildren?.(parameters);
   const types: string[] = [];
   for (const parameter of parameters.namedChildren) {
+    if (directChildren && parameter.type !== "parameter") continue;
     const type = parameter.childForFieldName("type") ?? parameter.namedChildren.at(-1);
     if (!type) return null;
     types.push(type.text.replace(/\s+/g, ""));
@@ -3630,6 +3715,7 @@ const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
     "Character",
   ]),
   kotlin: new Set(["Int", "Long", "Short", "Byte", "Char", "Boolean", "Float", "Double", "String", "Any", "Unit"]),
+  swift: new Set(["Int", "UInt", "String", "Bool", "Double", "Float", "Character", "Void"]),
   csharp: new Set([
     "int",
     "long",
@@ -3652,9 +3738,11 @@ const BUILTIN_PARAMETER_TYPES: Readonly<Record<string, ReadonlySet<string>>> = {
 /**
  * Whether two methods take the same parameter types, so the one in a derived class overrides the
  * other. Equal spelling is proof only within one file or for built-in types; elsewhere each
- * spelling must resolve to the same declaration from its own file.
+ * spelling must resolve to the same declaration from its own file. A language policy may let a
+ * position the inherited member spells with a type its implementer chooses fit any spelling.
  */
 export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean> {
+  if (callableFactsDiffer(left.callable, right.callable)) return false;
   // A type parameter (`T`) names a different type in each declaration after substitution, so
   // equal spelling proves nothing.
   const [leftGenerics, rightGenerics] = await Promise.all([
@@ -3669,8 +3757,22 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
   const sameFile = fileIdentityKey(left.file) === fileIdentityKey(right.file);
   const leftContext = await ensureParsedContextForIndex(index, left.file).catch(ignoreQueryParseFailure);
   if (!leftContext) return false;
+  const policy = memberLookupPolicyFor(leftContext.sup.id);
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
+    // A position the inherited member spells with a type its implementer chooses fits whatever the other spells there.
+    const generic = await policy.genericParameterFit?.({
+      index,
+      inherited: right,
+      inheritedType: rightTypes[at]!,
+      derivedType: text,
+      typeParameters: rightGenerics,
+      deps: memberLookupDeps,
+    });
+    if (generic !== undefined) {
+      if (!generic) return false;
+      continue;
+    }
     if (text !== rightTypes[at]) return false;
     const typeNames = text.match(/[\p{L}_][\p{L}\p{N}_]*/gu) ?? [];
     if (typeNames.some((typeName) => leftGenerics.has(typeName) || rightGenerics.has(typeName))) return false;
@@ -3785,7 +3887,9 @@ function memberAccessIsCall(languageId: string, memberNode: SyntaxNodeLike): boo
 }
 
 /** How the member access `memberNode` is used, where the language separates calls from value reads. */
-function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): "call" | "value" | undefined {
+function memberAccessUse(languageId: string, memberNode: SyntaxNodeLike): MemberUse | undefined {
+  const policyUse = memberLookupPolicyFor(languageId).useOf?.(memberNode);
+  if (policyUse) return policyUse;
   if (languageId !== "java" && languageId !== "kotlin" && languageId !== "csharp") return undefined;
   // Java method references name methods; Kotlin callable references may name properties too.
   if (languageId === "java" && memberNode.type === "method_reference") return "call";
@@ -3818,6 +3922,10 @@ async function resolveImplicitSelfAt(
   const staticScoped = languageId === "csharp" || jvm;
   const memberScope: ReceiverMemberScope = staticScoped && nodeInStaticMemberContext(anchor, source) ? "static" : "any";
   const report = { named: false, ambiguous: false };
+  let memberUse: MemberUse | undefined;
+  const policyUse = memberLookupPolicyFor(languageId).useOf?.(anchor);
+  if (policyUse) memberUse = policyUse;
+  else if (!kotlinReference) memberUse = "call";
   const member = await resolveKeywordReceiverMember(
     index,
     mod,
@@ -3828,7 +3936,7 @@ async function resolveImplicitSelfAt(
     argumentCount,
     undefined,
     report,
-    languageId === "swift" || kotlinReference ? undefined : "call",
+    memberUse,
   );
   if (member) return member;
   // Two inherited overloads of one arity are ambiguous without type ranking; in Java and C# any
@@ -3879,7 +3987,7 @@ export async function findReceiverTypeMember(
   member: string,
   argumentCount: number | undefined,
   externalBaseOmits?: ExternalBaseOmits,
-  memberUse?: "call" | "value",
+  memberUse?: MemberUse,
 ): Promise<ReceiverTypeMember> {
   const unproven: ReceiverTypeMember = { status: "unproven" };
   if (!declaresMembers(receiver)) return unproven;
@@ -4970,6 +5078,11 @@ async function resolveReceiverDefinition(
     return owner ? { def: owner, memberScope: receiver.memberScope } : null;
   }
   const constructor = receiver.kind === "named-type" && receiver.proof !== "static-type" ? receiver.typeNode : null;
+  if (memberLookupPolicyFor(sup.id).qualifiedConstruction && constructor && isMemberAccessNode(sup, constructor)) {
+    const resolved = await resolveExpression(constructor);
+    const def = resolved?.kind === "resolved" ? asMemberContainer(index, resolved.def) : undefined;
+    return def ? { def, memberScope: "instance" } : null;
+  }
   if (constructor) {
     if (sup.id === "csharp") {
       const qualified = csharpQualifiedNameNode(constructor);
@@ -5447,6 +5560,7 @@ function hasStaticModifier(local: SymbolDef, targetContext: ParsedFileContext, c
   if (splitTypeMethod) return false;
   if (declarationIsStaticEquivalent(targetContext.sup.id, current)) return true;
   while (current && current !== container) {
+    if (memberLookupPolicyFor(targetContext.sup.id).isStaticDeclaration?.(current)) return true;
     if (targetContext.sup.id === "php" && (current.type === "const_declaration" || current.type === "enum_case"))
       return true;
     if (declarationNodeIsStatic(current, targetContext.source)) return true;

@@ -646,6 +646,31 @@ describe("Impact Analyzer Edge Cases", () => {
         after: 'func helper(_ a: String, b: Int) {}\nfunc run(){ helper("x") }\n',
       },
       {
+        label: "Swift self member",
+        file: "main.swift",
+        before: 'class Box {\n  func helper(_ a: String) {}\n  func run() { self.helper("x") }\n}\n',
+        after: 'class Box {\n  func helper(_ a: String, b: Int) {}\n  func run() { self.helper("x") }\n}\n',
+      },
+      {
+        label: "Swift implicit self member",
+        file: "main.swift",
+        before: 'class Box {\n  func helper(_ a: String) {}\n  func run() { helper("x") }\n}\n',
+        after: 'class Box {\n  func helper(_ a: String, b: Int) {}\n  func run() { helper("x") }\n}\n',
+      },
+      {
+        label: "Swift typed local member",
+        file: "main.swift",
+        before: 'class Box {\n  func helper(_ a: String) {}\n}\nfunc run() { let box = Box(); box.helper("x") }\n',
+        after:
+          'class Box {\n  func helper(_ a: String, b: Int) {}\n}\nfunc run() { let box = Box(); box.helper("x") }\n',
+      },
+      {
+        label: "Swift static member",
+        file: "main.swift",
+        before: 'struct Box {\n  static func helper(_ a: String) {}\n}\nfunc run() { Box.helper("x") }\n',
+        after: 'struct Box {\n  static func helper(_ a: String, b: Int) {}\n}\nfunc run() { Box.helper("x") }\n',
+      },
+      {
         label: "PHP",
         file: "main.php",
         before: '<?php function helper($a) { return $a; }\n$value = helper("x");\n',
@@ -720,6 +745,367 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
+
+    it("flags a Swift member call in another file whether its count or its label no longer fits", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-swift-member-"));
+      try {
+        await fsp.writeFile(
+          path.join(root, "Box.swift"),
+          "class Box {\n  func helper(_ a: String, b: Int) {}\n}\n",
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "Use.swift"),
+          'func counted(_ box: Box) { box.helper("x") }\nfunc labelled(_ box: Box) { box.helper(c: "x") }\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = [
+          "diff --git a/Box.swift b/Box.swift",
+          "--- a/Box.swift",
+          "+++ b/Box.swift",
+          "@@ -2,1 +2,1 @@",
+          "-  func helper(_ a: String) {}",
+          "+  func helper(_ a: String, b: Int) {}",
+          "",
+        ].join("\n");
+        const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, includeTests: true });
+        if ("files" in result) throw new Error("Expected full impact report");
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        // The only `helper` stays the target of a call whose label names no parameter, as it was before label matching.
+        expect(
+          (helper?.callCompatibility ?? []).map((hint) => [hint.callsiteFile, hint.callsiteRange.start.line]),
+        ).toEqual([
+          ["Use.swift", 1],
+          ["Use.swift", 2],
+        ]);
+        expect(helper?.callCompatibility?.[0]).toEqual(
+          expect.objectContaining({ status: "likely_mismatch", reason: "argument_count_below_minimum" }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    /** The changed symbols that reach `file`, as the impact report names them; empty when `file` is not impacted. */
+    const symbolsReaching = (
+      result: { impacted: Array<{ file: string; symbols: string[] }> },
+      root: string,
+      file: string,
+    ): string[] => {
+      const item = result.impacted.find(
+        (candidate) =>
+          (path.isAbsolute(candidate.file) ? path.relative(root, candidate.file) : candidate.file).replace(
+            /\\/g,
+            "/",
+          ) === file,
+      );
+      return item?.symbols ?? [];
+    };
+    const rawDiff = (file: string, line: number, before: string, after: string): string =>
+      [
+        `diff --git a/${file} b/${file}`,
+        `--- a/${file}`,
+        `+++ b/${file}`,
+        `@@ -${line},1 +${line},1 @@`,
+        `-${before}`,
+        `+${after}`,
+        "",
+      ].join("\n");
+
+    it.each([
+      {
+        label: "member in another file",
+        files: {
+          "Box.swift": "class Box {\n  func helper(b: Int) {}\n}\n",
+          "Use.swift": "func use(_ box: Box) { box.helper(a: 1) }\n",
+        },
+        changed: { file: "Box.swift", line: 2, before: "  func helper(a: Int) {}", after: "  func helper(b: Int) {}" },
+        caller: "Use.swift",
+        attributed: true,
+      },
+      {
+        label: "self member",
+        files: { "Box.swift": "class Box {\n  func helper(b: Int) {}\n  func run() { self.helper(a: 1) }\n}\n" },
+        changed: { file: "Box.swift", line: 2, before: "  func helper(a: Int) {}", after: "  func helper(b: Int) {}" },
+        caller: "Box.swift",
+        attributed: true,
+      },
+      {
+        label: "implicit self member",
+        files: { "Box.swift": "class Box {\n  func helper(b: Int) {}\n  func run() { helper(a: 1) }\n}\n" },
+        changed: { file: "Box.swift", line: 2, before: "  func helper(a: Int) {}", after: "  func helper(b: Int) {}" },
+        caller: "Box.swift",
+        attributed: true,
+      },
+      {
+        label: "bare function",
+        files: { "F.swift": "func helper(b: Int) {}\n", "Use.swift": "func use() { helper(a: 1) }\n" },
+        changed: { file: "F.swift", line: 1, before: "func helper(a: Int) {}", after: "func helper(b: Int) {}" },
+        caller: "Use.swift",
+        attributed: true,
+      },
+      // Two overloads: the renamed label fits neither, so the argument count picks one or leaves the call open.
+      {
+        label: "bare function beside an overload the count picks",
+        files: {
+          "F.swift": "func helper(x: Int) {}\nfunc helper(y: Int, z: Int) {}\n",
+          "Use.swift": "func use() { helper(a: 1) }\n",
+        },
+        changed: { file: "F.swift", line: 1, before: "func helper(a: Int) {}", after: "func helper(x: Int) {}" },
+        caller: "Use.swift",
+        attributed: true,
+      },
+      {
+        label: "bare function beside an overload the count does not pick",
+        files: {
+          "F.swift": "func helper(x: Int) {}\nfunc helper(y: Int) {}\n",
+          "Use.swift": "func use() { helper(a: 1) }\n",
+        },
+        changed: { file: "F.swift", line: 1, before: "func helper(a: Int) {}", after: "func helper(x: Int) {}" },
+        caller: "Use.swift",
+        attributed: false,
+      },
+      {
+        label: "member beside an overload the count picks",
+        files: {
+          "Box.swift": "class Box {\n  func helper(x: Int) {}\n  func helper(y: Int, z: Int) {}\n}\n",
+          "Use.swift": "func use(_ box: Box) { box.helper(a: 1) }\n",
+        },
+        changed: { file: "Box.swift", line: 2, before: "  func helper(a: Int) {}", after: "  func helper(x: Int) {}" },
+        caller: "Use.swift",
+        attributed: true,
+      },
+      {
+        label: "member beside an overload the count does not pick",
+        files: {
+          "Box.swift": "class Box {\n  func helper(x: Int) {}\n  func helper(y: Int) {}\n}\n",
+          "Use.swift": "func use(_ box: Box) { box.helper(a: 1) }\n",
+        },
+        changed: { file: "Box.swift", line: 2, before: "  func helper(a: Int) {}", after: "  func helper(x: Int) {}" },
+        caller: "Use.swift",
+        attributed: false,
+      },
+    ])(
+      "keeps the only caller of a renamed Swift label impacted: $label",
+      async ({ files, changed, caller, attributed }) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-swift-label-"));
+        try {
+          for (const [file, text] of Object.entries(files)) await fsp.writeFile(path.join(root, file), text, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = rawDiff(changed.file, changed.line, changed.before, changed.after);
+          const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, includeTests: true });
+          if ("files" in result) throw new Error("Expected full impact report");
+          // The old call shape is the caller file's only use of the declaration, so only that call can impact it. A
+          // caller in the changed file is impacted regardless.
+          if (caller !== changed.file)
+            expect(symbolsReaching(result, root, caller).includes("helper")).toBe(attributed);
+          // An overload set has no signature to compare a call with, so it carries no compatibility hint.
+          const overloaded = Object.values(files).some((text) => (text.match(/func helper/g) ?? []).length > 1);
+          if (!overloaded) {
+            const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+            expect(helper?.callCompatibility?.map((hint) => hint.callsiteFile)).toEqual([caller]);
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
+    // The inherited declaration is the only one of its name, and the old call is the caller file's only use of it.
+    const inheritedReceivers = [
+      {
+        receiver: "implicit self",
+        caller: "Derived.swift",
+        derived: (call: string) => `class Derived: Base {\n  func run() { helper(${call}) }\n}\n`,
+      },
+      {
+        receiver: "self",
+        caller: "Derived.swift",
+        derived: (call: string) => `class Derived: Base {\n  func run() { self.helper(${call}) }\n}\n`,
+      },
+      {
+        receiver: "super",
+        caller: "Derived.swift",
+        derived: (call: string) => `class Derived: Base {\n  func run() { super.helper(${call}) }\n}\n`,
+      },
+      {
+        receiver: "typed value",
+        caller: "Use.swift",
+        derived: () => "class Derived: Base {}\n",
+        use: (call: string) => `func use(_ derived: Derived) { derived.helper(${call}) }\n`,
+      },
+      {
+        receiver: "subclass instance",
+        caller: "Use.swift",
+        derived: () => "class Derived: Base {}\nclass Leaf: Derived {}\n",
+        use: (call: string) => `func use() { let leaf = Leaf(); leaf.helper(${call}) }\n`,
+      },
+    ];
+    const inheritedChanges = [
+      {
+        change: "label rename",
+        before: "  func helper(a: Int) {}",
+        after: "  func helper(b: Int) {}",
+        sibling: "",
+        call: "a: 1",
+        attributed: () => true,
+      },
+      {
+        change: "count change",
+        before: "  func helper(_ a: Int) {}",
+        after: "  func helper(_ a: Int, _ b: Int) {}",
+        sibling: "",
+        call: "1",
+        // A `super` call keeps a mislabeled target but, as before, not a miscounted one.
+        attributed: (receiver: string) => receiver !== "super",
+      },
+      // Two overloads: the renamed label fits neither, so the argument count picks one or leaves the call open.
+      {
+        change: "label rename beside an overload the count picks",
+        before: "  func helper(a: Int) {}",
+        after: "  func helper(x: Int) {}",
+        sibling: "\n  func helper(y: Int, z: Int) {}",
+        call: "a: 1",
+        attributed: () => true,
+      },
+      {
+        change: "label rename beside an overload the count does not pick",
+        before: "  func helper(a: Int) {}",
+        after: "  func helper(x: Int) {}",
+        sibling: "\n  func helper(y: Int) {}",
+        call: "a: 1",
+        attributed: () => false,
+      },
+    ];
+    it.each(inheritedReceivers.flatMap((receiver) => inheritedChanges.map((change) => ({ ...receiver, ...change }))))(
+      "keeps the only caller of a changed inherited Swift member impacted: $receiver, $change",
+      async ({ receiver, change, caller, derived, use, before, after, sibling, call, attributed }) => {
+        const keepsTarget = attributed(receiver);
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-swift-inherited-"));
+        try {
+          await fsp.writeFile(path.join(root, "Base.swift"), `class Base {\n${after}${sibling}\n}\n`, "utf8");
+          await fsp.writeFile(path.join(root, "Derived.swift"), derived(call), "utf8");
+          if (use) await fsp.writeFile(path.join(root, "Use.swift"), use(call), "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = rawDiff("Base.swift", 2, before, after);
+          const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, includeTests: true });
+          if ("files" in result) throw new Error("Expected full impact report");
+          // The caller file names nothing else of the changed member, so only its old call can reach it.
+          expect(symbolsReaching(result, root, caller).includes("helper")).toBe(keepsTarget);
+          if (!sibling) {
+            const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+            expect((helper?.callCompatibility ?? []).map((hint) => hint.callsiteFile)).toEqual(
+              keepsTarget ? [caller] : [],
+            );
+            if (keepsTarget && change === "count change") {
+              expect(helper?.callCompatibility?.[0]).toEqual(
+                expect.objectContaining({ status: "likely_mismatch", reason: "argument_count_below_minimum" }),
+              );
+            }
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
+    it("attributes a call to neither of two competing inherited Swift overloads", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-swift-compete-"));
+      try {
+        const before = ["  func helper(_ a: Int) {}", "  func helper(_ a: Int, _ b: Int, _ c: Int) {}"];
+        const after = ["  func helper(_ a: String) {}", "  func helper(_ a: String, _ b: Int, _ c: Int) {}"];
+        await fsp.writeFile(path.join(root, "Base.swift"), `class Base {\n${after.join("\n")}\n}\n`, "utf8");
+        await fsp.writeFile(
+          path.join(root, "Derived.swift"),
+          "class Derived: Base {\n  func run() { helper(1, 2) }\n}\n",
+          "utf8",
+        );
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        // Both overloads change, so a call that resolved to either would be reached by a changed `helper`.
+        const diffText = [
+          "diff --git a/Base.swift b/Base.swift",
+          "--- a/Base.swift",
+          "+++ b/Base.swift",
+          "@@ -2,2 +2,2 @@",
+          ...before.map((line) => `-${line}`),
+          ...after.map((line) => `+${line}`),
+          "",
+        ].join("\n");
+        const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, includeTests: true });
+        if ("files" in result) throw new Error("Expected full impact report");
+        expect(result.changedSymbols.filter((symbol) => symbol.name === "helper")).toHaveLength(2);
+        // The subclass is impacted by its base class, but no changed `helper` reaches its call.
+        expect(symbolsReaching(result, root, "Derived.swift")).not.toContain("helper");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it.each([
+      {
+        label: "associated type witness",
+        file: "Mem.swift",
+        before: "  func put(_ i: Int) {}",
+        after: "  func put(_ i: Int, _ n: Int) {}",
+        source: [
+          "protocol Store {",
+          "  associatedtype Item",
+          "  func put(_ i: Item, _ n: Int)",
+          "}",
+          "struct Mem: Store {",
+          "  typealias Item = Int",
+          "  func put(_ i: Int, _ n: Int) {}",
+          "}",
+          "",
+        ].join("\n"),
+        caller: "func use(_ m: Mem) { m.put(1) }\n",
+        symbol: "put",
+        line: 7,
+      },
+      {
+        label: "generic base override",
+        file: "IntBase.swift",
+        before: "  override func add(_ x: Int) {}",
+        after: "  override func add(_ x: Int, _ n: Int) {}",
+        source: [
+          "class Base<T> {",
+          "  func add(_ x: T, _ n: Int) {}",
+          "}",
+          "class IntBase: Base<Int> {",
+          "  override func add(_ x: Int, _ n: Int) {}",
+          "}",
+          "",
+        ].join("\n"),
+        caller: "func use(_ i: IntBase) { i.add(1) }\n",
+        symbol: "add",
+        line: 5,
+      },
+    ])(
+      "keeps a concrete caller impacted when the witness spelling differs: $label",
+      async ({ file, before, after, source, caller, symbol, line }) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-swift-witness-"));
+        try {
+          await fsp.writeFile(path.join(root, file), source, "utf8");
+          await fsp.writeFile(path.join(root, "Use.swift"), caller, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText: rawDiff(file, line, before, after),
+            includeTests: true,
+          });
+          if ("files" in result) throw new Error("Expected full impact report");
+          expect(symbolsReaching(result, root, "Use.swift")).toContain(symbol);
+          const changed = result.changedSymbols.find((candidate) => candidate.name === symbol);
+          expect(changed?.callCompatibility?.map((hint) => hint.callsiteFile)).toEqual(["Use.swift"]);
+          expect(changed?.callCompatibility?.[0]).toEqual(
+            expect.objectContaining({ status: "likely_mismatch", reason: "argument_count_below_minimum" }),
+          );
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
 
     it.each([
       {
