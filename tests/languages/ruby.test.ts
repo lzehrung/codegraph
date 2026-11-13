@@ -4,15 +4,27 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { buildProjectIndex, buildSymbolGraphDetailed, findReferences, goToDefinition } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+} from "../../src/index.js";
+import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
+import { createAgentSession } from "../../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../../src/agent/workspace-symbols.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { collectDetailedDeclarations } from "../../src/graphs/symbol-graph-detailed/ast.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { buildScopeIndexFromSource } from "../../src/indexer/scope.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { getNativeQueryExecution } from "../../src/native/tree-sitter-native.js";
 import { QUALIFIED_BASE_FIXTURES, expectQualifiedBases } from "../helpers/qualified-base-fixture.js";
 import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
+import { RUBY_MEMBER_SOURCES } from "../helpers/ruby-member-names-fixture.js";
+import { RUBY_SCOPE_SOURCES, expectRubyScopeCalls } from "../helpers/ruby-generated-scope-fixture.js";
 
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "ruby");
 
@@ -191,6 +203,35 @@ log.info "x"
 `);
     const froms = imports.map((entry) => entry.from).sort();
     expect(froms).toEqual(["./other", "json", "lazy", "lazy_load.rb"]);
+  });
+
+  it("defines accessor methods only for attr calls that are direct class or module body statements", async () => {
+    const { module } = await collectModule(`
+class Odd
+  attr_reader :real
+  other.attr_accessor :via_receiver
+  attr_writer.chained :via_chain
+  helper(attr_accessor)
+  attr_accessor = 1
+  def attr_reader; end
+  [1].each { attr_reader :in_block }
+  class << self
+    attr_accessor :on_meta
+  end
+  def build
+    attr_accessor :in_method
+  end
+  private attr_reader :under_modifier
+end
+module Shared
+  attr_writer "plain", :symbol
+end
+`);
+    // An identifier spelled like an accessor macro is only a candidate; the receiver, argument, variable, definition,
+    // block, singleton class, method body, and modifier forms define nothing beyond what they already declared.
+    expect(module.locals.map((local) => local.localName).sort()).toEqual(
+      ["Odd", "Shared", "attr_accessor", "attr_reader", "build", "plain=", "real", "symbol="].sort(),
+    );
   });
 });
 
@@ -442,5 +483,344 @@ describe("Ruby qualified scope reopenings", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Ruby method names, generated accessors, and writer calls", () => {
+  const FILES: Record<string, string> = RUBY_MEMBER_SOURCES;
+  const GAUGE = FILES["gauge.rb"]!;
+
+  async function fixture(): Promise<string> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-names-"));
+    for (const [name, source] of Object.entries(FILES)) await fsp.writeFile(path.join(root, name), source);
+    return root;
+  }
+
+  /** The 1-based column of the `occurrence`-th `token` on a 1-based line of `source`. */
+  function columnOf(source: string, line: number, token: string, occurrence = 1): number {
+    const text = source.split("\n")[line - 1] ?? "";
+    let index = -1;
+    for (let seen = 0; seen < occurrence; seen += 1) index = text.indexOf(token, index + 1);
+    if (index < 0) throw new Error(`no ${token} on line ${line}: ${text}`);
+    return index + 1;
+  }
+
+  async function gotoLine(
+    index: Awaited<ReturnType<typeof buildProjectIndex>>,
+    root: string,
+    file: string,
+    line: number,
+    token: string,
+  ) {
+    const column = columnOf(FILES[file]!, line, token);
+    const result = await goToDefinition(index, { file: path.join(root, file), line, column });
+    if (result.status !== "ok") return result.status;
+    return `${path.basename(result.definition.file)}:${result.definition.range.start.line}:${result.definition.localName}`;
+  }
+
+  async function referenceLines(
+    index: Awaited<ReturnType<typeof buildProjectIndex>>,
+    root: string,
+    file: string,
+    line: number,
+    token: string,
+  ) {
+    const result = await findReferences(index, {
+      file: path.join(root, file),
+      line,
+      column: columnOf(FILES[file]!, line, token),
+    });
+    if (result.status !== "ok") throw new Error(`references ${result.status}`);
+    return {
+      sites: result.references
+        .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+        .sort(),
+      coverage: result.referenceCoverage.state,
+    };
+  }
+
+  async function answers(index: Awaited<ReturnType<typeof buildProjectIndex>>, root: string) {
+    return {
+      goto: [
+        await gotoLine(index, root, "gauge.rb", 26, "full?"),
+        await gotoLine(index, root, "gauge.rb", 27, "full"),
+        await gotoLine(index, root, "gauge.rb", 29, "label"),
+        await gotoLine(index, root, "gauge.rb", 30, "label"),
+        await gotoLine(index, root, "gauge.rb", 14, "mode"),
+        await gotoLine(index, root, "gauge.rb", 31, "mode"),
+        await gotoLine(index, root, "use.rb", 4, "full?"),
+        await gotoLine(index, root, "use.rb", 5, "level"),
+        await gotoLine(index, root, "use.rb", 6, "unit"),
+        await gotoLine(index, root, "use.rb", 7, "label"),
+        await gotoLine(index, root, "use.rb", 8, "full?"),
+        await gotoLine(index, root, "use.rb", 9, "level"),
+        await gotoLine(index, root, "use.rb", 10, "label"),
+      ],
+      refs: [
+        await referenceLines(index, root, "gauge.rb", 5, "full?"),
+        await referenceLines(index, root, "gauge.rb", 9, "full"),
+        await referenceLines(index, root, "gauge.rb", 2, "level"),
+        await referenceLines(index, root, "gauge.rb", 3, "mode"),
+        await referenceLines(index, root, "gauge.rb", 17, "label"),
+        await referenceLines(index, root, "gauge.rb", 21, "label"),
+      ],
+    };
+  }
+
+  it("resolves suffix names, generated accessors, and writer calls apart from same-named decoys", async () => {
+    const root = await fixture();
+    try {
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const found = await answers(index, root);
+      expect(found.goto).toEqual([
+        "gauge.rb:5:full?",
+        "gauge.rb:9:full",
+        "gauge.rb:17:label=",
+        "gauge.rb:21:label",
+        "gauge.rb:3:mode=",
+        "gauge.rb:3:mode",
+        "gauge.rb:5:full?",
+        "gauge.rb:2:level",
+        "gauge.rb:2:unit",
+        "gauge.rb:17:label=",
+        "dial.rb:3:full?",
+        "dial.rb:2:level",
+        "dial.rb:6:label=",
+      ]);
+      // `full?` and `full` share no site; `attr_accessor :mode` lists the writer call and the reader call.
+      expect(found.refs).toEqual([
+        { sites: ["gauge.rb:26", "gauge.rb:5", "use.rb:4"], coverage: "complete" },
+        { sites: ["gauge.rb:27", "gauge.rb:9"], coverage: "complete" },
+        { sites: ["gauge.rb:10", "gauge.rb:2", "gauge.rb:6", "use.rb:5"], coverage: "complete" },
+        { sites: ["gauge.rb:14", "gauge.rb:3", "gauge.rb:31"], coverage: "complete" },
+        { sites: ["gauge.rb:17", "gauge.rb:29", "use.rb:7"], coverage: "complete" },
+        { sites: ["gauge.rb:21", "gauge.rb:30"], coverage: "complete" },
+      ]);
+      const graph = await buildSymbolGraphDetailed(index);
+      const gauge = path.join(root, "gauge.rb");
+      const callees = (callerName: string) => {
+        const caller = [...graph.nodes.values()].find(
+          (node) => node.name === callerName && fileIdentityKey(node.file) === fileIdentityKey(gauge),
+        );
+        return graph.edges
+          .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+          .map((edge) => graph.nodes.get(edge.to)?.name)
+          .sort();
+      };
+      expect(callees("drain!")).toEqual(["mode="]);
+      // A bare `full` is an identifier read, which the graph records no call edge for.
+      expect(callees("check")).toEqual(["drain!", "full?", "label", "label=", "mode"]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cold, reopened, and incrementally updated disk caches equal to a cold build", async () => {
+    const root = await fixture();
+    try {
+      const cold = await answers(await buildProjectIndex(root, { cache: "off" }), root);
+      expect(await answers(await buildProjectIndex(root, { cache: "disk" }), root)).toEqual(cold);
+      expect(await answers(await buildProjectIndex(root, { cache: "disk" }), root)).toEqual(cold);
+      await fsp.appendFile(path.join(root, "gauge.rb"), "# edited\n");
+      const edited = await buildProjectIndexIncremental(root, { cache: "disk" });
+      expect(await answers(edited, root)).toEqual(await answers(await buildProjectIndex(root, { cache: "off" }), root));
+      await fsp.writeFile(path.join(root, "gauge.rb"), GAUGE);
+      expect(await answers(await buildProjectIndexIncremental(root, { cache: "disk" }), root)).toEqual(cold);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("previews a writer rename without touching its reader or the unsafe call sites", async () => {
+    const root = await fixture();
+    try {
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "label" });
+      const writer = symbols.symbols.find((symbol) => symbol.name === "label=" && symbol.location.file === "gauge.rb");
+      expect(writer).toBeDefined();
+      if (!writer) throw new Error("missing writer symbol");
+      const preview = await previewRenameWithSession(session, { root, handle: writer.handle, newName: "title" });
+      // A call site spells the writer `label`, not `label=`, so the preview cannot edit it and is not safe.
+      expect(preview.safe).toBe(false);
+      const touched = [
+        ...preview.edits.map((edit) => edit.file),
+        ...preview.unsafeSites.map((site) => site.location.file),
+      ];
+      expect(touched.every((file) => file === "gauge.rb" || file === "use.rb")).toBe(true);
+      const readerLines = new Set([21, 30]);
+      for (const edit of preview.edits) {
+        expect(edit.file === "gauge.rb" && readerLines.has(edit.range.start.line)).toBe(false);
+      }
+      for (const site of preview.unsafeSites) {
+        expect(site.location.file === "gauge.rb" && readerLines.has(site.location.range.start.line)).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby generated methods across cache states", () => {
+  type Index = Awaited<ReturnType<typeof buildProjectIndex>>;
+  const NAMES = new Set(
+    "v w later name count err ay dy z mode target label full? drain! full drain other k lv ev mv limit total item ax level kind".split(
+      " ",
+    ),
+  );
+
+  /** Every goto, reference list, and call edge at each token of the names under test, from the files as they stand. */
+  async function snapshot(index: Index, root: string): Promise<string[]> {
+    const relative = (file: string): string => path.relative(root, file).replaceAll("\\", "/");
+    const out: string[] = [];
+    for (const name of (await fsp.readdir(root)).filter((file) => file.endsWith(".rb")).sort()) {
+      const lines = (await fsp.readFile(path.join(root, name), "utf8")).split("\n");
+      for (const [offset, line] of lines.entries()) {
+        for (const match of line.matchAll(/:?[A-Za-z_][A-Za-z0-9_]*[?!]?/g)) {
+          if (!NAMES.has(match[0].replace(/^:/, ""))) continue;
+          const where = { file: path.join(root, name), line: offset + 1, column: match.index + 1 };
+          const goto = await goToDefinition(index, where);
+          const refs = await findReferences(index, where);
+          const target =
+            goto.status === "ok"
+              ? `${relative(goto.definition.file)}:${goto.definition.range.start.line}:${goto.definition.localName}`
+              : "not_found";
+          const sites =
+            refs.status === "ok"
+              ? `${refs.references
+                  .map((ref) => `${relative(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`)
+                  .sort()
+                  .join(" ")} ${refs.referenceCoverage.state}`
+              : refs.status;
+          out.push(`${name}:${offset + 1}:${match.index + 1} ${match[0]} goto=${target} refs=${sites}`);
+        }
+      }
+    }
+    const graph = await buildSymbolGraphDetailed(index);
+    for (const edge of graph.edges) {
+      if (edge.label !== "calls") continue;
+      const from = graph.nodes.get(edge.from);
+      const to = graph.nodes.get(edge.to);
+      out.push(`calls ${relative(from?.file ?? "")}:${from?.name} -> ${relative(to?.file ?? "")}:${to?.name}`);
+    }
+    return out.sort();
+  }
+
+  it("answers calls to generated methods, typed locals, and decoys from the detailed graph", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-graph-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await expectRubyScopeCalls(index, paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cold, memory, disk, and reopened builds equal while an attr line, a ?/! def, and a file change", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-cache-"));
+    const file = (name: string): string => path.join(root, name);
+    try {
+      await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
+      const edit = async (name: string, from: string, to: string): Promise<void> => {
+        const text = await fsp.readFile(file(name), "utf8");
+        expect(text, `${name} contains ${from}`).toContain(from);
+        await fsp.writeFile(file(name), text.replace(from, to));
+      };
+      const answersAt = async (step: string): Promise<string[]> => {
+        const cold = await snapshot(await buildProjectIndex(root, { cache: "off" }), root);
+        const warm = await snapshot(await buildProjectIndexIncremental(root, { cache: "disk" }), root);
+        const reopened = await snapshot(await buildProjectIndex(root, { cache: "disk" }), root);
+        const memory = await snapshot(await buildProjectIndex(root, { cache: "memory" }), root);
+        expect(warm, `${step}: incremental disk`).toEqual(cold);
+        expect(reopened, `${step}: reopened disk`).toEqual(cold);
+        expect(memory, `${step}: memory`).toEqual(cold);
+        return cold;
+      };
+      const baseline = await answersAt("cold");
+      expect(baseline).toContain("scope.rb:3:13 v goto=scope.rb:2:v refs=scope.rb:2:15 scope.rb:3:13 complete");
+
+      // An attr line that names another attribute removes the reader and its sites.
+      await edit(
+        "scope.rb",
+        "attr_reader :v\n  def read; v; end\nend\nclass Right",
+        "attr_reader :u\n  def read; v; end\nend\nclass Right",
+      );
+      const renamed = await answersAt("attr line edited");
+      expect(renamed).toContain("scope.rb:3:13 v goto=not_found refs=not_found");
+      await edit("scope.rb", "attr_reader :u", "attr_reader :v");
+      expect(await answersAt("attr line restored")).toEqual(baseline);
+
+      // A `?` and a `!` def lose their suffix, so the receiver calls that name them find nothing.
+      await edit("device.rb", "def full?; true; end", "def full; true; end");
+      await edit("device.rb", "def drain!; end", "def drain; end");
+      const suffixed = await answersAt("suffix removed");
+      expect(suffixed).toContain("operator.rb:11:12 full? goto=not_found refs=not_found");
+      await edit("device.rb", "def full; true; end", "def full?; true; end");
+      await edit("device.rb", "def drain; end", "def drain!; end");
+      expect(await answersAt("suffix restored")).toEqual(baseline);
+
+      // The declaring file is deleted and restored.
+      const device = await fsp.readFile(file("device.rb"), "utf8");
+      await fsp.rm(file("device.rb"));
+      const deleted = await answersAt("declaring file deleted");
+      expect(deleted).toContain("operator.rb:6:12 mode goto=not_found refs=not_found");
+      await fsp.writeFile(file("device.rb"), device);
+      expect(await answersAt("declaring file restored")).toEqual(baseline);
+
+      // The declaring file is renamed away and back.
+      await fsp.rename(file("device.rb"), file("device_moved.rb"));
+      const moved = await answersAt("declaring file renamed away");
+      expect(moved).not.toEqual(baseline);
+      await fsp.rename(file("device_moved.rb"), file("device.rb"));
+      expect(await answersAt("declaring file renamed back")).toEqual(baseline);
+
+      // A lambda parameter hides the reader; renaming it releases the reader, and restoring it hides the reader again.
+      await edit("shadow.rb", "->(k) { k }.call(1)", "->(j) { k }.call(1)");
+      const released = await answersAt("lambda parameter renamed");
+      expect(released.some((line) => line.startsWith("shadow.rb:4:13 k goto=shadow.rb:2:k "))).toBe(true);
+      await edit("shadow.rb", "->(j) { k }.call(1)", "->(k) { k }.call(1)");
+      expect(await answersAt("lambda parameter restored")).toEqual(baseline);
+
+      // `self` in a singleton method is the class; as an instance method it reaches the accessor.
+      await edit("selfs.rb", "def self.single", "def single");
+      const instance = await answersAt("singleton method became an instance method");
+      expect(instance.some((line) => line.startsWith("selfs.rb:8:10 lv goto=selfs.rb:2:lv "))).toBe(true);
+      await edit("selfs.rb", "def single", "def self.single");
+      expect(await answersAt("singleton method restored")).toEqual(baseline);
+
+      // The singleton method of the same name goes away: the constant receiver still does not reach the accessor.
+      await edit("statics.rb", "def self.level", "def self.levelx");
+      const withoutSingleton = await answersAt("singleton method renamed");
+      expect(withoutSingleton.some((line) => line.startsWith("statics.rb:14:12 level goto=not_found "))).toBe(true);
+      await edit("statics.rb", "def self.levelx", "def self.level");
+      expect(await answersAt("singleton method restored again")).toEqual(baseline);
+
+      // An attr line becomes a def, and a def becomes an attr line, of the same name.
+      await edit("scope.rb", "attr_reader :later", "def later; end");
+      await answersAt("attr replaced by def");
+      await edit("scope.rb", "def later; end", "attr_reader :later");
+      expect(await answersAt("def replaced by attr")).toEqual(baseline);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby scope index facts", () => {
+  async function scopeOf(source: string) {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-fact-"));
+    const file = path.join(root, "test.rb");
+    await fsp.writeFile(file, source, "utf8");
+    try {
+      const parsed = await parseFile(file);
+      return buildScopeIndexFromSource(file, parsed.source, parsed.sup, [], { tree: parsed.tree });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("records whether a file can generate methods, so a file without attr_ pays nothing for them", async () => {
+    expect((await scopeOf("class A\n  attr_reader :v\nend\n")).hasGeneratedMembers).toBe(true);
+    expect((await scopeOf("class A\n  def v; end\nend\n")).hasGeneratedMembers).toBe(false);
   });
 });

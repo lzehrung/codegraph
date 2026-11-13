@@ -122,6 +122,13 @@ import {
 } from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
+  RUBY_MEMBER_SOURCES,
+  RUBY_SUFFIX_SOURCES,
+  expectRubyMemberReferences,
+  expectRubySuffixCoverage,
+} from "./helpers/ruby-member-names-fixture.js";
+import { RUBY_SCOPE_SOURCES, expectRubyScopeReferences } from "./helpers/ruby-generated-scope-fixture.js";
+import {
   PHP_PATH_IMPORT_FORMS,
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
@@ -9580,6 +9587,44 @@ describe("Swift and Java reference coverage", () => {
         expect(swiftReferences.referenceCoverage.reasons).toContain("strategy_unavailable");
         expect(swiftReferences.referenceCoverage.affectedFiles).toContain(paths["Choices.swift"]);
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby member names, generated accessors, and writer calls", () => {
+  it("lists the exact sites of ? and ! names, attr_* accessors, and writers beside same-named decoys", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-members-references-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_MEMBER_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await expectRubyMemberReferences(index, paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby generated methods outside their own class", () => {
+  it("lists only the sites inside the owner and reports the coverage a same-shaped def does", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-references-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await expectRubyScopeReferences(index, paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby suffixed names used from a file that does not require the declaring file", () => {
+  it("reports partial coverage for ?, !, and = names and complete coverage for the plain name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-suffix-references-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_SUFFIX_SOURCES);
+      await expectRubySuffixCoverage(await buildProjectIndex(root, { cache: "off" }), paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

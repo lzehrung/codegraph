@@ -110,6 +110,8 @@ import {
   withDuplicateDeclarations,
 } from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
+import { RUBY_MEMBER_SOURCES, expectRubyMemberGoto } from "./helpers/ruby-member-names-fixture.js";
+import { RUBY_SCOPE_SOURCES, expectRubyScopeGoto } from "./helpers/ruby-generated-scope-fixture.js";
 import {
   PHP_PATH_IMPORT_FORMS,
   PHP_PATH_MAPPINGS,
@@ -7687,6 +7689,32 @@ describe("Swift contextual navigation", () => {
     try {
       const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
       await expectSwiftAccuracyGoto(await buildProjectIndex(root, { cache: "off" }), paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby member names, generated accessors, and writer calls", () => {
+  it("resolves ? and ! names, attr_* accessors, and writer calls without choosing a same-named decoy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-members-goto-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_MEMBER_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await expectRubyMemberGoto(index, paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby generated methods outside their own class", () => {
+  it("names a generated method only inside its owner's instance methods and keeps decoy classes apart", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-goto-"));
+    try {
+      const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
+      const index = await createTestIndexFromFiles(root, Object.values(paths));
+      await expectRubyScopeGoto(index, paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

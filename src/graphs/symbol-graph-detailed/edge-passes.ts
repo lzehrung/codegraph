@@ -1,3 +1,4 @@
+import { filterEarlierReplacedMembers, isGeneratedMember } from "../../languages/generated-members.js";
 import type { NameResolution } from "../../indexer/name-resolution-types.js";
 import type { ParsedFileProvider } from "../../indexer/parsed-cache.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
@@ -65,6 +66,7 @@ import { sliceText, toRange } from "../../util/ast.js";
 import {
   collectMemberAccessChain,
   getMemberAccessParts,
+  invokedMemberName,
   isMemberAccessNode,
   isReceiverNameNode,
   isQualifiedTypeSuffix,
@@ -1424,7 +1426,7 @@ export async function emitFunctionBodyEdges(
       forcedMemberScope?: ReceiverMemberScope,
       proof?: ReceiverBinding,
     ): void => {
-      const memberName = sliceText(access.property, context.source);
+      const memberName = invokedMemberName(context.sup, access.property, context.source);
       if (!memberName) return;
       const binding =
         proof ??
@@ -1472,12 +1474,14 @@ export async function emitFunctionBodyEdges(
         });
         return;
       }
+      const hideGenerated = !!context.sup.selfIsInstanceAt && !context.sup.selfIsInstanceAt(access.property);
       if (binding.kind === "own-type") {
         const normalizedMemberName =
           context.sup.id === "swift" ? context.sup.normalizeIdentifier(memberName) : memberName;
         const container = nearestMemberContainer(fn.node);
-        const declared = container
+        const rawDeclared = container
           ? lexicalMembers(container).filter((candidate) => {
+              if (hideGenerated && isGeneratedMember(context.sup, context.tree, candidate.def)) return false;
               const candidateName =
                 context.sup.id === "swift"
                   ? context.sup.normalizeIdentifier(candidate.def.localName)
@@ -1490,6 +1494,13 @@ export async function emitFunctionBodyEdges(
               return declarationNodeIsStatic(candidate.node, context.source) === (binding.memberScope === "static");
             })
           : [];
+        const declared = filterEarlierReplacedMembers(
+          context.sup,
+          context.tree,
+          rawDeclared,
+          (candidate) => candidate.def,
+          (candidate) => !declarationNodeIsStatic(candidate.node, context.source),
+        );
         const hasKotlinPropertyCollision =
           context.sup.id === "kotlin" &&
           !!container &&
@@ -1529,6 +1540,7 @@ export async function emitFunctionBodyEdges(
           : {}),
         memberScope: binding.memberScope,
         ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
+        ...(hideGenerated ? { hideGeneratedMembers: true } : {}),
         caseInsensitiveMemberName: phpCaseInsensitive,
       });
     };

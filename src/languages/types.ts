@@ -129,6 +129,56 @@ export interface LanguageDefinition {
   membersAreImplicitlyInScope?: boolean;
 
   /**
+   * The methods one node defines without a `def`. Any other node defines none. Indexing, lexical scope, and the
+   * detailed graph all read this, so a generated method resolves wherever a declared one does.
+   */
+  generatedMembers?: (node: SyntaxNodeLike) => readonly GeneratedMember[];
+
+  /**
+   * Text every call that generates members contains (Ruby `attr_`). A file without it generates nothing, so the walks
+   * that look for generated members skip it.
+   */
+  generatedMembersMarker?: string;
+
+  /**
+   * Whether the class or module `owner` that declares a generated method names it at `use`. Every class of a file shares
+   * the file scope, so scope alone would bind the method in unrelated classes: Ruby `attr_reader :name` is a method of
+   * its own class, reached by a bare name only inside that class's instance methods.
+   */
+  generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+
+  /**
+   * Whether the receiver `self` at `use` is an instance of the enclosing class, rather than the class itself. A
+   * generated method is an instance method, so `self.name` reaches it only where `self` is an instance: Ruby inside an
+   * instance method, never in a singleton method, a `class << self` body, or a class body.
+   */
+  selfIsInstanceAt?: (use: SyntaxNodeLike) => boolean;
+
+  /**
+   * The method that a member-access property invokes, when its text does not say so: Ruby `x.name = value` invokes
+   * the writer `name=`.
+   */
+  invokedMemberName?: (property: SyntaxNodeLike) => string;
+
+  /**
+   * How call sites spell a declared method name, for reference candidates: Ruby writes the setter `name=` as `name`.
+   */
+  useSiteMemberName?: (declared: string) => string;
+
+  /**
+   * Whether the name token `node` only spells a declaration, though its text equals the use-site spelling of another
+   * name: the `name` of Ruby `def name=(value)` declares the writer `name=` and is no use of a reader `name`. Reference
+   * candidates skip it.
+   */
+  isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
+
+  /**
+   * The identifier token a Bloom filter holds for a method name that is not one itself: Ruby `empty?` is stored as
+   * `empty`, because `?` is no identifier character.
+   */
+  bloomProbeName?: (name: string) => string;
+
+  /**
    * Whether the language supports cross-module symbol resolution.
    */
   supportsCrossModuleSymbols?: boolean;
@@ -169,6 +219,17 @@ export interface LanguageDefinition {
    * Optional native-runtime compatibility hooks for grammar/query differences.
    */
   native?: NativeCompatibility;
+}
+
+/**
+ * A method that a declaration-like call defines without a `def`, such as Ruby's `attr_reader :name`. `node` is the
+ * argument token that names it, so go-to-definition lands there.
+ */
+export interface GeneratedMember {
+  name: string;
+  node: SyntaxNodeLike;
+  /** Positional arguments the generated method accepts. */
+  arity: number;
 }
 
 export interface BlockDefinition {

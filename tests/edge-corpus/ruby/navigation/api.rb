@@ -2,11 +2,11 @@ module Atlas # @def atlas=Atlas @coverage atlas complete
   module Engine # @def engine=Engine @coverage engine complete
     class Device # @def device=Device @coverage device complete @known-gap reopened_class_coverage observed=partial
       attr_accessor :name
-      attr_accessor :serial # @def serial=:serial @coverage serial complete @known-gap generated_accessor_not_indexed observed=not_found
+      attr_accessor :serial # @def serial=:serial @coverage serial complete @known-gap typed_local_reader_reference observed=partial
 
       def initialize(name) # @def initialize
-        self.name = name # @ref name_writer @known-gap self_setter_call_reference observed=none
-        self.serial = 0 # @ref serial @known-gap generated_accessor_not_indexed observed=none
+        self.name = name # @ref name_writer
+        self.serial = 0 # @ref serial
       end
 
       def ready? # @def ready=ready?
@@ -14,7 +14,7 @@ module Atlas # @def atlas=Atlas @coverage atlas complete
       end
 
       def reset! # @def reset=reset!
-        self.name = "" # @goto name_writer @known-gap self_setter_call_goes_to_reader observed=name_reader
+        self.name = "" # @goto name_writer
       end
 
       def name=(value) # @def name_writer=name

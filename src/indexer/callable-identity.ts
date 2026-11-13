@@ -86,6 +86,25 @@ export function callableIdentityForDeclaration(args: {
 }
 
 /**
+ * A method generated at an argument token (Ruby `attr_reader :name`) has no parameter list; the generator fixes how
+ * many arguments it takes. The key has the shape of any declaration's, so two methods of one token stay distinct.
+ */
+export function callableIdentityForGeneratedMember(args: {
+  file: string;
+  name: string;
+  range: Range;
+  arity: number;
+}): CallableIdentity {
+  const { file, name, range, arity } = args;
+  return {
+    kind: "function",
+    arity: { minArgs: arity, maxArgs: arity },
+    owner: "",
+    key: `${file}\0${name}\0${range.start.index ?? -1}\0${range.end.index ?? -1}`,
+  };
+}
+
+/**
  * A C++ function first declared `static` keeps internal linkage when a later declaration in the
  * same file omits `static` (`static int run(); int run() {}`). One declaration node cannot see
  * that, so give every same-signature declaration in the file the static one's file-scoped key.

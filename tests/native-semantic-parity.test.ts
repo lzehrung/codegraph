@@ -124,6 +124,20 @@ import {
 } from "./helpers/duplicate-declaration-import-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "./helpers/swift-quoted-fixture.js";
 import {
+  RUBY_MEMBER_SOURCES,
+  RUBY_SUFFIX_SOURCES,
+  expectRubyMemberCalls,
+  expectRubyMemberGoto,
+  expectRubyMemberReferences,
+  expectRubySuffixCoverage,
+} from "./helpers/ruby-member-names-fixture.js";
+import {
+  RUBY_SCOPE_SOURCES,
+  expectRubyScopeCalls,
+  expectRubyScopeGoto,
+  expectRubyScopeReferences,
+} from "./helpers/ruby-generated-scope-fixture.js";
+import {
   PHP_PATH_IMPORT_FORMS,
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
@@ -4865,6 +4879,74 @@ nativeDescribe("Swift contextual native parity", () => {
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby member names, generated accessors, and writer calls", () => {
+  it("keeps ? and ! names, attr_* accessors, and writer calls identical across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-members-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-members-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, RUBY_MEMBER_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const reopened = await buildProjectIndex(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+      ["reopened", reopened],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      const names = index.byFile.get(fileIdentityKey(paths["gauge.rb"]!))?.locals.map((local) => local.localName);
+      expect(names, phase).toEqual(expect.arrayContaining(["level", "unit", "mode", "mode=", "full?", "label="]));
+      await expectRubyMemberGoto(index, paths, phase);
+      await expectRubyMemberReferences(index, paths, phase);
+      await expectRubyMemberCalls(index, paths, phase);
+    }
+  });
+});
+
+describe("Ruby generated methods outside their own class", () => {
+  it("keeps owner-only visibility, locals, definition order, and typed calls identical across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-scope-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-scope-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const reopened = await buildProjectIndex(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+      ["reopened", reopened],
+    ] as const) {
+      for (const module of index.byFile.values()) expect(module.nativeOutcome, phase).toBe("used");
+      await expectRubyScopeGoto(index, paths, phase);
+      await expectRubyScopeReferences(index, paths, phase);
+      await expectRubyScopeCalls(index, paths, phase);
+    }
+  });
+});
+
+describe("Ruby suffixed names used from a file that does not require the declaring file", () => {
+  it("keeps partial coverage for ?, !, and = names across a native disk-cache reload", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-suffix-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-ruby-suffix-cache-"));
+    tempDirs.push(root, cacheDir);
+    const paths = await writeFixtureFiles(root, RUBY_SUFFIX_SOURCES);
+    const options = { cache: "disk", cacheDir, threads: 1 } as const;
+    const cold = await buildProjectIndex(root, options);
+    const warm = await buildProjectIndexIncremental(root, options);
+    const reopened = await buildProjectIndex(root, options);
+    for (const [phase, index] of [
+      ["cold", cold],
+      ["warm", warm],
+      ["reopened", reopened],
+    ] as const) {
+      await expectRubySuffixCoverage(index, paths, phase);
     }
   });
 });

@@ -134,6 +134,10 @@ using syntax and facts proven from source. It must not emulate the full language
   (`tags.scm`: `@definition.*`, `@reference.*`; `locals.scm`: `@local.scope`, `@local.definition`,
   `@local.reference`). Limit per-language TypeScript to what queries cannot express, such as module
   path mapping and package units. That code works on nodes, never raw text.
+- A query compiles once per process, and nesting a pattern under parents with many children costs
+  compile time in every process that indexes the language (a nested Ruby `attr_*` pattern added
+  about 20 ms). Prefer a root pattern with a predicate, and check the surrounding structure in the
+  language hook.
 - Before writing code for a syntax form, check whether the grammar parses it (ERROR/MISSING census).
   A clean parse: use the tree. An ERROR in a rare form: give the conservative answer (`partial`,
   `not_found`, rename unsafe). An ERROR in the feature's core syntax: choose explicitly between a

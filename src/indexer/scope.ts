@@ -4,17 +4,19 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { isSwiftQualifiedExtensionSuffix } from "../util/swift-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
-import { callableIdentityForDeclaration } from "./callable-identity.js";
+import { callableIdentityForDeclaration, callableIdentityForGeneratedMember } from "./callable-identity.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import {
   cppQualifiedNameSegments,
   importTypeQuerySpecifier,
+  nearestMemberContainer,
   typescriptImportTypeQuery,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
+import { generatedMembersIn } from "../languages/generated-members.js";
 import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
@@ -29,7 +31,7 @@ import {
   type ScopeNodeRow,
 } from "./scope-nodes.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { GeneratedMember, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { SymbolKind, type ImportBinding, type SymbolDef } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
@@ -168,14 +170,17 @@ export function buildScopeIndexFromSource(
       }
     }
   }
-  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => {
-    const name = sliceText(nameNode, source);
+  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind, generated?: GeneratedMember): Binding => {
+    const name = generated?.name ?? sliceText(nameNode, source);
     const def = toRange(nameNode);
-    const callable =
-      kind === "function"
-        ? (indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
-          callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode }))
-        : undefined;
+    let callable: Binding["callable"];
+    if (generated) {
+      callable = callableIdentityForGeneratedMember({ file, name, range: def, arity: generated.arity });
+    } else if (kind === "function") {
+      callable =
+        indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
+        callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode });
+    }
     const heldModuleSpecifier =
       kind === "local" && isJsTsLanguage(support.id) ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
     return {
@@ -218,6 +223,7 @@ export function buildScopeIndexFromSource(
   }
 
   const row = scopeNodesFor(support.id);
+  const generatedMembers = generatedMembersIn(support, source);
   /** Covering-declaration names collected before a scope's body is walked, keyed by syntax node id. */
   const pendingNamesByNodeId = new Map<number, Set<string>>();
   /**
@@ -329,8 +335,15 @@ export function buildScopeIndexFromSource(
     }
   };
 
-  const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
-    const binding = buildBinding(nameNode, kind);
+  const addBinding = (
+    target: Scope,
+    nameNode: SyntaxNodeLike,
+    kind: BindingKind,
+    generated?: GeneratedMember,
+  ): void => {
+    const binding = buildBinding(nameNode, kind, generated);
+    const owner = generated ? nearestMemberContainer(nameNode) : null;
+    if (owner) binding.generatedOwner = owner;
     if (row.wholeScopeKinds?.has(target.kind) || declarationCoversScope(nameNode)) {
       binding.coversEnclosingScope = true;
     }
@@ -461,9 +474,9 @@ export function buildScopeIndexFromSource(
     }
   };
 
-  const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+  const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind, generated?: GeneratedMember): void => {
     const target = stack[stack.length - 1];
-    if (target) addBinding(target, nameNode, kind);
+    if (target) addBinding(target, nameNode, kind, generated);
   };
 
   const addHoistedDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
@@ -1003,7 +1016,7 @@ export function buildScopeIndexFromSource(
           binding &&
           ((methodCall && binding.kind === "local") ||
             (typeOnly && isValueNamespaceBinding(binding)) ||
-            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode)))
+            (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode, support)))
         ) {
           binding = binding.earlierSameScope;
         }
@@ -1094,6 +1107,8 @@ export function buildScopeIndexFromSource(
         }
       }
     }
+    // A method that a call generates (Ruby `attr_reader :name`) binds the way a `def` of that name does.
+    if (generatedMembers) for (const member of generatedMembers(node)) addDecl(member.node, "function", member);
     if (row.classNameTypes?.has(node.type)) {
       const isExtension = support.id === "swift" && isSwiftExtensionContainer(node, source);
       if (!isExtension) {
@@ -1443,5 +1458,11 @@ export function buildScopeIndexFromSource(
   };
   for (const scope of allScopes) flush(scope);
   for (const binding of extraBindings) pushBinding(binding);
-  return { bindings, all, allScopes, cppQualifiedFunctionBindings: cppQualifiedCallableBindings };
+  return {
+    bindings,
+    all,
+    allScopes,
+    cppQualifiedFunctionBindings: cppQualifiedCallableBindings,
+    hasGeneratedMembers: !!generatedMembers,
+  };
 }

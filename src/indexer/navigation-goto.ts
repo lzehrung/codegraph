@@ -1,3 +1,4 @@
+import { filterEarlierReplacedMembers, isGeneratedMember } from "../languages/generated-members.js";
 import { csharpImportNamespace, csharpImportsForName, withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import {
   CSHARP_SUPPORT,
@@ -34,6 +35,7 @@ import {
   collectMemberAccessChain,
   getMemberAccessParts,
   getNavigationExpressionProperty,
+  invokedMemberName,
   isMemberAccessNode,
   isQualifiedTypeSuffix,
   isReceiverNameNode,
@@ -43,6 +45,7 @@ import { definitionIdentityKey } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import {
   anonymousOwnerForm,
+  isKeywordReceiver,
   MEMBER_ACCESS_ROWS,
   supportsReceiverMemberNavigation,
 } from "../util/member-access-tables.js";
@@ -1607,6 +1610,40 @@ export function pythonDottedPhraseAtUse(
   });
 }
 
+/** Whether `node` is the property of a member access on the keyword `self` where `self` is the class, not an instance. */
+function isClassSelfMember(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  if (sup.selfIsInstanceAt?.(node) ?? true) return false;
+  const parts = node.parent ? getMemberAccessParts(sup, node.parent) : null;
+  return !!parts?.object && parts.property?.id === node.id && isKeywordReceiver(sup.id, parts.object.text);
+}
+
+/**
+ * Whether the receiver of the member access at `node` names the class itself: a constant, or a `self` that is the class.
+ * Only a language that generates instance methods asks, so every other language skips the check.
+ */
+function namesClassItself(sup: LanguageSupport, proof: ReceiverBinding | null, node: SyntaxNodeLike): boolean {
+  if (!sup.generatedMembers) return false;
+  if (proof?.kind === "named-type" && proof.proof === "static-type") return true;
+  return isClassSelfMember(sup, node);
+}
+
+/**
+ * A candidate filter for a receiver that names the class itself, a constant or a `self` that is the class. A generated
+ * method is an instance method, so such a receiver reaches none of them, and a singleton `def` of the same name stays
+ * the one candidate. Absent for a language without generated methods.
+ */
+function classLevelMemberFilter(context: ParsedFileContext): ((local: SymbolDef) => boolean) | undefined {
+  if (!context.sup.generatedMembers) return undefined;
+  return (local) => !isGeneratedMember(context.sup, context.tree, local);
+}
+
+/** Whether the export `hit` is a generated instance method, which a type name does not reach. */
+async function isGeneratedExport(index: ProjectIndex, hit: ResolvedExport): Promise<boolean> {
+  if (hit.kind !== "resolved") return false;
+  const context = await ensureParsedContextForIndex(index, hit.def.file);
+  return isGeneratedMember(context.sup, context.tree, hit.def);
+}
+
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
   mod: ModuleIndex;
@@ -1933,7 +1970,7 @@ export async function resolveMemberAccessDefinition(params: {
           const qualified = resolveJvmPackageExpression(index, sup, source, expr, resolveLexicalBinding, mod.file);
           if (qualified) return qualified;
         }
-        const memberName = sliceText(subProp, source);
+        const memberName = invokedMemberName(sup, subProp, source);
         // An unresolved type root, including an ambiguous using, cannot become a namespace.
         const dottedRoot = !base && sup.id === "csharp" ? csharpDottedNameRoot(expr) : null;
         const qualifiedRoot =
@@ -2011,7 +2048,7 @@ export async function resolveMemberAccessDefinition(params: {
             const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
             if (memberDef) return { kind: "resolved", def: memberDef };
             const localHit = resolveExport(index, base.def.file, memberName);
-            if (localHit) return localHit;
+            if (localHit && !(await isGeneratedExport(index, localHit))) return localHit;
           }
           return null;
         }
@@ -2062,6 +2099,7 @@ export async function resolveMemberAccessDefinition(params: {
           return null;
         })
       : null;
+  const classLevelReceiver = namesClassItself(sup, receiverProof, node);
   const pythonInstanceReceiver =
     sup.id === "python" &&
     ((receiverProof?.kind === "own-type" && obj?.type === "identifier" && sliceText(obj, source) === "self") ||
@@ -2103,7 +2141,7 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   if (obj && prop && node.id === prop.id && supportsReceiverMemberNavigation(sup.id)) {
-    const member = sliceText(prop, source);
+    const member = invokedMemberName(sup, prop, source);
     if (sup.id === "python") {
       const memberDef = await resolvePythonReceiverMember(
         index,
@@ -2140,6 +2178,7 @@ export async function resolveMemberAccessDefinition(params: {
         undefined,
         report,
         memberAccessUse(sup.id, memberNode),
+        classLevelReceiver,
       );
       if (memberDef) {
         return okGoToResult(index, memberDef, {
@@ -2327,6 +2366,7 @@ export async function resolveMemberAccessDefinition(params: {
               objDef,
               report,
               accessRules?.use,
+              classLevelReceiver,
             );
             if (!memberDef && report.named) {
               // Two members that both fit leave the target open. Named members that all reject the call hide the name
@@ -2353,6 +2393,7 @@ export async function resolveMemberAccessDefinition(params: {
               normalizeIdentifier,
               memberScope,
               knownArgumentCount,
+              classLevelReceiver,
             );
           } else if (!memberDef && (receiver.runtimeTypeOnly || targetContext.sup.id === "java")) {
             const candidates = findDirectLocalsWithinNode(
@@ -2384,6 +2425,7 @@ export async function resolveMemberAccessDefinition(params: {
               normalizeIdentifier,
               memberScope,
               knownArgumentCount,
+              classLevelReceiver,
             );
           }
           const memberContext =
@@ -3404,6 +3446,7 @@ async function resolveKeywordReceiverMember(
   explicitClassDef?: SymbolDef,
   report?: KeywordMemberReport,
   memberUse?: MemberUse,
+  classLevel = false,
 ): Promise<SymbolDef | undefined> {
   const current = explicitClassDef
     ? await keywordClassRefFromDef(index, explicitClassDef)
@@ -3439,7 +3482,7 @@ async function resolveKeywordReceiverMember(
     let nameFound = false;
     for (const ref of level) {
       const key = ownerKey(ref);
-      const matches: SymbolDef[] = [];
+      let matches: SymbolDef[] = [];
       if (!startAtAncestor || depth) {
         appendDirectKeywordMembers(
           ref.module.locals,
@@ -3447,9 +3490,18 @@ async function resolveKeywordReceiverMember(
           ref.container,
           ref.context,
           ref.context.sup.normalizeIdentifier,
-          undefined,
+          classLevel ? classLevelMemberFilter(ref.context) : undefined,
           matches,
         );
+        if (!classLevel && ref.context.sup.generatedMembers) {
+          matches = filterEarlierReplacedMembers(
+            ref.context.sup,
+            ref.context.tree,
+            matches,
+            (local) => local,
+            (local) => !hasStaticModifier(local, ref.context, ref.container),
+          );
+        }
         if (isJsTsLanguage(ref.context.sup.id) && ref.container.type === "interface_declaration") {
           const owner = memberContainerDef(ref.module, ref.container);
           if (owner) {
@@ -5228,13 +5280,10 @@ async function resolveMemberDefinitionForBase(
   if (!targetModule) return undefined;
   const languageId = targetContext.sup.id;
   const normalizeIdentifier = targetContext.sup.normalizeIdentifier;
-  const candidates = findDirectLocalsWithinNode(
-    targetModule.locals,
-    member,
-    container,
-    targetContext,
-    normalizeIdentifier,
-  );
+  const direct = findDirectLocalsWithinNode(targetModule.locals, member, container, targetContext, normalizeIdentifier);
+  // A type name names no generated instance method, so only the other members of that name are candidates.
+  const classLevel = classLevelMemberFilter(targetContext);
+  const candidates = classLevel ? direct.filter(classLevel) : direct;
   if (languageId === "csharp") {
     const partialParts = await findSharedOwnerMemberDefinitions({
       index,
@@ -5269,6 +5318,8 @@ async function resolveMemberDefinitionForBase(
     return selected.status === "unique" ? selected.member : undefined;
   }
   if (languageId === "java") return undefined;
+  // Every direct member of this name is generated: the lookup below would find them again.
+  if (direct.length) return undefined;
   return await findReceiverMemberDefinition(
     index,
     targetModule.locals,
@@ -5363,6 +5414,7 @@ async function findReceiverMemberDefinition(
   normalizeIdentifier: (name: string) => string,
   memberScope: ReceiverMemberScope = "any",
   knownArgumentCount?: number,
+  classLevel = false,
 ): Promise<SymbolDef | undefined> {
   const memberPredicate =
     memberScope === "any"
@@ -5382,7 +5434,7 @@ async function findReceiverMemberDefinition(
     });
     return selected.status === "unique" ? selected.member : undefined;
   }
-  const allReceiverMatches = typescriptMergedInterfaceMemberCandidates(
+  const receiverMatches = typescriptMergedInterfaceMemberCandidates(
     locals,
     member,
     receiverDef,
@@ -5391,6 +5443,17 @@ async function findReceiverMemberDefinition(
     normalizeIdentifier,
     memberPredicate,
   );
+  const classLevelFilter = classLevel ? classLevelMemberFilter(targetContext) : undefined;
+  const filteredReceiverMatches = classLevelFilter ? receiverMatches.filter(classLevelFilter) : receiverMatches;
+  const allReceiverMatches = classLevel
+    ? filteredReceiverMatches
+    : filterEarlierReplacedMembers(
+        targetContext.sup,
+        targetContext.tree,
+        filteredReceiverMatches,
+        (local) => local,
+        (local) => !hasStaticModifier(local, targetContext, container),
+      );
   if (targetContext.sup.id === "csharp" || targetContext.sup.id === "swift") {
     const shared = await findSharedOwnerMemberDefinitions({
       index,

@@ -3,17 +3,17 @@ require_relative "mixins"
 
 class Atlas::Engine::Device # @ref atlas @goto atlas
   def label # @def label
-    ready? # @ref ready @known-gap predicate_method_call observed=none
+    ready? # @ref ready @known-gap reopened_instance_method_reference observed=none
   end
 end
 
 item = Atlas::Engine::Device.new("sensor") # @ref atlas @goto atlas
 item.name = "probe" # @ref name_writer @known-gap typed_local_setter_reference observed=none
 item.name # @ref name_reader @known-gap typed_local_reader_reference observed=none
-item.serial = 7 # @ref serial @known-gap generated_accessor_not_indexed observed=none
-item.serial # @goto serial=serial @known-gap generated_accessor_not_indexed observed=not_found
-item.ready? # @ref ready @known-gap predicate_method_reference observed=none
-item.reset! # @ref reset @known-gap bang_method_reference observed=none
+item.serial = 7 # @ref serial @known-gap typed_local_setter_reference observed=none
+item.serial # @goto serial=serial @known-gap typed_local_reader_reference observed=not_found
+item.ready? # @ref ready @known-gap typed_local_reader_reference observed=none
+item.reset! # @ref reset @known-gap typed_local_reader_reference observed=none
 item.audit # @ref audit @known-gap included_mixin_method_reference observed=none
 item.audit_twice # @ref audit_twice @known-gap reopened_instance_method_reference observed=none
 "FactoryMethods"; Atlas::Engine::Device.make # @not-ref factory_methods @ref make @known-gap class_method_lookup observed=none

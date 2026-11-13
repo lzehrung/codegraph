@@ -228,16 +228,25 @@ export function isValueNamespaceBinding(binding: { kind: Binding["kind"] }): boo
  * Whole-scope bindings name every use in the scope. Every other binding names only uses at
  * or after its declaration. Python also rejects a function's own eager default before its
  * name is bound; other declaration-type coverage is recorded when the binding is registered.
+ * A generated member names only the uses its language says its owner reaches.
  */
 export function bindingCoversUse(
   row: ScopeNodeRow,
   scopeKind: Scope["kind"],
-  binding: { def?: Range; coversEnclosingScope?: boolean; kind?: Binding["kind"] },
+  binding: {
+    def?: Range;
+    coversEnclosingScope?: boolean;
+    kind?: Binding["kind"];
+    generatedOwner?: SyntaxNodeLike;
+  },
   useStartIndex: number,
-  useNode?: SyntaxNodeLike,
+  useNode: SyntaxNodeLike | undefined,
+  support: { generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean },
 ): boolean {
   const pythonFunction = row.moduleBindingsAtFunctionRuntime && binding.kind === "function";
   if (pythonFunction && useNode && pythonFunctionPendingInDefault(binding.def?.start.index, useNode)) return false;
+  const owner = binding.generatedOwner;
+  if (owner && !(useNode && support.generatedMemberVisibleAt?.(owner, useNode))) return false;
   if (binding.coversEnclosingScope || row.wholeScopeKinds?.has(scopeKind)) return true;
   const defIndex = binding.def?.start.index;
   if (defIndex === undefined) return true;

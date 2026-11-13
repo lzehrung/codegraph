@@ -162,8 +162,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Adapted trait uses retain hierarchy and unadapted members; subclasses keep adaptation uncertainty and trait-body
  * calls retain their own abstract declarations.
  * Epoch 153 records Swift callable argument labels and rebuilds contextual member and call edges.
+ * Epoch 154 indexes Ruby `attr_reader`, `attr_writer`, and `attr_accessor` methods at their argument tokens, binds
+ * a Ruby `receiver.name = value` to the writer `name=`, and rebuilds the detailed edges of both.
  */
-export const CORE_ALGORITHM_EPOCH = 153;
+export const CORE_ALGORITHM_EPOCH = 154;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -181,8 +183,10 @@ export const CORE_ALGORITHM_EPOCH = 153;
  * facts change, and a stray `$` before a keyword-prefixed name with decimal digits above ASCII no longer stalls the parse.
  * Epoch 17 uses the pinned TypeScript grammar fork to parse adjacent generic call signatures without
  * semicolons; its syntax tree, ERROR ranges, and downstream language behavior differ from the old grammar.
+ * Epoch 18 adds the Ruby hooks that name generated accessors, the method a property invokes, and the identifier token
+ * and use-site spelling of a method name with a `?`, `!`, or `=` suffix.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 17;
+export const LANGUAGE_BEHAVIOR_EPOCH = 18;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -284,6 +288,14 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   isTypeOnly: true,
   nodeTypes: true,
   native: true,
+  generatedMembers: true,
+  generatedMembersMarker: true,
+  generatedMemberVisibleAt: true,
+  selfIsInstanceAt: true,
+  invokedMemberName: true,
+  useSiteMemberName: true,
+  isDeclarationSpelling: true,
+  bloomProbeName: true,
 };
 
 /**

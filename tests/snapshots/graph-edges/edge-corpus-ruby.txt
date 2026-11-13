@@ -2,17 +2,22 @@
 # Graph edges resolved for tests/edge-corpus/ruby (one index per scenario directory).
 file navigation/consumer.rb -> navigation/api.rb raw=api
 file navigation/consumer.rb -> navigation/mixins.rb raw=mixins
+file navigation/members_use.rb -> navigation/members.rb raw=members
+file navigation/members_use.rb -> navigation/members_decoy.rb raw=members_decoy
 file navigation/sub/consumer.rb -> navigation/sub/foo.rb raw=foo
 symbol navigation/api.rb::build@30:16 -[member_of]-> navigation/api.rb::Registry@29:11
 symbol navigation/api.rb::find@34:16 -[member_of]-> navigation/api.rb::Registry@29:11
-symbol navigation/api.rb::initialize@7:11 -[calls]-> navigation/api.rb::name@24:11 site=8:14
+symbol navigation/api.rb::initialize@7:11 -[calls]-> navigation/api.rb::name=@20:11 site=8:14
+symbol navigation/api.rb::initialize@7:11 -[calls]-> navigation/api.rb::serial=@5:21 site=9:14
 symbol navigation/api.rb::initialize@7:11 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/api.rb::lookup@38:11 -[member_of]-> navigation/api.rb::Registry@29:11
 symbol navigation/api.rb::name=@20:11 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/api.rb::name@24:11 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/api.rb::ready?@12:11 -[member_of]-> navigation/api.rb::Device@3:11
-symbol navigation/api.rb::reset!@16:11 -[calls]-> navigation/api.rb::name@24:11 site=17:14
+symbol navigation/api.rb::reset!@16:11 -[calls]-> navigation/api.rb::name=@20:11 site=17:14
 symbol navigation/api.rb::reset!@16:11 -[member_of]-> navigation/api.rb::Device@3:11
+symbol navigation/api.rb::serial=@5:21 -[member_of]-> navigation/api.rb::Device@3:11
+symbol navigation/api.rb::serial@5:21 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/consumer.rb::Atlas::Engine::Auditable@import -[Atlas::Engine::Auditable]-> navigation/mixins.rb::Auditable@3:12
 symbol navigation/consumer.rb::Atlas::Engine::Auditable@import -[Atlas::Engine::Device]-> navigation/mixins.rb::Device@15:11
 symbol navigation/consumer.rb::Atlas::Engine::Auditable@import -[Atlas::Engine::FactoryMethods]-> navigation/mixins.rb::FactoryMethods@9:12
@@ -104,6 +109,62 @@ symbol navigation/consumer.rb::Atlas@import -[reset!]-> navigation/api.rb::reset
 symbol navigation/consumer.rb::audit@import -[audit]-> navigation/mixins.rb::audit@4:11
 symbol navigation/consumer.rb::label@5:7 -[member_of]-> navigation/consumer.rb::Atlas::Engine::Device@4:7
 symbol navigation/consumer.rb::make@import -[make]-> navigation/mixins.rb::make@10:11
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::drain!@14:7 site=34:5
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::full?@6:7 site=32:5
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::label=@23:7 site=37:10
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::label@27:7 site=38:10
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::unit@2:23 site=36:10
+symbol navigation/members.rb::check@31:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::config=@43:12 -[member_of]-> navigation/members.rb::Settings@42:7
+symbol navigation/members.rb::config@47:12 -[member_of]-> navigation/members.rb::Settings@42:7
+symbol navigation/members.rb::drain!@14:7 -[calls]-> navigation/members.rb::mode=@4:17 site=16:10
+symbol navigation/members.rb::drain!@14:7 -[calls]-> navigation/members.rb::target=@3:15 site=15:10
+symbol navigation/members.rb::drain!@14:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::drain@19:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::full?@6:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::full@10:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::label=@23:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::label@27:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::level@2:15 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::mode=@4:17 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::mode@4:17 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::target=@3:15 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::unit@2:23 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members_decoy.rb::drain!@9:7 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::full?@5:7 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::label=@13:7 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::label@17:7 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::level@2:15 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::mode=@3:17 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::mode@3:17 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_decoy.rb::unit@2:23 -[member_of]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_use.rb::Dial@import -[Dial]-> navigation/members_decoy.rb::Dial@1:7
+symbol navigation/members_use.rb::Dial@import -[drain!]-> navigation/members_decoy.rb::drain!@9:7
+symbol navigation/members_use.rb::Dial@import -[full?]-> navigation/members_decoy.rb::full?@5:7
+symbol navigation/members_use.rb::Dial@import -[label=]-> navigation/members_decoy.rb::label=@13:7
+symbol navigation/members_use.rb::Dial@import -[label]-> navigation/members_decoy.rb::label@17:7
+symbol navigation/members_use.rb::Gauge@import -[Gauge]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members_use.rb::Gauge@import -[Settings]-> navigation/members.rb::Settings@42:7
+symbol navigation/members_use.rb::Gauge@import -[check]-> navigation/members.rb::check@31:7
+symbol navigation/members_use.rb::Gauge@import -[config=]-> navigation/members.rb::config=@43:12
+symbol navigation/members_use.rb::Gauge@import -[config]-> navigation/members.rb::config@47:12
+symbol navigation/members_use.rb::Gauge@import -[drain!]-> navigation/members.rb::drain!@14:7
+symbol navigation/members_use.rb::Gauge@import -[drain]-> navigation/members.rb::drain@19:7
+symbol navigation/members_use.rb::Gauge@import -[full?]-> navigation/members.rb::full?@6:7
+symbol navigation/members_use.rb::Gauge@import -[full]-> navigation/members.rb::full@10:7
+symbol navigation/members_use.rb::Gauge@import -[label=]-> navigation/members.rb::label=@23:7
+symbol navigation/members_use.rb::Gauge@import -[label]-> navigation/members.rb::label@27:7
+symbol navigation/members_use.rb::Settings@import -[Gauge]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members_use.rb::Settings@import -[Settings]-> navigation/members.rb::Settings@42:7
+symbol navigation/members_use.rb::Settings@import -[check]-> navigation/members.rb::check@31:7
+symbol navigation/members_use.rb::Settings@import -[config=]-> navigation/members.rb::config=@43:12
+symbol navigation/members_use.rb::Settings@import -[config]-> navigation/members.rb::config@47:12
+symbol navigation/members_use.rb::Settings@import -[drain!]-> navigation/members.rb::drain!@14:7
+symbol navigation/members_use.rb::Settings@import -[drain]-> navigation/members.rb::drain@19:7
+symbol navigation/members_use.rb::Settings@import -[full?]-> navigation/members.rb::full?@6:7
+symbol navigation/members_use.rb::Settings@import -[full]-> navigation/members.rb::full@10:7
+symbol navigation/members_use.rb::Settings@import -[label=]-> navigation/members.rb::label=@23:7
+symbol navigation/members_use.rb::Settings@import -[label]-> navigation/members.rb::label@27:7
 symbol navigation/mixins.rb::Device@15:11 -[mixin]-> navigation/mixins.rb::Auditable@3:12 site=16:15
 symbol navigation/mixins.rb::Device@15:11 -[mixin]-> navigation/mixins.rb::FactoryMethods@9:12 site=17:14
 symbol navigation/mixins.rb::audit@4:11 -[member_of]-> navigation/mixins.rb::Auditable@3:12
