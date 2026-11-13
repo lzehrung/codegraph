@@ -67,7 +67,8 @@ using syntax and facts proven from source. It must not emulate the full language
   graph share:
   - bare-name lookup: `src/indexer/name-resolution.ts` and the hooks in
     `src/indexer/name-lookup-policies/`;
-  - member selection: `src/indexer/member-selection.ts`;
+  - member selection: `src/indexer/member-selection.ts`, with language rules in the policies of
+    `src/indexer/member-lookup-policies/`;
   - callable identity and accepted argument counts: `src/indexer/callable-identity.ts`, stored as
     `SymbolDef.callable`;
   - import specifier targets: `src/util/resolution/specifier-targets.ts`.

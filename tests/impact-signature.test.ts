@@ -507,7 +507,24 @@ describe("shared callable arity facts (#378 signature rows)", () => {
     ["box.rb", "def target(&block)\nend\n", "target", [0, 0], [0, 0], "function"],
     ["box.rb", "def target(value, &block)\nend\n", "target", [1, 1], [1, 1], "function"],
     ["box.swift", "func target(_ value: Int = 1) -> Int { return value }\n", "target", [0, 1], [0, 1], "function"],
-    ["box.swift", "func target(a: Int = 1, b: Int) {}\n", "target", [2, 2], [2, 2], "function"],
+    // Argument labels and a trailing closure skip defaults before a required parameter; `...` is unbounded.
+    ["box.swift", "func target(a: Int = 1, b: Int) {}\n", "target", [1, 2], [1, 2], "function"],
+    [
+      "box.swift",
+      'func target(_ items: Int..., separator: String = " ") {}\n',
+      "target",
+      [0, null],
+      [0, null],
+      "function",
+    ],
+    [
+      "box.swift",
+      "func target(_ a: Int, scale: Int? = nil, draw: () -> Void) {}\n",
+      "target",
+      [2, 3],
+      [2, 3],
+      "function",
+    ],
     [
       "Box.java",
       "class Box { int target(Map<String, Integer> value) { return 1; } }",
@@ -602,6 +619,14 @@ describe("shared callsite argument facts (#378 rows)", () => {
     ["call.kt", "fun run(){ helper(1) { } }\n", "helper", 2],
     ["call.kt", "fun run(){ helper() }\n", "helper", 0],
     ["call.swift", "func run(){ helper(1) { } }\n", "helper", 2],
+    // A trailing closure body holds other calls, whose arguments are not the callee's.
+    ["call.swift", "func run(){ helper { other(1, 2, 3) } }\n", "helper", 1],
+    ["call.swift", "func run(){ helper(a: 1, b: 2) { } }\n", "helper", 3],
+    ["call.swift", "func run(){ helper { } second: { } }\n", "helper", 2],
+    // `await` puts the call under the call that holds the trailing closure; `try await` keeps one call.
+    ["call.swift", "func run() async { let x = await helper(1) { } }\n", "helper", 2],
+    ["call.swift", "func run() async { let x = await helper(a: 1, b: 2) { } }\n", "helper", 3],
+    ["call.swift", "func run() async throws { let x = try await helper(1) { } }\n", "helper", 2],
     ["call.rb", "helper()\n", "helper", 0],
     ["call.rb", "helper(1) { }\n", "helper", 1],
     [

@@ -1,4 +1,5 @@
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
+import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -1063,10 +1064,20 @@ async function findReferencesInternal(
     (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
     definition.kind === SymbolKind.Function &&
     !receiverMemberDefinition;
+  // Swift overload labels, including overloads in another unit peer, require goto verification.
+  const swiftCallable =
+    memberLookupPolicyFor(parsedContext.sup.id).verifiesCallableReferences &&
+    definition.kind === SymbolKind.Function &&
+    !receiverMemberDefinition;
   const bindingNeedsVerifiedScan = requiresTypeScriptOverloadVerifiedScan || requiresRuntimeBindingVerifiedScan;
   const kotlinNeedsVerifiedScan = kotlinExtension || kotlinCallableCollision;
   const requiresSameFileVerifiedScan =
-    privateName || cFamilyCallable || scansNamespaceReferences || bindingNeedsVerifiedScan || kotlinNeedsVerifiedScan;
+    privateName ||
+    cFamilyCallable ||
+    swiftCallable ||
+    scansNamespaceReferences ||
+    bindingNeedsVerifiedScan ||
+    kotlinNeedsVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   let memberCallOccurrencesNeedVerification = false;

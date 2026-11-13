@@ -21,6 +21,8 @@ import {
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
 import { isSwiftQualifiedTypeSuffix, swiftQualifiedTypeSegments } from "../util/swift-tree.js";
+import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import { swiftShorthandContextType } from "./swift-enum.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
@@ -46,10 +48,12 @@ import {
   resolveImplicitSelfMember,
   resolveJvmQualifiedPath,
   resolveSwiftNestedTypePath,
+  memberLookupDeps,
 } from "./navigation-goto.js";
 import {
   definitionForBinding,
   findClosestScopeBinding,
+  getOrBuildScopeIndex,
   laterLocalShadowsUse,
   resolveNamedDefinition,
 } from "./navigation-local.js";
@@ -291,6 +295,45 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }
 
+/** The enum case a leading-dot name selects in the type its context proves, if any. */
+async function settleSwiftEnumCase(use: BareNameUse, options: SettleNameOptions): Promise<SymbolDef | undefined> {
+  const contextual = await swiftShorthandContextType(use, options.resolveCallee);
+  if (!contextual) return undefined;
+  const { index, name } = use;
+  // `.none` and `.some` in a `Type?` context are `Optional`'s own cases, not `Type`'s.
+  if (contextual.optional && (name === "none" || name === "some")) return undefined;
+  const { module, parsed: typeParsed, node: typeNode } = contextual;
+  const policy = memberLookupPolicyFor(use.parsed.sup.id);
+  const leading = { node: use.node, name, optionSet: contextual.optionSet };
+  if (contextual.enclosing) {
+    return await policy.contextualMember?.(index, { mod: module, node: typeNode }, leading, memberLookupDeps);
+  }
+  const scopeIndex = getOrBuildScopeIndex(
+    index,
+    module.file,
+    typeParsed.source,
+    typeParsed.sup,
+    module,
+    typeParsed.tree,
+  );
+  const files = createLoadingParsedFileProvider(index, { file: module.file, parsed: typeParsed });
+  const typeUse: BareNameUse = {
+    index,
+    mod: module,
+    file: module.file,
+    parsed: typeParsed,
+    scopeIndex,
+    files,
+    node: typeNode,
+    name: sliceText(typeNode, typeParsed.source),
+  };
+  const typeResolution = await withParsedFiles(files, () => resolveBareName(typeUse));
+  const type = await settleNameResolution(typeUse, typeResolution, options);
+  return type?.status === "ok"
+    ? await policy.contextualMember?.(index, { owner: type.definition }, leading, memberLookupDeps)
+    : undefined;
+}
+
 /**
  * What the lambdas around a Kotlin bare call decide: a member of the closest receiver that declares the name, or
  * `undefined` when no receiver claims it and the lookup goes on. A receiver whose members are not indexed may declare
@@ -378,6 +421,17 @@ export async function settleNameResolution(
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
       if (settled) return settled;
+    } else if (request.kind === "swift-enum-case") {
+      const member = await settleSwiftEnumCase(use, options);
+      if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });
+      // Without a proven context, the bare-name answer stays only when it is a static member that fits the use: a
+      // call names a function or a function-valued variable, never a variable that holds a value.
+      const named = await settleNameResolution(use, request.staticFallback, options);
+      const fallbackPolicy = memberLookupPolicyFor(parsed.sup.id);
+      const fitsUse =
+        named?.status === "ok" &&
+        (await fallbackPolicy.staticFallbackFits?.(index, named.definition, node, memberLookupDeps));
+      if (named?.status === "ok" && fitsUse) return named;
     } else if (request.kind === "swift-nested-type") {
       const nested = await resolveSwiftNestedTypePath(index, request.owner, request.names);
       if (nested) return okGoToResult(index, nested, { resolution: "member-access", confidence: "medium" });

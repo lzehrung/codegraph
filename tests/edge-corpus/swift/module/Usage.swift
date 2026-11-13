@@ -11,41 +11,41 @@ let typedFourth: Labelled.Type = Labelled.self
 
 // @ref announce
 func useDefault(_ value: Labelled) { value.announce() }
-// @goto announce @known-gap default-method observed=not_found
+// @goto announce
 let defaultMethod = Labelled.announce
 
 func useMembers(_ value: Labelled) {
     // @ref labelName
     let title = value.relayName
-    // @ref labelledSend @known-gap argument-label observed=none
+    // @ref labelledSend
     value.send(to: title)
-    // @ref sendAgain @known-gap unlabeled-overload observed=none
+    // @ref sendAgain
     value.send(title)
     // @ref description
     let text = value.description
     // @ref count
     let total = Labelled.count
-    // @ref nested @known-gap nested-type observed=none
+    // @ref nested
     let child = Labelled.nested()
-    // @goto nested @known-gap nested-type observed=not_found
+    // @goto nested
     let nestedConstructor = Labelled.nested.self
-    // @ref nestedValue @known-gap nested-property observed=none
+    // @ref nestedValue
     let number = child.nestedValue
     let another = Labelled()
     // @ref announce
     value.announce()
-    // @ref labelledSend @known-gap argument-label observed=none
+    // @ref labelledSend
     value.send(to: "closure")
     // @def captured
     let captured = "captured value"
     // @ref captured
     let closure = { captured + value.relayName }
     _ = closure()
-    // @ref warm @known-gap enum-shorthand observed=none
+    // @ref warm
     let selected: ColorMode = .warm
-    // @goto warm @known-gap enum-shorthand observed=not_found
+    // @goto warm
     let warmConstructor = ColorMode.warm
-    // @ref cool @known-gap enum-shorthand observed=none
+    // @ref cool
     let alternate: ColorMode = .cool
     // @not-ref captured
     let stringDecoy = "captured"

@@ -58,6 +58,13 @@ export function memberLookupBinding(languageId: string): CallableBinding {
  */
 export type CallableDeclarationKind = "function" | "instance-method" | "class-method" | "static-method";
 
+/** Syntax-only Swift external labels and optional parameter facts. */
+export type SwiftCallableParameter = {
+  label: string;
+  optional: boolean;
+  variadic: boolean;
+};
+
 /** The stable declaration group and call-form facts stored with each indexed callable. */
 export type CallableIdentity = {
   key: string;
@@ -67,6 +74,7 @@ export type CallableIdentity = {
   unboundArity?: CallableArity;
   signature?: string;
   role?: "signature" | "implementation" | "other";
+  swiftParameters?: SwiftCallableParameter[];
   definition?: boolean;
 };
 
@@ -432,10 +440,12 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   python: pythonProfile,
   ruby: rubyProfile,
   rust: rustProfile,
-  // Parameter clauses expose no list node; span the declaration's direct `parameter` children.
+  // Parameter clauses expose no list node; span the declaration's direct `parameter` children. Argument labels and a
+  // trailing closure can skip defaults before a required parameter, so every parameter is its own `name: Type` slot.
   swift: {
     ...GENERIC_PROFILE,
     directParameterChildType: "parameter",
+    keywordParameterPattern: /:/,
     trailingClosureNodeTypes: ["lambda_literal"],
   },
   // Callsites expose no argument-list node; scan for the call parentheses instead.
@@ -1036,28 +1046,34 @@ function enumerateListParameters(
   return { parameters, hasRest };
 }
 
+/**
+ * A direct-parameter declaration (Swift) keeps its parameters, `=` tokens, and default expressions as its own children
+ * between its `(` and `)`. A default can be an anonymous token (`nil`), so the `=` token marks it. A parse recovery
+ * in the clause or a parameter hides slots, so no arity is provable.
+ */
 function enumerateDirectParameters(
   profile: CallableArityLanguageProfile,
   region: { declaration: SyntaxNodeLike; parameterType: string },
   source: string,
-): EnumerationResult {
+): EnumerationResult | null {
   const parameters: ParameterFact[] = [];
   let last: ParameterFact | null = null;
-  let lastEndIndex = region.declaration.startIndex;
-
-  for (const child of region.declaration.namedChildren ?? []) {
-    if (child.type !== region.parameterType) {
-      if (last === null) {
-        continue;
-      }
-      const gap = source.slice(lastEndIndex, child.startIndex);
-      if (gap.includes("=")) {
-        last.forcedOptional = true;
-        lastEndIndex = child.endIndex;
-        continue;
-      }
-      break;
+  let inClause = false;
+  for (let index = 0; ; index += 1) {
+    const child = region.declaration.child(index);
+    if (!child) break;
+    if (!inClause) {
+      inClause = child.type === "(";
+      continue;
     }
+    if (child.type === ")") break;
+    if (child.type === "ERROR" || child.type === "MISSING") return null;
+    if (child.type === "=") {
+      if (last) last.forcedOptional = true;
+      continue;
+    }
+    if (child.type !== region.parameterType) continue;
+    if (child.namedChildren.some((part) => part.type === "ERROR" || part.type === "MISSING")) return null;
     const fact: ParameterFact = {
       text: sliceOf(source, child),
       nodeType: child.type,
@@ -1066,7 +1082,6 @@ function enumerateDirectParameters(
       forcedRest: false,
       forcedZeroSlot: false,
     };
-    lastEndIndex = child.endIndex;
     last = fact;
     parameters.push(fact);
   }
@@ -1359,16 +1374,25 @@ export function getCallArgumentCountFromArgumentText(args: {
   return groups.length;
 }
 
+/** Swift prefix operators that sit between a call and the call a trailing closure makes of it (`await f(a: 1) { }`). */
+const CALL_WRAPPER_NODE_TYPES: Record<string, true> = { await_expression: true, try_expression: true };
+
+function enclosingCallExpression(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let parent = node.parent;
+  while (parent && CALL_WRAPPER_NODE_TYPES[parent.type]) parent = parent.parent;
+  return parent;
+}
+
 function outermostTrailingClosureCall(call: SyntaxNodeLike, source: string): SyntaxNodeLike {
   let callNode = call;
-  let parent = callNode.parent;
+  let parent = enclosingCallExpression(callNode);
   while (parent && CALL_NODE_TYPES[parent.type]) {
     const trailingText = source.slice(callNode.endIndex, parent.endIndex).trimStart();
     if (!trailingText.startsWith("{")) {
       break;
     }
     callNode = parent;
-    parent = callNode.parent;
+    parent = enclosingCallExpression(callNode);
   }
   return callNode;
 }
@@ -1383,28 +1407,19 @@ function findArgumentNode(callNode: SyntaxNodeLike): SyntaxNodeLike | null {
       return child;
     }
     if (child.type === "call_suffix") {
-      return child.childForFieldName("arguments") ?? findNestedArgumentList(child);
+      // A trailing closure body holds other calls' argument lists; only the suffix's own list counts.
+      const own =
+        child.childForFieldName("arguments") ?? child.namedChildren.find((part) => ARGUMENT_LIST_NODE_TYPES[part.type]);
+      // A suffix with only a trailing closure belongs to the call wrapped around the one that holds the arguments.
+      if (own) return own;
     }
   }
   for (const child of callNode.namedChildren ?? []) {
-    if (CALL_NODE_TYPES[child.type]) {
+    if (CALL_NODE_TYPES[child.type] || CALL_WRAPPER_NODE_TYPES[child.type]) {
       const nested = findArgumentNode(child);
       if (nested) {
         return nested;
       }
-    }
-  }
-  return null;
-}
-
-function findNestedArgumentList(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  for (const child of node.namedChildren ?? []) {
-    if (ARGUMENT_LIST_NODE_TYPES[child.type]) {
-      return child;
-    }
-    const nested = findNestedArgumentList(child);
-    if (nested) {
-      return nested;
     }
   }
   return null;

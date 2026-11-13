@@ -7,8 +7,8 @@ class PrivateHit: GrandHit {
 }
 
 class PublicHit: PrivateHit {
-    func run() -> String { hit() } // @goto grandHit=hit @known-gap private_method_goto observed=privateHit
-    func reference() -> String { hit() } // @ref grandHit @known-gap private_method_reference observed=none
+    func run() -> String { hit() } // @goto grandHit=hit
+    func reference() -> String { hit() } // @ref grandHit
 }
 
 class LocalOverload {

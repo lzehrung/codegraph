@@ -11,6 +11,11 @@ import type { FindReferencesResult, ProjectIndex } from "../../src/indexer/types
 import { normalizePath } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
 import { columnOf, writeFixtureFiles } from "./callable-consumer-fixtures.js";
+import {
+  expectSwiftAccuracyGoto,
+  expectSwiftAccuracyReferences,
+  SWIFT_ACCURACY_SOURCES,
+} from "../helpers/swift-accuracy-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "../helpers/swift-quoted-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -1672,3 +1677,17 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
 });
 
 describeTypeParameterReceiverRows("swift", "Swift type parameter beside a same-named class");
+
+describe("Swift contextual language consumers", () => {
+  it("keeps declared enum cases and labeled overloads distinct", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-accuracy-language-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await expectSwiftAccuracyGoto(index, paths);
+      await expectSwiftAccuracyReferences(index, paths);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

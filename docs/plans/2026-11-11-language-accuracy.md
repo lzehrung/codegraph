@@ -115,14 +115,14 @@ fix order.
 
 ### Swift (12)
 
-- [ ] Enum shorthand `.case` with a known type (`enum-shorthand`: `module/Usage.swift:44`, `:46`,
+- [x] Enum shorthand `.case` with a known type (`enum-shorthand`: `module/Usage.swift:44`, `:46`,
       `:48`)
-- [ ] Overload selection by argument labels (`argument-label`: `module/Usage.swift:20`, `:37`;
+- [x] Overload selection by argument labels (`argument-label`: `module/Usage.swift:20`, `:37`;
       `unlabeled-overload`: `:22`)
-- [ ] Nested types and their properties (`nested-type`: `module/Usage.swift:28`, `:30`;
+- [x] Nested types and their properties (`nested-type`: `module/Usage.swift:28`, `:30`;
       `nested-property`: `:32`)
-- [ ] Protocol default methods (`default-method`: `module/Usage.swift:14`)
-- [ ] Private methods within their file (`private_method_goto`: `module/Lookup.swift:10`;
+- [x] Protocol default methods (`default-method`: `module/Usage.swift:14`)
+- [x] Private methods within their file (`private_method_goto`: `module/Lookup.swift:10`;
       `private_method_reference`: `:11`)
 
 ### C# (14)

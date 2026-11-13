@@ -35,9 +35,9 @@ symbol main.swift::Utils@import -[helperFunction]-> Utils.swift::helperFunction@
 symbol main.swift::Utils@import -[value]-> Utils.swift::value@6:14
 symbol main.swift::helperFromHelpers@import -[helperFromHelpers]-> Helpers.swift::helperFromHelpers@1:13
 symbol main.swift::helperFunction@import -[helperFunction]-> Utils.swift::helperFunction@1:13
-symbol main.swift::main@4:6 -[calls]-> Helpers.swift::helperFromHelpers@1:13 site=7:15
-symbol main.swift::main@4:6 -[calls]-> Utils.swift::UtilityStruct@5:15 site=6:17
-symbol main.swift::main@4:6 -[calls]-> Utils.swift::helperFunction@1:13 site=5:15
+symbol main.swift::main@4:6 -[calls]-> Helpers.swift::helperFromHelpers@1:13 site=7:23
+symbol main.swift::main@4:6 -[calls]-> Utils.swift::helperFunction@1:13 site=5:21
+symbol main.swift::main@4:6 -[instantiates]-> Utils.swift::UtilityStruct@5:15 site=6:23
 symbol main.swift::main@4:6 -[uses]-> Helpers.swift::helperFromHelpers@1:13
 symbol main.swift::main@4:6 -[uses]-> Utils.swift::UtilityStruct@5:15
 symbol main.swift::main@4:6 -[uses]-> Utils.swift::helperFunction@1:13

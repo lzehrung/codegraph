@@ -7,6 +7,7 @@ import { shapeCandidateTests, type RenameCandidateTest } from "./candidate-tests
 export type { RenameCandidateTest };
 import { canonicalizePythonReceiverAttributeDefinition, findRenameReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
+import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "../indexer/member-selection.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
@@ -228,12 +229,19 @@ export async function previewRenameInSnapshot(
     referenceFailure = errorMessage(error);
   }
   const semanticDefinitions = new Map<string, SymbolDef>([[resolved.id, resolved.def]]);
-  const implementationResult = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
-    limit: 500,
-  });
+  const targetLanguage =
+    supportForFileWithoutHeaderSample(resolved.def.file, snapshot.index.languageExtensions)?.id ?? "";
+  const unprovenLinkage = memberLookupPolicyFor(targetLanguage).renameLinkageUnproven?.(
+    snapshot.symbolGraph,
+    resolved.def,
+    resolved.id,
+  );
+  const implementationResult = unprovenLinkage
+    ? { status: "unsupported_target" as const, reason: unprovenLinkage.unsupportedReason }
+    : queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, { limit: 500 });
   let omittedImplementations = implementationResult.status === "ok" ? implementationResult.omitted : 0;
   let missingImplementationDefinitions = 0;
-  let implementationAmbiguityReason: string | undefined;
+  let implementationAmbiguityReason: string | undefined = unprovenLinkage?.ambiguityReason;
   const implementationUnsafeSites: RenameUnsafeSite[] = [];
   if (implementationResult.status === "ok") {
     const lookup = buildSymbolLookup(snapshot);

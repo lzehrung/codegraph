@@ -54,7 +54,8 @@ describe("cross-language call compatibility extraction", () => {
     ["helper.rb", "def helper(cls)\nend\n", 1, 1],
     ["helper.rb", "def helper(&block)\nend\n", 0, 0],
     ["helper.swift", "func helper(_ value: Int = 1) -> Int { return value }\n", 0, 1],
-    ["helper.swift", "func helper(a: Int = 1, b: Int) {}\n", 2, 2],
+    // Argument labels skip the default before the required `b`, so one argument is enough.
+    ["helper.swift", "func helper(a: Int = 1, b: Int) {}\n", 1, 2],
     ["Helper.java", "class Helper { int helper(Map<String, Integer> value) { return 1; } }\n", 1, 1],
     ["Box.java", "class Box { int helper(Box this, int value) { return value; } }\n", 1, 1],
     ["Helper.cs", "class Helper { void helper(Dictionary<string, int> value) {} }\n", 1, 1],

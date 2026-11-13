@@ -6,6 +6,7 @@ import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/sess
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import * as navigationModule from "../src/indexer/navigation.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { setAfterConfinedPathVerifiedForTests } from "../src/util/confined-file.js";
@@ -2259,6 +2260,164 @@ describe("rename preview", () => {
       }
     } finally {
       session.invalidate();
+    }
+  });
+
+  it("keeps Swift protocol witness renames unsafe without merging same-named decoys", async () => {
+    const root = await mkTmpDir("cg-rename-swift-witness-");
+    const lines = [
+      "protocol Relay { func send(to value: Int) }",
+      'extension Relay { func send(to value: Int) { print("default") }; func announce() { print("default announce") } }',
+      'struct OwnRelay: Relay { func send(to value: Int) { print("own") }; func announce() { print("own announce") } }',
+      'struct Decoy { func send(to value: Int) { print("decoy") } }',
+      'class Base { func send(to value: Int) { print("base") } }',
+      "class Child: Base, Relay {}",
+      "func viaProtocol(_ x: Relay) { x.send(to: 1) }",
+      "func viaOwn(_ x: OwnRelay) { x.send(to: 1) }",
+      "viaProtocol(OwnRelay())",
+      "viaOwn(OwnRelay())",
+      "viaProtocol(Child())",
+      "OwnRelay().announce()",
+      "func viaAnnounce(_ x: Relay) { x.announce() }",
+      "viaAnnounce(OwnRelay())",
+    ];
+    try {
+      await writeFixtureFiles(root, { "main.swift": `${lines.join("\n")}\n` });
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+        try {
+          for (const module of (await session.loadProject()).index.byFile.values())
+            expect(module.nativeOutcome).toBe("used");
+          for (const [name, line] of [
+            ["send", 1],
+            ["send", 2],
+            ["send", 3],
+            ["send", 5],
+            ["announce", 2],
+            ["announce", 3],
+          ] as const) {
+            const symbols = await workspaceSymbolsWithSession(session, { root, query: name });
+            const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === line);
+            expect(target, `${name}:${line}`).toBeDefined();
+            if (!target) throw new Error(`Missing ${name} at ${line}`);
+            const preview = await previewRenameWithSession(session, {
+              root,
+              handle: target.handle,
+              newName: "renamed",
+            });
+            expect(preview.safe, `${name}:${line}`).toBe(false);
+            expect(preview.unsafeSites).toContainEqual(
+              expect.objectContaining({
+                reason: "ambiguous_target",
+                provenance: expect.objectContaining({ reason: expect.stringContaining("protocol") }),
+              }),
+            );
+            expect(
+              preview.edits.filter((edit) => edit.kind === "definition").map((edit) => edit.range.start.line),
+            ).toEqual([line]);
+          }
+          const decoys = await workspaceSymbolsWithSession(session, { root, query: "send" });
+          const decoy = decoys.symbols.find((symbol) => symbol.location.range.start.line === 4);
+          if (!decoy) throw new Error("Missing nonconforming decoy");
+          const preview = await previewRenameWithSession(session, { root, handle: decoy.handle, newName: "renamed" });
+          expect(preview.safe).toBe(true);
+          expect(preview.edits.map((edit) => edit.range.start.line)).toEqual([4]);
+        } finally {
+          session.invalidate();
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a Java rename safe beside an unrelated rejected Swift call", async () => {
+    const root = await mkTmpDir("cg-rename-java-swift-");
+    try {
+      await writeFixtureFiles(root, {
+        "Box.java": "class Box { int target(int x) { return x; } int use() { return target(1); } }\n",
+        "Other.swift": "class Other { func target(_ x: Int) -> Int { x }; func use() -> Int { self.target(1, 2) } }\n",
+      });
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+        try {
+          for (const module of (await session.loadProject()).index.byFile.values())
+            expect(module.nativeOutcome).toBe("used");
+          const symbols = await workspaceSymbolsWithSession(session, { root, query: "target" });
+          const target = symbols.symbols.find((symbol) => symbol.location.file === "Box.java");
+          if (!target) throw new Error("Missing Java target");
+          const preview = await previewRenameWithSession(session, { root, handle: target.handle, newName: "renamed" });
+          expect(preview.safe).toBe(true);
+          expect(preview.unsafeSites).toEqual([]);
+          expect(preview.edits.map((edit) => [edit.file, edit.range.start.column])).toEqual([
+            ["Box.java", 17],
+            ["Box.java", 64],
+          ]);
+        } finally {
+          session.invalidate();
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cross-file Swift extension witnesses unsafe without touching a nonconformer", async () => {
+    const root = await mkTmpDir("cg-rename-swift-extension-witness-");
+    try {
+      await writeFixtureFiles(root, {
+        "Protocol.swift": [
+          "protocol Relay { func send() -> String }",
+          'extension Relay { func send() -> String { "default" } }',
+        ].join("\n"),
+        "Models.swift": [
+          "struct User {}",
+          'extension User: Relay { func send() -> String { "own" } }',
+          'struct Decoy { func send() -> String { "decoy" } }',
+          "func viaProtocol(_ value: Relay) -> String { value.send() }",
+          "func viaUser(_ value: User) -> String { value.send() }",
+        ].join("\n"),
+      });
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+        try {
+          for (const module of (await session.loadProject()).index.byFile.values())
+            expect(module.nativeOutcome).toBe("used");
+          const symbols = await workspaceSymbolsWithSession(session, { root, query: "send" });
+          const witness = symbols.symbols.find(
+            (symbol) => symbol.location.file === "Models.swift" && symbol.location.range.start.line === 2,
+          );
+          const decoy = symbols.symbols.find(
+            (symbol) => symbol.location.file === "Models.swift" && symbol.location.range.start.line === 3,
+          );
+          if (!witness || !decoy) throw new Error("Missing extension witness or decoy");
+          const preview = await previewRenameWithSession(session, { root, handle: witness.handle, newName: "renamed" });
+          expect(preview.safe).toBe(false);
+          expect(preview.unsafeSites).toContainEqual(
+            expect.objectContaining({
+              reason: "ambiguous_target",
+              provenance: expect.objectContaining({ reason: expect.stringContaining("protocol") }),
+            }),
+          );
+          expect(
+            preview.edits.filter((edit) => edit.kind === "definition").map((edit) => edit.range.start.line),
+          ).toEqual([2]);
+          const decoyPreview = await previewRenameWithSession(session, {
+            root,
+            handle: decoy.handle,
+            newName: "renamed",
+          });
+          expect(decoyPreview.safe).toBe(true);
+          expect(decoyPreview.edits.map((edit) => edit.range.start.line)).toEqual([3]);
+        } finally {
+          session.invalidate();
+        }
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -18,6 +18,7 @@ import {
   innermostNamespaceImport,
   isDirectKeywordMemberDeclaration,
   memberAcceptsCallAt,
+  memberLookupDeps,
   qualifiedBaseNames,
   pythonAnnotationTypeAtUse,
   readRubyConstantReference,
@@ -47,6 +48,7 @@ import {
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
 import { resolveEcmaPrivateName, selectMember } from "../../indexer/member-selection.js";
+import { memberLookupPolicyFor, type MemberCallEdge } from "../../indexer/member-lookup-policies/index.js";
 import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
 import { kotlinHasTrailingLambda } from "../../indexer/kotlin-call-compatibility.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
@@ -71,7 +73,7 @@ import {
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
-import { isSwiftQualifiedTypeSuffix } from "../../util/swift-tree.js";
+import { isSwiftQualifiedTypeSuffix, isSwiftSubscriptAccess } from "../../util/swift-tree.js";
 import {
   MEMBER_ACCESS_ROWS,
   type ReceiverAncestorClause,
@@ -918,6 +920,18 @@ function isCallTarget(context: EdgePassContext, def: SymbolDef): boolean {
   return def.kind === SymbolKind.Function || !!context.nodes.get(defNodeId(def))?.callable;
 }
 
+/** The edge a resolved dotted member call records, or null when its target cannot be the callee. */
+async function dottedCallEdge(
+  context: EdgePassContext,
+  member: SymbolDef,
+  callee: SyntaxNodeLike,
+): Promise<MemberCallEdge | null> {
+  const policy = memberLookupPolicyFor(context.sup.id);
+  if (policy.callEdge) return await policy.callEdge(context.index, member, callee, context.source, memberLookupDeps);
+  // The graph records no edge for a call its target cannot accept, as for other member calls.
+  return memberAcceptsCallAt(context.index, member, callee, context.source, context.sup.id) ? "calls" : null;
+}
+
 /**
  * A member of a proven same-file TS namespace receiver, selected with navigation's container and
  * overload rules. `undefined` means the receiver is not such a namespace.
@@ -1006,6 +1020,7 @@ function recordImportTypeCall(
 function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): boolean {
   const constructed = constructionTypeName(node, context.source, context.sup);
   if (!constructed) return false;
+  if (isMemberAccessNode(context.sup, constructed)) return false;
   const name = sliceText(constructed, context.source);
   // An inherited method can share a type's name; a deferred member lookup decides after the walk.
   if (context.resolveName(name, constructed)?.status === "deferred") return false;
@@ -1137,6 +1152,8 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
   },
   swift: {
     onCall(context, node, fromId) {
+      // A subscript read (`items[key]`) is not a call; the nodes inside it are still walked.
+      if (isSwiftSubscriptAccess(node)) return true;
       return recordSwiftCapitalizedConstruction(context, node, fromId) ? true : undefined;
     },
   },
@@ -1567,6 +1584,10 @@ export async function emitFunctionBodyEdges(
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
+        if (memberLookupPolicyFor(context.sup.id).dottedCallsUseMemberLookup) {
+          dottedReceiverCalls.push({ fromId, access });
+          return;
+        }
         if (isJsTsLanguage(context.sup.id) && access.property.type === "private_property_identifier") {
           const target = resolveEcmaPrivateName(access.property, context.moduleEntry.locals);
           if (target.status === "resolved" && target.target) {
@@ -1639,15 +1660,6 @@ export async function emitFunctionBodyEdges(
             return;
           }
           recordReceiverCall(node, access, undefined, receiverProof);
-          return;
-        }
-        if (
-          context.sup.id === "swift" &&
-          isIdentifierType(context.sup, access.receiver.type) &&
-          context.resolveIdentifier(sliceText(access.receiver, context.source), access.receiver)?.kind ===
-            SymbolKind.TypeAlias
-        ) {
-          dottedReceiverCalls.push({ fromId, access });
           return;
         }
         if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
@@ -1791,10 +1803,8 @@ export async function emitFunctionBodyEdges(
   }
   for (const { fromId, access } of dottedReceiverCalls) {
     const member = await context.resolveMemberAccessTarget(access.property);
-    // The graph records no edge for a call its target cannot accept, as for other member calls.
-    if (member && memberAcceptsCallAt(context.index, member, access.accessNode, context.source, context.sup.id)) {
-      recordDefEdge(context, fromId, member, "calls", access.property);
-    }
+    const edge = member ? await dottedCallEdge(context, member, access.accessNode) : null;
+    if (member && edge) recordDefEdge(context, fromId, member, edge, access.property);
   }
   for (const target of qualifiedConstructionTargets) {
     const resolved = await context.resolveMemberAccessTarget(target.member);

@@ -6,7 +6,7 @@ protocol Relay {
     func send(to recipient: String)
 }
 
-// @def Labelled
+// @def Labelled @goto Relay @ref Relay
 struct Labelled: Relay {
     // @def labelName=relayName
     var relayName: String { "local" }
@@ -26,7 +26,7 @@ struct Labelled: Relay {
     var description: String { relayName }
 }
 
-extension Relay {
+extension Relay { // @goto Relay @ref Relay
     // @def announce
     func announce() { send(to: relayName) }
 }

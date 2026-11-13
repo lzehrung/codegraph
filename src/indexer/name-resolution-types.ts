@@ -23,6 +23,11 @@ export type DeferredNameRequest =
   | { kind: "csharp-alias-member"; lookupName: string }
   /** A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it. */
   | { kind: "swift-nested-type"; owner: SymbolDef; names: readonly string[] }
+  /**
+   * A leading-dot Swift name needs its contextual type. Without one, only a static member the bare-name lookup finds
+   * (`staticFallback`) stays the answer.
+   */
+  | { kind: "swift-enum-case"; staticFallback: NameResolution | null }
   /** Several included C/C++ declarations that may be one callable. */
   | { kind: "c-included-star"; lookupName: string; cNamespace: "tag" | "ordinary" | undefined };
 
