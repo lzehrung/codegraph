@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 - TypeScript, TSX, and JavaScript private class names now resolve lexically in navigation, references, and detailed call edges, including nested classes, overloads, and brand checks. Rename previews require the `#` prefix and report private-name collisions and capture.
 - C# global namespace, alias, and static usings now apply across their nearest project in navigation, references, and detailed graphs, including literal project and Directory.Build.props `Using` items with XML preambles or child metadata. Using-only edits retain source modules, with shared compilation lookup indexes and stat-validated metadata snapshots. C# and Java record-body members stay out of namespace/package exports.
 - The MCP HTTP server now requires `@hono/node-server` 2.1.6 or later, which fixes a process crash on a reset socket during a WebSocket upgrade (GHSA-qv5m-9pm6-hqp3) and backslash path parsing that could bypass path-based access control at a reverse proxy (GHSA-jpvv-r467-5p4w).
+- The MCP HTTP server now requires `hono` 4.13.16 or later, which fixes middleware bypasses through `mount()` and the RegExp router (GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq), a `csrf()` gap for hyperlink-auditing requests (GHSA-46wx-v44x-9hh2), skipped `multipart/form-data` validation (GHSA-4h7h-rv7c-7m2v), and unescaped closing tags in the `css` helper (GHSA-3gg2-335m-rxc6).
 
 ## [3.2.1] - 2026-11-11
 
