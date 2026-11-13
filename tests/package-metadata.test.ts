@@ -1542,11 +1542,28 @@ describe("package metadata", () => {
     expect(devDependencies["eslint-plugin-import"]).toBeUndefined();
   });
 
-  it("keeps the MCP Node adapter above the GHSA-frvp-7c67-39w9 and GHSA-rmxm-3fg6-px4f fixes", () => {
+  it("keeps the MCP Node adapter at or above the fix for every known advisory", () => {
+    // GHSA-frvp-7c67-39w9 and GHSA-rmxm-3fg6-px4f (2.1.3); GHSA-qv5m-9pm6-hqp3 and GHSA-jpvv-r467-5p4w (2.1.6).
+    const minimum = [2, 1, 6];
+    const atLeastMinimum = (version: string) => {
+      const parts = version.split(".").map((part) => Number.parseInt(part, 10));
+      for (let index = 0; index < minimum.length; index++) {
+        if (parts[index] !== minimum[index]) return parts[index] > minimum[index];
+      }
+      return true;
+    };
     const rootPackage = readJson("package.json");
-    const overrides = readStringRecord(rootPackage.overrides);
+    const override = readStringRecord(rootPackage.overrides)["@hono/node-server"] ?? "";
+    expect(override).toMatch(/^\^\d+\.\d+\.\d+$/);
+    expect(atLeastMinimum(override.slice(1))).toBe(true);
 
-    expect(overrides["@hono/node-server"]).toBe("^2.1.3");
+    const lockedPackages = readJson("package-lock.json").packages;
+    const lockedEntry =
+      lockedPackages && typeof lockedPackages === "object"
+        ? Object.entries(lockedPackages).find(([key]) => key === "node_modules/@hono/node-server")?.[1]
+        : undefined;
+    const locked = readStringRecord(lockedEntry).version ?? "";
+    expect(atLeastMinimum(locked)).toBe(true);
   });
 
   it("keeps all publishable workspaces under the packages directory", () => {
