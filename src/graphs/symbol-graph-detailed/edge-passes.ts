@@ -35,7 +35,12 @@ import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/
 import { bindsTypeParameter } from "../../indexer/type-parameters.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
-import { findPhpImportAlias, inferPhpQualifiedReferenceImportType } from "../../indexer/navigation-php.js";
+import {
+  findPhpImportAlias,
+  inferPhpQualifiedReferenceImportType,
+  phpTraitMethodIsAbstract,
+  phpUnresolvedTraitMemberNames,
+} from "../../indexer/navigation-php.js";
 import {
   cjsRequireValueBinding,
   resolveImportTypeMember,
@@ -144,6 +149,10 @@ type EdgePassContext = {
   recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
   /** Receiver calls whose target needs the completed graph; resolved after every module. */
   receiverCalls: ReceiverCallCandidate[];
+  /** Names whose adapted PHP trait composition must not fall through to inherited calls. */
+  phpAdaptedTraitMembers: Map<string, ReadonlySet<string>> | undefined;
+  /** Composed abstract PHP trait methods require implementations; trait-body calls name their declarations. */
+  phpAbstractTraitMembers: Set<string> | undefined;
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Accepted argument-count range for arity-selected members, keyed by graph node id. */
@@ -441,6 +450,13 @@ export async function emitMemberOwnershipEdges(
       if (declarationDef) memberDef = declarationDef;
     }
     const memberId = ensureNode(context, memberDef);
+    if (
+      context.sup.id === "php" &&
+      owner.container?.type === "trait_declaration" &&
+      phpTraitMethodIsAbstract(fn.node)
+    ) {
+      context.phpAbstractTraitMembers?.add(memberId);
+    }
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
     if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
       const declarationNode = outOfLineDeclaration?.node ?? fn.node;
@@ -1894,6 +1910,7 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
   if (isUnprovenHeritageExpression(node)) return;
   if (isNonBaseHeritageArgument(node)) return;
+  if (sup.id === "php" && node.type === "use_list") return;
   if (sup.id === "cpp" && node.type === "qualified_identifier") {
     out.push(node);
     return;
@@ -2219,6 +2236,10 @@ export async function emitClassInheritanceEdges(
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
     const declaring: DeclaringType = { node: cls.node, isInterface: declaredSupertypeKind(cls.node) === "interface" };
     if (declaring.isInterface) markInterfaceNode(context, fromId);
+    if (context.sup.id === "php") {
+      const adapted = phpUnresolvedTraitMemberNames(context.index, context.moduleEntry.file, cls.node, context.source);
+      if (adapted.size) context.phpAdaptedTraitMembers?.set(fromId, adapted);
+    }
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
       extensionNominal = null;

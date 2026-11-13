@@ -15,7 +15,7 @@ import {
   declaresMembers,
   receiverConstructorExpression,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
+import { phpTraitPropertyMayUseDefinition, provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
@@ -626,6 +626,16 @@ async function receiverProofUnavailable(
           return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
         },
       );
+      if (parsed.sup.id === "php" && receiver.kind === "own-type") {
+        const mayUseProperty = await phpTraitPropertyMayUseDefinition(
+          index,
+          fileId,
+          current,
+          sliceText(property, parsed.source),
+          expectedDef,
+        );
+        if (mayUseProperty) return true;
+      }
       // A recognized shape is not proof. Exclude it only when the type is a resolved
       // member-declaring definition, every supertype resolves, and none declare this member.
       let unavailable: boolean;

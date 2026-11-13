@@ -6,6 +6,7 @@ import {
   inheritsMemberOverloads,
   selectMember,
   type MemberModel,
+  type MemberSelection,
 } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
@@ -1436,7 +1437,7 @@ export function keywordReceiverMemberScope(
   if (!hasStaticMemberDistinction(sup.id)) return "any";
   if (nodeInStaticMemberContext(node, source)) return "static";
   const kind = keywordReceiverKind(sup.id, receiverName);
-  if (kind === "supertype") return "instance";
+  if (kind === "supertype") return sup.id === "php" ? "any" : "instance";
   return ownReceiverMemberScope(sup.id, receiverName) ?? "any";
 }
 
@@ -1899,6 +1900,8 @@ export function emitReceiverCallEdges(
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
   isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
   acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
+  phpAbstractTraitMembers?: ReadonlySet<string>,
+  phpAdaptedTraitMembers?: ReadonlyMap<string, ReadonlySet<string>>,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1906,6 +1909,8 @@ export function emitReceiverCallEdges(
   const ownerByMember = new Map<string, string>();
   const supertypesByOwner = new Map<string, string[]>();
   const classAncestorsByOwner = new Map<string, string[]>();
+  let traitOwnerIds: Set<string> | undefined;
+  let hasPhpTraitCalls: boolean | undefined;
   const pushUnique = (map: Map<string, string[]>, from: string, to: string): void => {
     const list = map.get(from);
     if (!list) map.set(from, [to]);
@@ -1921,6 +1926,13 @@ export function emitReceiverCallEdges(
     if (!label || !HIERARCHY_LABELS[label]) continue;
     pushUnique(supertypesByOwner, edge.from, edge.to);
     if (label === "extends") pushUnique(classAncestorsByOwner, edge.from, edge.to);
+    if (label === "trait") {
+      hasPhpTraitCalls ??= candidates.some((candidate) => candidate.caseInsensitiveMemberName);
+      if (hasPhpTraitCalls) {
+        traitOwnerIds ??= new Set();
+        traitOwnerIds.add(edge.to);
+      }
+    }
   }
   // Receiver-local access does not change the nominal type's membership edges.
   for (const [ownerId, memberIds] of accessibleMembers) {
@@ -1963,6 +1975,13 @@ export function emitReceiverCallEdges(
       if (!classOnly) return supertypesByOwner.get(id) ?? [];
       return (classAncestorsByOwner.get(id) ?? []).filter((base) => graph.nodes.get(base)?.kind === "class");
     },
+    ...(traitOwnerIds ? { isTraitOwner: (id: string) => traitOwnerIds.has(id) } : {}),
+    ...(phpAbstractTraitMembers?.size
+      ? { isAbstractTraitMember: (id: string) => phpAbstractTraitMembers.has(canonicalMemberId(id, nodeAliases)) }
+      : {}),
+    ...(phpAdaptedTraitMembers?.size
+      ? { unresolvedMember: (id: string, name: string) => phpAdaptedTraitMembers.get(id)?.has(name) ?? false }
+      : {}),
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),
@@ -2002,6 +2021,11 @@ export function emitReceiverCallEdges(
   const rejectedCallSites = new Set<string>();
 
   const sourceCache = new Map<string, string>();
+  // The graph's PHP owner/composition facts are immutable. Repeated call shapes
+  // in a class share the selector's precedence/adaptation walk, not a new rule.
+  // Site-dependent callbacks must still run selection independently.
+  const cachePhpLookups = hasPhpTraitCalls && !isReceiverMemberVisible && !acceptsCallShape;
+  const phpLookupsByOwner = cachePhpLookups ? new Map<string, Map<string, MemberSelection<string>>>() : undefined;
   for (const candidate of candidates) {
     const siteKey = callSiteKey(candidate.callerId, candidate.site);
     const existingTargets = callTargetsBySite.get(siteKey) ?? new Set<string>();
@@ -2019,18 +2043,34 @@ export function emitReceiverCallEdges(
     const languageId = support?.id ?? "";
     activeCandidate = candidate;
     activeOwner = owner;
-    const lookup = selectMember([owner], model, {
-      name: candidate.memberName,
-      argumentCount: candidate.argumentCount,
-      scope: memberScope,
-      useFile: candidate.site.file,
-      phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
-      normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
-      callSite: languageId === "kotlin",
-      separateMemberScopes: hasSeparateMemberScopes(languageId),
-      startAtAncestor: candidate.viaSupertypes,
-      inheritOverloads: inheritsMemberOverloads(languageId),
-    });
+    let phpLookupKey: string | undefined;
+    if (phpLookupsByOwner && candidate.caseInsensitiveMemberName && !candidate.goPackagePeerFiles) {
+      const visibilityFile = fileHiddenMemberIds.size ? fileIdentityKey(candidate.site.file) : "";
+      phpLookupKey = `${visibilityFile}\0${foldPhpIdentifierCase(candidate.memberName)}\0${memberScope}\0${candidate.argumentCount}\0${candidate.viaSupertypes}`;
+    }
+    let ownerLookups = phpLookupKey === undefined ? undefined : phpLookupsByOwner?.get(owner);
+    let lookup = phpLookupKey === undefined ? undefined : ownerLookups?.get(phpLookupKey);
+    if (!lookup) {
+      lookup = selectMember([owner], model, {
+        name: candidate.memberName,
+        argumentCount: candidate.argumentCount,
+        scope: memberScope,
+        useFile: candidate.site.file,
+        phpCaseInsensitive: !!candidate.caseInsensitiveMemberName,
+        normalizeIdentifier: languageId === "swift" ? support?.normalizeIdentifier : undefined,
+        callSite: languageId === "kotlin",
+        separateMemberScopes: hasSeparateMemberScopes(languageId),
+        startAtAncestor: candidate.viaSupertypes,
+        inheritOverloads: inheritsMemberOverloads(languageId),
+      });
+      if (phpLookupKey !== undefined) {
+        if (!ownerLookups) {
+          ownerLookups = new Map();
+          phpLookupsByOwner!.set(owner, ownerLookups);
+        }
+        ownerLookups.set(phpLookupKey, lookup);
+      }
+    }
     let receiverDisposition: "none" | "resolved" | "ambiguous" =
       lookup.status === "unique" ? "resolved" : lookup.status;
     if (lookup.status === "unique") {
@@ -2077,6 +2117,7 @@ export function emitReceiverCallEdges(
 }
 
 function canonicalMemberId(id: string, aliases: ReadonlyMap<string, string>): string {
+  if (!aliases.has(id)) return id;
   let current = id;
   const seen = new Set<string>();
   while (aliases.has(current) && !seen.has(current)) {

@@ -114,6 +114,7 @@ import {
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
 } from "./helpers/php-path-fallback-fixture.js";
+import { PHP_ACCURACY_LINES, PHP_ACCURACY_SOURCES } from "./helpers/php-accuracy-fixture.js";
 import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
@@ -1230,6 +1231,35 @@ describe("Go to Definition", () => {
   });
 
   describe("PHP", () => {
+    it("resolves PHP namespaced, case-folded, parent, and trait uses without taking decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-accuracy-goto-"));
+      try {
+        const files = await writeFixtureFiles(root, PHP_ACCURACY_SOURCES);
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const [useFile, line, token, targetLine] of [
+          ["client.php", 5, "Target", 7],
+          ["client.php", 5, "AliasRENDER", 3],
+          ["client.php", 5, "LABEL", 6],
+          ["app.php", 10, "FaCtOrY", 4],
+          ["app.php", 10, "LaBeL", 6],
+          ["app.php", 6, "name", 9],
+        ] as const) {
+          const result = await goToDefinition(index, {
+            file: files[useFile],
+            line,
+            column: columnInLines(PHP_ACCURACY_LINES[useFile], line, token),
+          });
+          expect(result.status, `${useFile}:${line}:${token}`).toBe("ok");
+          if (result.status !== "ok") throw new Error("Expected PHP accuracy fixture target");
+          expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(files["app.php"]!));
+          expect(result.definition.range.start.line).toBe(targetLine);
+          expect(fileIdentityKey(result.definition.file)).not.toBe(fileIdentityKey(files["decoy.php"]!));
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("folds PHP method names but keeps property and constant names exact", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-member-case-goto-"));
       try {
@@ -7639,5 +7669,13 @@ describe("qualified reopening and dotted import binding navigation", () => {
 it("resolves C# global usings from other files and project items before same-named decoys", async () => {
   await withCsharpGlobalUsingFixture(async ({ root, files }) => {
     await expectCsharpGlobalUsingNavigation(await buildProjectIndex(root, { cache: "off" }), files);
+  });
+});
+
+import { expectPhpTraitCompositionGoto, withPhpTraitComposition } from "./helpers/php-trait-composition-fixture.js";
+
+it("retains unadapted PHP trait members and blocks adapted inherited decoys after cache reload", async () => {
+  await withPhpTraitComposition(async (index, files) => {
+    await expectPhpTraitCompositionGoto(index, files);
   });
 });

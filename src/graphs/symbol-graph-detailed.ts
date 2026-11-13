@@ -217,7 +217,21 @@ export async function buildSymbolGraphDetailed(
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<DetailedSymbolGraph> {
   assertNativeRequiredAvailable();
-  await ensurePhpNamespaceSymbolIndex(index);
+  const fileSupports = new Map<string, LanguageSupport | undefined>();
+  const supportForIndexedFile = (file: string): LanguageSupport | undefined => {
+    const key = fileIdentityKey(file);
+    if (fileSupports.has(key)) return fileSupports.get(key);
+    const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+    fileSupports.set(key, support);
+    return support;
+  };
+  let hasPhpModules = false;
+  for (const moduleEntry of index.byFile.values()) {
+    if (supportForIndexedFile(moduleEntry.file)?.id !== "php") continue;
+    hasPhpModules = true;
+    await ensurePhpNamespaceSymbolIndex(index);
+    break;
+  }
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const configuredMaxEdges =
     typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? Math.floor(opts.maxEdges) : undefined;
@@ -326,6 +340,8 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
+  const phpAdaptedTraitMembers = hasPhpModules ? new Map<string, ReadonlySet<string>>() : undefined;
+  const phpAbstractTraitMembers = hasPhpModules ? new Set<string>() : undefined;
   const fileHiddenMemberIds = new Set<string>();
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   const receiverMemberArities = new Map<string, MemberArityRange>();
@@ -335,14 +351,6 @@ export async function buildSymbolGraphDetailed(
   const nodeAliases = new Map<string, string>();
   const pythonMemberAccessResolvers = new Map<string, (node: SyntaxNodeLike) => Promise<SymbolDef | null>>();
   const ownershipParsedContexts = new Map<string, Promise<ParsedFileContext | null>>();
-  const fileSupports = new Map<string, LanguageSupport | undefined>();
-  const supportForIndexedFile = (file: string): LanguageSupport | undefined => {
-    const key = fileIdentityKey(file);
-    if (fileSupports.has(key)) return fileSupports.get(key);
-    const support = supportForFileWithoutHeaderSample(file, index.languageExtensions);
-    fileSupports.set(key, support);
-    return support;
-  };
   let pythonReceiverResolutionCache: ReturnType<typeof createPythonReceiverResolutionCache> | undefined;
   const loadParsedFile = (file: string): Promise<ParsedFileContext | null> => {
     const fileKey = fileIdentityKey(file);
@@ -357,16 +365,17 @@ export async function buildSymbolGraphDetailed(
   };
   // Receiver calls into runtime and dependency APIs dominate real call sites. Build these
   // indexes lazily so a scoped graph that has no receiver calls pays no allocation cost.
-  let callableNames: { exact: Set<string>; phpFolded: Set<string>; swiftNormalized?: Set<string> } | undefined;
-  const ensureCallableNames = (): { exact: Set<string>; phpFolded: Set<string>; swiftNormalized?: Set<string> } => {
+  let callableNames: { exact: Set<string>; phpFolded?: Set<string>; swiftNormalized?: Set<string> } | undefined;
+  const ensureCallableNames = (): { exact: Set<string>; phpFolded?: Set<string>; swiftNormalized?: Set<string> } => {
     if (!callableNames) {
-      callableNames = { exact: new Set(), phpFolded: new Set() };
+      callableNames = { exact: new Set() };
       for (const entry of index.byFile.values()) {
         const support = supportForIndexedFile(entry.file);
         for (const local of entry.locals) {
           if (local.kind !== SymbolKind.Function) continue;
           callableNames.exact.add(local.localName);
-          if (support?.id === "php") callableNames.phpFolded.add(foldPhpIdentifierCase(local.localName));
+          if (support?.id === "php")
+            (callableNames.phpFolded ??= new Set()).add(foldPhpIdentifierCase(local.localName));
           if (support?.id === "swift") {
             (callableNames.swiftNormalized ??= new Set()).add(support.normalizeIdentifier(local.localName));
           }
@@ -377,7 +386,8 @@ export async function buildSymbolGraphDetailed(
   };
   const hasCallableNamed = (candidate: ReceiverCallCandidate): boolean => {
     const names = ensureCallableNames();
-    if (candidate.caseInsensitiveMemberName) return names.phpFolded.has(foldPhpIdentifierCase(candidate.memberName));
+    if (candidate.caseInsensitiveMemberName)
+      return names.phpFolded?.has(foldPhpIdentifierCase(candidate.memberName)) ?? false;
     if (names.exact.has(candidate.memberName)) return true;
     if (!names.swiftNormalized?.size) return false;
     const support = supportForIndexedFile(candidate.site.file);
@@ -393,7 +403,7 @@ export async function buildSymbolGraphDetailed(
   ): void => {
     const names = ensureCallableNames();
     names.exact.add(name);
-    if (phpCaseInsensitive) names.phpFolded.add(foldPhpIdentifierCase(name));
+    if (phpCaseInsensitive) (names.phpFolded ??= new Set()).add(foldPhpIdentifierCase(name));
     if (normalizeIdentifier) (names.swiftNormalized ??= new Set()).add(normalizeIdentifier(name));
   };
 
@@ -411,7 +421,7 @@ export async function buildSymbolGraphDetailed(
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
-      const fileSupport = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+      const fileSupport = supportForIndexedFile(file);
       if (fileSupport && !fileSupport.supportsCrossModuleSymbols && !detectSFCFramework(file)) continue;
       const fileKey = fileIdentityKey(file);
       // Register the pending read and parse before another query can request this disk-cached file.
@@ -708,6 +718,8 @@ export async function buildSymbolGraphDetailed(
         },
         recordEdge,
         receiverCalls,
+        phpAdaptedTraitMembers,
+        phpAbstractTraitMembers,
         receiverMemberScopes,
         receiverMemberArities,
         sharedOwnerPeers,
@@ -914,17 +926,21 @@ export async function buildSymbolGraphDetailed(
     memberIdentities,
     index.languageExtensions,
     overridingSignatures,
-    (memberId, useFile) => {
-      const member = receiverMemberDefinitions?.get(memberId);
-      if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
-      const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
-      const memberPackage = getPackageDeclarationName(index, member.file, "java");
-      const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
-      return memberPackage === usePackage;
-    },
+    receiverMemberDefinitions
+      ? (memberId, useFile) => {
+          const member = receiverMemberDefinitions.get(memberId);
+          if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
+          const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
+          const memberPackage = getPackageDeclarationName(index, member.file, "java");
+          const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
+          return memberPackage === usePackage;
+        }
+      : undefined,
     trailingLambdaCalls.size
       ? (targetId, candidate) => !trailingLambdaCalls.has(candidate) || !lambdaRejectedTargets.has(targetId)
       : undefined,
+    phpAbstractTraitMembers,
+    phpAdaptedTraitMembers,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

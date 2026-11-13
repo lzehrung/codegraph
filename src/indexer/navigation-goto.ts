@@ -141,8 +141,19 @@ import {
 import { fileBindingIsUnshadowed, type Binding, type ScopeIndex } from "./scope.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { comparePhpReferenceNames, findPhpImportAlias } from "./navigation-php.js";
-import { resolveIndexedPhpClassReference, resolvePhpNamespaceSymbol } from "./php-namespace-symbols.js";
+import {
+  comparePhpReferenceNames,
+  findPhpImportAlias,
+  phpTraitMethodIsAbstract,
+  phpUnresolvedTraitMemberNames,
+  phpTraitUseIsAdapted,
+} from "./navigation-php.js";
+import {
+  phpNamespaceSymbolIndexFor,
+  resolveIndexedPhpClassReference,
+  resolvePhpExplicitImport,
+  resolvePhpNamespaceSymbol,
+} from "./php-namespace-symbols.js";
 import {
   cjsRequireValueBinding,
   csharpShadowedImports,
@@ -2101,6 +2112,12 @@ export async function resolveMemberAccessDefinition(params: {
           confidence: "medium",
         });
       }
+      if (sup.id === "php" && memberNode.type === "member_access_expression" && !report.named) {
+        const composedProperty = await resolvePhpComposedTraitProperty(index, mod, node, member);
+        if (composedProperty) {
+          return okGoToResult(index, composedProperty, { resolution: "member-access", confidence: "medium" });
+        }
+      }
       if (sup.id === "kotlin" && report.named) return { status: "not_found", reason: AMBIGUOUS_RECEIVER_MEMBER_REASON };
       const outOfLineOwnerPath = cppOutOfLineOwnerPath(node, source, sup);
       const outOfLineOwner = outOfLineOwnerPath
@@ -2363,6 +2380,100 @@ type KeywordClassRef = {
 function keywordContainerKey(file: string, container: SyntaxNodeLike): string {
   return `${fileIdentityKey(file)}:${container.startIndex}:${container.endIndex}`;
 }
+type PhpComposedPropertyFacts = { candidates: SymbolDef[]; uncertain: boolean };
+const phpComposedPropertyCache = new WeakMap<ProjectIndex, Map<string, PhpComposedPropertyFacts>>();
+
+/** A trait's `$this->property` can name one using class's declared property, never a name-only decoy. */
+async function phpComposedPropertyFacts(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  member: string,
+): Promise<PhpComposedPropertyFacts | null> {
+  const trait = await keywordClassRefFromNode(index, mod, node);
+  if (trait?.container.type !== "trait_declaration") return null;
+  const traitDef = memberContainerDef(trait.module, trait.container);
+  const symbols = phpNamespaceSymbolIndexFor(index);
+  if (!traitDef || !symbols) return null;
+  const traitKey = definitionIdentityKey(traitDef);
+  const cacheKey = `${traitKey}:${member}`;
+  let cache = phpComposedPropertyCache.get(index);
+  const cached = cache?.get(cacheKey);
+  if (cached) return cached;
+  if (!cache) {
+    cache = new Map();
+    phpComposedPropertyCache.set(index, cache);
+  }
+  const facts: PhpComposedPropertyFacts = { candidates: [], uncertain: false };
+  for (const classes of symbols.classes.values()) {
+    for (const classDef of classes) {
+      const module = index.byFile.get(fileIdentityKey(classDef.file));
+      if (!module) continue;
+      const parsed = await ensureParsedContextForIndex(index, classDef.file);
+      const classNode = nameNodeForDef(parsed, classDef)?.parent;
+      if (classNode?.type !== "class_declaration") continue;
+      const body = classNode.childForFieldName("body");
+      for (const use of body?.namedChildren ?? []) {
+        if (use.type !== "use_declaration") continue;
+        let usesTrait = false;
+        for (const name of use.namedChildren) {
+          if (name.type !== "name" && name.type !== "qualified_name" && name.type !== "relative_name") continue;
+          const spelling = sliceText(name, parsed.source);
+          const alias = spelling.includes("\\") ? null : findPhpImportAlias(module.imports, spelling, "class");
+          const target = alias
+            ? resolvePhpExplicitImport(index, alias, "class")
+            : resolvePhpNamespaceSymbol(index, parsed.source, parsed.tree, name, spelling, module.imports, "class");
+          if (target && definitionIdentityKey(target) === traitKey) usesTrait = true;
+        }
+        if (!usesTrait) continue;
+        if (phpTraitUseIsAdapted(use)) facts.uncertain = true;
+        const matching: SymbolDef[] = [];
+        appendDirectKeywordMembers(
+          module.locals,
+          member,
+          classNode,
+          parsed,
+          parsed.sup.normalizeIdentifier,
+          (local) => !!local.isMember && local.kind === SymbolKind.Variable,
+          matching,
+        );
+        if (matching.length !== 1) {
+          facts.uncertain = true;
+          continue;
+        }
+        facts.candidates.push(matching[0]!);
+      }
+    }
+  }
+  cache.set(cacheKey, facts);
+  return facts;
+}
+
+async function resolvePhpComposedTraitProperty(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  node: SyntaxNodeLike,
+  member: string,
+): Promise<SymbolDef | undefined> {
+  const facts = await phpComposedPropertyFacts(index, mod, node, member);
+  return facts && !facts.uncertain && facts.candidates.length === 1 ? facts.candidates[0] : undefined;
+}
+
+/** Reference coverage stays partial for each possible using-class property if trait composition is ambiguous. */
+export async function phpTraitPropertyMayUseDefinition(
+  index: ProjectIndex,
+  fileId: string,
+  node: SyntaxNodeLike,
+  member: string,
+  definition: SymbolDef,
+): Promise<boolean> {
+  if (definition.kind !== SymbolKind.Variable) return false;
+  const mod = index.byFile.get(fileIdentityKey(fileId));
+  if (!mod) return false;
+  const facts = await phpComposedPropertyFacts(index, mod, node, member);
+  const identity = definitionIdentityKey(definition);
+  return facts?.candidates.some((candidate) => definitionIdentityKey(candidate) === identity) ?? false;
+}
 
 /**
  * One direct base a class declares. `unproven` is a base clause entry that names a type no reader can resolve (a
@@ -2511,6 +2622,7 @@ function collectDeclaredBaseTypes(
     bases.push({ kind: "unproven" });
   };
   const collectType = (node: SyntaxNodeLike): void => {
+    if (sup.id === "php" && node.type === "use_list") return;
     // A dotted Kotlin or Swift type reads through its qualifier; its first segment alone would name the qualifier.
     const dotted = dottedUserTypeSegments(sup, node);
     if (dotted) {
@@ -3167,7 +3279,14 @@ async function baseRefsFromContainer(
     if (base.kind === "unproven") continue;
     if (heritageNameBoundToValue(index, mod, parsed, base)) continue;
     let def: SymbolDef | undefined;
-    if (base.kind === "simple") {
+    if (base.kind === "simple" && sup.id === "php") {
+      const alias = findPhpImportAlias(mod.imports, base.name, "class");
+      if (alias) def = resolvePhpExplicitImport(index, alias, "class") ?? undefined;
+      else {
+        const baseNode = tree.rootNode.descendantForIndex(base.at, base.at + base.name.length);
+        def = resolvePhpNamespaceSymbol(index, source, tree, baseNode, base.name, mod.imports, "class") ?? undefined;
+      }
+    } else if (base.kind === "simple") {
       def = resolveNamedMemberContainer(index, mod, base.name, normalize);
     } else if (base.kind === "ruby-constant") {
       const constant = resolveRubyConstantReference(index, mod, base.reference);
@@ -3193,9 +3312,6 @@ async function baseRefsFromContainer(
         scope,
       );
       if (named?.status === "ok") def = asMemberContainer(index, named.definition);
-    }
-    if (!def && sup.id === "php" && base.kind === "simple") {
-      def = resolvePhpNamespaceSymbol(index, source, tree, container, base.name, mod.imports, "class") ?? undefined;
     }
     if (def && sup.id === "swift") def = await swiftBaseDeclaration(index, def);
     if (!def) continue;
@@ -3252,6 +3368,7 @@ async function resolveKeywordReceiverMember(
   const membersByKey = new Map<string, SymbolDef[]>();
   const scopeByMember = new Map<SymbolDef, ReceiverMemberScope>();
   const visible = new Set<SymbolDef>();
+  const abstractTraitMembers = current.context.sup.id === "php" ? new Set<SymbolDef>() : undefined;
   const propertyInvocationArities =
     memberUse === "call" && current.context.sup.id === "kotlin"
       ? new Map<SymbolDef, CallableArity | null | undefined>()
@@ -3321,6 +3438,10 @@ async function resolveKeywordReceiverMember(
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
+        if (abstractTraitMembers && ref.container.type === "trait_declaration") {
+          const nameNode = nameNodeForDef(ref.context, hit);
+          if (nameNode && phpTraitMethodIsAbstract(nameNode.parent ?? nameNode)) abstractTraitMembers.add(hit);
+        }
         if (lambdaCompatible) lambdaCompatible.set(hit, await kotlinCallableAcceptsTrailingLambda(index, hit));
         if (propertyInvocationArities && !hit.callable) {
           const start = hit.range.start.index;
@@ -3337,7 +3458,7 @@ async function resolveKeywordReceiverMember(
         }
         if (depth && isUninheritedJavaInterfaceStaticMethod(hit, ref, scopeByMember.get(hit))) continue;
         visible.add(hit);
-        nameFound = true;
+        if (!depth || !abstractTraitMembers?.has(hit)) nameFound = true;
       }
       if (nameFound && !spansHierarchy && !preloadHiddenNames) continue;
       const bases = await baseRefsFromContainer(
@@ -3346,7 +3467,7 @@ async function resolveKeywordReceiverMember(
         ref.container,
         ref.context.source,
         ref.context.sup,
-        startAtAncestor,
+        startAtAncestor && (ref.context.sup.id !== "php" || depth === 0),
         ref.context.tree,
       );
       parentsByKey.set(key, bases);
@@ -3379,6 +3500,18 @@ async function resolveKeywordReceiverMember(
   const model: MemberModel<KeywordClassRef, SymbolDef> = {
     ownerKey,
     members: (ref) => membersByKey.get(ownerKey(ref)) ?? [],
+    ...(current.context.sup.id === "php"
+      ? {
+          isTraitOwner: (ref: KeywordClassRef) => ref.container.type === "trait_declaration",
+          ...(memberUse !== "value"
+            ? {
+                unresolvedMember: (ref: KeywordClassRef, name: string) =>
+                  phpUnresolvedTraitMemberNames(index, ref.file, ref.container, ref.context.source).has(name),
+              }
+            : {}),
+        }
+      : {}),
+    ...(abstractTraitMembers ? { isAbstractTraitMember: (def: SymbolDef) => abstractTraitMembers.has(def) } : {}),
     supertypes: (ref) => parentsByKey.get(ownerKey(ref)) ?? [],
     name: (def) => def.localName,
     key: (def) => def.callable?.key ?? memberKey(def),
@@ -4859,6 +4992,19 @@ async function resolveReceiverDefinition(
           };
         }
       }
+    }
+    if (sup.id === "php") {
+      const parsed = await ensureParsedContextForIndex(index, mod.file);
+      const phpType = resolvePhpNamespaceSymbol(
+        index,
+        source,
+        parsed.tree,
+        constructor,
+        sliceText(constructor, source),
+        mod.imports,
+        "class",
+      );
+      if (phpType) return { def: phpType, memberScope: "instance" };
     }
     const typeName = sliceText(constructor, source);
     if (bindsTypeParameter(typeName, constructor, source, sup)) return null;

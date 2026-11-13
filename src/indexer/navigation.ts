@@ -2444,7 +2444,9 @@ function shouldScanVerifiedReferences(
   parsedContext: ParsedFileContext,
   receiverMemberDefinition: boolean,
 ): boolean {
-  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) return false;
+  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) {
+    return def.kind === SymbolKind.Variable && receiverMemberDefinition;
+  }
   return supportsReceiverMemberNavigation(parsedContext.sup.id) && receiverMemberDefinition;
 }
 function cppNamespaceFunctionEquivalentDefinitions(

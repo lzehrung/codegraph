@@ -105,12 +105,12 @@ fix order.
 
 ### PHP (8)
 
-- [ ] Case-insensitive function and method names (`case-insensitive-function-goto`:
+- [x] Case-insensitive function and method names (`case-insensitive-function-goto`:
       `case-rules/case.php:21`; `case_variant_method_goto`: `namespaces/src/SameNames.php:20`)
-- [ ] Namespaced class lookup (`namespace_class_goto`: `namespaces/src/SameNames.php:18`)
-- [ ] `parent::` static calls (`parent-static-goto`: `members/model.php:34`;
+- [x] Namespaced class lookup (`namespace_class_goto`: `namespaces/src/SameNames.php:18`)
+- [x] `parent::` static calls (`parent-static-goto`: `members/model.php:34`;
       `parent-static-reference`: `:33`)
-- [ ] Trait members on the using class (`trait-receiver-goto`: `members/model.php:30`;
+- [x] Trait members on the using class (`trait-receiver-goto`: `members/model.php:30`;
       `trait-receiver-reference`: `:29`; `trait-promoted-property`: `:8`)
 
 ### Swift (12)

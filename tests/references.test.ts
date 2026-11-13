@@ -124,6 +124,7 @@ import {
   PHP_PATH_MAPPINGS,
   phpPathFallbackFixture,
 } from "./helpers/php-path-fallback-fixture.js";
+import { PHP_ACCURACY_LINES, PHP_ACCURACY_SOURCES } from "./helpers/php-accuracy-fixture.js";
 import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
@@ -3211,6 +3212,41 @@ describe("Find References", () => {
   });
 
   describe("PHP", () => {
+    it("finds exact PHP case-variant, namespaced, parent, and trait references without decoys", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-accuracy-refs-"));
+      try {
+        const files = await writeFixtureFiles(root, PHP_ACCURACY_SOURCES);
+        const index = await buildProjectIndex(root, { cache: "off" });
+        for (const [line, token, sites, coverage] of [
+          [3, "Render", ["app.php:3", "client.php:4", "client.php:4", "client.php:5"], "complete"],
+          [4, "factory", ["app.php:4", "app.php:10"], "complete"],
+          [6, "label", ["app.php:6", "app.php:10", "client.php:5"], "complete"],
+          [9, "$name", ["app.php:6", "app.php:9"], "complete"],
+        ] as const) {
+          const references = await findReferences(index, {
+            file: files["app.php"]!,
+            line,
+            column: columnInLines(PHP_ACCURACY_LINES["app.php"], line, token),
+          });
+          expect(references.status, token).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected PHP accuracy references");
+          expect(references.referenceCoverage?.state).toBe(coverage);
+          expect(
+            references.references
+              .map((reference) => `${path.basename(reference.file)}:${reference.range.start.line}`)
+              .sort(),
+          ).toEqual([...sites].sort());
+          expect(
+            references.references.some(
+              (reference) => fileIdentityKey(reference.file) === fileIdentityKey(files["decoy.php"]!),
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find all references to imported function", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
@@ -7051,7 +7087,7 @@ describe("Find References: reference coverage honesty", () => {
     }
   });
 
-  it("reports name_equivalence_unavailable for a bare case-variant PHP reference", async () => {
+  it("reports complete coverage for a bare case-variant PHP function call", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-coverage-name-equivalence-"));
     try {
       const serviceFile = path.join(root, "service.php").replace(/\\/g, "/");
@@ -7069,13 +7105,11 @@ describe("Find References: reference coverage honesty", () => {
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
-      // `service()` is a function call, but the bare spelling is also a legal constant name,
-      // so this case variant stays unproven. A class-only `new` is covered separately.
+      // A PHP call names a function even when a same-named case-sensitive constant exists.
       expectReferenceAt(result, useFile, 1);
       expect(result.referenceCoverage).toEqual({
         scope: "indexed_candidates",
-        state: "partial",
-        reasons: ["name_equivalence_unavailable"],
+        state: "complete",
       });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -9476,5 +9510,16 @@ describe("qualified reopening and dotted import references", () => {
 it("finds C# global-using references without counting nearer declarations or other projects", async () => {
   await withCsharpGlobalUsingFixture(async ({ root, files }) => {
     await expectCsharpGlobalUsingReferences(await buildProjectIndex(root, { cache: "off" }), files);
+  });
+});
+
+import {
+  expectPhpTraitCompositionReferences,
+  withPhpTraitComposition,
+} from "./helpers/php-trait-composition-fixture.js";
+
+it("keeps PHP trait-body requirements and composed-member references separate from inherited decoys", async () => {
+  await withPhpTraitComposition(async (index, files, root) => {
+    await expectPhpTraitCompositionReferences(index, files, root);
   });
 });

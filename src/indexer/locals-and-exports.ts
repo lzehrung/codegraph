@@ -158,6 +158,7 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   interface_declaration: true,
   impl_item: true,
   trait_item: true,
+  trait_declaration: true,
   enum_declaration: true,
   enum_item: true,
   // Zig has no implicit member scope of its own; a function nested in one of these container
@@ -179,9 +180,9 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   singleton_method: true,
 };
 
-function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
+function isTypeMemberDeclaration(node: SyntaxNodeLike, languageId: string): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
-  if (phpConstructorPromotedVariable(node)) return true;
+  if (languageId === "php" && phpConstructorPromotedVariable(node)) return true;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -842,7 +843,7 @@ export function collectLocalsAndExportsFromSource(
     const splitMethod =
       kind === SymbolKind.Function &&
       (node?.parent?.type === "property_signature" || node?.parent?.type === "public_field_definition");
-    if (splitMethod || (node && isTypeMemberDeclaration(node))) base.isMember = true;
+    if (splitMethod || (node && isTypeMemberDeclaration(node, support.id))) base.isMember = true;
     if (support.id === "csharp" && node) {
       const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
       if (nominalType) {
@@ -1034,7 +1035,7 @@ export function collectLocalsAndExportsFromSource(
                 );
               }
             }
-          } else if (node && phpPropertyPromotionParameter(node)) {
+          } else if (support.id === "php" && node && phpPropertyPromotionParameter(node)) {
             const promoted = phpConstructorPromotedVariable(node, source);
             if (promoted) {
               pushLocal(sliceText(promoted, source), SymbolKind.Variable, toRange(promoted), promoted);
