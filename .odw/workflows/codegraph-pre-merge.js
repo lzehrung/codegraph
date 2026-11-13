@@ -33,7 +33,6 @@ const FINDING = {
   },
   required: ["lane", "severity", "title", "location", "evidence", "suggestedFix"],
 };
-const FINDINGS = { type: "array", items: FINDING };
 const EDGE_CHANGES = {
   type: "object",
   additionalProperties: false,
