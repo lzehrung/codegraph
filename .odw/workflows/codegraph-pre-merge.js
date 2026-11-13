@@ -147,7 +147,12 @@ function laneSchema(lane) {
     lane: { type: "string", enum: [lane] },
     status: { type: "string", enum: ["complete", "skipped", "incomplete"] },
     reason: TEXT,
-    findings: FINDINGS,
+    // A finding that names another lane fails schema validation, so the agent is asked to correct it instead of the
+    // run failing after every lane has finished.
+    findings: {
+      type: "array",
+      items: { ...FINDING, properties: { ...FINDING.properties, lane: { type: "string", enum: [lane] } } },
+    },
     evidence: TEXT,
     artifacts: TEXTS,
   };
