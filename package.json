@@ -198,6 +198,7 @@
     "zod": "^4.6.7"
   },
   "overrides": {
+    "hono": "^4.13.16",
     "@hono/node-server": "^2.1.6",
     "@emnapi/core": "1.11.3",
     "@emnapi/runtime": "1.11.3"
