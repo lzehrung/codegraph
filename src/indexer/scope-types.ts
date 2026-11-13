@@ -40,6 +40,11 @@ export type Binding = {
    * compare source indexes instead of walking the declaration's ancestors.
    */
   coversEnclosingScope?: boolean;
+  /**
+   * The class or module that declares a generated member (Ruby `attr_reader :name`). Every class of a file shares the
+   * file scope, so the language decides which uses the member names.
+   */
+  generatedOwner?: SyntaxNodeLike;
   /** Same-file module specifier proven by a JS/TS local declaration or its assignments; null if invalidated. */
   heldModuleSpecifier?: string | null;
   import?: ScopeImportBinding;
@@ -65,4 +70,9 @@ export type ScopeIndex = {
   all: Binding[];
   allScopes: Scope[];
   cppQualifiedFunctionBindings: Map<string, Binding[]>;
+  /**
+   * Whether a call in this file may generate methods (Ruby `attr_reader :name`), so uses of the generated names must
+   * check `Binding.generatedOwner`. Absent means unknown; a file without the generating text costs nothing.
+   */
+  hasGeneratedMembers?: boolean;
 };

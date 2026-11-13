@@ -72,6 +72,8 @@ export type ReceiverCallCandidate = {
   pythonInstanceReceiver?: boolean;
   /** Free function to use only if a Swift receiver has no matching member. */
   fallbackTargetId?: string | undefined;
+  /** Receiver names a class context (e.g. `self` inside Ruby `Struct.new`), so generated instance members stay hidden. */
+  hideGeneratedMembers?: boolean;
 };
 
 /** Languages whose grammar distinguishes static members from instance members. */
@@ -1900,7 +1902,7 @@ export function emitReceiverCallEdges(
   callableIdentities: ReadonlyMap<string, CallableIdentity> = new Map(),
   languageExtensions?: LanguageExtensionMap,
   overridingSignatures?: ReadonlyMap<string, ReadonlySet<string>>,
-  isReceiverMemberVisible?: (memberId: string, useFile: string) => boolean,
+  isReceiverMemberVisible?: (memberId: string, useFile: string, candidate: ReceiverCallCandidate) => boolean,
   acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
   phpAbstractTraitMembers?: ReadonlySet<string>,
   phpAdaptedTraitMembers?: ReadonlyMap<string, ReadonlySet<string>>,
@@ -1997,7 +1999,7 @@ export function emitReceiverCallEdges(
       const node = graph.nodes.get(id) ?? graph.nodes.get(canonicalId);
       if (!node || (node.kind !== "function" && !node.callable && !kotlinPropertyArities.has(canonicalId)))
         return false;
-      if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile)) return false;
+      if (isReceiverMemberVisible && !isReceiverMemberVisible(canonicalId, useFile, activeCandidate)) return false;
       if (
         (fileHiddenMemberIds.has(id) || fileHiddenMemberIds.has(canonicalId)) &&
         fileIdentityKey(node.file) !== fileIdentityKey(useFile)

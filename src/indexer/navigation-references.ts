@@ -492,6 +492,8 @@ async function collectNamedNodeReferences(
     if (privateName) canonicalSymbolName = ecmaPrivateNameKey(symbolName);
     else if (parsed.sup.id === "java" || parsed.sup.id === "kotlin") {
       canonicalSymbolName = parsed.sup.normalizeIdentifier(normalizeKotlinIdentifier(symbolName));
+    } else if (parsed.sup.useSiteMemberName) {
+      canonicalSymbolName = parsed.sup.useSiteMemberName(canonicalSymbolName);
     }
     const isPhp = parsed.sup.id === "php";
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
@@ -504,7 +506,11 @@ async function collectNamedNodeReferences(
         let text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
         if (privateName && node.type === "private_property_identifier") text = ecmaPrivateNameKey(text);
         let isMatch: boolean;
-        if (!isPhp) {
+        // A token that only spells a declaration of another name (`name` in `def name=(value)`) is no use.
+        const spellsDeclaration = parsed.sup.isDeclarationSpelling?.(node) ?? false;
+        if (spellsDeclaration) {
+          isMatch = false;
+        } else if (!isPhp) {
           isMatch = text === canonicalSymbolName;
         } else if (
           (node.type === "name" || node.type === "namespace_name") &&

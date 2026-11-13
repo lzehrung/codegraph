@@ -1,5 +1,14 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import {
+  rubyBloomProbeName,
+  rubyGeneratedMemberVisibleAt,
+  rubyGeneratedMembers,
+  rubyInvokedMethodName,
+  rubyIsSetterDeclaration,
+  rubySelfIsInstanceAt,
+  rubyUseSiteMethodName,
+} from "../../util/ruby-tree.js";
 import { isNameFieldOnParent } from "./shared.js";
 
 export const RUBY_DEF: LanguageDefinition = {
@@ -43,6 +52,9 @@ export const RUBY_DEF: LanguageDefinition = {
       (singleton_method name: [(identifier) (setter)] @name)
       (assignment left: (constant) @name)
     `,
+    // `@accessor` is the name token of a possible `attr_*` call. A pattern with no children compiles as fast as the
+    // others; nesting it under class and module bodies added about 20 ms to every process. `generatedMembers` checks
+    // that the call is a direct body statement.
     locals: `
       (class name: [(constant) (scope_resolution)] @name)
       (module name: [(constant) (scope_resolution)] @name)
@@ -50,6 +62,7 @@ export const RUBY_DEF: LanguageDefinition = {
       (singleton_method name: [(identifier) (setter)] @name)
       (assignment left: (identifier) @name)
       (assignment left: (constant) @name)
+      ((identifier) @accessor (#any-of? @accessor "attr_reader" "attr_writer" "attr_accessor"))
     `,
     importBindings: `
       ((call method: (identifier) @method arguments: (argument_list (string (string_content) @from))) @stmt (#match? @method "^(require|require_relative|load|autoload)$"))
@@ -61,6 +74,14 @@ export const RUBY_DEF: LanguageDefinition = {
   },
   supportsCrossModuleSymbols: true,
   membersAreImplicitlyInScope: true,
+  generatedMembers: rubyGeneratedMembers,
+  generatedMembersMarker: "attr_",
+  generatedMemberVisibleAt: rubyGeneratedMemberVisibleAt,
+  selfIsInstanceAt: rubySelfIsInstanceAt,
+  invokedMemberName: rubyInvokedMethodName,
+  useSiteMemberName: rubyUseSiteMethodName,
+  isDeclarationSpelling: rubyIsSetterDeclaration,
+  bloomProbeName: rubyBloomProbeName,
   // Query-driven locals capture the declared name inside a `class`, `module`, `method`, or
   // `singleton_method`, so classification must read the parent type the same way the scope
   // walker's structural handling does.

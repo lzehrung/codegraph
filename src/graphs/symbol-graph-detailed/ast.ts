@@ -1,4 +1,5 @@
 import type { LanguageSupport } from "../../languages.js";
+import { generatedMembersIn } from "../../languages/generated-members.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
 import { typescriptSplitMethodName } from "../../indexer/ts-callables.js";
@@ -105,6 +106,8 @@ export function collectDetailedDeclarations(
   sup: LanguageSupport,
   source: string,
   locals: SymbolDef[],
+  /** What the file's scope index already knows; omitted, the source is scanned for the generating text. */
+  hasGeneratedMembers?: boolean,
 ): DetailedDeclarationPassResult {
   const functionNodes: DetailedFunctionNode[] = [];
   const classNodes: DetailedClassNode[] = [];
@@ -187,7 +190,15 @@ export function collectDetailedDeclarations(
     );
 
   const recoverSplitMethods = sup.id === "ts" || sup.id === "tsx";
+  const generatedMembers = generatedMembersIn(sup, source, hasGeneratedMembers);
   const walk = (node: SyntaxNodeLike): void => {
+    // A method a call generates is declared at its argument token and has no body to walk.
+    if (generatedMembers) {
+      for (const member of generatedMembers(node)) {
+        const def = findDefinitionAt(member.name, member.node);
+        if (def) functionNodes.push({ name: member.name, node: member.node, def });
+      }
+    }
     const functionLike = functionNodeTypes.has(node.type) || isStandaloneNamedFunctionExpression(sup, node);
     const functionName = functionLike ? functionNameNode(node) : undefined;
     const missingName = functionName && functionName.startIndex === functionName.endIndex;

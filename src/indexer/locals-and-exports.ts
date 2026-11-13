@@ -17,7 +17,11 @@ import { sliceText, toRange, unquote } from "../util/ast.js";
 import { replaceContents } from "../util/collections.js";
 import { swiftExtensionOwnerType } from "../util/swift-tree.js";
 import { csharpGenericArity } from "../util/csharp-tree.js";
-import { callableIdentityForDeclaration, propagateCppInternalLinkage } from "./callable-identity.js";
+import {
+  callableIdentityForDeclaration,
+  callableIdentityForGeneratedMember,
+  propagateCppInternalLinkage,
+} from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { isTypeParameterName } from "./scope-nodes.js";
@@ -997,6 +1001,26 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
+  /**
+   * The methods that the call owning a captured name token defines without a `def` (Ruby `attr_reader :name`), each at
+   * its argument token. Whether any were defined says whether the capture really was such a call.
+   */
+  const pushGeneratedMembers = (call: SyntaxNodeLike | null | undefined): boolean => {
+    if (!call) return false;
+    const members = support.generatedMembers?.(call) ?? [];
+    for (const member of members) {
+      const range = toRange(member.node);
+      pushLocal(
+        member.name,
+        SymbolKind.Function,
+        range,
+        call,
+        callableIdentityForGeneratedMember({ file, name: member.name, range, arity: member.arity }),
+      );
+    }
+    return members.length > 0;
+  };
+
   // Declarator captures name the declared entity, never parameter or array-bound types.
 
   const extractLocalsFromNativeQueries = (): boolean => {
@@ -1010,6 +1034,16 @@ export function collectLocalsAndExportsFromSource(
       const enrichmentTree = ensureTree();
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
+          if (capture.name === "accessor") {
+            const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
+            // The capture is the name token of the call that generates the members.
+            const nameToken = enrichmentTree?.rootNode.descendantForIndex(
+              nativeRange.start.index ?? 0,
+              nativeRange.end.index ?? 0,
+            );
+            if (pushGeneratedMembers(nameToken?.parent)) capturedLocals = true;
+            continue;
+          }
           if (capture.name !== "name" && capture.name !== "declarator") continue;
           const nativeRange = rangeFromNativeCapture(capture, ensureByteIndexMap());
           const node =

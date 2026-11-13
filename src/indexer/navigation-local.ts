@@ -337,7 +337,7 @@ export function findClosestScopeBinding(
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
           if (
             atModuleRuntime ||
-            bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode)
+            bindingCoversUse(row, currentScope.kind, binding, currentNode.startIndex, currentNode, support)
           ) {
             break;
           }
@@ -382,7 +382,7 @@ export function laterLocalShadowsUse(
     }
     if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex, currentNode)) return true;
     let binding = scope.map.get(canonicalName);
-    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex, currentNode)) {
+    while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex, currentNode, support)) {
       binding = binding.earlierSameScope;
     }
     if (binding) return false;

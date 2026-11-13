@@ -1,3 +1,4 @@
+import { isGeneratedMember } from "../languages/generated-members.js";
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import path from "node:path";
@@ -913,6 +914,7 @@ async function findReferencesInternal(
     ...family.equivalents,
     ...csharpPartialEquivalents,
     ...(rubyReopen?.parts ?? []),
+    ...generatedPeerDefinitions(mod, definition, parsedContext.sup),
     ...(privateResolution?.status === "resolved"
       ? privateResolution.definitions.filter((candidate) => !sameDef(candidate, definition, index.languageExtensions))
       : []),
@@ -1909,12 +1911,14 @@ async function findReferencesInternal(
       const filter = index.bloomFilters?.get(entry.key);
       let canonicalName = canonicalNames.get(entry.support);
       if (canonicalName === undefined) {
-        // Bloom filters store folded PHP identifiers in addition to their source spelling.
+        // Bloom filters store folded PHP identifiers in addition to their source spelling, and a name with a suffix
+        // no identifier holds (Ruby `empty?`) as the identifier before it.
         const normalizedName = entry.support?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
+        const probeName = entry.support?.bloomProbeName?.(normalizedName) ?? normalizedName;
         canonicalName =
           entry.support?.id === "php" && isPhpCaseInsensitiveSymbolKind(definition.kind)
-            ? foldPhpIdentifierCase(normalizedName)
-            : normalizedName;
+            ? foldPhpIdentifierCase(probeName)
+            : probeName;
         canonicalNames.set(entry.support, canonicalName);
       }
       if (filter) {
@@ -2084,6 +2088,21 @@ async function findReferencesInternal(
     referenceCoverage,
     ...(provenance ? { provenance } : {}),
   };
+}
+
+/**
+ * The other methods that the token declaring `def` generates (`attr_accessor :name` declares `name` and `name=`). They
+ * name one declaration, so a reference to either is a reference of it.
+ */
+function generatedPeerDefinitions(mod: ModuleIndex, def: SymbolDef, sup: LanguageSupport): SymbolDef[] {
+  if (!sup.generatedMembers || def.kind !== SymbolKind.Function) return [];
+  return mod.locals.filter(
+    (local) =>
+      local.kind === SymbolKind.Function &&
+      local.localName !== def.localName &&
+      local.range.start.index === def.range.start.index &&
+      local.range.end.index === def.range.end.index,
+  );
 }
 
 function pythonPropertyAccessorNeedsPartialCoverage(parsedContext: ParsedFileContext, definition: SymbolDef): boolean {
@@ -2508,6 +2527,7 @@ function isReceiverMemberDefinition(
   let current: SyntaxNodeLike | null = syntaxNodeForDefinition(parsedContext, def);
   let sawCppFunction = false;
   let sawRustImplFunction = false;
+  if (isGeneratedMember(parsedContext.sup, parsedContext.tree, def)) return true;
   while (current) {
     if (
       current.type === "method_definition" ||

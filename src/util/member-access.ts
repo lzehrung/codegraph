@@ -172,6 +172,14 @@ export function isMemberReferencePropertyIdentifier(sup: LanguageSupport, nodeTy
   return memberReferencePropertyIdentifierTypes(sup).includes(nodeType);
 }
 
+/**
+ * The method a member-access property invokes at its use site: its source spelling, unless the language says the
+ * site invokes another method (Ruby `object.name = value` calls the writer `name=`).
+ */
+export function invokedMemberName(sup: LanguageSupport, property: SyntaxNodeLike, source: string): string {
+  return sup.invokedMemberName?.(property) ?? sliceText(property, source);
+}
+
 const RECEIVER_KEYWORD_CALL_NODE_TYPES: Record<string, true> = { call: true, call_expression: true };
 
 /**

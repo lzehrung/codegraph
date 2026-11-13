@@ -271,7 +271,7 @@ describe("declaration-order visibility", () => {
         end: { line: 2, column: 25, index: declaration + "amount".length },
       },
     };
-    expect(bindingCoversUse(scopeNodesFor("sql"), "module", binding, before)).toBe(false);
+    expect(bindingCoversUse(scopeNodesFor("sql"), "module", binding, before, undefined, {})).toBe(false);
   });
 
   it("does not invent a C# top-level local before its declaration", async () => {

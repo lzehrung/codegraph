@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { LanguageDefinition, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
+import type { GeneratedMember, LanguageDefinition, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import { maskJsLikeCommentsAndStrings } from "./util/comments.js";
 import "./languages/all.js";
@@ -34,6 +34,14 @@ export type LanguageSupport = {
   usesQueryDrivenLocals: boolean;
   supportsExportFromReferences: boolean;
   native?: NativeCompatibility;
+  generatedMembers?: (node: SyntaxNodeLike) => readonly GeneratedMember[];
+  generatedMembersMarker?: string;
+  generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+  selfIsInstanceAt?: (use: SyntaxNodeLike) => boolean;
+  invokedMemberName?: (property: SyntaxNodeLike) => string;
+  useSiteMemberName?: (declared: string) => string;
+  isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
+  bloomProbeName?: (name: string) => string;
   normalizeIdentifier: (name: string) => string;
 };
 
@@ -57,6 +65,14 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
     normalizeIdentifier: def.normalizeIdentifier || ((name) => name),
     ...(def.native ? { native: def.native } : {}),
+    ...(def.generatedMembers ? { generatedMembers: def.generatedMembers } : {}),
+    ...(def.generatedMembersMarker ? { generatedMembersMarker: def.generatedMembersMarker } : {}),
+    ...(def.generatedMemberVisibleAt ? { generatedMemberVisibleAt: def.generatedMemberVisibleAt } : {}),
+    ...(def.selfIsInstanceAt ? { selfIsInstanceAt: def.selfIsInstanceAt } : {}),
+    ...(def.invokedMemberName ? { invokedMemberName: def.invokedMemberName } : {}),
+    ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),
+    ...(def.isDeclarationSpelling ? { isDeclarationSpelling: def.isDeclarationSpelling } : {}),
+    ...(def.bloomProbeName ? { bloomProbeName: def.bloomProbeName } : {}),
   };
 }
 

@@ -12,6 +12,7 @@ import {
 import { definitionWithoutDeferredSteps } from "../indexer/name-resolution-types.js";
 import { kotlinThisMemberResult, type LambdaReceiverCache } from "../indexer/kotlin-lambda-receiver.js";
 import { recoverIncludedCallableStar } from "../indexer/navigation.js";
+import { isGeneratedMember } from "../languages/generated-members.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import { detectSFCFramework } from "../languages/sfc.js";
@@ -90,6 +91,7 @@ import {
 import { buildImportAliasMaps } from "./symbol-graph-detailed/import-aliases.js";
 import { createMemberChainResolver } from "./symbol-graph-detailed/member-chains.js";
 import {
+  declarationNodeIsStatic,
   emitReceiverCallEdges,
   nearestMemberContainer,
   inheritedReceiverMemberSignatures,
@@ -408,6 +410,8 @@ export async function buildSymbolGraphDetailed(
     if (normalizeIdentifier) (names.swiftNormalized ??= new Set()).add(normalizeIdentifier(name));
   };
 
+  let generatedMemberIds: Set<string> | undefined;
+  let replacedByGeneratedMemberIds: Set<string> | undefined;
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
   for (const indexedModule of index.byFile.values()) {
     const moduleEntry = withCsharpGlobalUsings(index, indexedModule);
@@ -473,8 +477,34 @@ export async function buildSymbolGraphDetailed(
         sup,
         src,
         moduleEntry.locals,
+        scopeIndex.hasGeneratedMembers,
       );
-
+      if (sup.generatedMembers && scopeIndex.hasGeneratedMembers) {
+        const latestGeneratedByContainerAndName = new Map<string, number>();
+        const containerByNode = new Map<(typeof functionNodes)[number], number>();
+        for (const fnNode of functionNodes) {
+          if (declarationNodeIsStatic(fnNode.node, src)) continue;
+          const container = nearestMemberContainer(fnNode.node);
+          if (!container) continue;
+          containerByNode.set(fnNode, container.startIndex);
+          const start = fnNode.def.range.start.index;
+          if (start === undefined || !isGeneratedMember(sup, tree, fnNode.def)) continue;
+          (generatedMemberIds ??= new Set()).add(defNodeId(fnNode.def));
+          const key = `${container.startIndex}:${fnNode.def.localName}`;
+          const prev = latestGeneratedByContainerAndName.get(key);
+          if (prev === undefined || start > prev) latestGeneratedByContainerAndName.set(key, start);
+        }
+        if (latestGeneratedByContainerAndName.size) {
+          for (const [fnNode, containerStart] of containerByNode) {
+            const latest = latestGeneratedByContainerAndName.get(`${containerStart}:${fnNode.def.localName}`);
+            const start = fnNode.def.range.start.index;
+            if (latest === undefined || start === undefined || start >= latest) continue;
+            if (!isGeneratedMember(sup, tree, fnNode.def)) {
+              (replacedByGeneratedMemberIds ??= new Set()).add(defNodeId(fnNode.def));
+            }
+          }
+        }
+      }
       const hasPythonDottedImports = sup.id === "python" && moduleEntry.imports.some(isPythonDottedImportBinding);
 
       const memberResolver = createMemberChainResolver({
@@ -934,9 +964,11 @@ export async function buildSymbolGraphDetailed(
     memberIdentities,
     index.languageExtensions,
     overridingSignatures,
-    receiverMemberDefinitions
-      ? (memberId, useFile) => {
-          const member = receiverMemberDefinitions.get(memberId);
+    receiverMemberDefinitions || generatedMemberIds || replacedByGeneratedMemberIds
+      ? (memberId, useFile, candidate) => {
+          if (replacedByGeneratedMemberIds?.has(memberId)) return false;
+          if (candidate.hideGeneratedMembers && generatedMemberIds?.has(memberId)) return false;
+          const member = receiverMemberDefinitions?.get(memberId);
           if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
           const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
           const memberPackage = getPackageDeclarationName(index, member.file, "java");

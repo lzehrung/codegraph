@@ -9,8 +9,10 @@ import { fileIdentityKey } from "../../util/paths.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveImported } from "../navigation-resolve.js";
 import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js";
+import { scopeIdentifierKey, scopeNodesFor } from "../scope-nodes.js";
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
 import type { NameLookupPolicy } from "../name-resolution-types.js";
+import type { Binding } from "../scope-types.js";
 import { cLookupPolicy, cppLookupPolicy } from "./c-family.js";
 import { csharpLookupPolicy, jvmLookupPolicy, kotlinLookupPolicy, swiftLookupPolicy } from "./implicit-self.js";
 import { phpLookupPolicy } from "./php.js";
@@ -110,6 +112,46 @@ const zigLookupPolicy: NameLookupPolicy = {
     });
   },
 };
+
+/**
+ * Ruby: a generated method (`attr_reader :name`) is named by a bare use only through the scope binding that checks where
+ * the use sits. The same-file fallback below it would bind the method from any class declared after it. When an earlier
+ * `def` is replaced by a later `attr_*`, that `def`'s own declaration token still names itself, never the later accessor.
+ */
+const rubyLookupPolicy: NameLookupPolicy = {
+  fromClosestBinding({ use, closestBinding }) {
+    if (!use.scopeIndex.hasGeneratedMembers || !closestBinding?.generatedOwner) return undefined;
+    const { node, file } = use;
+    for (
+      let binding: Binding | undefined = closestBinding.earlierSameScope;
+      binding;
+      binding = binding.earlierSameScope
+    ) {
+      if (binding.generatedOwner) continue;
+      if (binding.node?.startIndex !== node.startIndex || binding.node.endIndex !== node.endIndex) continue;
+      const def = use.mod.locals.find(
+        (local) =>
+          fileIdentityKey(local.file) === fileIdentityKey(file) &&
+          local.range.start.index === node.startIndex &&
+          local.range.end.index === node.endIndex,
+      );
+      return def ? okGoToResult(use.index, def, { resolution: "exact", confidence: "high" }) : undefined;
+    }
+    return undefined;
+  },
+  afterCrossModule({ use, lookupName }, resolved) {
+    if (resolved?.status !== "ok") return undefined;
+    if (!use.scopeIndex.hasGeneratedMembers) return undefined;
+    const { definition } = resolved;
+    if (fileIdentityKey(definition.file) !== fileIdentityKey(use.file)) return undefined;
+    const sup = use.parsed.sup;
+    const key = scopeIdentifierKey(scopeNodesFor(sup.id), lookupName, use.node, sup.normalizeIdentifier);
+    const generated = use.scopeIndex.bindings
+      .get(key)
+      ?.some((binding) => binding.generatedOwner && binding.def?.start.index === definition.range.start.index);
+    return generated ? null : undefined;
+  },
+};
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
@@ -121,6 +163,7 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   kotlin: kotlinLookupPolicy,
   php: phpLookupPolicy,
   python: pythonLookupPolicy,
+  ruby: rubyLookupPolicy,
   rust: rustLookupPolicy,
   swift: swiftLookupPolicy,
   ts: typescriptLookupPolicy,
