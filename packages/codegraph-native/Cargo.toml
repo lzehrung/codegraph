@@ -26,7 +26,7 @@ tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.0"
 tree-sitter-sequel = "0.3.11"
 tree-sitter-swift = "0.7.1"
-tree-sitter-typescript = "0.23.2"
+tree-sitter-typescript = { git = "https://github.com/lzehrung/tree-sitter-typescript", rev = "f0a42fe031d137374bafada517cf11165e9c5c87" }
 tree-sitter-zig = "1.1.2"
 arborium-c-sharp = "2.16.0"
 arborium-scss = "2.16.0"

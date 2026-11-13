@@ -58,13 +58,15 @@ member calls (26%), member accesses (27%), and type references (27%). Wrong answ
 
 ### Real-code gaps found by the benchmark
 
-Not covered by the edge corpus. Each fix adds a corpus case first.
+Each fix found by the benchmark adds an edge-corpus case first.
 
 - [ ] C#: a `global using` directive in one file applies to every file of the project
       (Spectre.Console `Properties/Usings.cs`); also project-file `<Using Include="..." />`.
       Reproduced: a type reached only through another file's `global using` is `not_found`.
-- [ ] TypeScript: a same-file `type` alias declared after its use (Hono `src/types.ts:2354` uses
-      `MergeTypedResponse` from `:2653`). Reproduced: `not_found`.
+- [x] TypeScript: Hono `src/types.ts:2354` uses the same-file `MergeTypedResponse` alias from
+      `:2653`. Upstream Tree-sitter TypeScript's scanner refused automatic semicolons before
+      adjacent generic call signatures (tree-sitter/tree-sitter-typescript#335), swallowing later
+      aliases inside an `ERROR`; the pinned grammar fork restores go-to-definition and references.
 - [ ] TypeScript: `#private` members. Reproduced: references miss `this.#name(...)` calls and still
       report `complete` coverage.
 - [ ] TypeScript: interface members through a typed parameter (`c.value` with

@@ -59,4 +59,12 @@ symbol syntax/ambient.d.ts::pluginCall@2:19 -[member_of]-> syntax/ambient.d.ts::
 symbol syntax/decorators.ts::method@7:3 -[member_of]-> syntax/decorators.ts::Decorated@5:14
 symbol syntax/generics.ts::run@24:17 -[calls]-> syntax/generics.ts::format@21:17 site=25:10
 symbol syntax/generics.ts::wrapper@10:17 -[calls]-> syntax/generics.ts::identity@2:17 site=15:10
+symbol syntax/split-generic-method.ts::A@2:11 -[extends]-> syntax/split-generic-method.ts::B@1:11 site=2:21
+symbol syntax/split-generic-method.ts::OptionalSplit@9:11 -[extends]-> syntax/split-generic-method.ts::B@1:11 site=9:33
+symbol syntax/split-generic-method.ts::SplitClass@18:7 -[extends]-> syntax/split-generic-method.ts::SplitBase@17:7 site=18:26
+symbol syntax/split-generic-method.ts::m@10:12 -[member_of]-> syntax/split-generic-method.ts::OptionalSplit@9:11
+symbol syntax/split-generic-method.ts::m@17:19 -[member_of]-> syntax/split-generic-method.ts::SplitBase@17:7
+symbol syntax/split-generic-method.ts::m@19:3 -[member_of]-> syntax/split-generic-method.ts::SplitClass@18:7
+symbol syntax/split-generic-method.ts::m@1:15 -[member_of]-> syntax/split-generic-method.ts::B@1:11
+symbol syntax/split-generic-method.ts::m@3:3 -[member_of]-> syntax/split-generic-method.ts::A@2:11
 symbol tsx/field-chain.tsx::open@2:5 -[member_of]-> tsx/field-chain.tsx::Controller@1:7

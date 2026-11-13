@@ -1190,6 +1190,408 @@ fn parse_syntax_tree_rejects_unsupported_languages() {
     );
 }
 
+#[test]
+fn typescript_and_tsx_parse_adjacent_generic_call_signatures_without_semicolons() {
+    let source = "export interface Handler {\n  <T0>(): Forward<T0>\n  <T1>(): Forward<T1>\n  <T2>(): Forward<T2>\n}\ntype Forward<T> = T;\n";
+    for language_id in ["ts", "tsx"] {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(parse_root(source, language_id));
+        });
+        let tree = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap_or_else(|_| panic!("{language_id} parser did not return"));
+        let root = tree.root_node();
+        assert!(!root.has_error(), "{language_id}: {}", root.to_sexp());
+        let exported = root.named_child(0).expect("interface export");
+        let alias = root.named_child(1).expect("forward alias");
+        assert_eq!(exported.kind(), "export_statement", "{language_id}");
+        assert_eq!(alias.kind(), "type_alias_declaration", "{language_id}");
+        let alias_name = alias.child_by_field_name("name").expect("alias name");
+        assert_eq!(alias_name.utf8_text(source.as_bytes()).unwrap(), "Forward");
+        let interface = exported.child_by_field_name("declaration").expect("interface");
+        let body = interface.child_by_field_name("body").expect("interface body");
+        assert_eq!(body.named_child_count(), 3, "{language_id}");
+    }
+}
+
+#[test]
+fn typescript_pins_split_generic_method_parse_limit() {
+    let cases = [
+        (
+            "class method",
+            "class A {\n m\n <T>() {}\n}\n",
+            "(program (class_declaration name: (type_identifier) body: (class_body (public_field_definition name: (property_identifier)) (method_definition name: (MISSING property_identifier) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) body: (statement_block)))))",
+            true,
+        ),
+        (
+            "abstract method",
+            "abstract class A {\n abstract m\n <T>(): void\n}\n",
+            "(program (abstract_class_declaration name: (type_identifier) body: (class_body (public_field_definition name: (property_identifier)) (method_signature name: (MISSING property_identifier) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (predefined_type))))))",
+            true,
+        ),
+        (
+            "ambient method",
+            "declare class A {\n m\n <T>(): void\n}\n",
+            "(program (ambient_declaration (class_declaration name: (type_identifier) body: (class_body (public_field_definition name: (property_identifier)) (method_signature name: (MISSING property_identifier) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (predefined_type)))))))",
+            true,
+        ),
+        (
+            "interface method",
+            "interface A {\n m\n <T>(): void\n}\n",
+            "(program (interface_declaration name: (type_identifier) body: (interface_body (property_signature name: (property_identifier)) (call_signature type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (predefined_type))))))",
+            false,
+        ),
+        (
+            "type-literal method",
+            "type A = {\n m\n <T>(): void\n}\n",
+            "(program (type_alias_declaration name: (type_identifier) value: (object_type (property_signature name: (property_identifier)) (call_signature type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (predefined_type))))))",
+            false,
+        ),
+    ];
+    for (label, source, expected, has_error) in cases {
+        for language_id in ["ts", "tsx"] {
+            let tree = parse_root(source, language_id);
+            let root = tree.root_node();
+            assert_eq!(root.to_sexp(), expected, "{label} {language_id}");
+            assert_eq!(root.has_error(), has_error, "{label} {language_id}");
+        }
+    }
+}
+
+#[test]
+fn typescript_and_tsx_pin_semicolonless_generic_member_contexts() {
+    fn first_member_body(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+        if node.kind() == "interface_body" || node.kind() == "object_type" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if let Some(body) = first_member_body(child) {
+                return Some(body);
+            }
+        }
+        None
+    }
+    let cases: &[(&str, &str, &[&str], &[&str], usize)] = &[
+        (
+            "Hono-style multiline type parameters and Promise returns",
+            "export interface H {\n <T0 extends string,\n  I0 = unknown\n >(): Promise<Forward<T0>>\n <T1 extends number,\n  I1 = unknown\n >(): Promise<Forward<T1>>\n <T2>(): Promise<Forward<T2>>\n}\ntype Forward<T> = T;\n",
+            &["export_statement", "type_alias_declaration"],
+            &["call_signature", "call_signature", "call_signature"],
+            0,
+        ),
+        (
+            "method then call",
+            "interface H {\n method(): void\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["method_signature", "call_signature"],
+            0,
+        ),
+        (
+            "property then call",
+            "interface H {\n prop: number\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["property_signature", "call_signature"],
+            0,
+        ),
+        (
+            "type literal",
+            "type L = {\n <T>(): Promise<T>\n <U>(): Promise<U>\n};\ntype Alias<T> = T;\n",
+            &["type_alias_declaration", "type_alias_declaration"],
+            &["call_signature", "call_signature"],
+            0,
+        ),
+        (
+            "ambient module",
+            "declare module \"pkg\" {\n export interface H {\n  <T>(): Promise<T>\n  <U>(): Promise<U>\n }\n}\ntype Alias<T> = T;\n",
+            &["ambient_declaration", "type_alias_declaration"],
+            &["call_signature", "call_signature"],
+            0,
+        ),
+        (
+            "comments, blank lines, and CRLF",
+            "interface H {\r\n <T>(): Promise<T> // first\r\n\r\n /* between */\r\n <U>(): Promise<U>\r\n}\r\ntype Alias<T> = T;\r\n",
+            &["interface_declaration", "type_alias_declaration"],
+            &["call_signature", "call_signature"],
+            2,
+        ),
+        (
+            "multiline JSDoc with less-than at line start",
+            "interface H {\n <T>(): Promise<T>\n /**\n  * <U>(): Alias\n  * @example <div />\n  */\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            1,
+        ),
+        (
+            "consecutive line comments",
+            "interface H {\n <T>(): Promise<T>\n // first\n // second\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            2,
+        ),
+        (
+            "TypeScript ignore directive",
+            "interface H {\n <T>(): Promise<T>\n // @ts-ignore\n <U>(): Promise<U>\n}\n",
+            &["interface_declaration"],
+            &["call_signature", "call_signature"],
+            1,
+        ),
+        (
+            "index signature before call",
+            "interface H {\n [key: string]: unknown\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["index_signature", "call_signature"],
+            0,
+        ),
+        (
+            "construct signature before call",
+            "interface H {\n new(name: string): H\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["construct_signature", "call_signature"],
+            0,
+        ),
+        (
+            "getter signature before call",
+            "interface H {\n get name(): string\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["method_signature", "call_signature"],
+            0,
+        ),
+        (
+            "optional method before call",
+            "interface H {\n method?(): void\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["method_signature", "call_signature"],
+            0,
+        ),
+        (
+            "readonly property before call",
+            "interface H {\n readonly name: string\n <T>(): Promise<T>\n}\n",
+            &["interface_declaration"],
+            &["property_signature", "call_signature"],
+            0,
+        ),
+    ];
+    for &(label, source, top_kinds, member_kinds, expected_comments) in cases {
+        for language_id in ["ts", "tsx"] {
+            let tree = parse_root(source, language_id);
+            let root = tree.root_node();
+            assert!(!root.has_error(), "{label} {language_id}: {}", root.to_sexp());
+            let mut top_cursor = root.walk();
+            let mut top_nodes = root.named_children(&mut top_cursor);
+            for &kind in top_kinds {
+                assert_eq!(top_nodes.next().expect("top-level declaration").kind(), kind, "{label} {language_id}");
+            }
+            assert!(top_nodes.next().is_none(), "{label} {language_id}: extra top-level node");
+            let body = first_member_body(root).expect("interface or type-literal body");
+            let mut cursor = body.walk();
+            let mut members = body.named_children(&mut cursor);
+            let mut comments = 0;
+            for &kind in member_kinds {
+                let member = loop {
+                    let child = members.next().expect("declared member");
+                    if child.kind() != "comment" {
+                        break child;
+                    }
+                    comments += 1;
+                };
+                assert_eq!(member.kind(), kind, "{label} {language_id}");
+                if kind == "call_signature" {
+                    let return_type = member.child_by_field_name("return_type").expect("call return type");
+                    assert!(
+                        return_type
+                            .utf8_text(source.as_bytes())
+                            .expect("return type text")
+                            .contains("Promise<"),
+                        "{label} {language_id}: {}",
+                        return_type.to_sexp(),
+                    );
+                }
+            }
+            for trailing in members {
+                assert_eq!(trailing.kind(), "comment", "{label} {language_id}: extra member");
+                comments += 1;
+            }
+            assert_eq!(comments, expected_comments, "{label} {language_id}");
+        }
+    }
+}
+
+#[test]
+fn typescript_and_tsx_preserve_less_than_and_jsx_expression_trees() {
+    let cases = [
+        (
+            "ts comparison",
+            "ts",
+            "const a = 1, b = 2;\nconst value = a\n< b;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (number)) (variable_declarator name: (identifier) value: (number))) (lexical_declaration (variable_declarator name: (identifier) value: (binary_expression left: (identifier) right: (identifier)))))",
+        ),
+        (
+            "ts generic call",
+            "ts",
+            "declare function f<T>(value: T): T;\nconst got = f\n<string>('ok');\n",
+            concat!(
+                "(program (ambient_declaration (function_signature name: (identifier) type_parameters: (type_parameters ",
+                "(type_parameter name: (type_identifier))) parameters: (formal_parameters (required_parameter pattern: ",
+                "(identifier) type: (type_annotation (type_identifier)))) return_type: (type_annotation (type_identifier)))) ",
+                "(lexical_declaration (variable_declarator name: (identifier) value: (call_expression function: (identifier) ",
+                "type_arguments: (type_arguments (predefined_type)) arguments: (arguments (string (string_fragment)))))))",
+            ),
+        ),
+        (
+            "tsx jsx after semicolon",
+            "tsx",
+            "const before = 1;\n<div />;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (number))) (expression_statement (jsx_self_closing_element name: (identifier))))",
+        ),
+        (
+            "tsx jsx without semicolon",
+            "tsx",
+            "const before = 1\n<div />;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (binary_expression left: (number) right: (identifier))) (ERROR)))",
+        ),
+        (
+            "tsx jsx return",
+            "tsx",
+            "function view() {\n  const before = 1\n  return <div />\n}\n",
+            "(program (function_declaration name: (identifier) parameters: (formal_parameters) body: (statement_block (lexical_declaration (variable_declarator name: (identifier) value: (number))) (return_statement (jsx_self_closing_element name: (identifier))))))",
+        ),
+    ];
+    for (label, language_id, source, expected) in cases {
+        let tree = parse_root(source, language_id);
+        assert_eq!(tree.root_node().to_sexp(), expected, "{label}");
+    }
+}
+
+#[test]
+fn typescript_and_tsx_pin_statement_start_and_return_asi_trees() {
+    let cases = [
+        (
+            "type alias followed by generic arrow",
+            "ts",
+            "type A = B\n<T,>(value: T) => value\n",
+            "(program (type_alias_declaration name: (type_identifier) value: (type_identifier)) (expression_statement (arrow_function type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters (required_parameter pattern: (identifier) type: (type_annotation (type_identifier)))) body: (identifier))))",
+        ),
+        (
+            "import followed by generic arrow",
+            "ts",
+            "import x from \"y\"\n<T,>(value: T) => value\n",
+            "(program (import_statement (import_clause (identifier)) source: (string (string_fragment))) (expression_statement (arrow_function type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters (required_parameter pattern: (identifier) type: (type_annotation (type_identifier)))) body: (identifier))))",
+        ),
+        (
+            "function signature followed by generic arrow",
+            "ts",
+            "function f(): B\n<T,>(value: T) => value\n",
+            "(program (function_signature name: (identifier) parameters: (formal_parameters) return_type: (type_annotation (type_identifier))) (expression_statement (arrow_function type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters (required_parameter pattern: (identifier) type: (type_annotation (type_identifier)))) body: (identifier))))",
+        ),
+        (
+            "return then JSX expression",
+            "tsx",
+            "function render() { return\n<div /> }\n",
+            "(program (function_declaration name: (identifier) parameters: (formal_parameters) body: (statement_block (return_statement) (expression_statement (jsx_self_closing_element name: (identifier))))))",
+        ),
+        (
+            "return then generic arrow",
+            "tsx",
+            "function build() { return\n<T,>(x: T) => x }\n",
+            "(program (function_declaration name: (identifier) parameters: (formal_parameters) body: (statement_block (return_statement) (expression_statement (arrow_function type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters (required_parameter pattern: (identifier) type: (type_annotation (type_identifier)))) body: (identifier))))))",
+        ),
+    ];
+    for (label, language_id, source, expected) in cases {
+        let tree = parse_root(source, language_id);
+        let root = tree.root_node();
+        assert!(!root.has_error(), "{label}: {}", root.to_sexp());
+        assert_eq!(root.to_sexp(), expected, "{label}");
+    }
+}
+
+#[test]
+fn javascript_keeps_jsx_on_the_return_statement_after_a_newline() {
+    let source = "function render() { return\n<div /> }\n";
+    let root = parse_root(source, "js");
+    assert_eq!(
+        root.root_node().to_sexp(),
+        "(program (function_declaration name: (identifier) parameters: (formal_parameters) body: (statement_block (return_statement (jsx_self_closing_element name: (identifier))))))",
+    );
+}
+
+#[test]
+fn typescript_and_tsx_pin_import_type_before_semicolonless_signature_parse_limit() {
+    let source = "interface H {\n <T>(): import('x').Foo<string>\n <U>(): Promise<U>\n}\n";
+    for language_id in ["ts", "tsx"] {
+        let tree = parse_root(source, language_id);
+        let root = tree.root_node();
+        assert!(root.has_error(), "{language_id}: {}", root.to_sexp());
+        if language_id == "ts" {
+            assert_eq!(
+                root.to_sexp(),
+                "(program (interface_declaration name: (type_identifier) body: (interface_body (call_signature type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (member_expression object: (call_expression function: (import) arguments: (arguments (string (string_fragment)))) property: (property_identifier)))) (MISSING \"}\"))) (ERROR (type_arguments (predefined_type)) type_parameters: (type_parameters (type_parameter name: (type_identifier))) parameters: (formal_parameters) return_type: (type_annotation (generic_type name: (type_identifier) type_arguments: (type_arguments (type_identifier))))))",
+            );
+        } else {
+            assert!(root.to_sexp().contains("(jsx_opening_element"), "tsx: {}", root.to_sexp());
+        }
+    }
+}
+
+#[test]
+fn typescript_preserves_non_declaration_less_than_trees() {
+    let cases = [
+        (
+            "as type",
+            "const value = x as Foo\n< 5;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (as_expression (identifier) (generic_type name: (type_identifier) type_arguments: (type_arguments (literal_type (number)) (MISSING \">\")))))))",
+        ),
+        (
+            "satisfies type",
+            "const value = x satisfies Foo\n< 5;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (satisfies_expression (identifier) (generic_type name: (type_identifier) type_arguments: (type_arguments (literal_type (number)) (MISSING \">\")))))))",
+        ),
+        (
+            "non-null expression",
+            "const value = x!\n< y;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (binary_expression left: (non_null_expression (identifier)) right: (identifier)))))",
+        ),
+        (
+            "angle-bracket assertion",
+            "const value = <T>x;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (type_assertion (type_arguments (type_identifier)) (identifier)))))",
+        ),
+        (
+            "constructed generic type",
+            "const value = new X\n<T>();\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (new_expression constructor: (identifier) type_arguments: (type_arguments (type_identifier)) arguments: (arguments)))))",
+        ),
+        (
+            "generic-like tagged template",
+            "const value = tag\n<T>`hello`;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (binary_expression left: (binary_expression left: (identifier) right: (identifier)) right: (template_string (string_fragment))))))",
+        ),
+        (
+            "tagged template across a newline",
+            "const value = tag\n`hello`;\n",
+            "(program (lexical_declaration (variable_declarator name: (identifier) value: (call_expression function: (identifier) arguments: (template_string (string_fragment))))))",
+        ),
+        (
+            "class heritage type arguments",
+            "class C extends B\n<T> {}\n",
+            "(program (class_declaration name: (type_identifier) (class_heritage (extends_clause value: (identifier) type_arguments: (type_arguments (type_identifier)))) body: (class_body)))",
+        ),
+    ];
+    for (label, source, expected) in cases {
+        for language_id in ["ts", "tsx"] {
+            let tree = parse_root(source, language_id);
+            let root = tree.root_node();
+            if language_id == "tsx" && label == "angle-bracket assertion" {
+                assert!(root.has_error(), "{label}: {}", root.to_sexp());
+                assert!(root.to_sexp().contains("(jsx_opening_element"), "{label}: {}", root.to_sexp());
+            } else {
+                assert_eq!(root.to_sexp(), expected, "{label} {language_id}");
+            }
+        }
+    }
+}
+
 /// Parses Kotlin source on a worker thread so a scanner that never returns fails the test
 /// instead of hanging the suite. Also returns how long the parse took.
 fn parse_kotlin_timed(

@@ -1,3 +1,8 @@
+import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "../helpers/typescript-split-method-fixture.js";
+import { writeFixtureFiles } from "./callable-consumer-fixtures.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
@@ -107,6 +112,17 @@ const definition: LanguageTestDefinition = {
 runLanguageTests(definition);
 
 describe("TSX class static-block scopes", () => {
+  it("retains cross-file split method signatures and class methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-split-methods-"));
+    try {
+      const files = await writeFixtureFiles(root, typescriptSplitMethodSources("tsx"));
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      await expectTypeScriptSplitMethods(index, root, "tsx");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not resolve static-block locals from sibling methods", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-tsx-static-block-scope-"));
     const file = path.join(root, "scope.tsx");

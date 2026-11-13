@@ -1060,6 +1060,7 @@ export function buildScopeIndexFromSource(
   };
 
   const walk = (node: SyntaxNodeLike) => {
+    if (node.startIndex === node.endIndex) return;
     let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
     let qualifiedNamespaceScope: Scope | undefined;
     // A name-registering node puts its name in the *current* (enclosing) scope before the push

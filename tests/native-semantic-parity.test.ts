@@ -1,4 +1,8 @@
 import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "./helpers/typescript-split-method-fixture.js";
+import {
   expectCsharpGlobalUsingGraph,
   expectCsharpGlobalUsingNavigation,
   expectCsharpGlobalUsingReferences,
@@ -1008,6 +1012,20 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
 }
 
 nativeDescribe("native semantic coverage", () => {
+  it.each(["ts", "tsx"] as const)(
+    "retains native %s split methods across cold and reopened caches",
+    async (extension) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-split-methods-"));
+      tempDirs.push(root);
+      await writeFixtureFiles(root, typescriptSplitMethodSources(extension));
+      for (const cache of ["off", "disk", "disk"] as const) {
+        const index = await buildProjectIndex(root, { cache, threads: 1 });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        await expectTypeScriptSplitMethods(index, root, extension);
+      }
+    },
+  );
+
   it("keeps native semantics stable for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
       sampleExpectation(

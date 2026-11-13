@@ -1,4 +1,8 @@
 import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "./helpers/typescript-split-method-fixture.js";
+import {
   expectCsharpGlobalUsingReferences,
   withCsharpGlobalUsingFixture,
 } from "./helpers/csharp-global-using-fixture.js";
@@ -135,6 +139,20 @@ import {
 } from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("declaration header reference namespaces", () => {
+  it.each(["ts", "tsx"] as const)(
+    "keeps cross-file %s split-method references separate from inherited decoys",
+    async (extension) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-split-method-refs-"));
+      try {
+        const files = await writeFixtureFiles(root, typescriptSplitMethodSources(extension));
+        const index = await createTestIndexFromFiles(root, Object.values(files));
+        await expectTypeScriptSplitMethods(index, root, extension);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("excludes Kotlin accessor decoys and keeps factory-named receiver references", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-receiver-review-refs-"));
     try {

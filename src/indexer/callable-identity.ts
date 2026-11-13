@@ -21,6 +21,7 @@ function callableDeclaration(node: SyntaxNodeLike | undefined): SyntaxNodeLike |
       CALLABLE_DECLARATION_NODE_TYPES[current.type] ||
       current.type === "function_signature" ||
       current.type === "method_signature" ||
+      current.type === "call_signature" ||
       current.type === "abstract_method_signature"
     )
       return current;

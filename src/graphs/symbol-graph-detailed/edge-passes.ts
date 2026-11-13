@@ -456,7 +456,7 @@ export async function emitMemberOwnershipEdges(
     markImplementationTarget(
       context,
       memberId,
-      outOfLineDeclaration?.node ?? fn.node,
+      outOfLineDeclaration?.node ?? fn.modifierNode ?? fn.node,
       outOfLineDeclaration?.source ?? context.source,
       fn.def,
     );
@@ -574,10 +574,12 @@ function memberScopeForDefinition(
   // Kotlin has no `static` keyword; a member of a `companion object` or a named `object`
   // declaration is the language's static-equivalent mechanism (reachable as `Outer.member()`).
   if (declarationIsStaticEquivalent(context.sup.id, fn.node)) return "static";
-  const declarationNode =
-    fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition"
-      ? fn.node.parent
-      : fn.node;
+  let declarationNode = fn.node;
+  if (fn.modifierNode?.type === "public_field_definition") {
+    declarationNode = fn.modifierNode;
+  } else if (fn.node.parent?.type === "public_field_definition" || fn.node.parent?.type === "field_definition") {
+    declarationNode = fn.node.parent;
+  }
   return declarationNodeIsStatic(declarationNode, context.source) ? "static" : "instance";
 }
 

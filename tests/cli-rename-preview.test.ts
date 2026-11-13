@@ -80,6 +80,54 @@ describe("rename preview CLI", () => {
     expect(await fs.readFile(consumerFile, "utf8")).toBe(beforeConsumer);
   });
 
+  it("previews every forward-alias site after semicolonless generic signatures", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-forward-rename-"));
+    const fixtureFile = path.join(fixtureRoot, "forward.ts");
+    const source = [
+      "export interface Handler {",
+      "  <T0>(): Forward<T0>",
+      "  <T1>(): Forward<T1>",
+      "  <T2>(): Forward<T2>",
+      "}",
+      "type Forward<T> = T",
+      "const value: Forward<string> = 'ok'",
+      "",
+    ].join("\n");
+    await fs.writeFile(fixtureFile, source);
+    try {
+      const result = await captureCli([
+        "rename-preview",
+        "forward.ts::Forward",
+        "Fwd",
+        "--root",
+        fixtureRoot,
+        "--cache",
+        "off",
+        "--json",
+      ]);
+      expect(result.exitCode).toBeUndefined();
+      expect(stripCliProgressLines(result.stderr)).toBe("");
+      const parsed: unknown = JSON.parse(result.stdout);
+      expect(parsed).toMatchObject({ safe: true, target: { name: "Forward" }, newName: "Fwd" });
+      if (!isPlainRecord(parsed) || !Array.isArray(parsed.edits)) throw new Error("Forward alias edits unavailable");
+      const lines = parsed.edits.map((edit) => {
+        if (!isPlainRecord(edit) || !isPlainRecord(edit.range) || !isPlainRecord(edit.range.start)) {
+          throw new Error("Forward alias edit lacks a source range");
+        }
+        const line = edit.range.start.line;
+        if (typeof line !== "number") throw new Error("Forward alias edit lacks a source line");
+        expect(edit.file).toBe("forward.ts");
+        expect(edit.oldText).toBe("Forward");
+        expect(edit.newText).toBe("Fwd");
+        return line;
+      });
+      expect(lines.sort((left, right) => left - right)).toEqual([2, 3, 4, 6, 7]);
+      expect(await fs.readFile(fixtureFile, "utf8")).toBe(source);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("preserves unsafe omission and invalid-identifier responses", async () => {
     const limited = await captureCli([
       "rename-preview",

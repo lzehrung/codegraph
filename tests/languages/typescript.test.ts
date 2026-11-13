@@ -1,3 +1,7 @@
+import {
+  expectTypeScriptSplitMethods,
+  typescriptSplitMethodSources,
+} from "../helpers/typescript-split-method-fixture.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
@@ -108,6 +112,17 @@ const definition: LanguageTestDefinition = {
 runLanguageTests(definition);
 
 describe("TypeScript symbol extraction", () => {
+  it("retains cross-file split method signatures and class methods", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-ts-split-methods-"));
+    try {
+      const files = await writeFixtureFiles(root, typescriptSplitMethodSources("ts"));
+      const index = await createTestIndexFromFiles(root, Object.values(files));
+      await expectTypeScriptSplitMethods(index, root, "ts");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts type aliases with the type kind", async () => {
     const index = await createTestIndex("typescript");
     const file = path.resolve(process.cwd(), "tests", "samples", "typescript", "utils.ts");

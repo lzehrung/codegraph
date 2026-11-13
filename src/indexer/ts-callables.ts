@@ -5,6 +5,7 @@ import type { SymbolDef } from "./types.js";
 const OVERLOAD_SIGNATURE_NODE_TYPES: Record<string, true> = {
   function_signature: true,
   method_signature: true,
+  call_signature: true,
   abstract_method_signature: true,
 };
 
@@ -17,6 +18,62 @@ const OVERLOAD_IMPLEMENTATION_NODE_TYPES: Record<string, true> = {
 };
 
 export type TypeScriptCallableRole = "signature" | "implementation" | "other";
+
+/**
+ * The fork splits a method's name/modifiers from its generic signature at a newline.
+ * Join only adjacent untyped properties and generic signatures, never explicit separators.
+ * Called only while extracting module locals or walking detailed declarations.
+ */
+export function typescriptSplitMethodName(signature: SyntaxNodeLike): SyntaxNodeLike | undefined {
+  const callSignature = signature.type === "call_signature";
+  if (!callSignature) {
+    const recoveryMethod =
+      signature.type === "method_definition" ||
+      signature.type === "method_signature" ||
+      signature.type === "abstract_method_signature";
+    if (!recoveryMethod) return undefined;
+    const missingName = signature.childForFieldName("name");
+    if (!missingName || missingName.startIndex !== missingName.endIndex) return undefined;
+  }
+  if (!signature.childForFieldName("type_parameters")) return undefined;
+  let property = signature.previousSibling;
+  while (property?.type === "comment") property = property.previousSibling;
+  const propertyType = callSignature ? "property_signature" : "public_field_definition";
+  if (property?.type !== propertyType) return undefined;
+  const name = property.childForFieldName("name");
+  if (!name || name.startIndex === name.endIndex) return undefined;
+  let hasMethodModifier = false;
+  for (let index = 0; ; index += 1) {
+    const token = property.child(index);
+    if (!token) break;
+    if (token.startIndex === name.startIndex && token.endIndex === name.endIndex) continue;
+    switch (token.type) {
+      case "comment":
+        break;
+      case "?":
+      case "decorator":
+      case "accessibility_modifier":
+      case "static":
+      case "override_modifier":
+      case "abstract":
+        hasMethodModifier = true;
+        break;
+      case "readonly":
+      case "declare":
+        // These modifiers are accepted on interface signatures, not class methods.
+        if (!callSignature) return undefined;
+        hasMethodModifier = true;
+        break;
+      default:
+        return undefined;
+    }
+  }
+  // Bare `new` is a construct signature; `new?` and `readonly new` are methods.
+  const constructSignature =
+    callSignature && name.type === "property_identifier" && name.text === "new" && !hasMethodModifier;
+  if (constructSignature) return undefined;
+  return name;
+}
 
 /**
  * TypeScript overload signatures and the following implementation are one callable.

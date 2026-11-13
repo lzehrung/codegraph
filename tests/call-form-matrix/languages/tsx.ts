@@ -7,6 +7,52 @@ export const tsxOmissions: readonly CallFormOmission[] = [];
 
 export const tsxCells: MatrixCell[] = [
   {
+    id: "tsx/split-generic-method-shadowing",
+    language: "tsx",
+    callForm: "typed-local-receiver",
+    files: {
+      "split.tsx": [
+        "interface B { m(): void }",
+        "interface A extends B {",
+        "  m",
+        "  <T>(): void",
+        "}",
+        "export function run(a: A) { a.m<string>(); }",
+      ].join("\n"),
+    },
+    use: { file: "split.tsx", line: 6, token: "m" },
+    expected: { file: "split.tsx", line: 3, token: "m" },
+    decoy: { file: "split.tsx", line: 1, token: "m" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "split.tsx", fromName: "run" },
+  },
+  ...[
+    { label: "optional", name: "m?", call: "m<string>()" },
+    { label: "readonly", name: "readonly m", call: "m()" },
+    { label: "readonly-optional", name: "readonly m?", call: "m<string>()" },
+  ].map(
+    ({ label, name, call }): MatrixCell => ({
+      id: `tsx/split-generic-method-${label}`,
+      language: "tsx",
+      callForm: "typed-local-receiver",
+      files: {
+        "types.tsx": [
+          "export interface B { m(value: number): void }",
+          "export interface A extends B {",
+          `  ${name}`,
+          "  <T>(): void",
+          "}",
+        ].join("\n"),
+        "use.tsx": ['import { A } from "./types";', `export function run(a: A) { a.${call}; }`].join("\n"),
+      },
+      use: { file: "use.tsx", line: 2, token: "m" },
+      expected: { file: "types.tsx", line: 3, token: "m" },
+      decoy: { file: "types.tsx", line: 1, token: "m" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: "use.tsx", fromName: "run" },
+    }),
+  ),
+  {
     id: "tsx/private-self-member-call",
     language: "tsx",
     callForm: "self-member-call",

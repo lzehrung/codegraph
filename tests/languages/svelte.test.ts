@@ -4,7 +4,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunk-sfc.js";
-import { collectGraph } from "../../src/index.js";
+import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { prepareSourceInput } from "../../src/languages/file-prep.js";
@@ -31,6 +31,39 @@ describe("Svelte SFC chunking", () => {
     const templateChunks = chunks.filter((chunk) => chunk.type?.startsWith("template"));
     expect(templateChunks.every((chunk) => chunk.languageId === "html")).toBe(true);
   });
+});
+
+it("keeps forward aliases after adjacent signatures in a Svelte TypeScript script", async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-svelte-forward-alias-"));
+  const file = path.join(root, "Forward.svelte");
+  const source = [
+    '<script lang="ts">',
+    "interface Handler {",
+    "  <T0>(): Forward<T0>",
+    "  <T1>(): Forward<T1>",
+    "  <T2>(): Forward<T2>",
+    "}",
+    "type Forward<T> = T",
+    "const fwd: Forward<string> = 'ok'",
+    "</script>",
+    "<div>{fwd}</div>",
+    "",
+  ].join("\n");
+  await fs.promises.writeFile(file, source);
+  try {
+    const index = await createTestIndexFromFiles(root, [file]);
+    const goto = await goToDefinition(index, { file, line: 3, column: source.split("\n")[2]!.indexOf("Forward") + 1 });
+    expect(goto.status).toBe("ok");
+    if (goto.status === "ok") expect(goto.definition.range.start.line).toBe(7);
+    const refs = await findReferences(index, { file, line: 7, column: 6 });
+    expect(refs.status).toBe("ok");
+    if (refs.status === "ok") {
+      expect(refs.references.map((reference) => reference.range.start.line)).toEqual([3, 4, 5, 7, 8]);
+      expect(refs.referenceCoverage.state).toBe("complete");
+    }
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
 });
 
 const definition: LanguageTestDefinition = {

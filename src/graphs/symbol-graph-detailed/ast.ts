@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
+import { typescriptSplitMethodName } from "../../indexer/ts-callables.js";
 import { sliceText, unquote } from "../../util/ast.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import {
@@ -13,6 +14,8 @@ export type DetailedFunctionNode = {
   name: string;
   node: SyntaxNodeLike;
   def: SymbolDef;
+  /** The name/modifiers live in a preceding property for recovered split methods. */
+  modifierNode?: SyntaxNodeLike;
 };
 
 export type DetailedClassNode = {
@@ -183,15 +186,33 @@ export function collectDetailedDeclarations(
         (local.range.start.index ?? Number.POSITIVE_INFINITY) < nameNode.endIndex,
     );
 
+  const recoverSplitMethods = sup.id === "ts" || sup.id === "tsx";
   const walk = (node: SyntaxNodeLike): void => {
-    if (functionNodeTypes.has(node.type) || isStandaloneNamedFunctionExpression(sup, node)) {
-      const nameNode = functionNameNode(node);
+    const functionLike = functionNodeTypes.has(node.type) || isStandaloneNamedFunctionExpression(sup, node);
+    const functionName = functionLike ? functionNameNode(node) : undefined;
+    const missingName = functionName && functionName.startIndex === functionName.endIndex;
+    const splitCandidate = missingName || node.type === "call_signature";
+    const splitName = recoverSplitMethods && splitCandidate ? typescriptSplitMethodName(node) : undefined;
+    if (functionLike) {
+      const nameNode = splitName ?? functionName;
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
         // A declaration is modeled only through the symbol at its own name. Falling back to a
         // same-named symbol elsewhere would give this body another declaration's identity.
         const def = findDefinitionAt(name, nameNode!);
-        if (def) functionNodes.push({ name, node, def });
+        if (def) {
+          const fn: DetailedFunctionNode = { name, node, def };
+          if (splitName?.parent) fn.modifierNode = splitName.parent;
+          functionNodes.push(fn);
+        }
+      }
+    } else if (splitName) {
+      const name = sliceText(splitName, source);
+      const def = findDefinitionAt(name, splitName);
+      if (def) {
+        const fn: DetailedFunctionNode = { name, node, def };
+        if (splitName.parent) fn.modifierNode = splitName.parent;
+        functionNodes.push(fn);
       }
     } else if (sup.id === "kotlin" && node.type === "property_declaration" && kotlinExtensionReceiverType(node)) {
       const variable = node.namedChildren.find((child) => child.type === "variable_declaration");
