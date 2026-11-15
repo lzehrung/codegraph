@@ -23,6 +23,8 @@ import {
   csharpInheritedAliasCase,
 } from "../../helpers/csharp-inherited-alias-fixture.js";
 import { typeParameterReceiverCell } from "../../helpers/type-parameter-receiver-fixture.js";
+import { CSHARP_STATIC_RECEIVER_SOURCES } from "../../helpers/csharp-java-batch3-fixture.js";
+import { CSHARP_COLOR_COLOR_SOURCES } from "../../helpers/header-parameter-fixture.js";
 import {
   CSHARP_DOTTED_USING_CASES,
   csharpPartialGenericRootFixture,
@@ -60,9 +62,77 @@ const inheritedAliasCell = (caseName: string, id: string, outcome: "alias" | "me
   return { ...base, expected: "not_found", decoy, decoyAmbiguous: true };
 };
 
+// A cell carries only its own use file: complete reference coverage needs every file to read the declaration it checks.
+const STATIC_RECEIVER_LIB: Record<string, string> = {
+  "Lib.cs": [
+    "namespace Lib;",
+    "public class Widget { public static int Make() => 1; public int Inst() => 2; }",
+    "",
+  ].join("\n"),
+  "Decoy.cs": CSHARP_STATIC_RECEIVER_SOURCES["Decoy.cs"]!,
+};
+
+const staticReceiverFiles = (useFile: string): Record<string, string> => ({
+  ...STATIC_RECEIVER_LIB,
+  [useFile]: CSHARP_STATIC_RECEIVER_SOURCES[useFile]!,
+});
+
 const partialGenericRoot = csharpPartialGenericRootFixture();
 
 export const csharpCells: MatrixCell[] = [
+  // A field, property, local, or declarator list typed `Widget` does not turn the type name `Widget` into a value receiver.
+  ...(["UseField.cs", "UseProp.cs", "UseLocal.cs", "UseMulti.cs", "UseInit.cs", "UseUsing.cs"] as const).map(
+    (file): MatrixCell => ({
+      id: `csharp/static-receiver-beside-typed-${file.slice(3, -3).toLowerCase()}`,
+      language: "csharp",
+      callForm: "static-receiver",
+      files: staticReceiverFiles(file),
+      use: { file, line: 3, token: "Make" },
+      expected: { file: "Lib.cs", line: 2, token: "Make" },
+      decoy: { file: "Decoy.cs", line: 2, token: "Make" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: file, fromName: "F" },
+    }),
+  ),
+  // A field, local, and parameter named like their own type (Color Color) keep the instance call.
+  ...(
+    [
+      [5, "F"],
+      [6, "G"],
+      [7, "H"],
+    ] as const
+  ).map(
+    ([line, fromName]): MatrixCell => ({
+      id: `csharp/typed-receiver-named-like-its-type-${fromName.toLowerCase()}`,
+      language: "csharp",
+      callForm: "typed-local-receiver",
+      files: staticReceiverFiles("UseColor.cs"),
+      use: { file: "UseColor.cs", line, token: "Inst" },
+      expected: { file: "Lib.cs", line: 2, token: "Inst" },
+      decoy: { file: "Decoy.cs", line: 2, token: "Inst" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: "UseColor.cs", fromName },
+    }),
+  ),
+  // A record parameter and a primary-constructor parameter named like their own type keep the nested-type chain.
+  ...(
+    [
+      ["record", 5, "F2"],
+      ["primary-constructor", 14, "G3"],
+    ] as const
+  ).map(
+    ([owner, line, fromName]): MatrixCell => ({
+      id: `csharp/static-receiver-named-like-its-type-${owner}`,
+      language: "csharp",
+      callForm: "static-receiver",
+      files: CSHARP_COLOR_COLOR_SOURCES,
+      use: { file: "Use.cs", line, token: "Make" },
+      expected: { file: "Types.cs", line: 2, token: "Make" },
+      decoy: { file: "Decoy.cs", line: 2, token: "Make" },
+      decoyKind: "callable",
+      edge: { label: "calls", fromFile: "Use.cs", fromName },
+    }),
+  ),
   ...CSHARP_INSTANTIATED_RECEIVER_SCOPES.flatMap((scope) => {
     const fixture = csharpInstantiatedReceiverFixture(scope);
     return fixture.sites.map((site): MatrixCell => {

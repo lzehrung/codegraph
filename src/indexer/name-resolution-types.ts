@@ -19,8 +19,16 @@ export type DeferredNameRequest =
    * Kotlin lambda and extension-body receivers between the call and its enclosing type, innermost first.
    */
   | { kind: "kotlin-lambda-receiver-member"; lookupName: string; receivers: readonly SyntaxNodeLike[] }
+  /** A C# attribute name `Marker` names the type `Marker` or `MarkerAttribute`; both lookups settle together. */
+  | { kind: "csharp-attribute-suffix" }
   /** An enclosing C# member (only a nested type in type positions) binds before a using alias of that name. */
   | { kind: "csharp-alias-member"; lookupName: string }
+  /**
+   * A C# header parameter (a record's positional parameter or a primary-constructor parameter) read in a member body
+   * binds after a member of another `partial` part or a project base class of the same name. `owner` is the declaration
+   * whose header declares it.
+   */
+  | { kind: "csharp-header-parameter-member"; lookupName: string; owner: SyntaxNodeLike }
   /** A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it. */
   | { kind: "swift-nested-type"; owner: SymbolDef; names: readonly string[] }
   /**
@@ -69,6 +77,8 @@ export type BareNameUse = {
   name: string;
   /** PHP import role at the use, when the caller knows it. */
   phpImportType?: "class" | "function" | "const";
+  /** A C# attribute name whose `Attribute`-suffixed spelling is already part of this lookup. */
+  attributeSuffixTried?: true;
 };
 
 /** What a lookup step knows about the use once the closest scope binding is found. */

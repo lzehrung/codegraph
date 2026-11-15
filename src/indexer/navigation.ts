@@ -40,7 +40,7 @@ import {
   toModuleRef,
 } from "./navigation-local.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
-import { isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
+import { headerParameterOwner, isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import { AMBIGUOUS_CPP_OVERLOAD_REASON, AMBIGUOUS_RECEIVER_MEMBER_REASON } from "./ambiguous-resolution.js";
 import { resolveEcmaPrivateName } from "./member-selection.js";
 import {
@@ -1071,7 +1071,12 @@ async function findReferencesInternal(
     memberLookupPolicyFor(parsedContext.sup.id).verifiesCallableReferences &&
     definition.kind === SymbolKind.Function &&
     !receiverMemberDefinition;
-  const bindingNeedsVerifiedScan = requiresTypeScriptOverloadVerifiedScan || requiresRuntimeBindingVerifiedScan;
+  // A header parameter's uses also go through a language policy (members of other parts, binders the scope does not
+  // model), which scope occurrences cannot reproduce: goto decides each one.
+  const requiresHeaderParameterVerifiedScan =
+    !!localBinding?.node && !!headerParameterOwner(parsedContext.sup.id, localBinding.node);
+  const bindingNeedsVerifiedScan =
+    requiresTypeScriptOverloadVerifiedScan || requiresRuntimeBindingVerifiedScan || requiresHeaderParameterVerifiedScan;
   const kotlinNeedsVerifiedScan = kotlinExtension || kotlinCallableCollision;
   const requiresSameFileVerifiedScan =
     privateName ||

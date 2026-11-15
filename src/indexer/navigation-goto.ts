@@ -679,10 +679,12 @@ export function resolveCsharpNameRoot(
   qualifier: SyntaxNodeLike,
   source: string,
   files?: ParsedFileProvider,
+  /** The name to look up when it is not the node's own spelling (an attribute name with its suffix). */
+  nameOverride?: string,
 ): CsharpNameRoot {
   mod = withCsharpGlobalUsings(index, mod);
   if (qualifier.parent?.type === "alias_qualified_name") return { kind: "none" };
-  const name = sliceText(qualifier, source);
+  const name = nameOverride ?? sliceText(qualifier, source);
   if (csharpAliasAt(index, mod, name, qualifier)) return { kind: "none" };
   const normalized = CSHARP_SUPPORT.normalizeIdentifier(name);
   const genericArity = csharpTypeArgumentArity(qualifier);
@@ -4255,7 +4257,7 @@ async function csharpBaseClassRef(
   for (const part of parts) {
     const { container, context } = part;
     // A struct or enum has no base class: its base list names interfaces or an underlying type.
-    if (container.type === "struct_declaration" || container.type === "enum_declaration") continue;
+    if (csharpIsStruct(container) || container.type === "enum_declaration") continue;
     const baseList = container.namedChildren.find((child) => child.type === "base_list");
     if (!baseList?.namedChildren.length) continue;
     // An interface inherits the members of its base interfaces; that walk is not modeled.
@@ -4301,7 +4303,8 @@ async function csharpInterfaceBaseRefs(
 
 /**
  * Enclosing-member lookup, excluding values in type positions. Calls check the whole project base chain before
- * shared overload selection; a non-call name stops at the nearest declaring type.
+ * shared overload selection; a non-call name stops at the nearest declaring type. `inheritedFromStart` reads the
+ * first type as a base class: only the members a derived type inherits.
  */
 async function csharpTypeChainMembersNamed(
   index: ProjectIndex,
@@ -4309,6 +4312,7 @@ async function csharpTypeChainMembersNamed(
   name: string,
   typeOnly: boolean,
   call: boolean,
+  inheritedFromStart = false,
 ): Promise<SymbolDef[] | "unproven"> {
   const seen = new Set<string>();
   let nearest: SymbolDef[] = [];
@@ -4318,7 +4322,7 @@ async function csharpTypeChainMembersNamed(
     if (depth >= RECEIVER_HIERARCHY_DEPTH || seen.has(key)) return "unproven";
     seen.add(key);
     const { parts, complete } = await csharpTypeParts(index, current);
-    const members = csharpPartMembersNamed(parts, name, depth > 0, typeOnly);
+    const members = csharpPartMembersNamed(parts, name, inheritedFromStart || depth > 0, typeOnly);
     if (members.length) {
       const hidesBaseOverloads = !call || members.some((member) => member.kind !== SymbolKind.Function);
       if (hidesBaseOverloads) return nearest.length ? nearest : members;
@@ -4330,6 +4334,44 @@ async function csharpTypeChainMembersNamed(
     current = baseClass;
   }
   return nearest;
+}
+
+/**
+ * What a type gives a name its own header parameter also spells, before that parameter: a member another `partial`
+ * part declares, then a non-private member its project base classes declare (a derived record that repeats a base
+ * record's parameter reads the inherited property). `none` leaves the parameter as the answer; `unproven` means a
+ * part or base cannot be inspected. A member this part declares is already the closer lexical binding.
+ */
+export async function csharpHeaderParameterOverride(
+  index: ProjectIndex,
+  mod: ModuleIndex,
+  owner: SyntaxNodeLike,
+  name: string,
+): Promise<CsharpAliasMemberLookup> {
+  const context = await ensureParsedContextForIndex(index, mod.file);
+  let container: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(owner.startIndex, owner.endIndex);
+  while (container && (container.type !== owner.type || container.startIndex !== owner.startIndex)) {
+    container = container.parent;
+  }
+  if (!container) return { status: "unproven" };
+  const self: KeywordClassRef = { file: mod.file, container, context, module: mod };
+  // A declaration that is not `partial` has no other parts: a twin under `#if` is an alternative, and peers cannot add any.
+  const { parts, complete } = csharpIsPartial(container)
+    ? await csharpTypeParts(index, self)
+    : { parts: [self], complete: true };
+  const found = (members: readonly SymbolDef[]): CsharpAliasMemberLookup => ({
+    status: "member",
+    member: members.length === 1 ? members[0]! : null,
+  });
+  const otherParts = csharpPartMembersNamed(parts.slice(1), name, false, false);
+  if (otherParts.length) return found(otherParts);
+  if (!complete) return { status: "unproven" };
+  const base = await csharpBaseClassRef(index, parts);
+  if (base === "unproven") return { status: "unproven" };
+  if (!base) return { status: "none" };
+  const inherited = await csharpTypeChainMembersNamed(index, base, name, false, false, true);
+  if (inherited === "unproven") return { status: "unproven" };
+  return inherited.length ? found(inherited) : { status: "none" };
 }
 
 /**
@@ -4377,18 +4419,30 @@ function csharpOwnerCache(index: ProjectIndex): CsharpOwnerCache {
   return fresh;
 }
 
-/** Whether anything outside an owner's own declaration can give it members: another `partial` part or a base class. */
-function csharpOwnerMayHaveOuterMembers(container: SyntaxNodeLike): boolean {
-  let hasBaseList = false;
-  for (const child of container.namedChildren) {
-    if (child.type === "modifier" && child.text === "partial") return true;
-    if (child.type === "base_list" && child.namedChildren.length) hasBaseList = true;
+/** A struct or a `record struct`: a value type, whose base list names interfaces only. */
+function csharpIsStruct(container: SyntaxNodeLike): boolean {
+  if (container.type === "struct_declaration") return true;
+  if (container.type !== "record_declaration") return false;
+  // The `struct` keyword sits between the `record` keyword and the name.
+  for (let position = 0; ; position += 1) {
+    const child = container.child(position);
+    if (!child || child.type === "identifier") return false;
+    if (child.type === "struct") return true;
   }
+}
+
+/** Whether a declaration says it has other parts: only a `partial` type can, whatever else shares its name. */
+function csharpIsPartial(container: SyntaxNodeLike): boolean {
+  return container.namedChildren.some((child) => child.type === "modifier" && child.text === "partial");
+}
+
+/** Whether anything outside an owner's own declaration can give it members: another `partial` part or a base class. */
+export function csharpOwnerMayHaveOuterMembers(container: SyntaxNodeLike): boolean {
+  if (csharpIsPartial(container)) return true;
+  const hasBaseList = container.namedChildren.some((child) => child.type === "base_list" && child.namedChildren.length);
   // A struct lists no base class, an interface's bases are not modeled, and an enum has none.
   const hasNoBaseClass =
-    container.type === "struct_declaration" ||
-    container.type === "interface_declaration" ||
-    container.type === "enum_declaration";
+    csharpIsStruct(container) || container.type === "interface_declaration" || container.type === "enum_declaration";
   return hasBaseList && !hasNoBaseClass;
 }
 

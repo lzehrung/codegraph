@@ -132,6 +132,7 @@ const SCOPE_NODE_LIST_FIELDS = [
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "requireCall",
   "classScopeComprehension",
+  "headerParameters",
   "moduleBindingsAtFunctionRuntime",
   "laterLocalBlocksOuterKinds",
   "namelessVariableDeclaration",
@@ -152,6 +153,10 @@ function declaredNodeTypeLists(row: ScopeNodeRow): Array<{ field: string; types:
       field: "namelessVariableDeclaration.declarationTypes",
       types: row.namelessVariableDeclaration.declarationTypes,
     });
+  }
+  if (row.headerParameters) {
+    lists.push({ field: "headerParameters.declarationTypes", types: row.headerParameters.declarationTypes });
+    lists.push({ field: "headerParameters.listTypes", types: row.headerParameters.listTypes });
   }
   if (row.scopedEnum) {
     lists.push({ field: "scopedEnum.enumDeclarationTypes", types: row.scopedEnum.enumDeclarationTypes });

@@ -40,6 +40,22 @@ export type ScopeNodeRow = {
   typeNameTypes?: ReadonlySet<string>;
   /** Node types that push a dedicated scope for the type parameters they declare. */
   typeScopeTypes?: ReadonlySet<string>;
+  /**
+   * Type declarations whose header parameter list binds names in the declaration's own scope, so the header and the body
+   * see them: a C# record's positional parameters, a C# class's or struct's primary-constructor parameters, and a Java
+   * record's components. `listTypes` names the parameter-list node, so a delegate's or method's list is not read as one.
+   * Each declaration type must also be a `typeScopeTypes` entry.
+   */
+  headerParameters?: {
+    declarationTypes: ReadonlySet<string>;
+    listTypes: ReadonlySet<string>;
+    /**
+     * A parameter named like its own type (C# `Widget Widget`, Color Color; Java `Money Money`) stays unbound: a receiver
+     * spelled that way may name the type for its static and nested members, which only the type lookup answers, and a
+     * type position never names a parameter.
+     */
+    leavesTypeNamedUnbound?: true;
+  };
   /** Node types whose member names become module-level extra bindings instead of lexical bindings. */
   enumMemberTypes?: ReadonlySet<string>;
   /** Enum-member node types registered in the current scope instead of as extra bindings. */
@@ -381,6 +397,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     unnamedFunctionScopeTypes: new Set(["constructor_declaration"]),
     classNameTypes: new Set(["class_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration"]),
+    // A record's components are bound in the record's own scope, which the header and the body share.
+    typeScopeTypes: new Set(["record_declaration"]),
+    headerParameters: {
+      declarationTypes: new Set(["record_declaration"]),
+      listTypes: new Set(["formal_parameters"]),
+      leavesTypeNamedUnbound: true,
+    },
     enumMemberTypes: new Set(["enum_constant"]),
     enumBodyParentTypes: new Set(["enum_body"]),
     variableDeclarationTypes: new Set(["field_declaration", "local_variable_declaration"]),
@@ -411,6 +434,12 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
       "interface_declaration",
       "delegate_declaration",
     ]),
+    // Record positional parameters and C# 12 primary-constructor parameters are bound in the declaration's own scope.
+    headerParameters: {
+      declarationTypes: new Set(["record_declaration", "class_declaration", "struct_declaration"]),
+      listTypes: new Set(["parameter_list"]),
+      leavesTypeNamedUnbound: true,
+    },
     typeParameterTypes: new Set(["type_parameter"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
     declarationPatternTypes: new Set(["declaration_pattern"]),
@@ -591,6 +620,35 @@ export function scopeNodesFor(languageId: string): ScopeNodeRow {
 export function isTypeParameterName(languageId: string, node: SyntaxNodeLike): boolean {
   const parentType = node.parent?.type;
   return !!parentType && !!scopeNodesFor(languageId).typeParameterTypes?.has(parentType);
+}
+
+/**
+ * The declaration whose header parameter list declares `name`, a parameter's name node (a record component, or a
+ * primary-constructor parameter), per the language's `headerParameters` row. Any other parameter has no such owner.
+ */
+export function headerParameterOwner(languageId: string, name: SyntaxNodeLike): SyntaxNodeLike | null {
+  const header = scopeNodesFor(languageId).headerParameters;
+  if (!header) return null;
+  // The name sits in a parameter, or in a declarator inside a varargs parameter, below the list.
+  let current = name.parent;
+  for (let hop = 0; current && hop < 3 && !header.listTypes.has(current.type); hop += 1) current = current.parent;
+  const owner = current && header.listTypes.has(current.type) ? current.parent : null;
+  return owner && header.declarationTypes.has(owner.type) ? owner : null;
+}
+
+/** Whether a header parameter's declared type is spelled like its own name (`Widget Widget`, `Lib.Widget? Widget`). */
+export function headerParameterNamedLikeType(
+  parameter: SyntaxNodeLike,
+  name: SyntaxNodeLike,
+  normalizeIdentifier: (value: string) => string,
+): boolean {
+  const type = parameter.childForFieldName("type");
+  if (!type) return false;
+  const text = type.text.replace(/\?$/u, "");
+  // A generic or array type is not the simple name the parameter spells.
+  if (/[<[(]/u.test(text)) return false;
+  const simple = text.split(/\.|::/u).at(-1)!.trim();
+  return normalizeIdentifier(simple) === normalizeIdentifier(name.text);
 }
 
 /** Preserve sigils on variable nodes so they cannot collide with import, type, or function names. */

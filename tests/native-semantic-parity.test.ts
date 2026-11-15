@@ -1,3 +1,5 @@
+import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
+import { eachIndexMode, withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
 import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
@@ -1033,6 +1035,17 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
 }
 
 nativeDescribe("native semantic coverage", () => {
+  it.each(BATCH3_CASES)(
+    "keeps $language $name identical through the native runtime and a reopened disk cache",
+    async ({ sources, check }) => {
+      await withBatch3Fixture("cg-batch3-native-", sources, async (fixture) => {
+        await eachIndexMode(fixture, async (index) => {
+          for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+          await check(fixture, index);
+        });
+      });
+    },
+  );
   it.each(["ts", "tsx"] as const)(
     "retains native %s split methods across cold and reopened caches",
     async (extension) => {

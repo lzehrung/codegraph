@@ -75,6 +75,33 @@ async function tryCreateFileSymlink(target: string, linkPath: string): Promise<b
   }
 }
 
+async function renameInFixture(
+  sources: Readonly<Record<string, string>>,
+  target: { file: string; name: string },
+  newName: string,
+) {
+  const root = await mkTmpDir("cg-rename-header-parameter-");
+  await writeFixtureFiles(root, sources);
+  const session = createAgentSession({
+    root,
+    buildOptions: { cache: "off", threads: 1 },
+    freshness: { policy: "check" },
+  });
+  try {
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: target.name });
+    const symbol = symbols.symbols.find((item) => item.name === target.name && item.location.file === target.file);
+    expect(symbol, `${target.file}::${target.name}`).toBeDefined();
+    return await previewRenameWithSession(session, { root, handle: symbol!.handle, newName });
+  } finally {
+    session.invalidate();
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+const editSites = (result: {
+  edits: ReadonlyArray<{ file: string; range: { start: { line: number; column: number } } }>;
+}) => result.edits.map((edit) => [edit.file, edit.range.start.line, edit.range.start.column]);
+
 describe("rename preview", () => {
   describe.each(["ts", "tsx"] as const)("split generic method rename in %s", (extension) => {
     it.each(["m", "m?", "readonly m", "readonly m?"])(
@@ -2574,4 +2601,91 @@ it("keeps inherited decoy rename unsafe through an ancestor's adapted PHP trait 
     closeDiskCacheDatabase(root, diskOptions);
     await fsp.rm(temporary, { recursive: true, force: true });
   }
+});
+
+it("renames a C# record parameter and its uses, but not a same-named member of another type", async () => {
+  const point = "public record Point(int X, int Y) { public int Sum() => X + Y; }";
+  const result = await renameInFixture(
+    {
+      "Point.cs": `namespace Geo;\n${point}\n`,
+      "Other.cs": "namespace Geo;\npublic class Other { public int Y; public int Read() => Y; }\n",
+    },
+    { file: "Point.cs", name: "Y" },
+    "Height",
+  );
+  expect(result.safe).toBe(true);
+  expect(editSites(result)).toEqual([
+    ["Point.cs", 2, point.indexOf("Y") + 1],
+    ["Point.cs", 2, point.lastIndexOf("Y") + 1],
+  ]);
+});
+
+it("marks a C# record parameter rename unsafe when a `with` or object initializer designates a member of that name", async () => {
+  const result = await renameInFixture(
+    {
+      "Point.cs": [
+        "namespace Geo;",
+        "public class Dto { public int X; }",
+        "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { X = X + 1 }; public Dto ToDto() => new Dto { X = X }; }",
+        "",
+      ].join("\n"),
+    },
+    { file: "Point.cs", name: "X" },
+    "Horizontal",
+  );
+  expect(result.safe).toBe(false);
+  // The designators `X =` name a member of the initialized type, so no edit reaches them.
+  const designators = [
+    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { ",
+    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { X = X + 1 }; public Dto ToDto() => new Dto { ",
+  ].map((prefix) => prefix.length + 1);
+  for (const column of designators) expect(editSites(result)).not.toContainEqual(["Point.cs", 3, column]);
+});
+
+it("marks the suffix-less attribute spelling unsafe when renaming an Attribute-suffixed class", async () => {
+  const result = await renameInFixture(
+    {
+      "Lib.cs": "namespace Lib;\npublic class MarkerAttribute : System.Attribute { }\n",
+      "Use.cs": "using Lib;\n[Marker] public class A { }\n[MarkerAttribute] public class B { }\n",
+    },
+    { file: "Lib.cs", name: "MarkerAttribute" },
+    "TagAttribute",
+  );
+  expect(result.safe).toBe(false);
+  expect(result.unsafeSites).toContainEqual(
+    expect.objectContaining({
+      reason: "unresolved_reference",
+      text: "Marker",
+      location: expect.objectContaining({ file: "Use.cs" }),
+    }),
+  );
+  // The declaration and the exact spelling are edited; the suffix-less spelling is left for the author.
+  expect(editSites(result)).toEqual([
+    ["Lib.cs", 2, 14],
+    ["Use.cs", 3, 2],
+  ]);
+});
+
+it("does not edit a Java lambda parameter or loop variable when renaming a record component", async () => {
+  const result = await renameInFixture(
+    {
+      "Rec.java": [
+        "record Rec(int value) {",
+        "  int f(java.util.List<Integer> xs) {",
+        "    xs.forEach(value -> value.hashCode());",
+        "    for (Integer value : xs) { value.hashCode(); }",
+        "    return value;",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    { file: "Rec.java", name: "value" },
+    "amount",
+  );
+  expect(result.safe).toBe(false);
+  expect(editSites(result)).toEqual([
+    ["Rec.java", 1, 16],
+    ["Rec.java", 5, 12],
+  ]);
 });

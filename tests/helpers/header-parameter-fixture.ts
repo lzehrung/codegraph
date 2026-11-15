@@ -1,0 +1,657 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { expect } from "vitest";
+import { buildProjectIndex, buildSymbolGraphDetailed, goToDefinition, type ProjectIndex } from "../../src/index.js";
+import {
+  CSHARP_ATTRIBUTE_SOURCES,
+  CSHARP_RECORD_SOURCES,
+  CSHARP_STATIC_RECEIVER_SOURCES,
+  JAVA_RECORD_SOURCES,
+  expectCsharpAttributeNames,
+  expectCsharpRecordComponents,
+  expectGoto,
+  expectJavaRecordComponents,
+  expectStaticReceiverEdges,
+  expectReferences,
+  placeOf,
+  type Batch3Fixture,
+  type Place,
+  type Sources,
+} from "./csharp-java-batch3-fixture.js";
+
+/**
+ * One record per binder form: a nearer binder of `X`, or a binder the scope index does not model, beside the header
+ * parameter `X`. Every expectation below was checked against Roslyn (C#) and javac (Java).
+ */
+type BinderForm = {
+  id: string;
+  /** Members of `record R<id>(int X, int Y)`; the header parameter is the first `X` of its line. */
+  body: string;
+  /** The `X` (or `value`) occurrences read, each with the occurrence it names, or `not_found` when unproven. */
+  uses: ReadonlyArray<readonly [use: number, target: number | "not_found"]>;
+  /** The header parameter's references: the occurrences that name it, and whether coverage stays complete. */
+  references?: { names: readonly number[]; coverage: "complete" | "partial" };
+};
+
+const CSHARP_BINDER_FORMS: readonly BinderForm[] = [
+  {
+    id: "ForeachVar",
+    body: "int A(int[] xs) { foreach (var X in xs) { return X; } return X; }",
+    uses: [
+      [3, 2],
+      [4, 1],
+    ],
+    references: { names: [1, 4], coverage: "complete" },
+  },
+  {
+    id: "Deconstruction",
+    body: "int A() { var (X, Z) = (1, 2); return X; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+    ],
+    references: { names: [1], coverage: "partial" },
+  },
+  {
+    id: "DeconstructionBlock",
+    body: "int A() { { var (X, Z) = (1, 2); } return X; }",
+    uses: [[3, 1]],
+  },
+  {
+    id: "QueryFrom",
+    body: "int A(int[] xs) => (from X in xs select X).Count() + X;",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+    references: { names: [1, 4], coverage: "partial" },
+  },
+  {
+    id: "QueryLet",
+    body: "int A(int[] xs) => (from v in xs let X = v select X).Count();",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+    ],
+  },
+  {
+    id: "QueryJoin",
+    body: "int A(int[] xs, int[] ys) => (from a in xs join X in ys on a equals X select X).Count();",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, "not_found"],
+    ],
+  },
+  {
+    id: "QueryInto",
+    body: "int A(int[] xs) => (from a in xs group a by a into X select X.Key).Count();",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+    ],
+  },
+  {
+    id: "AnonymousMethodParameter",
+    body: "System.Func<int, int> F = delegate (int X) { return X; };",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+    ],
+  },
+  {
+    id: "AnonymousMethodCall",
+    body: "int A(int[] xs) => xs.Sum(delegate (int X) { return X; }) + X;",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "AnonymousMethodNoParameter",
+    body: "System.Func<int> F = delegate { return X; };",
+    uses: [[2, 1]],
+  },
+  {
+    id: "InitializerLambda",
+    body: "System.Func<int, int> F = X => X + 1;",
+    uses: [
+      [2, 2],
+      [3, 2],
+    ],
+  },
+  {
+    id: "InitializerStaticLambda",
+    body: "System.Func<int, int> F = static X => X;",
+    uses: [[3, 2]],
+  },
+  {
+    id: "InitializerCallLambda",
+    body: "int[] F = new[] { 1 }.Select(X => X + 1).ToArray();",
+    uses: [[3, 2]],
+  },
+  {
+    id: "InitializerPattern",
+    body: "bool F = 1 is int X && X > 0;",
+    uses: [
+      [2, 2],
+      [3, 2],
+    ],
+  },
+  {
+    id: "InitializerOutVariable",
+    body: 'int F = int.TryParse("1", out var X) ? X : 0;',
+    uses: [[3, 2]],
+  },
+  {
+    id: "LocalFunction",
+    body: "int A() { int Local(int X) => X; return Local(1) + X; }",
+    uses: [
+      [3, 2],
+      [4, 1],
+    ],
+  },
+];
+
+/** One file per form: unproven names of one form must not make another form's references partial. */
+export const CSHARP_BINDER_SOURCES: Sources = Object.fromEntries(
+  CSHARP_BINDER_FORMS.map((form) => [
+    `R${form.id}.cs`,
+    ["using System.Linq;", "namespace Binders;", `public record R${form.id}(int X, int Y) { ${form.body} }`, ""].join(
+      "\n",
+    ),
+  ]),
+);
+
+/** The header parameter, and what each use in every form names, through goto and the header parameter's references. */
+export async function expectCsharpBinderForms(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  for (const form of CSHARP_BINDER_FORMS) {
+    const occurrence = (nth: number): Place => ({ file: `R${form.id}.cs`, line: 3, token: "X", nth });
+    for (const [use, target] of form.uses) {
+      await expectGoto(fixture, index, occurrence(use), target === "not_found" ? target : occurrence(target));
+    }
+    if (form.references) {
+      await expectReferences(
+        fixture,
+        index,
+        occurrence(1),
+        form.references.names.map(occurrence),
+        form.references.coverage,
+      );
+    }
+  }
+}
+
+const JAVA_BINDER_FORMS: readonly BinderForm[] = [
+  {
+    id: "LambdaName",
+    body: "int f(java.util.List<Integer> xs) { xs.forEach(value -> value.hashCode()); return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+    references: { names: [1, 4], coverage: "partial" },
+  },
+  {
+    id: "LambdaTyped",
+    body: "int f(java.util.List<Integer> xs) { xs.forEach((Integer value) -> value.hashCode()); return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "LambdaInferred",
+    body: "int f(java.util.List<Integer> xs) { xs.forEach((value) -> value.hashCode()); return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "EnhancedFor",
+    body: "int f(java.util.List<Integer> xs) { for (Integer value : xs) { value.hashCode(); } return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "Catch",
+    body: "int f() { try { hashCode(); } catch (RuntimeException value) { value.hashCode(); } return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "TryWithResources",
+    body: 'int f() { try (java.io.StringReader value = new java.io.StringReader("")) { value.read(); } catch (Exception e) { int q = value; } return value; }',
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+      [5, 1],
+    ],
+  },
+  {
+    id: "NestedLambda",
+    body: "int f(java.util.List<Integer> xs) { xs.forEach(a -> { xs.forEach(value -> value.hashCode()); a.hashCode(); }); return value; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+      [4, 1],
+    ],
+  },
+  {
+    id: "PatternVariable",
+    body: "int f(Object o) { if (o instanceof Integer value) { return value; } return 0; }",
+    uses: [
+      [2, "not_found"],
+      [3, "not_found"],
+    ],
+  },
+  {
+    id: "MethodParameter",
+    body: "int f(int value) { return value; }",
+    uses: [[3, 2]],
+  },
+  {
+    id: "LocalVariable",
+    body: "int f() { int value = 2; return value; }",
+    uses: [[3, 2]],
+  },
+];
+
+export const JAVA_BINDER_SOURCES: Sources = Object.fromEntries(
+  JAVA_BINDER_FORMS.map((form) => [
+    `R${form.id}.java`,
+    `record R${form.id}(int value, String label) { ${form.body} }\n`,
+  ]),
+);
+
+/** The component, and what each use in every form names. A variable the scope does not bind stops the lookup. */
+export async function expectJavaBinderForms(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  for (const form of JAVA_BINDER_FORMS) {
+    const occurrence = (nth: number): Place => ({ file: `R${form.id}.java`, line: 1, token: "value", nth });
+    for (const [use, target] of form.uses) {
+      await expectGoto(fixture, index, occurrence(use), target === "not_found" ? target : occurrence(target));
+    }
+    if (form.references) {
+      await expectReferences(
+        fixture,
+        index,
+        occurrence(1),
+        form.references.names.map(occurrence),
+        form.references.coverage,
+      );
+    }
+  }
+}
+
+/** Base-constructor arguments are expressions: they read the parameter, and no type or parameter becomes a base. */
+export const CSHARP_HERITAGE_SOURCES: Sources = {
+  "Heritage.cs": [
+    "namespace Heritage;",
+    "public record Base1(int Id);",
+    "public record Derived1(int Id, string Tag) : Base1(Id) { public int Twice() => Id * 2; }",
+    "public class Id { }",
+    "public class BaseC(int v) { }",
+    "public class DerivedC(int x) : BaseC(x) { }",
+    "public class x { }",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpHeritageArguments(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const file = "Heritage.cs";
+  const at = (line: number, token: string, nth = 1): Place => ({ file, line, token, nth });
+  // The argument reads the derived record's own parameter; the body reads the inherited property.
+  await expectGoto(fixture, index, at(3, "Id", 2), at(3, "Id", 1));
+  await expectGoto(fixture, index, at(3, "Id", 3), at(2, "Id"));
+  await expectGoto(fixture, index, at(6, "x", 2), at(6, "x", 1));
+  const graph = await buildSymbolGraphDetailed(index);
+  const heritageTargets = (name: string): string[] =>
+    graph.edges
+      .filter((edge) => edge.label === "extends" || edge.label === "implements")
+      .filter((edge) => graph.nodes.get(edge.from)?.name === name)
+      .map((edge) => graph.nodes.get(edge.to)?.name ?? "?");
+  expect(heritageTargets("Derived1")).toEqual(["Base1"]);
+  expect(heritageTargets("DerivedC")).toEqual(["BaseC"]);
+  // The decoys named like the arguments are never a base.
+  const decoyIds = new Set(
+    [...graph.nodes].filter(([, node]) => node.name === "Id" || node.name === "x").map(([id]) => id),
+  );
+  for (const edge of graph.edges.filter((candidate) => candidate.label === "implements")) {
+    expect(decoyIds.has(edge.to)).toBe(false);
+  }
+}
+
+/** A header parameter named like its own type (Color Color): `T.Static`, `T.Nested`, and enum members read the type. */
+export const CSHARP_COLOR_COLOR_SOURCES: Sources = {
+  "Types.cs": [
+    "namespace T;",
+    "public class Outer { public static int SM() => 1; public int Inst() => 2; public class Inner { public static int Make() => 3; } public enum Kind { A, B } public const int Limit = 5; }",
+    "public enum Status { Active, Idle }",
+    "",
+  ].join("\n"),
+  "Decoy.cs": [
+    "namespace Decoy;",
+    "public class Outer { public static int SM() => -1; public int Inst() => -2; public class Inner { public static int Make() => -3; } public enum Kind { A, B } }",
+    "public enum Status { Active, Idle }",
+    "",
+  ].join("\n"),
+  "Use.cs": [
+    "using T;",
+    "namespace App;",
+    "public record R(Outer Outer, Status Status) {",
+    "  public int F1() => Outer.SM();",
+    "  public int F2() => Outer.Inner.Make();",
+    "  public int F3() => (int)Outer.Kind.A;",
+    "  public bool F4() => Status == Status.Active;",
+    "  public int F5() => Outer.Inst();",
+    "  public int F6() => Outer.Limit;",
+    "}",
+    "public class Cl(Outer Outer) {",
+    "  public int G1() => Outer.SM();",
+    "  public int G2() => Outer.Inst();",
+    "  public int G3() => Outer.Inner.Make();",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpColorColorHeaders(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const use = (line: number, token: string, nth = 1): Place => ({ file: "Use.cs", line, token, nth });
+  const type = (token: string, line: number): Place => ({ file: "Types.cs", line, token });
+  const inner = (line: number): Place => ({ file: "Types.cs", line, token: "Make" });
+  for (const line of [4, 12]) await expectGoto(fixture, index, use(line, "SM"), type("SM", 2));
+  for (const line of [5, 14]) await expectGoto(fixture, index, use(line, "Make"), inner(2));
+  await expectGoto(fixture, index, use(6, "A"), type("A", 2));
+  await expectGoto(fixture, index, use(7, "Active"), type("Active", 3));
+  for (const line of [8, 13]) await expectGoto(fixture, index, use(line, "Inst"), type("Inst", 2));
+  await expectGoto(fixture, index, use(9, "Limit"), type("Limit", 2));
+  const graph = await buildSymbolGraphDetailed(index);
+  const reached = new Set(
+    graph.edges
+      .filter((edge) => edge.label === "calls")
+      .map((edge) => graph.nodes.get(edge.to)?.file)
+      .filter((file): file is string => !!file),
+  );
+  expect(reached.has(fixture.files["Types.cs"]!)).toBe(true);
+  expect(reached.has(fixture.files["Decoy.cs"]!)).toBe(false);
+  await expectReferences(fixture, index, inner(2), [inner(2), use(5, "Make"), use(14, "Make")], "complete");
+}
+
+/** A member of another `partial` part, or of a base class, outranks a header parameter of the same name in a body. */
+export const CSHARP_PARTIAL_SOURCES: Sources = {
+  "Part1.cs": [
+    "namespace Part;",
+    "public partial class PC(int y) { public int A() => y; }",
+    "public class BaseK { protected int z; }",
+    "public class DK(int z) : BaseK { public int A() => z; }",
+    "public partial class PE(int w) { }",
+    "",
+  ].join("\n"),
+  "Part2.cs": [
+    "namespace Part;",
+    "public partial class PC { int y; }",
+    "public partial class PE { public int B() => w; }",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpPartialAndInheritedMembers(
+  fixture: Batch3Fixture,
+  index: ProjectIndex,
+): Promise<void> {
+  const part1 = (line: number, token: string, nth = 1): Place => ({ file: "Part1.cs", line, token, nth });
+  const part2 = (line: number, token: string, nth = 1): Place => ({ file: "Part2.cs", line, token, nth });
+  // Goto reads the other part's field and the inherited field; so do the references of those fields, and the header
+  // parameters' references leave the use out.
+  await expectGoto(fixture, index, part1(2, "y", 2), part2(2, "y"));
+  await expectGoto(fixture, index, part1(4, "z", 2), part1(3, "z"));
+  await expectReferences(fixture, index, part1(2, "y"), [part1(2, "y")], "complete");
+  await expectReferences(fixture, index, part2(2, "y"), [part2(2, "y"), part1(2, "y", 2)], "complete");
+  await expectReferences(fixture, index, part1(4, "z"), [part1(4, "z")], "complete");
+  await expectReferences(fixture, index, part1(3, "z"), [part1(3, "z"), part1(4, "z", 2)], "complete");
+  // Roslyn also binds the parameter in a part that declares no header; that use stays unresolved here (a documented limit).
+  await expectGoto(fixture, index, part2(3, "w"), "not_found");
+}
+
+/** Names written before `=` or `:` designate members of another type; the value after them reads the parameter. */
+export const CSHARP_DESIGNATOR_SOURCES: Sources = {
+  "Desig.cs": [
+    "namespace Desig;",
+    "public class Dto { public int X; public int Y; public Dto(int X = 0, int Y = 0) { } }",
+    "public record Pat(int X, int Y) {",
+    "  public bool P1(object o) => o is Dto { X: 1 };",
+    "  public Dto N1() => new Dto(X: X);",
+    "  public object A1() => new { X = X };",
+    "  public (int, int) T1() => (X: X, Y: 2);",
+    "  public Dto I1() => new Dto { X = X, Y = Y };",
+    "  public Pat W1() => this with { X = X };",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpDesignators(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Desig.cs", line, token, nth });
+  const header = (token: string): Place => at(3, token);
+  await expectGoto(fixture, index, at(4, "X"), "not_found");
+  await expectGoto(fixture, index, at(5, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(5, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(6, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(6, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(7, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(7, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(7, "Y"), "not_found");
+  await expectGoto(fixture, index, at(8, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(8, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(8, "Y", 2), header("Y"));
+  await expectGoto(fixture, index, at(9, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(9, "X", 2), header("X"));
+  await expectReferences(
+    fixture,
+    index,
+    header("X"),
+    [header("X"), at(5, "X", 2), at(6, "X", 2), at(7, "X", 2), at(8, "X", 2), at(9, "X", 2)],
+    "partial",
+  );
+}
+
+/** Two records declared under `#if`/`#else`, beside a file whose syntax tree is unavailable. */
+export const CSHARP_TWIN_SOURCES: Sources = {
+  "Twin.cs": [
+    "namespace Twin;",
+    "#if NEVER",
+    'public readonly record struct Row(int Year) : System.IFormattable { public int G() => Year; public string ToString(string f, System.IFormatProvider p) => ""; }',
+    "#else",
+    'public readonly record struct Row(int Year) : System.IFormattable { public int G() => Year; public string ToString(string f, System.IFormatProvider p) => ""; }',
+    "#endif",
+    "public partial record Part(int Month) { public int H() => Month; }",
+    "",
+  ].join("\n"),
+  "Peer.cs": ["namespace Twin;", "// CG_NO_TREE", "public class Peer { }", ""].join("\n"),
+};
+
+export const CSHARP_TWIN_NO_TREE_MARKER = "CG_NO_TREE";
+
+export async function expectCsharpTwinRecordStructs(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Twin.cs", line, token, nth });
+  // Neither twin is `partial` and a struct has no base class: no peer, readable or not, can hide the parameter.
+  await expectGoto(fixture, index, at(3, "Year", 2), at(3, "Year"));
+  await expectGoto(fixture, index, at(5, "Year", 2), at(5, "Year"));
+  // A `partial` record may have a part in the unreadable peer: the parameter is not proven.
+  await expectGoto(fixture, index, at(7, "Month", 2), "not_found");
+}
+
+type Mutation = {
+  label: string;
+  apply: (root: string) => Promise<void>;
+  /** What each site answers after the mutation: `ok:<file>:<line>` or `not_found`. */
+  expected: readonly string[];
+};
+
+/**
+ * After each mutation a disk-cached build, which reuses what the earlier builds stored, answers every site like a cold
+ * build that reads the files again, and like the expected answer.
+ */
+async function expectWarmMatchesCold(
+  fixture: Batch3Fixture,
+  sites: readonly Place[],
+  mutations: readonly Mutation[],
+): Promise<void> {
+  const answers = (index: ProjectIndex): Promise<string[]> =>
+    Promise.all(
+      sites.map(async (place) => {
+        const result = await goToDefinition(index, {
+          file: fixture.files[place.file]!,
+          ...placeOf(fixture.sources, place),
+        });
+        if (result.status !== "ok") return "not_found";
+        return `ok:${path.basename(result.definition.file)}:${result.definition.range.start.line}`;
+      }),
+    );
+  for (const { label, apply, expected } of mutations) {
+    await apply(fixture.root);
+    const cold = await answers(await buildProjectIndex(fixture.root, { cache: "off" }));
+    const warm = await answers(await buildProjectIndex(fixture.root, { cache: "disk", threads: 1 }));
+    expect(cold, label).toEqual(expected);
+    expect(warm, label).toEqual(cold);
+  }
+}
+
+/** A member of another part hides the header parameter; editing, deleting, renaming, and restoring that part changes it. */
+export async function expectPartialPartThroughEdits(fixture: Batch3Fixture): Promise<void> {
+  const part2 = path.join(fixture.root, "Part2.cs");
+  const renamed = path.join(fixture.root, "Part2Renamed.cs");
+  const original = CSHARP_PARTIAL_SOURCES["Part2.cs"]!;
+  const sites: Place[] = [
+    { file: "Part1.cs", line: 2, token: "y", nth: 2 },
+    { file: "Part1.cs", line: 4, token: "z", nth: 2 },
+  ];
+  await expectWarmMatchesCold(fixture, sites, [
+    { label: "initial", apply: async () => {}, expected: ["ok:Part2.cs:2", "ok:Part1.cs:3"] },
+    {
+      label: "edit",
+      apply: () => fsp.writeFile(part2, original.replace("int y;", "int other;")),
+      expected: ["ok:Part1.cs:2", "ok:Part1.cs:3"],
+    },
+    { label: "delete", apply: () => fsp.rm(part2), expected: ["ok:Part1.cs:2", "ok:Part1.cs:3"] },
+    { label: "restore", apply: () => fsp.writeFile(part2, original), expected: ["ok:Part2.cs:2", "ok:Part1.cs:3"] },
+    { label: "rename", apply: () => fsp.rename(part2, renamed), expected: ["ok:Part2Renamed.cs:2", "ok:Part1.cs:3"] },
+    { label: "rename back", apply: () => fsp.rename(renamed, part2), expected: ["ok:Part2.cs:2", "ok:Part1.cs:3"] },
+  ]);
+}
+
+/** An attribute class and a twin without the suffix are ambiguous; editing, deleting, and restoring the twin changes it. */
+export async function expectAttributeTwinThroughEdits(fixture: Batch3Fixture): Promise<void> {
+  const lib = path.join(fixture.root, "Lib.cs");
+  const renamed = path.join(fixture.root, "LibRenamed.cs");
+  const original = CSHARP_ATTRIBUTE_SOURCES["Lib.cs"]!;
+  const withoutTwin = original.replace("public class Dual : System.Attribute { }\n", "");
+  const sites: Place[] = [
+    { file: "Use.cs", line: 3, token: "Marker" },
+    { file: "Use.cs", line: 6, token: "Dual" },
+  ];
+  await expectWarmMatchesCold(fixture, sites, [
+    { label: "initial", apply: async () => {}, expected: ["ok:Lib.cs:2", "not_found"] },
+    { label: "delete twin", apply: () => fsp.writeFile(lib, withoutTwin), expected: ["ok:Lib.cs:2", "ok:Lib.cs:3"] },
+    { label: "restore twin", apply: () => fsp.writeFile(lib, original), expected: ["ok:Lib.cs:2", "not_found"] },
+    { label: "rename", apply: () => fsp.rename(lib, renamed), expected: ["ok:LibRenamed.cs:2", "not_found"] },
+    { label: "rename back", apply: () => fsp.rename(renamed, lib), expected: ["ok:Lib.cs:2", "not_found"] },
+    { label: "delete", apply: () => fsp.rm(lib), expected: ["not_found", "not_found"] },
+  ]);
+}
+
+export type Batch3Case = {
+  name: string;
+  language: "csharp" | "java";
+  /** Whether the check asserts `findReferences` results and coverage. */
+  references: boolean;
+  sources: Sources;
+  check: (fixture: Batch3Fixture, index: ProjectIndex) => Promise<void>;
+};
+
+/** Every static-receiver, record-parameter, attribute, and binder fixture, with the assertions that go with it. */
+export const BATCH3_CASES: readonly Batch3Case[] = [
+  {
+    name: "T.Static() beside typed members",
+    language: "csharp",
+    references: false,
+    sources: CSHARP_STATIC_RECEIVER_SOURCES,
+    check: expectStaticReceiverEdges,
+  },
+  {
+    name: "record and primary-constructor parameters",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_RECORD_SOURCES,
+    check: expectCsharpRecordComponents,
+  },
+  {
+    name: "attribute names",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_ATTRIBUTE_SOURCES,
+    check: expectCsharpAttributeNames,
+  },
+  {
+    name: "nearer binders",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_BINDER_SOURCES,
+    check: expectCsharpBinderForms,
+  },
+  {
+    name: "base-constructor arguments",
+    language: "csharp",
+    references: false,
+    sources: CSHARP_HERITAGE_SOURCES,
+    check: expectCsharpHeritageArguments,
+  },
+  {
+    name: "parameters named like their type",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_COLOR_COLOR_SOURCES,
+    check: expectCsharpColorColorHeaders,
+  },
+  {
+    name: "members of other parts and base classes",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_PARTIAL_SOURCES,
+    check: expectCsharpPartialAndInheritedMembers,
+  },
+  {
+    name: "member designators",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_DESIGNATOR_SOURCES,
+    check: expectCsharpDesignators,
+  },
+  {
+    name: "record components",
+    language: "java",
+    references: true,
+    sources: JAVA_RECORD_SOURCES,
+    check: expectJavaRecordComponents,
+  },
+  {
+    name: "nearer binders",
+    language: "java",
+    references: true,
+    sources: JAVA_BINDER_SOURCES,
+    check: expectJavaBinderForms,
+  },
+];

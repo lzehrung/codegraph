@@ -7,6 +7,39 @@ import {
   withCsharpGlobalUsingFixture,
 } from "./helpers/csharp-global-using-fixture.js";
 import { describe, it, expect, vi } from "vitest";
+import {
+  CSHARP_BINDER_SOURCES,
+  CSHARP_COLOR_COLOR_SOURCES,
+  CSHARP_DESIGNATOR_SOURCES,
+  CSHARP_HERITAGE_SOURCES,
+  CSHARP_PARTIAL_SOURCES,
+  CSHARP_TWIN_NO_TREE_MARKER,
+  CSHARP_TWIN_SOURCES,
+  JAVA_BINDER_SOURCES,
+  expectCsharpBinderForms,
+  expectCsharpColorColorHeaders,
+  expectCsharpDesignators,
+  expectCsharpHeritageArguments,
+  expectCsharpPartialAndInheritedMembers,
+  expectAttributeTwinThroughEdits,
+  expectCsharpTwinRecordStructs,
+  expectJavaBinderForms,
+  expectPartialPartThroughEdits,
+} from "./helpers/header-parameter-fixture.js";
+import { failNativeTreeReconstructionFor } from "./helpers/native-tree.js";
+import { __resetNativeTreeSitterBindingForTests } from "../src/native/tree-sitter-native.js";
+import {
+  CSHARP_ATTRIBUTE_SOURCES,
+  CSHARP_RECORD_SOURCES,
+  CSHARP_STATIC_RECEIVER_SOURCES,
+  JAVA_RECORD_SOURCES,
+  eachIndexMode,
+  expectCsharpAttributeNames,
+  expectCsharpRecordComponents,
+  expectJavaRecordComponents,
+  expectStaticReceiverEdges,
+  withBatch3Fixture,
+} from "./helpers/csharp-java-batch3-fixture.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -3131,6 +3164,18 @@ describe("Go to Definition", () => {
   });
 
   describe("Java", () => {
+    it("resolves record components inside the record, its compact constructor, and inner classes only", async () => {
+      await withBatch3Fixture("cg-java-record-components-", JAVA_RECORD_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectJavaRecordComponents(fixture, index));
+      });
+    });
+
+    it("stops at a lambda, loop, catch, resource, or pattern variable that hides a record component", async () => {
+      await withBatch3Fixture("cg-java-record-binders-", JAVA_BINDER_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectJavaBinderForms(fixture, index));
+      });
+    });
+
     it("should find definition of imported annotation types", async () => {
       const index = await createTestIndex("java");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");
@@ -3304,6 +3349,70 @@ describe("Go to Definition", () => {
   });
 
   describe("C#", () => {
+    it("keeps the call edge of T.Static() beside a field, property, local, or parameter typed T", async () => {
+      await withBatch3Fixture("cg-csharp-static-receiver-", CSHARP_STATIC_RECEIVER_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectStaticReceiverEdges(fixture, index));
+      });
+    });
+
+    it("resolves record components and primary-constructor parameters inside their own type", async () => {
+      await withBatch3Fixture("cg-csharp-record-components-", CSHARP_RECORD_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpRecordComponents(fixture, index));
+      });
+    });
+
+    it("resolves attribute names with and without the Attribute suffix", async () => {
+      await withBatch3Fixture("cg-csharp-attribute-names-", CSHARP_ATTRIBUTE_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpAttributeNames(fixture, index));
+      });
+    });
+
+    it("keeps a nearer binder, or stops at one the scope does not model, beside a header parameter", async () => {
+      await withBatch3Fixture("cg-csharp-header-binders-", CSHARP_BINDER_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpBinderForms(fixture, index));
+      });
+    });
+
+    it("reads base-constructor arguments as expressions, not as base types", async () => {
+      await withBatch3Fixture("cg-csharp-heritage-arguments-", CSHARP_HERITAGE_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpHeritageArguments(fixture, index));
+      });
+    });
+
+    it("keeps the type reading for a header parameter named like its own type", async () => {
+      await withBatch3Fixture("cg-csharp-color-color-header-", CSHARP_COLOR_COLOR_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpColorColorHeaders(fixture, index));
+      });
+    });
+
+    it("agrees between goto and references for members of other parts and base classes", async () => {
+      await withBatch3Fixture("cg-csharp-header-outer-members-", CSHARP_PARTIAL_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpPartialAndInheritedMembers(fixture, index));
+      });
+    });
+
+    it("keeps a warm build equal to a cold one through edits, deletes, and renames of a part or a twin", async () => {
+      await withBatch3Fixture("cg-csharp-part-edits-", CSHARP_PARTIAL_SOURCES, expectPartialPartThroughEdits);
+      await withBatch3Fixture("cg-csharp-twin-edits-", CSHARP_ATTRIBUTE_SOURCES, expectAttributeTwinThroughEdits);
+    });
+
+    it("leaves names written before = or : unresolved and the values after them on the parameter", async () => {
+      await withBatch3Fixture("cg-csharp-designators-", CSHARP_DESIGNATOR_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpDesignators(fixture, index));
+      });
+    });
+
+    it("does not let an unreadable peer hide the parameter of a record struct declared under #if", async () => {
+      failNativeTreeReconstructionFor(CSHARP_TWIN_NO_TREE_MARKER);
+      try {
+        await withBatch3Fixture("cg-csharp-twin-record-structs-", CSHARP_TWIN_SOURCES, async (fixture) => {
+          await eachIndexMode(fixture, (index) => expectCsharpTwinRecordStructs(fixture, index));
+        });
+      } finally {
+        __resetNativeTreeSitterBindingForTests();
+      }
+    });
+
     it("should find definition of static method", async () => {
       const index = await createTestIndex("csharp");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp");

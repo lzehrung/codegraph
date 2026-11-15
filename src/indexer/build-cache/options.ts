@@ -166,8 +166,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * a Ruby `receiver.name = value` to the writer `name=`, and rebuilds the detailed edges of both.
  * Epoch 159 resolves PHP members composed through nested traits ahead of inherited ones and PHP constant reads in
  * namespace order, and rebuilds their navigation, references, and detailed edges.
+ * Epoch 160 binds a C# record's positional parameters, a C# class's or struct's primary-constructor parameters, and a
+ * Java record's components in the declaration's own scope (a parameter named like its own type stays unbound), resolves
+ * `[Marker]` to `MarkerAttribute`, keeps the detailed `calls` edge of `T.Static()` when the caller's type declares a
+ * field, property, or local typed `T`, and no longer reads a base-constructor argument as an `implements` edge.
  */
-export const CORE_ALGORITHM_EPOCH = 159;
+export const CORE_ALGORITHM_EPOCH = 160;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -187,8 +191,9 @@ export const CORE_ALGORITHM_EPOCH = 159;
  * semicolons; its syntax tree, ERROR ranges, and downstream language behavior differ from the old grammar.
  * Epoch 18 adds the Ruby hooks that name generated accessors, the method a property invokes, and the identifier token
  * and use-site spelling of a method name with a `?`, `!`, or `=` suffix.
+ * Epoch 20 adds the C# hook that names an attribute class under its suffix-less spelling for reference candidates.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 18;
+export const LANGUAGE_BEHAVIOR_EPOCH = 20;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -298,6 +303,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   useSiteMemberName: true,
   isDeclarationSpelling: true,
   bloomProbeName: true,
+  alternateUseNames: true,
 };
 
 /**
