@@ -4,6 +4,7 @@
  * language id inside a consumer, so go-to-definition, references, and the graph answer the same way. A language
  * without special rules has an empty policy.
  */
+import { phpMemberLookupPolicy } from "./php.js";
 import { swiftMemberLookupPolicy } from "./swift.js";
 import type { MemberLookupPolicy } from "./types.js";
 
@@ -22,6 +23,7 @@ export type {
 const NO_POLICY: MemberLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
+  php: phpMemberLookupPolicy,
   swift: swiftMemberLookupPolicy,
 };
 

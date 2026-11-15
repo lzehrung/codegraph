@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -46,8 +46,17 @@ import {
 import { loadBinding } from "../../src/native/runtime.js";
 import { collectPhpModuleImportNames, phpNamespaceSymbolIndexFor } from "../../src/indexer/php-namespace-symbols.js";
 import * as phpNavigation from "../../src/indexer/navigation-php.js";
-import { closeDiskCacheDatabase } from "../../src/indexer/build-cache.js";
+import { clearMemoryCache, closeDiskCacheDatabase } from "../../src/indexer/build-cache.js";
 import { findUnusedExports } from "../../src/indexer/unused-exports.js";
+import type { ProjectIndex } from "../../src/indexer/types.js";
+import {
+  PHP_COMPETING_CONSTANT_FILES,
+  PHP_CONSTANT_FILES,
+  expectPhpCompetingConstants,
+  expectPhpConstantGoto,
+  expectPhpConstantReferences,
+  expectPhpConstantUnused,
+} from "../helpers/php-constant-fixture.js";
 import { workspaceSymbols } from "../../src/indexer/workspace-symbols.js";
 import {
   expectPhpTraitCompositionGoto,
@@ -55,6 +64,15 @@ import {
   expectPhpTraitCompositionGraph,
   withPhpTraitComposition,
 } from "../helpers/php-trait-composition-fixture.js";
+import {
+  PHP_NESTED_TRAIT_PROJECT,
+  PHP_UNPROVEN_TRAIT_PROJECT,
+  expectPhpNestedTraitGoto,
+  expectPhpNestedTraitGraph,
+  expectPhpNestedTraitReferences,
+  withPhpNestedTraitProject,
+} from "../helpers/php-nested-trait-fixture.js";
+import { withPhpFiles } from "../helpers/php-project-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "php",
@@ -1001,6 +1019,114 @@ describe("PHP import symbol namespaces", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves constant reads in PHP namespace order, never to a same-named constant of another namespace", async () => {
+    await withPhpFiles(PHP_CONSTANT_FILES, async (index, paths) => {
+      await expectPhpConstantGoto(index, paths);
+      await expectPhpConstantReferences(index, paths);
+      await expectPhpConstantUnused(index);
+    });
+  });
+
+  it("leaves a constant read unresolved, and its declarations in use, when several constants compete for it", async () => {
+    await withPhpFiles(PHP_COMPETING_CONSTANT_FILES, async (index, paths) => {
+      await expectPhpCompetingConstants(index, paths);
+    });
+  });
+
+  it.each(["disk", "memory"] as const)(
+    "keeps constant reads equal to a cold build across an add, an edit, a delete, and a restore (%s cache)",
+    async (cache) => {
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "cg-php-constant-warm-"));
+      const root = path.join(temporary, "project");
+      const diskOptions = { cache: "disk", cacheDir: path.join(temporary, "cache") } as const;
+      const options = cache === "disk" ? { ...diskOptions, threads: 1 } : { cache, threads: 1 };
+      const sources = {
+        "app.php": "<?php\nnamespace App;\nconst LIMIT = 1;\n",
+        "other.php": "<?php\nnamespace Other;\nconst LIMIT = 2;\n",
+        "reader.php":
+          "<?php\nnamespace App;\nfunction readApp() { return LIMIT; }\nfunction readOther() { return \\Other\\LIMIT; }\n",
+      };
+      // What a consumer sees: both reads, the references and coverage of every declaration, and the unused constants.
+      const observe = async (index: ProjectIndex): Promise<string[]> => {
+        const seen: string[] = [];
+        const reader = path.join(root, "reader.php");
+        for (const [line, column] of [
+          [3, 31],
+          [4, 38],
+        ] as const) {
+          const result = await goToDefinition(index, { file: reader, line, column });
+          seen.push(
+            result.status === "ok"
+              ? `${line}->${path.basename(result.definition.file)}:${result.definition.range.start.line}`
+              : `${line}->${result.reason}`,
+          );
+        }
+        for (const file of ["app.php", "other.php", "rival.php"]) {
+          if (!index.byFile.has(fileIdentityKey(path.join(root, file)))) continue;
+          const references = await findReferences(index, { file: path.join(root, file), line: 3, column: 7 });
+          if (references.status !== "ok") throw new Error(`Expected references for ${file}`);
+          const sites = references.references.map((site) => `${path.basename(site.file)}:${site.range.start.line}`);
+          seen.push(`${file} ${references.referenceCoverage.state} ${sites.sort().join(",")}`);
+        }
+        const unused = await findUnusedExports(index);
+        seen.push(
+          `unused ${unused
+            .filter((entry) => entry.kind === "variable")
+            .map((entry) => (entry.file ? path.basename(entry.file) : ""))
+            .sort()
+            .join(",")}`,
+        );
+        return seen;
+      };
+      const write = async (file: string, text: string) => {
+        await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+        await writeFile(path.join(root, file), text);
+      };
+      try {
+        clearMemoryCache();
+        for (const [file, text] of Object.entries(sources)) await write(file, text);
+        const steps: Array<{ name: string; mutate: () => Promise<void>; expected: string[] }> = [
+          { name: "initial", mutate: async () => undefined, expected: ["3->app.php:3", "4->other.php:3"] },
+          {
+            name: "a competing App constant is added",
+            mutate: async () => write("rival.php", "<?php\nnamespace App;\nconst LIMIT = 3;\n"),
+            expected: ["3->Ambiguous PHP constant", "4->other.php:3"],
+          },
+          {
+            name: "the rival moves to its own namespace",
+            mutate: async () => write("rival.php", "<?php\nnamespace Rival;\nconst LIMIT = 3;\n"),
+            expected: ["3->app.php:3", "4->other.php:3"],
+          },
+          {
+            name: "the Other constant is deleted",
+            mutate: async () => rm(path.join(root, "other.php")),
+            expected: ["3->app.php:3", "4->No matching PHP constant"],
+          },
+          {
+            name: "the Other constant is restored",
+            mutate: async () => write("other.php", sources["other.php"]),
+            expected: ["3->app.php:3", "4->other.php:3"],
+          },
+        ];
+        // The first build seeds the warm cache; every later build reads it.
+        if (cache === "disk") closeDiskCacheDatabase(root, diskOptions);
+        await buildProjectIndex(root, options);
+        for (const step of steps) {
+          await step.mutate();
+          const warm = await buildProjectIndex(root, options);
+          const cold = await buildProjectIndex(root, { cache: "off", threads: 1 });
+          const observed = await observe(warm);
+          expect(observed, step.name).toEqual(await observe(cold));
+          expect(observed.slice(0, 2), step.name).toEqual(step.expected);
+        }
+      } finally {
+        closeDiskCacheDatabase(root, diskOptions);
+        clearMemoryCache();
+        await rm(temporary, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("PHP enum interface conformance", () => {
@@ -1817,6 +1943,73 @@ describe("PHP trait composition", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("selects a method composed through nested traits over an inherited method across cold and reopened caches", async () => {
+    await withPhpNestedTraitProject(PHP_NESTED_TRAIT_PROJECT, async (index, files, root) => {
+      await expectPhpNestedTraitGoto(PHP_NESTED_TRAIT_PROJECT, index, files);
+      await expectPhpNestedTraitReferences(PHP_NESTED_TRAIT_PROJECT, index, files, root);
+      await expectPhpNestedTraitGraph(PHP_NESTED_TRAIT_PROJECT, index, files);
+    });
+  });
+
+  it("leaves a member unresolved, never inherited, when a composed trait is not indexed", async () => {
+    await withPhpNestedTraitProject(PHP_UNPROVEN_TRAIT_PROJECT, async (index, files, root) => {
+      await expectPhpNestedTraitGoto(PHP_UNPROVEN_TRAIT_PROJECT, index, files);
+      await expectPhpNestedTraitReferences(PHP_UNPROVEN_TRAIT_PROJECT, index, files, root);
+      await expectPhpNestedTraitGraph(PHP_UNPROVEN_TRAIT_PROJECT, index, files);
+    });
+  });
+
+  it("reports an unindexed PHP trait only against PHP definitions", async () => {
+    const files = {
+      "base.php": "<?php\nclass Base { public function foo() { return 1; } }\n",
+      "use.php":
+        "<?php\nclass Ext extends Base { use \\Vendor\\Missing; public function run() { return $this->foo(); } }\n",
+      "other.ts": "export class Other {\n  foo(): number {\n    return 2;\n  }\n}\n",
+    };
+    await withPhpFiles(files, async (index, paths) => {
+      const php = await findReferences(index, { file: paths["base.php"]!, line: 2, column: 30 });
+      expect(php.status === "ok" ? php.referenceCoverage.reasons : null).toEqual(["unindexed_trait"]);
+      const other = await findReferences(index, { file: paths["other.ts"]!, line: 2, column: 3 });
+      expect(other.status).toBe("ok");
+      expect(other.status === "ok" ? other.referenceCoverage.reasons : null).not.toContain("unindexed_trait");
+    });
+  });
+
+  it("resolves the reported nested-trait call to the inner trait method, not the inherited one", async () => {
+    const lines = [
+      "<?php",
+      'trait Inner { public function foo() { return "inner"; } }',
+      "trait Outer { use Inner; }",
+      'class Base { public function foo() { return "base"; } }',
+      "class C extends Base { use Outer; public function run() { return $this->foo(); } }",
+    ];
+    await withPhpFiles({ "repro.php": lines.join("\n") }, async (index, paths) => {
+      const file = paths["repro.php"]!;
+      const call = await goToDefinition(index, { file, line: 5, column: columnOf(lines, 5, "foo") });
+      expect(call.status).toBe("ok");
+      expect(call.status === "ok" ? call.definition.range.start.line : 0).toBe(2);
+      const referenceSites = async (line: number) => {
+        const result = await findReferences(index, { file, line, column: columnOf(lines, line, "foo") });
+        if (result.status !== "ok") throw new Error("Expected references");
+        return {
+          lines: result.references.map((site) => site.range.start.line).sort(),
+          state: result.referenceCoverage.state,
+        };
+      };
+      expect(await referenceSites(2)).toEqual({ lines: [2, 5], state: "complete" });
+      expect(await referenceSites(4)).toEqual({ lines: [4], state: "complete" });
+      const graph = await buildSymbolGraphDetailed(index);
+      const inner = index.byFile
+        .get(fileIdentityKey(file))!
+        .locals.find((local) => local.localName === "foo" && local.range.start.line === 2);
+      expect(inner).toBeDefined();
+      const targets = graph.edges
+        .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "run")
+        .map((edge) => edge.to);
+      expect(targets).toEqual([defNodeId(inner!)]);
+    });
   });
 });
 

@@ -11,6 +11,19 @@ export function phpTraitUseIsAdapted(node: SyntaxNodeLike): boolean {
   return node.type === "use_declaration" && node.namedChildren.some((child) => child.type === "use_list");
 }
 
+/** The `use_declaration`s of a class-like body: each names the traits composed into it. */
+export function phpTraitUseDeclarations(container: SyntaxNodeLike): SyntaxNodeLike[] {
+  const body = container.childForFieldName("body");
+  return (body?.namedChildren ?? []).filter((child) => child.type === "use_declaration");
+}
+
+/** The trait names one `use` declaration lists, without the adaptation block that follows them. */
+export function phpTraitUseNames(use: SyntaxNodeLike): SyntaxNodeLike[] {
+  return use.namedChildren.filter(
+    (child) => child.type === "name" || child.type === "qualified_name" || child.type === "relative_name",
+  );
+}
+
 const phpAdaptedMemberCache = new WeakMap<ProjectIndex, Map<string, ReadonlySet<string>>>();
 
 /** Precompute each composing class's uncertain names once per index, not once per call. */
@@ -220,7 +233,7 @@ export function phpLastIdentifierSegment(name: string): string {
 
 export type PhpCanonicalNameOptions = {
   imports?: readonly ImportBinding[];
-  role?: "class" | "function";
+  role?: "class" | "function" | "const";
 };
 
 function phpUseAliasTarget(
@@ -266,9 +279,10 @@ export function findPhpImportAlias(
  * namespace: `\Foo\Bar` is already absolute, `namespace\Foo` prefixes the current
  * namespace, and a bare or partially qualified name is relative to the current namespace.
  * The first segment of a relative name is resolved against `use` aliases ASCII-case-insensitively
- * before the current namespace is prefixed. Unqualified function names keep an ordered list:
- * `CurrentNamespace\name`, then the global `name`. Class names do not fall back. Consumers must
- * take the first existing candidate; the list is not an unordered set of equivalents.
+ * before the current namespace is prefixed. Unqualified function and constant names keep an ordered list:
+ * `CurrentNamespace\name`, then the global `name`. Class names do not fall back. An unqualified constant
+ * name is never a namespace alias: its own `use const` binding is the caller's to read first. Consumers
+ * must take the first existing candidate; the list is not an unordered set of equivalents.
  */
 export function canonicalPhpReferenceNames(
   rawName: string,
@@ -292,12 +306,13 @@ export function canonicalPhpReferenceNames(
   const separator = trimmed.indexOf("\\");
   const firstSegment = separator < 0 ? trimmed : trimmed.slice(0, separator);
   const remainder = separator < 0 ? "" : trimmed.slice(separator + 1);
-  const aliasTarget = phpUseAliasTarget(firstSegment, options?.imports, separator < 0 ? options?.role : "class");
+  const aliasRole = separator < 0 ? options?.role : "class";
+  const aliasTarget = aliasRole === "const" ? null : phpUseAliasTarget(firstSegment, options?.imports, aliasRole);
   if (aliasTarget) {
     return [remainder ? `${aliasTarget}\\${remainder}` : aliasTarget];
   }
   const relative = currentNamespace ? `${currentNamespace}\\${trimmed}` : trimmed;
-  if (options?.role === "function" && currentNamespace && separator < 0) {
+  if ((options?.role === "function" || options?.role === "const") && currentNamespace && separator < 0) {
     return [relative, trimmed];
   }
   return [relative];
@@ -343,6 +358,33 @@ export function isInsidePhpUseDeclaration(node: SyntaxNodeLike | null): boolean 
     current = current.parent;
   }
   return false;
+}
+
+/** Parents whose `name` children are namespace path segments or labels, never constant reads. */
+const PHP_NON_READ_NAME_PARENTS: Record<string, true> = {
+  variable_name: true,
+  namespace_name: true,
+  namespace_use_clause: true,
+  namespace_use_group_clause: true,
+  namespace_aliasing_clause: true,
+  class_constant_access_expression: true,
+  goto_statement: true,
+  named_label_statement: true,
+};
+
+/**
+ * Whether a `name` node reads a constant: an operand of an expression, bare or qualified by its last segment.
+ * A declaration, a member or label name, and a namespace path segment never name a constant.
+ */
+export function isPhpConstantRead(node: SyntaxNodeLike): boolean {
+  const parent = node.parent;
+  if (node.type !== "name" || !parent) return false;
+  if (PHP_NON_READ_NAME_PARENTS[parent.type] || isInsidePhpUseDeclaration(node)) return false;
+  // A `name` field is the name a declaration, member access, or named argument introduces.
+  if (parent.childForFieldName("name")?.startIndex === node.startIndex) return false;
+  if (parent.type === "const_element") return parent.namedChildren[0]?.startIndex !== node.startIndex;
+  if (isPhpQualifiedReferenceNode(parent)) return parent.namedChildren.at(-1)?.startIndex === node.startIndex;
+  return true;
 }
 
 export function getPhpQualifiedReference(node: SyntaxNodeLike | null, source: string): string | null {

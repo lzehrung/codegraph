@@ -135,6 +135,20 @@ import {
 } from "./helpers/php-path-fallback-fixture.js";
 import { PHP_ACCURACY_LINES, PHP_ACCURACY_SOURCES } from "./helpers/php-accuracy-fixture.js";
 import {
+  PHP_NESTED_TRAIT_PROJECT,
+  PHP_UNPROVEN_TRAIT_PROJECT,
+  expectPhpNestedTraitReferences,
+  withPhpNestedTraitProject,
+} from "./helpers/php-nested-trait-fixture.js";
+import {
+  PHP_COMPETING_CONSTANT_FILES,
+  PHP_CONSTANT_FILES,
+  expectPhpCompetingConstants,
+  expectPhpConstantReferences,
+  expectPhpConstantUnused,
+} from "./helpers/php-constant-fixture.js";
+import { withPhpFiles } from "./helpers/php-project-fixture.js";
+import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
   KOTLIN_TYPE_PARAMETER_FILES,
@@ -3221,6 +3235,24 @@ describe("Find References", () => {
   });
 
   describe("PHP", () => {
+    it("keeps nested trait methods and their inherited decoys apart, partial where a trait chain is unproven", async () => {
+      for (const project of [PHP_NESTED_TRAIT_PROJECT, PHP_UNPROVEN_TRAIT_PROJECT]) {
+        await withPhpNestedTraitProject(project, async (index, files, root) => {
+          await expectPhpNestedTraitReferences(project, index, files, root);
+        });
+      }
+    });
+
+    it("lists PHP constant reads in namespace order, keeps used constants out of unused exports, and stays partial when constants compete", async () => {
+      await withPhpFiles(PHP_CONSTANT_FILES, async (index, paths) => {
+        await expectPhpConstantReferences(index, paths);
+        await expectPhpConstantUnused(index);
+      });
+      await withPhpFiles(PHP_COMPETING_CONSTANT_FILES, async (index, paths) => {
+        await expectPhpCompetingConstants(index, paths);
+      });
+    });
+
     it("finds exact PHP case-variant, namespaced, parent, and trait references without decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-accuracy-refs-"));
       try {
@@ -4509,6 +4541,33 @@ describe("Find References", () => {
   });
 
   describe("Swift", () => {
+    it("keeps type uses out of the references of a Swift member that shares their spelling", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-type-member-refs-"));
+      try {
+        const lines = [
+          "protocol I { func I() }",
+          "class C: I { func I() {}; var f: I? = nil; func use(_ p: I) { I() } }",
+          "class Base { func Base() {} }",
+          "class A: Base { }",
+        ];
+        const file = path.join(root, "types.swift").replace(/\\/g, "/");
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const second = lines[1]!;
+        // The class's `I` has its declaration and the unqualified call; the three type uses are not references of it.
+        await testFindReferences(index, file, 2, second.indexOf("func I") + 6, [
+          { file, line: 2, column: second.indexOf("func I") + 6 },
+          { file, line: 2, column: second.indexOf("{ I()") + 3 },
+        ]);
+        // `Base` the method is referenced only by its declaration; the header names the class.
+        await testFindReferences(index, file, 3, lines[2]!.indexOf("func Base") + 6, [
+          { file, line: 3, column: lines[2]!.indexOf("func Base") + 6 },
+        ]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find all references to imported function", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "swift");
       const utilsFile = path.join(samplePath, "Utils.swift").replace(/\\/g, "/");

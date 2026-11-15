@@ -530,6 +530,7 @@ export type ReferenceCoverageReason =
   | "unresolved_import"
   | "strategy_unavailable"
   | "name_equivalence_unavailable"
+  | "unindexed_trait"
   | "parse_error"
   | "truncated";
 

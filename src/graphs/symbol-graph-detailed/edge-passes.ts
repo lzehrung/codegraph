@@ -43,6 +43,7 @@ import {
   phpTraitMethodIsAbstract,
   phpUnresolvedTraitMemberNames,
 } from "../../indexer/navigation-php.js";
+import { phpOwnerComposesUnprovenTrait } from "../../indexer/php-namespace-symbols.js";
 import {
   cjsRequireValueBinding,
   resolveImportTypeMember,
@@ -157,6 +158,8 @@ type EdgePassContext = {
   phpAdaptedTraitMembers: Map<string, ReadonlySet<string>> | undefined;
   /** Composed abstract PHP trait methods require implementations; trait-body calls name their declarations. */
   phpAbstractTraitMembers: Set<string> | undefined;
+  /** PHP owners that compose a trait no indexed declaration names: their members are unknown. */
+  phpUnprovenTraitOwners: Set<string> | undefined;
   /** Proven static or instance scope for callable members, keyed by graph node id. */
   receiverMemberScopes: Map<string, ReceiverMemberScope>;
   /** Accepted argument-count range for arity-selected members, keyed by graph node id. */
@@ -2261,6 +2264,10 @@ export async function emitClassInheritanceEdges(
     if (context.sup.id === "php") {
       const adapted = phpUnresolvedTraitMemberNames(context.index, context.moduleEntry.file, cls.node, context.source);
       if (adapted.size) context.phpAdaptedTraitMembers?.set(fromId, adapted);
+      const parsed = { source: context.source, tree: context.tree };
+      if (phpOwnerComposesUnprovenTrait(context.index, context.moduleEntry, parsed, cls.node)) {
+        context.phpUnprovenTraitOwners?.add(fromId);
+      }
     }
     let extensionNominal: SymbolDef | null | undefined;
     if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {

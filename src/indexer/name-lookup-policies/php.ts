@@ -8,9 +8,11 @@ import {
   findPhpImportAlias,
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
+  isPhpConstantRead,
 } from "../navigation-php.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import {
+  lookupPhpConstant,
   phpClassReferenceMatchesDefinition,
   phpReferenceRoleMatchesKind,
   resolveIndexedPhpClassReference,
@@ -19,8 +21,9 @@ import {
   resolvePhpSameScopeRoleDefinition,
 } from "../php-namespace-symbols.js";
 import { scopeNodesFor } from "../scope-nodes.js";
+import { AMBIGUOUS_PHP_CONSTANT_REASON } from "../ambiguous-resolution.js";
 import type { SymbolDef } from "../types.js";
-import type { BareNameUse, NameLookupPolicy } from "../name-resolution-types.js";
+import type { BareNameUse, NameLookupPolicy, NameResolution } from "../name-resolution-types.js";
 
 /** A class-reference form (`new X`, `X::y`, a type) cannot bind a same-named function. */
 const isClassReference = (use: BareNameUse): boolean => inferPhpQualifiedReferenceImportType(use.node) === "class";
@@ -35,6 +38,23 @@ const classMatches = (use: BareNameUse, lookupName: string, def: SymbolDef): boo
     use.mod.imports,
     def,
   );
+
+/**
+ * A constant read follows PHP's namespace order (`CurrentNamespace\name`, then the global name), so a constant of
+ * another namespace with the same spelling is never the answer. Nothing indexed under that order proves no constant.
+ */
+function resolveConstantRead(use: BareNameUse, spelling: string): NameResolution | undefined {
+  const { index, mod, parsed, node } = use;
+  const found = lookupPhpConstant(index, parsed, mod, node, spelling);
+  if (!found) return undefined;
+  if (found.status === "found") {
+    return okGoToResult(index, found.def, { resolution: "php-qualified", confidence: "high" });
+  }
+  return {
+    status: "not_found",
+    reason: found.status === "ambiguous" ? AMBIGUOUS_PHP_CONSTANT_REASON : "No matching PHP constant",
+  };
+}
 
 export const phpLookupPolicy: NameLookupPolicy = {
   beforeLexical(use, lookupName) {
@@ -59,7 +79,10 @@ export const phpLookupPolicy: NameLookupPolicy = {
       }
     }
     const role = use.phpImportType ?? inferPhpQualifiedReferenceImportType(node) ?? "const";
-    const binding = findPhpImportAlias(mod.imports, name, role);
+    const qualified = getPhpQualifiedReference(node, parsed.source);
+    const constantRead = role === "const" && isPhpConstantRead(node);
+    // An import binds an unqualified constant name; a qualified spelling names a constant of its own namespace.
+    const binding = constantRead && qualified ? null : findPhpImportAlias(mod.imports, name, role);
     const alias = binding ? resolvePhpExplicitImport(index, binding, role) : null;
     if (alias) {
       return okGoToResult(index, alias, {
@@ -68,7 +91,7 @@ export const phpLookupPolicy: NameLookupPolicy = {
         confidence: "high",
       });
     }
-    const qualified = getPhpQualifiedReference(node, parsed.source);
+    if (constantRead && !binding) return resolveConstantRead(use, qualified ?? name);
     if (role === "function") {
       const target = resolvePhpNamespaceSymbol(
         index,

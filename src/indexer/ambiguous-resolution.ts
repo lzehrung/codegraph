@@ -29,6 +29,16 @@ export const AMBIGUOUS_RECEIVER_MEMBER_REASON = "No unique receiver member";
  */
 export const INAPPLICABLE_RECEIVER_MEMBER_REASON = "No applicable receiver member";
 /**
+ * Several indexed PHP constants carry the spelling a read resolves to, and no `require` of the reading file tells them
+ * apart. A PHP member policy reports the read as unproven for every constant, since imports do not bound visibility.
+ */
+export const AMBIGUOUS_PHP_CONSTANT_REASON = "Ambiguous PHP constant";
+/**
+ * A PHP class composes a trait that no indexed declaration names, and no indexed trait, class, or ancestor up to that
+ * point names the member, so the unindexed trait may declare it. Reference coverage reports `unindexed_trait`.
+ */
+export const UNINDEXED_PHP_TRAIT_REASON = "A composed PHP trait is not indexed and may declare this member";
+/**
  * A Kotlin lambda that may have an implicit receiver encloses the call, and that receiver's members are not indexed
  * (an external type, an unresolved callee, an overload set), so the receiver may declare the name before the enclosing type.
  */

@@ -2420,6 +2420,125 @@ describe("rename preview", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  /** Runs `run` on a session over a cold build, a first disk build, and a reopened disk build of PHP files. */
+  async function withPhpRenameSessions(
+    files: Readonly<Record<string, string>>,
+    run: (session: ReturnType<typeof createAgentSession>, root: string) => Promise<void>,
+  ): Promise<void> {
+    const temporary = await mkTmpDir("cg-rename-php-");
+    const root = path.join(temporary, "project");
+    const diskOptions = { cache: "disk", cacheDir: path.join(temporary, "cache") } as const;
+    try {
+      await writeFixtureFiles(root, files);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        if (cache === "disk") closeDiskCacheDatabase(root, diskOptions);
+        const session = createAgentSession({
+          root,
+          freshness: { policy: "check" },
+          buildOptions: { ...diskOptions, cache, threads: 1 },
+        });
+        try {
+          await run(session, root);
+        } finally {
+          session.invalidate();
+        }
+      }
+    } finally {
+      closeDiskCacheDatabase(root, diskOptions);
+      await fsp.rm(temporary, { recursive: true, force: true });
+    }
+  }
+
+  async function phpRename(
+    session: ReturnType<typeof createAgentSession>,
+    root: string,
+    query: string,
+    declaration: { file: string; line: number },
+    newName: string,
+  ) {
+    const symbols = await workspaceSymbolsWithSession(session, { root, query });
+    const target = symbols.symbols.find(
+      (symbol) => symbol.location.file === declaration.file && symbol.location.range.start.line === declaration.line,
+    );
+    expect(target).toBeDefined();
+    const preview = await previewRenameWithSession(session, { root, handle: target!.handle, newName });
+    return {
+      safe: preview.safe,
+      edits: preview.edits.map((edit) => `${edit.file}:${edit.range.start.line}`).sort(),
+      unsafe: preview.unsafeSites.map(
+        (site) => `${site.location.file}:${site.location.range.start.line}:${site.reason}`,
+      ),
+      reasons: preview.unsafeSites.map((site) => site.provenance.reason ?? ""),
+    };
+  }
+
+  it("renames a PHP method composed through nested traits apart from the inherited method it shadows", async () => {
+    const files = {
+      "t.php": [
+        "<?php",
+        "trait Inner { public function foo() { return 'inner'; } }",
+        "trait Outer { use Inner; }",
+        "class Base { public function foo() { return 'base'; } }",
+        "class C extends Base { use Outer; public function run() { return $this->foo(); } }",
+        "class E extends Base { public function run() { return $this->foo(); } }",
+      ].join("\n"),
+    };
+    await withPhpRenameSessions(files, async (session, root) => {
+      // Line 5 calls `Inner::foo`, which PHP runs, so the inherited method's rename leaves it alone.
+      const base = await phpRename(session, root, "foo", { file: "t.php", line: 4 }, "renamed");
+      expect(base).toMatchObject({ safe: true, edits: ["t.php:4", "t.php:6"], unsafe: [] });
+      const inner = await phpRename(session, root, "foo", { file: "t.php", line: 2 }, "renamed");
+      expect(inner).toMatchObject({ safe: true, edits: ["t.php:2", "t.php:5"], unsafe: [] });
+    });
+  });
+
+  it("keeps a PHP method rename unsafe where a composed trait is not indexed", async () => {
+    const files = {
+      "t.php": [
+        "<?php",
+        "class Base { public function foo() { return 'base'; } }",
+        "class Ext extends Base { use \\Vendor\\Missing; public function run() { return $this->foo(); } }",
+      ].join("\n"),
+    };
+    await withPhpRenameSessions(files, async (session, root) => {
+      const base = await phpRename(session, root, "foo", { file: "t.php", line: 2 }, "renamed");
+      expect(base.safe).toBe(false);
+      expect(base.unsafe).toEqual(["t.php:2:unresolved_reference"]);
+      // The specific cause, not the generic `strategy_unavailable`.
+      expect(base.reasons).toEqual(["Reference coverage is partial (unindexed_trait)."]);
+    });
+  });
+
+  it("previews a PHP constant rename by namespace order, unsafe only where a qualified read cannot be edited", async () => {
+    const files = {
+      "consts.php": ["<?php", "namespace Other;", "const LIMIT = 1;", "const PLAIN = 2;"].join("\n"),
+      "reader.php": ["<?php", "namespace Other;", "function g() { return LIMIT + PLAIN; }"].join("\n"),
+      "imported.php": [
+        "<?php",
+        "namespace Imported;",
+        "use const Other\\LIMIT as L;",
+        "use const Other\\PLAIN;",
+        "function f() { return L + PLAIN + \\Other\\LIMIT; }",
+      ].join("\n"),
+      "decoy.php": ["<?php", "namespace Third;", "const LIMIT = 9;", "function h() { return LIMIT; }"].join("\n"),
+    };
+    await withPhpRenameSessions(files, async (session, root) => {
+      // Only same-namespace and imported reads: every edit is proven, and the same-named constant of `Third` is not.
+      const plain = await phpRename(session, root, "PLAIN", { file: "consts.php", line: 4 }, "RENAMED");
+      expect(plain).toMatchObject({
+        safe: true,
+        edits: ["consts.php:4", "imported.php:4", "imported.php:5", "reader.php:3"],
+        unsafe: [],
+      });
+      // The rooted `\Other\LIMIT` read names the constant through a qualified path, which the preview cannot edit.
+      const limit = await phpRename(session, root, "LIMIT", { file: "consts.php", line: 3 }, "RENAMED");
+      expect(limit.safe).toBe(false);
+      expect(limit.edits).toEqual(["consts.php:3", "imported.php:3", "reader.php:3"]);
+      expect(limit.unsafe).toEqual(["imported.php:5:unresolved_reference"]);
+      expect(limit.edits.some((edit) => edit.startsWith("decoy.php"))).toBe(false);
+    });
+  });
 });
 
 it("keeps inherited decoy rename unsafe through an ancestor's adapted PHP trait use after cache reload", async () => {

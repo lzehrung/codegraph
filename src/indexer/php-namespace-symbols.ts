@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { sliceText } from "../util/ast.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import {
   findPhpComposerPath,
@@ -12,6 +13,8 @@ import {
   canonicalPhpReferenceNames,
   findPhpImportAlias,
   inferPhpQualifiedReferenceImportType,
+  phpTraitUseDeclarations,
+  phpTraitUseNames,
   readPhpNamespaceName,
   readPhpNamespaceFromRange,
 } from "./navigation-php.js";
@@ -106,6 +109,50 @@ export function resolveFirstIndexedPhpSymbol(
     if (matches.length > 1) return null;
   }
   return null;
+}
+
+/** What PHP's constant lookup order finds for a name: one indexed declaration, several that compete, or none. */
+export type PhpConstantLookup = { status: "found"; def: SymbolDef } | { status: "ambiguous" } | { status: "none" };
+
+/**
+ * Resolves a constant read in PHP's order: `CurrentNamespace\name`, then the global `name` for an unqualified name;
+ * a qualified or `\`-rooted name has no fallback. The first spelling that names an indexed declaration decides, as for
+ * functions, and a declaration in any other namespace is not a candidate. Several declarations of that spelling
+ * compete unless the file reading the constant requires exactly one of their files. Null until the namespace index is built.
+ */
+export function lookupPhpConstant(
+  index: ProjectIndex,
+  parsed: Pick<ParsedFileContext, "source" | "tree">,
+  module: Pick<ModuleIndex, "imports">,
+  node: SyntaxNodeLike,
+  name: string,
+): PhpConstantLookup | null {
+  const symbols = phpNamespaceSymbolIndexFor(index);
+  if (!symbols) return null;
+  const candidates = canonicalPhpReferenceNames(name, parsed.source, parsed.tree, node, {
+    imports: module.imports,
+    role: "const",
+  });
+  for (const candidate of candidates) {
+    const matches = symbols.consts.get(phpConstantQualifiedKey(candidate.replace(/^\\+/, ""))) ?? [];
+    if (!matches.length) continue;
+    if (matches.length === 1) return { status: "found", def: matches[0]! };
+    const required = matches.filter((def) => phpModuleRequiresFile(module.imports, def.file));
+    return required.length === 1 ? { status: "found", def: required[0]! } : { status: "ambiguous" };
+  }
+  return { status: "none" };
+}
+
+/** Whether an include or require in a module names `file`. */
+function phpModuleRequiresFile(imports: readonly ImportBinding[], file: string): boolean {
+  const fileKey = fileIdentityKey(file);
+  return imports.some(
+    (candidate) =>
+      candidate.kind === "star" &&
+      candidate.mechanism === "php" &&
+      typeof candidate.resolved === "string" &&
+      fileIdentityKey(candidate.resolved) === fileKey,
+  );
 }
 
 /** PHP's class import namespace: classes (including traits), interfaces, and enums. */
@@ -485,6 +532,37 @@ export function phpClassReferenceMatchesDefinition(
   return canonicalPhpReferenceNames(name, source, tree, node, { imports, role: "class" }).some(
     (candidate) => foldPhpIdentifierCase(candidate.replace(/^\\+/, "")) === expected,
   );
+}
+
+/** The indexed declaration a trait name in a `use` declaration refers to; null when none does or several do. */
+export function resolvePhpTraitUse(
+  index: ProjectIndex,
+  module: Pick<ModuleIndex, "imports">,
+  parsed: Pick<ParsedFileContext, "source" | "tree">,
+  name: SyntaxNodeLike,
+): SymbolDef | null {
+  const spelling = sliceText(name, parsed.source);
+  const alias = spelling.includes("\\") ? null : findPhpImportAlias(module.imports, spelling, "class");
+  if (alias) return resolvePhpExplicitImport(index, alias, "class");
+  return resolvePhpNamespaceSymbol(index, parsed.source, parsed.tree, name, spelling, module.imports, "class");
+}
+
+/**
+ * Whether a class-like declaration composes a trait that no indexed declaration names. Its members are unknown, so a
+ * lookup that finds nothing in the traits it does resolve cannot prove that an inherited member is the one it reaches.
+ */
+export function phpOwnerComposesUnprovenTrait(
+  index: ProjectIndex,
+  module: Pick<ModuleIndex, "imports">,
+  parsed: Pick<ParsedFileContext, "source" | "tree">,
+  container: SyntaxNodeLike,
+): boolean {
+  for (const use of phpTraitUseDeclarations(container)) {
+    for (const name of phpTraitUseNames(use)) {
+      if (!resolvePhpTraitUse(index, module, parsed, name)) return true;
+    }
+  }
+  return false;
 }
 
 async function buildPhpNamespaceSymbolIndex(index: ProjectIndex): Promise<PhpNamespaceSymbolIndex> {

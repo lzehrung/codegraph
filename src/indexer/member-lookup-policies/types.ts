@@ -111,6 +111,11 @@ export type MemberAccessRules = {
 
 export type MemberLookupPolicy = {
   /**
+   * The declaration of a type is not one of its members: a member lookup skips the type's own name token. A language
+   * sets this where member names fold case, so a method called `deep` would otherwise match `class Deep`.
+   */
+  excludesContainerNameFromMembers?: boolean;
+  /**
    * The edge a resolved dotted member call records, or `null` when its target cannot be the callee. Without this
    * hook, a target that accepts the call's argument count records `calls`.
    */
