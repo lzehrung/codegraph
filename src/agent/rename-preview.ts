@@ -8,6 +8,7 @@ export type { RenameCandidateTest };
 import { canonicalizePythonReceiverAttributeDefinition, findRenameReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
+import { memberLookupDeps } from "../indexer/navigation-goto.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "../indexer/member-selection.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
@@ -243,6 +244,22 @@ export async function previewRenameInSnapshot(
   let missingImplementationDefinitions = 0;
   let implementationAmbiguityReason: string | undefined = unprovenLinkage?.ambiguityReason;
   const implementationUnsafeSites: RenameUnsafeSite[] = [];
+  const addMemberReferences = async (memberDef: SymbolDef): Promise<void> => {
+    try {
+      const memberReferences = await findRenameReferences(snapshot.index, memberDef, {
+        maxReferences: maxEdits + 1,
+      });
+      if (memberReferences.status === "ok") {
+        semanticReferences.push(...memberReferences.references);
+        referenceFailure ??= incompleteReferenceCoverageReason(memberReferences.referenceCoverage);
+      } else {
+        referenceFailure ??= memberReferences.reason;
+      }
+    } catch (error: unknown) {
+      rethrowStaleQuerySource(error);
+      referenceFailure ??= errorMessage(error);
+    }
+  };
   if (implementationResult.status === "ok") {
     const lookup = buildSymbolLookup(snapshot);
     for (const unresolved of implementationResult.unresolved) {
@@ -298,24 +315,32 @@ export async function previewRenameInSnapshot(
         continue;
       }
       semanticDefinitions.set(implementation.symbolId, memberDef);
-      try {
-        const memberReferences = await findRenameReferences(snapshot.index, memberDef, {
-          maxReferences: maxEdits + 1,
-        });
-        if (memberReferences.status === "ok") {
-          semanticReferences.push(...memberReferences.references);
-          referenceFailure ??= incompleteReferenceCoverageReason(memberReferences.referenceCoverage);
-        } else {
-          referenceFailure ??= memberReferences.reason;
-        }
-      } catch (error: unknown) {
-        rethrowStaleQuerySource(error);
-        referenceFailure ??= errorMessage(error);
-      }
+      await addMemberReferences(memberDef);
     }
   } else if (/\b(?:ambiguous|overload)\b/i.test(implementationResult.reason)) {
     implementationAmbiguityReason = implementationResult.reason;
   }
+  // A language can require other declarations to share the target's name (the witnesses of a Swift protocol property).
+  const companions = await memberLookupPolicyFor(targetLanguage).renameCompanions?.({
+    index: snapshot.index,
+    target: resolved.def,
+    deps: memberLookupDeps,
+    usesOf: async (def) => {
+      try {
+        const uses = await findRenameReferences(snapshot.index, def, { maxReferences: maxEdits + 1 });
+        if (uses.status !== "ok" || incompleteReferenceCoverageReason(uses.referenceCoverage)) return null;
+        return uses.references;
+      } catch (error: unknown) {
+        rethrowStaleQuerySource(error);
+        return null;
+      }
+    },
+  });
+  for (const companion of companions?.definitions ?? []) {
+    semanticDefinitions.set(defNodeId(companion), companion);
+    await addMemberReferences(companion);
+  }
+  if (companions?.unprovenReason) implementationAmbiguityReason ??= companions.unprovenReason;
   omittedImplementations += missingImplementationDefinitions;
   const edits: RenameEdit[] = [];
   const unsafeSites: RenameUnsafeSite[] = [];

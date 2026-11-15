@@ -175,6 +175,11 @@ export type ScopeNodeRow = {
    * Python `self.run` must not attach to a same-named function; the property is a member.
    */
   nonLexicalMemberPropertyTypes?: ReadonlySet<string>;
+  /**
+   * Node types whose identifier child is the name after a dot (Swift `navigation_suffix`). That name selects a member
+   * of its receiver, so it never uses a variable, parameter, or function of the same spelling.
+   */
+  memberSelectorParentTypes?: ReadonlySet<string>;
 };
 
 const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
@@ -545,6 +550,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
+    memberSelectorParentTypes: new Set(["navigation_suffix"]),
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),

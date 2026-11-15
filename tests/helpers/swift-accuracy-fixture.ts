@@ -78,3 +78,66 @@ export async function expectSwiftAccuracyGraph(index: ProjectIndex, paths: Recor
     ).toBe(true);
   }
 }
+
+const requirementModels = [
+  "protocol Named { var title: String { get } }",
+  "struct Item: Named { var title: String }",
+  "struct Other { var title: String }",
+];
+const requirementUses = [
+  "func read(_ named: Named, _ item: Item, _ other: Other) {",
+  "  _ = named.title",
+  "  _ = item.title",
+  "  _ = other.title",
+  "}",
+];
+export const SWIFT_REQUIREMENT_SOURCES = {
+  "Named.swift": `${requirementModels.join("\n")}\n`,
+  "Read.swift": `${requirementUses.join("\n")}\n`,
+};
+
+function requirementSite(paths: Record<string, string>, file: "Named.swift" | "Read.swift", line: number) {
+  const lines = file === "Named.swift" ? requirementModels : requirementUses;
+  return { file: paths[file]!, line, column: columnOf(lines, line, "title") };
+}
+
+/** A use through the protocol names the requirement, a use through a type names its own property, never the decoy's. */
+export async function expectSwiftRequirementGoto(index: ProjectIndex, paths: Record<string, string>): Promise<void> {
+  for (const [use, declaration] of [
+    [requirementSite(paths, "Read.swift", 2), requirementSite(paths, "Named.swift", 1)],
+    [requirementSite(paths, "Read.swift", 3), requirementSite(paths, "Named.swift", 2)],
+    [requirementSite(paths, "Read.swift", 4), requirementSite(paths, "Named.swift", 3)],
+  ] as const) {
+    const result = await goToDefinition(index, use);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") continue;
+    expect([result.definition.file, result.definition.range.start.line, result.definition.range.start.column]).toEqual([
+      declaration.file,
+      declaration.line,
+      declaration.column,
+    ]);
+  }
+}
+
+/** The requirement lists its protocol-typed use, each property its own use, and the decoy's use stays with the decoy. */
+export async function expectSwiftRequirementReferences(
+  index: ProjectIndex,
+  paths: Record<string, string>,
+): Promise<void> {
+  for (const [declaration, use] of [
+    [requirementSite(paths, "Named.swift", 1), requirementSite(paths, "Read.swift", 2)],
+    [requirementSite(paths, "Named.swift", 2), requirementSite(paths, "Read.swift", 3)],
+    [requirementSite(paths, "Named.swift", 3), requirementSite(paths, "Read.swift", 4)],
+  ] as const) {
+    const refs = await findReferences(index, declaration);
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") continue;
+    expect(refs.referenceCoverage).toEqual({ scope: "indexed_candidates", state: "complete" });
+    const key = (item: { file: string; line: number; column: number }) => `${item.file}:${item.line}:${item.column}`;
+    expect(
+      refs.references
+        .map((ref) => key({ file: ref.file, line: ref.range.start.line, column: ref.range.start.column }))
+        .sort(),
+    ).toEqual([declaration, use].map(key).sort());
+  }
+}

@@ -899,3 +899,56 @@ describe("C# nearer qualified receiver roots", () => {
     }
   });
 });
+
+describe("rest and variadic parameters hold a collection of their type", () => {
+  it("leaves a TypeScript rest parameter's array method unresolved and resolves a plain parameter's method", async () => {
+    const text = [
+      "class Item { reverse(): number { return 1; } }",
+      "class Decoy { reverse(): number { return 2; } }",
+      "export function many(...xs: Item[]): unknown { return xs.reverse(); }",
+      "export function one(x: Item): number { return x.reverse(); }",
+      "",
+    ].join("\n");
+    const p = await fixture("cg-ts-rest-", { "m.ts": text });
+    const file = p.f("m.ts");
+    // The rest parameter is an array: its `reverse` is `Array.reverse`, never `Item.reverse`.
+    expect((await goToDefinition(p.index, { file, ...locate(text, "reverse", 2) })).status).toBe("not_found");
+    const plain = await goToDefinition(p.index, { file, ...locate(text, "reverse", 3) });
+    expect(plain.status).toBe("ok");
+    if (plain.status === "ok") expect(plain.definition.range.start.line).toBe(1);
+    const refs = await findReferences(p.index, { file, ...locate(text, "reverse", 0) });
+    expect(refs.status).toBe("ok");
+    if (refs.status === "ok") {
+      expect(refs.references.map((reference) => reference.range.start.line).sort()).toEqual([1, 4]);
+    }
+  });
+
+  it("leaves a Go variadic parameter's receiver unresolved and resolves a plain parameter's method", async () => {
+    const text = [
+      "package main",
+      "",
+      "type Item struct{}",
+      "func (Item) Len() int { return 1 }",
+      "type Decoy struct{}",
+      "func (Decoy) Len() int { return 2 }",
+      "// A variadic parameter is a slice, which has no methods: the call is not valid Go, and must name no declaration.",
+      "func many(xs ...Item) int { return xs.Len() }",
+      "func one(x Item) int { return x.Len() }",
+      "",
+    ].join("\n");
+    const p = await fixture("cg-go-variadic-", { "main.go": text });
+    const file = p.f("main.go");
+    expect((await goToDefinition(p.index, { file, ...locate(text, "Len", 2) })).status).toBe("not_found");
+    const plain = await goToDefinition(p.index, { file, ...locate(text, "Len", 3) });
+    expect(plain.status).toBe("ok");
+    if (plain.status === "ok") expect(plain.definition.range.start.line).toBe(4);
+    const refs = await findReferences(p.index, { file, ...locate(text, "Len", 0) });
+    expect(refs.status).toBe("ok");
+    if (refs.status === "ok") {
+      const lines = refs.references.map((reference) => reference.range.start.line);
+      // Go lists a same-named method of another type as a candidate, but never the variadic parameter's call.
+      expect(lines).toContain(9);
+      expect(lines).not.toContain(8);
+    }
+  });
+});

@@ -163,6 +163,7 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   impl_item: true,
   trait_item: true,
   trait_declaration: true,
+  protocol_declaration: true,
   enum_declaration: true,
   enum_item: true,
   // Zig has no implicit member scope of its own; a function nested in one of these container
@@ -182,6 +183,11 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   method_declaration: true,
   method: true,
   singleton_method: true,
+  // Swift: a protocol requirement, an initializer, and a subscript own their parameters and locals like a function.
+  protocol_function_declaration: true,
+  init_declaration: true,
+  deinit_declaration: true,
+  subscript_declaration: true,
 };
 
 function isTypeMemberDeclaration(node: SyntaxNodeLike, languageId: string): boolean {
