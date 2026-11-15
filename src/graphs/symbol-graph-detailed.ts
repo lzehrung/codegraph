@@ -345,6 +345,7 @@ export async function buildSymbolGraphDetailed(
   const receiverCalls: ReceiverCallCandidate[] = [];
   const phpAdaptedTraitMembers = hasPhpModules ? new Map<string, ReadonlySet<string>>() : undefined;
   const phpAbstractTraitMembers = hasPhpModules ? new Set<string>() : undefined;
+  const phpUnprovenTraitOwners = hasPhpModules ? new Set<string>() : undefined;
   const fileHiddenMemberIds = new Set<string>();
   const receiverMemberScopes = new Map<string, ReceiverMemberScope>();
   const receiverMemberArities = new Map<string, MemberArityRange>();
@@ -758,6 +759,7 @@ export async function buildSymbolGraphDetailed(
         receiverCalls,
         phpAdaptedTraitMembers,
         phpAbstractTraitMembers,
+        phpUnprovenTraitOwners,
         receiverMemberScopes,
         receiverMemberArities,
         sharedOwnerPeers,
@@ -981,6 +983,7 @@ export async function buildSymbolGraphDetailed(
       : undefined,
     phpAbstractTraitMembers,
     phpAdaptedTraitMembers,
+    phpUnprovenTraitOwners,
   );
   edgeCount -= removedReceiverEdges.length;
   for (const edge of removedReceiverEdges) added.delete(edgeKey(edge.from, edge.to, edge.label, edge.site));

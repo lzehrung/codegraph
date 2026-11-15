@@ -1906,6 +1906,7 @@ export function emitReceiverCallEdges(
   acceptsCallShape?: (targetId: string, candidate: ReceiverCallCandidate) => boolean,
   phpAbstractTraitMembers?: ReadonlySet<string>,
   phpAdaptedTraitMembers?: ReadonlyMap<string, ReadonlySet<string>>,
+  phpUnprovenTraitOwners?: ReadonlySet<string>,
 ): SymbolGraph["edges"][number][] {
   if (!candidates.length) return [];
 
@@ -1986,6 +1987,7 @@ export function emitReceiverCallEdges(
     ...(phpAdaptedTraitMembers?.size
       ? { unresolvedMember: (id: string, name: string) => phpAdaptedTraitMembers.get(id)?.has(name) ?? false }
       : {}),
+    ...(phpUnprovenTraitOwners?.size ? { composesUnprovenTrait: (id: string) => phpUnprovenTraitOwners.has(id) } : {}),
     name: (id) => graph.nodes.get(id)?.name ?? graph.nodes.get(canonicalMemberId(id, nodeAliases))?.name ?? "",
     key: (id) => facts.get(id)?.key ?? canonicalMemberId(id, nodeAliases),
     callable: (id) => (graph.nodes.get(id)?.kind === "function" ? facts.get(id) : undefined),

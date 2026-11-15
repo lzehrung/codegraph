@@ -4853,8 +4853,46 @@ import {
   expectPhpTraitCompositionGraph,
   withPhpTraitComposition,
 } from "./helpers/php-trait-composition-fixture.js";
+import {
+  PHP_NESTED_TRAIT_PROJECT,
+  PHP_UNPROVEN_TRAIT_PROJECT,
+  expectPhpNestedTraitGoto,
+  expectPhpNestedTraitGraph,
+  expectPhpNestedTraitReferences,
+  withPhpNestedTraitProject,
+} from "./helpers/php-nested-trait-fixture.js";
+import {
+  PHP_COMPETING_CONSTANT_FILES,
+  PHP_CONSTANT_FILES,
+  expectPhpCompetingConstants,
+  expectPhpConstantGoto,
+  expectPhpConstantReferences,
+  expectPhpConstantUnused,
+} from "./helpers/php-constant-fixture.js";
+import { withPhpFiles } from "./helpers/php-project-fixture.js";
 
 nativeDescribe("PHP adapted trait and abstract-requirement native parity", () => {
+  it("agrees on cold and reopened constant reads, references, and unused exports", async () => {
+    await withPhpFiles(PHP_CONSTANT_FILES, async (index, paths) => {
+      await expectPhpConstantGoto(index, paths);
+      await expectPhpConstantReferences(index, paths);
+      await expectPhpConstantUnused(index);
+    });
+    await withPhpFiles(PHP_COMPETING_CONSTANT_FILES, async (index, paths) => {
+      await expectPhpCompetingConstants(index, paths);
+    });
+  });
+
+  it("agrees on cold and reopened navigation, references, and call edges for nested and unproven traits", async () => {
+    for (const project of [PHP_NESTED_TRAIT_PROJECT, PHP_UNPROVEN_TRAIT_PROJECT]) {
+      await withPhpNestedTraitProject(project, async (index, files, root) => {
+        await expectPhpNestedTraitGoto(project, index, files);
+        await expectPhpNestedTraitReferences(project, index, files, root);
+        await expectPhpNestedTraitGraph(project, index, files);
+      });
+    }
+  });
+
   it("agrees on cold and reopened navigation, references, and every call and trait edge", async () => {
     await withPhpTraitComposition(async (index, files, root) => {
       await expectPhpTraitCompositionGoto(index, files);

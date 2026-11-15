@@ -164,8 +164,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 153 records Swift callable argument labels and rebuilds contextual member and call edges.
  * Epoch 154 indexes Ruby `attr_reader`, `attr_writer`, and `attr_accessor` methods at their argument tokens, binds
  * a Ruby `receiver.name = value` to the writer `name=`, and rebuilds the detailed edges of both.
+ * Epoch 159 resolves PHP members composed through nested traits ahead of inherited ones and PHP constant reads in
+ * namespace order, and rebuilds their navigation, references, and detailed edges.
  */
-export const CORE_ALGORITHM_EPOCH = 154;
+export const CORE_ALGORITHM_EPOCH = 159;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

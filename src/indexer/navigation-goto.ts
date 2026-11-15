@@ -139,6 +139,7 @@ import {
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
   AMBIGUOUS_RECEIVER_MEMBER_REASON,
+  UNINDEXED_PHP_TRAIT_REASON,
   INAPPLICABLE_RECEIVER_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
@@ -150,14 +151,18 @@ import {
   comparePhpReferenceNames,
   findPhpImportAlias,
   phpTraitMethodIsAbstract,
-  phpUnresolvedTraitMemberNames,
+  phpTraitUseDeclarations,
   phpTraitUseIsAdapted,
+  phpTraitUseNames,
+  phpUnresolvedTraitMemberNames,
 } from "./navigation-php.js";
 import {
   phpNamespaceSymbolIndexFor,
+  phpOwnerComposesUnprovenTrait,
   resolveIndexedPhpClassReference,
   resolvePhpExplicitImport,
   resolvePhpNamespaceSymbol,
+  resolvePhpTraitUse,
 } from "./php-namespace-symbols.js";
 import {
   cjsRequireValueBinding,
@@ -182,6 +187,7 @@ import {
   inheritsMemberOverloads,
   kotlinPropertyInvocationArity,
   selectMember,
+  splitComposedOwners,
   type MemberModel,
 } from "./member-selection.js";
 import {
@@ -2220,6 +2226,7 @@ export async function resolveMemberAccessDefinition(params: {
       // extension member by its bare name (including an unproven where clause).
       if (sup.id === "swift") return { status: "not_found", reason: "No matching Swift member definition" };
     } else if (receiverProof?.kind === "supertype") {
+      const report: KeywordMemberReport = { named: false, ambiguous: false };
       const memberDef = await resolveKeywordReceiverMember(
         index,
         mod,
@@ -2229,10 +2236,13 @@ export async function resolveMemberAccessDefinition(params: {
         true,
         getCallArgumentCount({ languageId: sup.id, source, call: memberNode.parent ?? memberNode }) ?? undefined,
         undefined,
-        undefined,
+        report,
         memberAccessUse(sup.id, memberNode),
       );
-      if (!memberDef) return { status: "not_found", reason: "No matching supertype member definition" };
+      if (!memberDef) {
+        const reason = report.unprovenTrait ? UNINDEXED_PHP_TRAIT_REASON : "No matching supertype member definition";
+        return { status: "not_found", reason };
+      }
       return okGoToResult(index, memberDef, {
         via: { exportedName: member },
         resolution: "member-access",
@@ -2371,10 +2381,7 @@ export async function resolveMemberAccessDefinition(params: {
             if (!memberDef && report.named) {
               // Two members that both fit leave the target open. Named members that all reject the call hide the name
               // from the rest of the hierarchy, so the use is no candidate for a hidden declaration.
-              const reason = report.inapplicable
-                ? INAPPLICABLE_RECEIVER_MEMBER_REASON
-                : AMBIGUOUS_RECEIVER_MEMBER_REASON;
-              return { status: "not_found", reason };
+              return { status: "not_found", reason: keywordMemberMissReason(report) };
             }
             if (!memberDef && accessRules?.missReason) return { status: "not_found", reason: accessRules.missReason };
           }
@@ -2503,17 +2510,10 @@ async function phpComposedPropertyFacts(
       const parsed = await ensureParsedContextForIndex(index, classDef.file);
       const classNode = nameNodeForDef(parsed, classDef)?.parent;
       if (classNode?.type !== "class_declaration") continue;
-      const body = classNode.childForFieldName("body");
-      for (const use of body?.namedChildren ?? []) {
-        if (use.type !== "use_declaration") continue;
+      for (const use of phpTraitUseDeclarations(classNode)) {
         let usesTrait = false;
-        for (const name of use.namedChildren) {
-          if (name.type !== "name" && name.type !== "qualified_name" && name.type !== "relative_name") continue;
-          const spelling = sliceText(name, parsed.source);
-          const alias = spelling.includes("\\") ? null : findPhpImportAlias(module.imports, spelling, "class");
-          const target = alias
-            ? resolvePhpExplicitImport(index, alias, "class")
-            : resolvePhpNamespaceSymbol(index, parsed.source, parsed.tree, name, spelling, module.imports, "class");
+        for (const name of phpTraitUseNames(use)) {
+          const target = resolvePhpTraitUse(index, module, parsed, name);
           if (target && definitionIdentityKey(target) === traitKey) usesTrait = true;
         }
         if (!usesTrait) continue;
@@ -3433,7 +3433,14 @@ async function baseRefsFromContainer(
 }
 
 /** What a hierarchy member walk saw, for callers that must not fall back past it. */
-type KeywordMemberReport = { named: boolean; ambiguous: boolean; inapplicable?: boolean };
+type KeywordMemberReport = { named: boolean; ambiguous: boolean; inapplicable?: boolean; unprovenTrait?: boolean };
+
+/** Why a receiver member the walk named is still not a target: its overloads hide it, a trait may declare it, or it competes. */
+function keywordMemberMissReason(report: KeywordMemberReport): string {
+  if (report.inapplicable) return INAPPLICABLE_RECEIVER_MEMBER_REASON;
+  if (report.unprovenTrait) return UNINDEXED_PHP_TRAIT_REASON;
+  return AMBIGUOUS_RECEIVER_MEMBER_REASON;
+}
 
 async function resolveKeywordReceiverMember(
   index: ProjectIndex,
@@ -3477,7 +3484,16 @@ async function resolveKeywordReceiverMember(
   const lambdaCompatible = trailingLambda ? new Map<SymbolDef, boolean>() : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
-  for (let depth = 0; depth < RECEIVER_HIERARCHY_DEPTH && level.length; depth += 1) {
+  // The order `selectMember` searches: PHP examines the traits composed into a class, to any depth, before its parent.
+  const isTraitOwner =
+    current.context.sup.id === "php"
+      ? (ref: KeywordClassRef): boolean => ref.container.type === "trait_declaration"
+      : undefined;
+  let composedLevel = false;
+  let deferred: KeywordClassRef[] = [];
+  let traitChain = 0;
+  let depth = 0;
+  while (level.length && depth < RECEIVER_HIERARCHY_DEPTH) {
     const next: KeywordClassRef[] = [];
     let nameFound = false;
     for (const ref of level) {
@@ -3579,7 +3595,7 @@ async function resolveKeywordReceiverMember(
         }
         if (depth && isUninheritedJavaInterfaceStaticMethod(hit, ref, scopeByMember.get(hit))) continue;
         visible.add(hit);
-        if (!depth || !abstractTraitMembers?.has(hit)) nameFound = true;
+        if ((!depth && !composedLevel) || !abstractTraitMembers?.has(hit)) nameFound = true;
       }
       if (walkRules) await walkRules.afterOwnerMatches(ref, current, matches, visible, scopeByMember);
       if (nameFound && !spansHierarchy && !preloadHiddenNames) continue;
@@ -3601,7 +3617,23 @@ async function resolveKeywordReceiverMember(
       }
     }
     if (nameFound && !spansHierarchy && !preloadHiddenNames) break;
-    level = next;
+    if (isTraitOwner) {
+      const { composed, inherited } = splitComposedOwners(next, isTraitOwner);
+      deferred.push(...inherited);
+      if (composed.length && traitChain < RECEIVER_HIERARCHY_DEPTH) {
+        level = composed;
+        composedLevel = true;
+        traitChain += 1;
+        continue;
+      }
+      composedLevel = false;
+      traitChain = 0;
+      level = deferred;
+      deferred = [];
+    } else {
+      level = next;
+    }
+    depth += 1;
   }
   const selectionUse = walkRules ? walkRules.selectionUse(visible, memberUse, scopeByMember) : memberUse;
   const sameSignatures = new Map<string, Set<string>>();
@@ -3623,13 +3655,15 @@ async function resolveKeywordReceiverMember(
   const model: MemberModel<KeywordClassRef, SymbolDef> = {
     ownerKey,
     members: (ref) => membersByKey.get(ownerKey(ref)) ?? [],
-    ...(current.context.sup.id === "php"
+    ...(isTraitOwner
       ? {
-          isTraitOwner: (ref: KeywordClassRef) => ref.container.type === "trait_declaration",
+          isTraitOwner,
           ...(memberUse !== "value"
             ? {
                 unresolvedMember: (ref: KeywordClassRef, name: string) =>
                   phpUnresolvedTraitMemberNames(index, ref.file, ref.container, ref.context.source).has(name),
+                composesUnprovenTrait: (ref: KeywordClassRef) =>
+                  phpOwnerComposesUnprovenTrait(index, ref.module, ref.context, ref.container),
               }
             : {}),
         }
@@ -3676,6 +3710,7 @@ async function resolveKeywordReceiverMember(
     report.named = selected.named;
     report.ambiguous = selected.status === "ambiguous";
     report.inapplicable = selected.status === "ambiguous" && !!selected.inapplicable;
+    report.unprovenTrait = selected.status === "ambiguous" && !!selected.unprovenTrait;
   }
   return selected.status === "unique" ? selected.member : undefined;
 }
@@ -5760,6 +5795,10 @@ function appendDirectKeywordMembers(
 ): void {
   const containerStart = container.startIndex;
   const containerEnd = container.endIndex;
+  // Where member names fold case, the declaration of the container itself is not one of its members.
+  const containerName = memberLookupPolicyFor(targetContext.sup.id).excludesContainerNameFromMembers
+    ? container.childForFieldName("name")
+    : null;
   const normalizedMember = normalizeIdentifier(member);
   for (const local of locals) {
     const startIndex = local.range.start.index;
@@ -5769,7 +5808,8 @@ function appendDirectKeywordMembers(
       startIndex === undefined ||
       endIndex === undefined ||
       startIndex < containerStart ||
-      endIndex > containerEnd
+      endIndex > containerEnd ||
+      (containerName && startIndex === containerName.startIndex && endIndex === containerName.endIndex)
     ) {
       continue;
     }

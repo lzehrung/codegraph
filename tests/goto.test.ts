@@ -119,6 +119,19 @@ import {
 } from "./helpers/php-path-fallback-fixture.js";
 import { PHP_ACCURACY_LINES, PHP_ACCURACY_SOURCES } from "./helpers/php-accuracy-fixture.js";
 import {
+  PHP_NESTED_TRAIT_PROJECT,
+  PHP_UNPROVEN_TRAIT_PROJECT,
+  expectPhpNestedTraitGoto,
+  withPhpNestedTraitProject,
+} from "./helpers/php-nested-trait-fixture.js";
+import {
+  PHP_COMPETING_CONSTANT_FILES,
+  PHP_CONSTANT_FILES,
+  expectPhpCompetingConstants,
+  expectPhpConstantGoto,
+} from "./helpers/php-constant-fixture.js";
+import { withPhpFiles } from "./helpers/php-project-fixture.js";
+import {
   CSHARP_SCOPE_READ_FILES,
   CSHARP_SCOPE_READ_LINES,
   KOTLIN_TYPE_VALUE_FILES,
@@ -1234,6 +1247,23 @@ describe("Go to Definition", () => {
   });
 
   describe("PHP", () => {
+    it("resolves nested trait members ahead of inherited ones and leaves unproven trait chains unresolved", async () => {
+      for (const project of [PHP_NESTED_TRAIT_PROJECT, PHP_UNPROVEN_TRAIT_PROJECT]) {
+        await withPhpNestedTraitProject(project, async (index, files) => {
+          await expectPhpNestedTraitGoto(project, index, files);
+        });
+      }
+    });
+
+    it("resolves PHP constant reads in namespace order and leaves competing constants unresolved", async () => {
+      await withPhpFiles(PHP_CONSTANT_FILES, async (index, paths) => {
+        await expectPhpConstantGoto(index, paths);
+      });
+      await withPhpFiles(PHP_COMPETING_CONSTANT_FILES, async (index, paths) => {
+        await expectPhpCompetingConstants(index, paths);
+      });
+    });
+
     it("resolves PHP namespaced, case-folded, parent, and trait uses without taking decoys", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-php-accuracy-goto-"));
       try {
@@ -2963,6 +2993,32 @@ describe("Go to Definition", () => {
   });
 
   describe("Swift", () => {
+    it("keeps a Swift type name on its type when a member shares the spelling", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-type-member-goto-"));
+      try {
+        const lines = [
+          "protocol I { func I() }",
+          "class C: I { func I() {}; var f: I? = nil; func use(_ p: I) { I() } }",
+          "class Base { func Base() {} }",
+          "class A: Base { }",
+        ];
+        const file = path.join(root, "types.swift").replace(/\\/g, "/");
+        await fsp.writeFile(file, lines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [file]);
+        const second = lines[1]!;
+        // Inheritance clause, property type, and parameter type name the protocol, never the member `I`.
+        await testGoToDefinition(index, file, 2, second.indexOf(": I") + 3, file, 1);
+        await testGoToDefinition(index, file, 2, second.indexOf("f: I") + 4, file, 1);
+        await testGoToDefinition(index, file, 2, second.indexOf("p: I") + 4, file, 1);
+        // The unqualified call is the member of the class.
+        await testGoToDefinition(index, file, 2, second.indexOf("{ I()") + 3, file, 2);
+        // A base class named in the header is the class, not its method of the same spelling.
+        await testGoToDefinition(index, file, 4, lines[3]!.indexOf(": Base") + 3, file, 3);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find definition of imported function", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "swift");
       const mainFile = path.join(samplePath, "main.swift").replace(/\\/g, "/");

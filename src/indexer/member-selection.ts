@@ -108,6 +108,11 @@ export type MemberModel<Owner, Member> = {
   isAbstractTraitMember?(member: Member): boolean;
   /** A PHP adaptation with no own declaration blocks only that name, including through subclasses. */
   unresolvedMember?(owner: Owner, name: string): boolean;
+  /**
+   * A PHP owner `use`s a trait that no indexed declaration names. Its members are unknown, so when no member composed
+   * into the owner is named, an inherited one is not proven to be the one the owner resolves.
+   */
+  composesUnprovenTrait?(owner: Owner): boolean;
   /** Only needed by languages that inherit otherwise hidden overloads. */
   sameSignature?(derived: Member, inherited: Member): boolean;
   /** Syntax-specific call compatibility beyond argument count; an unproven shape keeps the candidate. */
@@ -131,6 +136,8 @@ export type MemberSelection<Member> =
       named: true;
       /** Every named member rejects the call and none stands in for it: the name is hidden, not contested. */
       inapplicable?: true;
+      /** No composed trait names the member, but a trait that no indexed declaration names may still declare it. */
+      unprovenTrait?: true;
     };
 
 export type MemberSelectionOptions = {
@@ -307,6 +314,21 @@ function hasNamedAncestor<Owner, Member>(
   }
   return false;
 }
+
+/**
+ * PHP composes a trait into the class that uses it, and the traits it uses into that trait, so a composed member comes
+ * before any inherited one. A hierarchy walk searches the `composed` owners of a depth, and theirs in turn, before the
+ * `inherited` owners above it. Navigation and the detailed graph share this order.
+ */
+export function splitComposedOwners<Owner>(
+  owners: readonly Owner[],
+  isComposed: (owner: Owner) => boolean,
+): { composed: Owner[]; inherited: Owner[] } {
+  const composed: Owner[] = [];
+  const inherited: Owner[] = [];
+  for (const owner of owners) (isComposed(owner) ? composed : inherited).push(owner);
+  return { composed, inherited };
+}
 /** Level-order member lookup shared by navigation and the detailed call graph. */
 export function selectMember<Owner, Member>(
   starts: readonly Owner[],
@@ -329,15 +351,24 @@ export function selectMember<Owner, Member>(
     : (options.normalizeIdentifier?.(options.name) ?? options.name);
   const phpTraits = options.phpCaseInsensitive ? model : undefined;
   const classOnly = !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.phpCaseInsensitive);
-  for (let depth = 0; depth < MAX_DEPTH && level.length; depth += 1) {
+  const composing = phpTraits && (phpTraits.isTraitOwner || phpTraits.composesUnprovenTrait) ? phpTraits : undefined;
+  // PHP searches the traits composed into a class, to any depth, before its parent (`splitComposedOwners`). The walk
+  // stays at one inheritance depth while `level` holds composed traits, and the inherited owners wait in `deferred`.
+  let composedLevel = false;
+  let deferred: Owner[] = [];
+  // The owners whose composed traits this depth searched, kept until a trait that no declaration names matters.
+  let composition: Owner[] = [];
+  let traitChain = 0;
+  let depth = 0;
+  while (level.length && depth < MAX_DEPTH) {
     const candidates: Member[] = [];
-    let traitCandidates: Member[] | undefined;
     const owners = overloadState ? new Map<Member, string>() : undefined;
     let unresolved = false;
     for (const owner of level) {
       const ownerKey = model.ownerKey(owner);
-      const isTraitOwner = phpTraits?.isTraitOwner?.(owner);
-      const composedTrait = isTraitOwner && (depth !== 0 || options.startAtAncestor);
+      if (composing?.composesUnprovenTrait) composition.push(owner);
+      const composedTrait =
+        phpTraits?.isTraitOwner?.(owner) && (composedLevel || depth !== 0 || options.startAtAncestor);
       let ownerNamed = false;
       for (const member of model.members(owner)) {
         if (!memberNameMatches(member, model, options, queryName) || !model.visible(member, options.useFile)) continue;
@@ -347,10 +378,6 @@ export function selectMember<Owner, Member>(
         if (matchesScope || !options.separateMemberScopes) named = true;
         if (matchesScope) {
           candidates.push(member);
-          if (isTraitOwner) {
-            traitCandidates ??= [];
-            traitCandidates.push(member);
-          }
           owners?.set(member, ownerKey);
         }
         if (options.firstDeclarationWins && (matchesScope || !options.separateMemberScopes)) break;
@@ -358,7 +385,7 @@ export function selectMember<Owner, Member>(
       if (!ownerNamed && phpTraits?.unresolvedMember?.(owner, queryName)) unresolved = true;
     }
     if (unresolved) return { status: "ambiguous", named: true };
-    const distinct = distinctCandidates(traitCandidates ?? candidates, model, options.argumentCount);
+    const distinct = distinctCandidates(candidates, model, options.argumentCount);
     const byUse = preferByUse(distinct, model, options);
     const unique = model.acceptsCall ? byUse.filter((member) => model.acceptsCall?.(member)) : byUse;
     // Members that can stand in for a miscounted call. A lone candidate stays whatever its labels; a label that does
@@ -432,7 +459,28 @@ export function selectMember<Owner, Member>(
         next.push(parent);
       }
     }
-    level = next;
+    if (composing) {
+      const { composed, inherited } = splitComposedOwners(next, (owner) => !!composing.isTraitOwner?.(owner));
+      deferred.push(...inherited);
+      if (composed.length && traitChain < MAX_DEPTH) {
+        level = composed;
+        composedLevel = true;
+        traitChain += 1;
+        continue;
+      }
+      // No member composed into this depth is named, and a trait that no declaration names may still declare it.
+      if (composition.some((owner) => composing.composesUnprovenTrait?.(owner))) {
+        return { status: "ambiguous", named: true, unprovenTrait: true };
+      }
+      composition = [];
+      composedLevel = false;
+      traitChain = 0;
+      level = deferred;
+      deferred = [];
+    } else {
+      level = next;
+    }
+    depth += 1;
   }
   if (overloadState?.accepted.length === 1)
     return { status: "unique", named: true, member: overloadState.accepted[0]!.member };

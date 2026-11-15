@@ -27,6 +27,7 @@ import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   isInsidePhpUseDeclaration,
+  isPhpConstantRead,
   isPhpQualifiedReferenceNode,
   phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
@@ -63,6 +64,7 @@ import {
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
   CSHARP_NAMESPACE_NAME_REASON,
   isAmbiguousResolutionReason,
+  UNINDEXED_PHP_TRAIT_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
 import {
@@ -286,6 +288,21 @@ export async function buildPhpQualifiedNames(
 
 const phpCanonicalNamesCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
 const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
+/** Definitions a use in a class with an unindexed trait may name: an unindexed trait may declare the same name. */
+const phpUnindexedTraitGaps = new WeakMap<ProjectIndex, Set<string>>();
+
+function isPhpDefinition(index: ProjectIndex, def: SymbolDef): boolean {
+  return supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id === "php";
+}
+
+function markPhpUnindexedTraitGap(index: ProjectIndex, def: SymbolDef): void {
+  let gaps = phpUnindexedTraitGaps.get(index);
+  if (!gaps) {
+    gaps = new Set();
+    phpUnindexedTraitGaps.set(index, gaps);
+  }
+  gaps.add(definitionIdentityKey(def));
+}
 
 async function phpCanonicalDefinitionNames(index: ProjectIndex, def: SymbolDef): Promise<string[]> {
   let perIndex = phpCanonicalNamesCache.get(index);
@@ -547,6 +564,15 @@ async function collectNamedNodeReferences(
   }
 }
 
+/** The last segment of a qualified constant read (`\App\LIMIT`): goto resolves that name, not the path before it. */
+function phpQualifiedConstantProbe(node: SyntaxNodeLike, parsed: ParsedFileContext): Range["start"] | null {
+  if (parsed.sup.id !== "php" || !isPhpQualifiedReferenceNode(node) || inferPhpQualifiedReferenceImportType(node)) {
+    return null;
+  }
+  const last = node.namedChildren.at(-1);
+  return last && isPhpConstantRead(last) ? toRange(last).start : null;
+}
+
 export type VerifiedNamedNodeReference = {
   range: Range;
   provenance?: ResolutionProvenance;
@@ -785,14 +811,9 @@ export async function collectVerifiedNamedNodeReferences(
         continue;
       }
     }
-    const resolved = await resolveDefinition(
-      {
-        file: fileId,
-        line: range.start.line,
-        column: range.start.column,
-      },
-      parsed,
-    );
+    // A qualified constant read resolves at its last segment, the name PHP's namespace order decides.
+    const probe = phpQualifiedConstantProbe(node, parsed) ?? range.start;
+    const resolved = await resolveDefinition({ file: fileId, line: probe.line, column: probe.column }, parsed);
     if (resolved.status === "ok" && resolved.definition) {
       if (matchesExpectedDefinition(resolved.definition)) {
         pushVerified({
@@ -855,6 +876,16 @@ export async function collectVerifiedNamedNodeReferences(
     // imports, C++ overloads, or using targets) is the same kind of gap when this definition
     // (or an equivalent declaration) is visible from this file: one of the candidates may be
     // it. A name with no binding at all is proven unrelated by scope and stays out.
+    // An unindexed trait may declare the member this use names, so any same-named PHP definition may be the target.
+    if (
+      !recoveredByLanguageFallback &&
+      resolved.reason === UNINDEXED_PHP_TRAIT_REASON &&
+      isPhpDefinition(index, expectedDef) &&
+      mayReferenceDefinition()
+    ) {
+      markPhpUnindexedTraitGap(index, expectedDef);
+      continue;
+    }
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable && mayReferenceDefinition()) {
       if (
         policy.unprovenReference?.(node, resolved.reason) ||
@@ -1492,6 +1523,7 @@ export const REFERENCE_COVERAGE_REASON_ORDER: readonly ReferenceCoverageReason[]
   "unresolved_import",
   "strategy_unavailable",
   "name_equivalence_unavailable",
+  "unindexed_trait",
   "truncated",
 ];
 
@@ -1879,6 +1911,10 @@ export function buildIndexedCandidateCoverage(args: {
 
   if (phpNameEquivalenceGaps.get(index)?.has(definitionIdentityKey(def))) {
     reasons.push("name_equivalence_unavailable");
+  }
+
+  if (phpUnindexedTraitGaps.get(index)?.has(definitionIdentityKey(def))) {
+    reasons.push("unindexed_trait");
   }
 
   if (truncated) reasons.push("truncated");
