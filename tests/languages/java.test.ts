@@ -1,3 +1,5 @@
+import { BATCH3_CASES } from "../helpers/header-parameter-fixture.js";
+import { withBatch3Fixture } from "../helpers/csharp-java-batch3-fixture.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import os from "node:os";
@@ -2500,6 +2502,16 @@ describe("Java interface inheritance", () => {
 describeTypeParameterReceiverRows("java", "Java type parameter beside a same-named class");
 
 describe("Java record member identity", () => {
+  describe.each(BATCH3_CASES.filter((batch3Case) => batch3Case.language === "java"))(
+    "Java record components: $name",
+    ({ sources, check }) => {
+      it("resolves through goto, references, and the detailed graph", async () => {
+        await withBatch3Fixture("cg-java-batch3-", sources, async (fixture) => {
+          await check(fixture, await buildProjectIndex(fixture.root, { cache: "off" }));
+        });
+      });
+    },
+  );
   it("keeps record methods as members for goto, references, and graph calls", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-record-members-"));
     try {

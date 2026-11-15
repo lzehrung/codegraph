@@ -513,6 +513,10 @@ async function collectNamedNodeReferences(
       canonicalSymbolName = parsed.sup.useSiteMemberName(canonicalSymbolName);
     }
     const isPhp = parsed.sup.id === "php";
+    // Another spelling a use can name the declaration by (a C# attribute class is written without its suffix).
+    const alternateNames = new Set(
+      (parsed.sup.alternateUseNames?.(symbolName) ?? []).map((name) => parsed.sup.normalizeIdentifier(name)),
+    );
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
     let nameEquivalenceUnavailable = false;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
@@ -528,7 +532,7 @@ async function collectNamedNodeReferences(
         if (spellsDeclaration) {
           isMatch = false;
         } else if (!isPhp) {
-          isMatch = text === canonicalSymbolName;
+          isMatch = text === canonicalSymbolName || alternateNames.has(text);
         } else if (
           (node.type === "name" || node.type === "namespace_name") &&
           (isPhpQualifiedReferenceNode(node.parent) ||

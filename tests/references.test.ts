@@ -1,3 +1,5 @@
+import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
+import { withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
 import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
@@ -4632,6 +4634,16 @@ describe("Find References", () => {
   });
 
   describe("C#", () => {
+    describe.each(BATCH3_CASES.filter((batch3Case) => batch3Case.references && batch3Case.language === "csharp"))(
+      "C# header parameter, attribute, and member references: $name",
+      ({ sources, check }) => {
+        it("lists exactly the uses goto resolves to the declaration, with their coverage", async () => {
+          await withBatch3Fixture("cg-csharp-batch3-references-", sources, async (fixture) => {
+            await check(fixture, await buildProjectIndex(fixture.root, { cache: "off" }));
+          });
+        });
+      },
+    );
     it("should find all references to static method", async () => {
       const index = await createTestIndex("csharp");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp");
@@ -4949,6 +4961,16 @@ describe("Find References", () => {
   });
 
   describe("Java", () => {
+    describe.each(BATCH3_CASES.filter((batch3Case) => batch3Case.references && batch3Case.language === "java"))(
+      "Java record component references: $name",
+      ({ sources, check }) => {
+        it("lists exactly the uses goto resolves to the declaration, with their coverage", async () => {
+          await withBatch3Fixture("cg-java-batch3-references-", sources, async (fixture) => {
+            await check(fixture, await buildProjectIndex(fixture.root, { cache: "off" }));
+          });
+        });
+      },
+    );
     it("should find references to imported annotation types", async () => {
       const index = await createTestIndex("java");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "java");

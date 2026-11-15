@@ -263,8 +263,13 @@ export function isUnprovenHeritageExpression(node: SyntaxNodeLike): boolean {
 /** Python base-list entries that are never base types: `metaclass=M` and other keyword arguments, and `*bases` splats. */
 const NON_BASE_HERITAGE_ARGUMENT_TYPES = new Set(["keyword_argument", "dictionary_splat", "list_splat"]);
 
+/** Parents whose `argument_list` is a base constructor call's arguments (C# `class C(int x) : Base(x)`, `record R(int x) : Base(x)`). */
+const BASE_CALL_ARGUMENT_PARENT_TYPES = new Set(["base_list", "primary_constructor_base_type"]);
+
+/** A base-list entry that never names a base type: a Python keyword argument or splat, or a base constructor call's arguments. */
 export function isNonBaseHeritageArgument(node: SyntaxNodeLike): boolean {
-  return NON_BASE_HERITAGE_ARGUMENT_TYPES.has(node.type);
+  if (NON_BASE_HERITAGE_ARGUMENT_TYPES.has(node.type)) return true;
+  return node.type === "argument_list" && BASE_CALL_ARGUMENT_PARENT_TYPES.has(node.parent?.type ?? "");
 }
 
 /**
@@ -540,6 +545,21 @@ type BindingProof =
   /** A TypeScript type annotation: every later assignment must conform to it. */
   | { status: "declared"; node: SyntaxNodeLike };
 
+/** The declarator of a C# `variable_declaration` whose name is the declaration's own simple type name (`Widget Widget;`). */
+function declaratorNamedLikeType(
+  declaration: SyntaxNodeLike,
+  declaredType: SyntaxNodeLike,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (declaration.type !== "variable_declaration" || !isReceiverNameNode(sup, declaredType.type)) return null;
+  const typeName = sup.normalizeIdentifier(declaredType.text);
+  for (const child of declaration.namedChildren) {
+    const name = child.type === "variable_declarator" ? child.childForFieldName("name") : null;
+    if (name && sup.normalizeIdentifier(name.text) === typeName) return name;
+  }
+  return null;
+}
+
 /**
  * Identifier a binding node declares: a `name` or `pattern` field, a nested C/C++
  * declarator, an assignment left-hand side, or the last identifier child (C++
@@ -578,8 +598,15 @@ function bindingIdentifier(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNo
       current.namedChildren.find((child) => child.type === "identifier" || child.type === "field_identifier") ?? null
     );
   }
+  // A declaration's `type` field names its type, never the variable it declares (C# `Widget w;`). Only a declarator that
+  // spells its own declared type (`Widget Widget;`, which C# lets name the type as well) binds that name for a receiver.
+  const declaredType = node.childForFieldName("type");
+  const sameNamed = declaredType ? declaratorNamedLikeType(node, declaredType, sup) : null;
+  if (sameNamed) return sameNamed;
   const identifiers = node.namedChildren.filter(
-    (child) => isReceiverNameNode(sup, child.type) || child.type === "field_identifier",
+    (child) =>
+      (isReceiverNameNode(sup, child.type) || child.type === "field_identifier") &&
+      !sameSyntaxNode(declaredType, child),
   );
   if (identifiers.length === 0) return null;
   // `let name = Type;` / `var name = Type{}` put the binding first and the type second.
@@ -983,7 +1010,9 @@ function bindingDeclaresReceiverName(
   const name = bindingIdentifier(node, sup);
   if (name && sameReceiverBindingName(sup, sliceText(name, source), receiverName)) return true;
   if (node.type === "property_declaration") {
+    const declaredType = node.childForFieldName("type");
     return node.namedChildren.some((child) => {
+      if (sameSyntaxNode(declaredType, child)) return false;
       if (child.type === "variable_declaration" || child.type === "pattern") {
         return child.namedChildren.some(
           (inner) =>

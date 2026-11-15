@@ -33,6 +33,8 @@ function isForeachDesignation(node: SyntaxNodeLike): boolean {
   return loop?.type === "foreach_statement" && loop.childForFieldName("left")?.id === designation.id;
 }
 
+const ATTRIBUTE_SUFFIX = "Attribute";
+
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs", ".csx"],
@@ -160,5 +162,10 @@ export const CSHARP_DEF: LanguageDefinition = {
     isForeachDesignation(node) ||
     isNameFieldOnParent(node, DECLARATION_NAME_PARENTS),
   normalizeIdentifier: normalizeCsharpIdentifier,
+  // An attribute list writes the class `MarkerAttribute` as `Marker`.
+  alternateUseNames: (declared) =>
+    declared.length > ATTRIBUTE_SUFFIX.length && declared.endsWith(ATTRIBUTE_SUFFIX)
+      ? [declared.slice(0, -ATTRIBUTE_SUFFIX.length)]
+      : [],
 };
 registerLanguage(CSHARP_DEF);

@@ -27,8 +27,10 @@ import { fileIdentityKey } from "../util/paths.js";
 import {
   isAmbiguousResolutionReason,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
   AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   UNPROVEN_CSHARP_ALIAS_MEMBER_REASON,
+  UNPROVEN_CSHARP_HEADER_PARAMETER_REASON,
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
@@ -43,6 +45,7 @@ import { declaresMembers } from "../graphs/symbol-graph-detailed/receiver-calls.
 import {
   csharpAliasAt,
   csharpAliasMemberLookup,
+  csharpHeaderParameterOverride,
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
@@ -60,10 +63,16 @@ import {
 
 import { okGoToResult } from "./navigation-provenance.js";
 
-import { createLoadingParsedFileProvider, withParsedFiles } from "./parsed-cache.js";
+import { createLoadingParsedFileProvider, ensureParsedContextForIndex, withParsedFiles } from "./parsed-cache.js";
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
-import type { BareNameUse, JvmTypeNameResolver, NameLookupState, NameResolution } from "./name-resolution-types.js";
+import type {
+  BareNameUse,
+  DeferredNameRequest,
+  JvmTypeNameResolver,
+  NameLookupState,
+  NameResolution,
+} from "./name-resolution-types.js";
 
 export type {
   BareNameUse,
@@ -295,6 +304,60 @@ async function settleCsharpAliasMember(use: BareNameUse, lookupName: string): Pr
   return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
 }
 
+/**
+ * A C# attribute name `Marker` names the type `Marker` or `MarkerAttribute`. One of them settles the use; both are the
+ * ambiguity C# rejects (spelled `@Marker` or `MarkerAttribute`, it is not ambiguous and never reaches this).
+ */
+async function settleCsharpAttributeSuffix(
+  use: BareNameUse,
+  plainResolution: NameResolution | null,
+  options: SettleNameOptions,
+): Promise<GoToResult | null> {
+  const plain = await settleNameResolution({ ...use, attributeSuffixTried: true }, plainResolution, options);
+  const suffixedUse: BareNameUse = { ...use, name: `${use.name}Attribute`, attributeSuffixTried: true };
+  const suffixed = await settleNameResolution(suffixedUse, resolveBareName(suffixedUse), options);
+  if (suffixed?.status !== "ok") return plain;
+  if (plain?.status !== "ok") return suffixed;
+  const same =
+    fileIdentityKey(plain.definition.file) === fileIdentityKey(suffixed.definition.file) &&
+    plain.definition.range.start.index === suffixed.definition.range.start.index;
+  if (same) return plain;
+  // A type that is no attribute class is not a candidate: exactly one provable attribute class settles the use.
+  const plainIsAttribute = await namesAttributeBase(use.index, plain.definition);
+  const suffixedIsAttribute = await namesAttributeBase(use.index, suffixed.definition);
+  if (plainIsAttribute !== suffixedIsAttribute) return plainIsAttribute ? plain : suffixed;
+  return { status: "not_found", reason: AMBIGUOUS_CSHARP_ATTRIBUTE_REASON };
+}
+
+/** Whether a class lists a base type spelled `...Attribute` (`Attribute`, `System.Attribute`, `ValidationAttribute`). */
+async function namesAttributeBase(index: ProjectIndex, def: SymbolDef): Promise<boolean> {
+  const start = def.range.start.index;
+  if (start === undefined) return false;
+  const parsed = await ensureParsedContextForIndex(index, def.file).catch(() => null);
+  const declaration = parsed?.tree.rootNode.descendantForIndex(start, start).parent;
+  const baseList = declaration?.namedChildren.find((child) => child.type === "base_list");
+  return !!baseList?.namedChildren.some((base) => {
+    const typeName = base.text.split("<")[0]!.split(".").at(-1)!.trim();
+    return typeName.endsWith("Attribute");
+  });
+}
+
+/**
+ * A C# header parameter read in a member body: a member of another part or a project base class that shares its name
+ * binds first. Nothing found leaves the parameter as the answer.
+ */
+async function settleCsharpHeaderParameterMember(
+  use: BareNameUse,
+  request: Extract<DeferredNameRequest, { kind: "csharp-header-parameter-member" }>,
+): Promise<GoToResult | undefined> {
+  const { index, mod } = use;
+  const lookup = await csharpHeaderParameterOverride(index, mod, request.owner, request.lookupName);
+  if (lookup.status === "none") return undefined;
+  if (lookup.status === "unproven") return { status: "not_found", reason: UNPROVEN_CSHARP_HEADER_PARAMETER_REASON };
+  if (!lookup.member) return { status: "not_found", reason: AMBIGUOUS_IMPLICIT_MEMBER_REASON };
+  return okGoToResult(index, lookup.member, { resolution: "member-access", confidence: "medium" });
+}
+
 /** The enum case a leading-dot name selects in the type its context proves, if any. */
 async function settleSwiftEnumCase(use: BareNameUse, options: SettleNameOptions): Promise<SymbolDef | undefined> {
   const contextual = await swiftShorthandContextType(use, options.resolveCallee);
@@ -420,6 +483,11 @@ export async function settleNameResolution(
       if (member === null) return { status: "not_found", reason: AMBIGUOUS_IMPLICIT_MEMBER_REASON };
     } else if (request.kind === "csharp-alias-member") {
       const settled = await settleCsharpAliasMember(use, request.lookupName);
+      if (settled) return settled;
+    } else if (request.kind === "csharp-attribute-suffix") {
+      return await settleCsharpAttributeSuffix(use, fallback, options);
+    } else if (request.kind === "csharp-header-parameter-member") {
+      const settled = await settleCsharpHeaderParameterMember(use, request);
       if (settled) return settled;
     } else if (request.kind === "swift-enum-case") {
       const member = await settleSwiftEnumCase(use, options);

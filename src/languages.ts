@@ -42,6 +42,7 @@ export type LanguageSupport = {
   useSiteMemberName?: (declared: string) => string;
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
   bloomProbeName?: (name: string) => string;
+  alternateUseNames?: (declared: string) => readonly string[];
   normalizeIdentifier: (name: string) => string;
 };
 
@@ -73,6 +74,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),
     ...(def.isDeclarationSpelling ? { isDeclarationSpelling: def.isDeclarationSpelling } : {}),
     ...(def.bloomProbeName ? { bloomProbeName: def.bloomProbeName } : {}),
+    ...(def.alternateUseNames ? { alternateUseNames: def.alternateUseNames } : {}),
   };
 }
 

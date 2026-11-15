@@ -18,6 +18,21 @@ export const CSHARP_NAMESPACE_NAME_REASON = "C# name denotes a namespace, not an
 export const UNPROVEN_CSHARP_ALIAS_MEMBER_REASON = "C# alias may be hidden by a member of an unresolved base type";
 /** Enclosing members hide the alias, but arity and visibility do not prove one applicable declaration. */
 export const AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON = "No unique applicable C# member before using alias";
+/** A C# header parameter shares its name with a member of a `partial` part or base class that cannot be inspected. */
+export const UNPROVEN_CSHARP_HEADER_PARAMETER_REASON = "C# header parameter may be hidden by an uninspected member";
+/** A C# name written before `=` or `:` names a member of the initialized or matched type, which is not proven. */
+export const UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON = "C# member designator may name a member of another type";
+/** A C# header parameter shares its name with a query, deconstruction, or anonymous-method variable the scope does not bind. */
+export const UNPROVEN_CSHARP_BINDER_REASON =
+  "C# name may be bound by a query, deconstruction, or anonymous method variable";
+/** A C# attribute name matches both the plain and the `Attribute`-suffixed type. */
+export const AMBIGUOUS_CSHARP_ATTRIBUTE_REASON = "C# attribute name is ambiguous between the plain and suffixed types";
+/**
+ * A Java record component shares its name with a variable the scope does not bind (a pattern, lambda, enhanced-`for`,
+ * `catch`, or resource variable) or with an annotation element.
+ */
+export const UNPROVEN_JAVA_RECORD_COMPONENT_REASON =
+  "Java record component may be shadowed by a pattern, lambda, loop, catch, or resource variable";
 /** An implicit receiver has multiple viable or unproven same-name member candidates. */
 export const AMBIGUOUS_IMPLICIT_MEMBER_REASON = "No unique member through the implicit receiver";
 /** A known receiver declares the name, but its members compete for the call or leave the target unproven. */
@@ -54,6 +69,11 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_IMPLICIT_MEMBER_REASON,
   AMBIGUOUS_RECEIVER_MEMBER_REASON,
   AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON,
+  UNPROVEN_CSHARP_HEADER_PARAMETER_REASON,
+  UNPROVEN_CSHARP_BINDER_REASON,
+  UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON,
+  UNPROVEN_JAVA_RECORD_COMPONENT_REASON,
+  AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
 ]);
 

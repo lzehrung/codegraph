@@ -1,0 +1,310 @@
+/**
+ * C# header parameters: a record's positional parameters and a class's or struct's primary-constructor parameters. The
+ * scope index binds them in the declaration's own scope (`headerParameters` in `scope-nodes.ts`), so a closer local,
+ * parameter, or member of the body already wins. This policy settles the uses that Roslyn binds differently:
+ *  - an initializer or base-constructor argument reads the parameter even when the body declares a same-named member;
+ *  - a member body reads a member of another `partial` part or a project base class before the parameter (a derived
+ *    record that repeats a base record's parameter reads the inherited property);
+ *  - a name written before `=` or `:` (`with { X = 1 }`, `new Dto { X = 1 }`, `F(x: 1)`, `{ X: 1 }`) designates a
+ *    member of another type, not the parameter.
+ */
+import { nearestMemberContainer } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
+import { UNPROVEN_CSHARP_BINDER_REASON, UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } from "../ambiguous-resolution.js";
+import { csharpOwnerMayHaveOuterMembers } from "../navigation-goto.js";
+import { definitionForBinding } from "../navigation-local.js";
+import { okGoToResult } from "../navigation-provenance.js";
+import type { NameLookupState, NameResolution } from "../name-resolution-types.js";
+import { headerParameterOwner as headerParameterOwnerOf, scopeNodesFor } from "../scope-nodes.js";
+import type { Binding } from "../scope-types.js";
+
+const HEADER_PARAMETERS = scopeNodesFor("csharp").headerParameters;
+
+/** Members whose names an initializer's parameter read outranks. */
+const BODY_MEMBER_TYPES: ReadonlySet<string> = new Set([
+  "field_declaration",
+  "event_field_declaration",
+  "property_declaration",
+]);
+
+/** Query clauses that declare a range variable. */
+const QUERY_BINDING_CLAUSE_TYPES: ReadonlySet<string> = new Set(["from_clause", "let_clause", "join_clause"]);
+
+/** How a use reads a header parameter, relative to the declaration whose header declares it. */
+export type HeaderParameterContext = "header" | "initializer" | "member" | "designator";
+
+const ARRAY_CREATION_TYPES: ReadonlySet<string> = new Set([
+  "array_creation_expression",
+  "implicit_array_creation_expression",
+  "stackalloc_expression",
+  "implicit_stackalloc_expression",
+]);
+
+/** Parents whose identifier child is a designator when `=` or `:` follows it. */
+const DESIGNATOR_PARENT_TYPES: ReadonlySet<string> = new Set([
+  "with_initializer",
+  "subpattern",
+  "anonymous_object_creation_expression",
+  "attribute_argument",
+]);
+
+function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike): boolean {
+  if (!left) return false;
+  if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
+  return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
+}
+
+/** The token that follows `node` in its parent, anonymous tokens included. */
+function followingTokenType(node: SyntaxNodeLike): string | undefined {
+  const parent = node.parent;
+  if (!parent) return undefined;
+  for (let position = 0; ; position += 1) {
+    const child = parent.child(position);
+    if (!child) return undefined;
+    if (sameNode(child, node)) return parent.child(position + 1)?.type;
+  }
+}
+
+/**
+ * Whether an identifier names a member of another type instead of reading a binding: an object or `with` initializer
+ * member, a named argument or tuple element, a property pattern, an anonymous-object member, or an attribute argument.
+ */
+export function isMemberDesignator(node: SyntaxNodeLike): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  if (parent.type === "argument") return sameNode(parent.childForFieldName("name"), node);
+  if (DESIGNATOR_PARENT_TYPES.has(parent.type)) {
+    const following = followingTokenType(node);
+    return following === "=" || following === ":";
+  }
+  if (parent.type !== "assignment_expression" || !sameNode(parent.childForFieldName("left"), node)) return false;
+  const container = parent.parent;
+  if (container?.type === "attribute_argument") return true;
+  return container?.type === "initializer_expression" && !ARRAY_CREATION_TYPES.has(container.parent?.type ?? "");
+}
+
+/** The declaration whose header parameter list declares `binding`, or null for every other binding. */
+export function headerParameterOwner(binding: Binding | null | undefined): SyntaxNodeLike | null {
+  return binding?.kind === "param" && binding.node ? headerParameterOwnerOf("csharp", binding.node) : null;
+}
+
+/** The name node of the header parameter of `owner` that `name` spells. */
+function headerParameterNamed(owner: SyntaxNodeLike, name: string): SyntaxNodeLike | null {
+  if (!HEADER_PARAMETERS?.declarationTypes.has(owner.type)) return null;
+  const wanted = normalizeCsharpIdentifier(name);
+  const list = owner.namedChildren.find((child) => HEADER_PARAMETERS.listTypes.has(child.type));
+  for (const parameter of list?.namedChildren ?? []) {
+    const nameNode = parameter.childForFieldName("name");
+    if (nameNode && normalizeCsharpIdentifier(nameNode.text) === wanted) return nameNode;
+  }
+  return null;
+}
+
+/** Whether `use` sits in the initializer of a field or property: where a parameter binds before the members. */
+function inMemberInitializer(use: SyntaxNodeLike, member: SyntaxNodeLike): boolean {
+  if (member.type === "property_declaration") {
+    const value = member.childForFieldName("value");
+    // An expression-bodied property is a getter body; only `= value` is an initializer.
+    return (
+      !!value &&
+      value.type !== "arrow_expression_clause" &&
+      value.startIndex <= use.startIndex &&
+      use.endIndex <= value.endIndex
+    );
+  }
+  if (member.type !== "field_declaration" && member.type !== "event_field_declaration") return false;
+  for (let current = use.parent; current && !sameNode(current, member); current = current.parent) {
+    if (current.type === "variable_declarator") return true;
+  }
+  return false;
+}
+
+/** How `use` reads a parameter declared in the header of `owner`. */
+export function headerParameterContext(use: SyntaxNodeLike, owner: SyntaxNodeLike): HeaderParameterContext {
+  if (isMemberDesignator(use)) return "designator";
+  const body = owner.childForFieldName("body");
+  if (!body || use.startIndex < body.startIndex || use.endIndex > body.endIndex) return "header";
+  let member: SyntaxNodeLike = use;
+  while (member.parent && !sameNode(member.parent, body)) member = member.parent;
+  return inMemberInitializer(use, member) ? "initializer" : "member";
+}
+
+/**
+ * Whether `name` is the declared name of a field, event field, or property directly in the body of `owner`: the members
+ * an initializer's parameter read outranks. A lambda, pattern, or `out` variable of an initializer is nearer than the
+ * parameter and never one.
+ */
+function namesBodyMember(name: SyntaxNodeLike, owner: SyntaxNodeLike): boolean {
+  const declarator = name.parent;
+  const declaration = declarator?.type === "variable_declarator" ? declarator.parent?.parent : declarator;
+  if (!declaration || !BODY_MEMBER_TYPES.has(declaration.type)) return false;
+  return sameNode(declaration.parent?.parent, owner);
+}
+
+/** The names a deconstruction `var (X, (Y, _)) = ...` declares. */
+function deconstructedNames(pattern: SyntaxNodeLike, out: SyntaxNodeLike[]): void {
+  for (const child of pattern.namedChildren) {
+    if (child.type === "identifier") out.push(child);
+    else if (child.type === "tuple_pattern") deconstructedNames(child, out);
+  }
+}
+
+function spells(name: SyntaxNodeLike, wanted: string): boolean {
+  return normalizeCsharpIdentifier(name.text) === wanted;
+}
+
+/** The names the deconstructions of one local declaration statement declare (`var (X, Z) = ...;`). */
+function deconstructedNamesOf(statement: SyntaxNodeLike): SyntaxNodeLike[] {
+  const names: SyntaxNodeLike[] = [];
+  for (const declaration of statement.namedChildren) {
+    for (const declarator of declaration.namedChildren) {
+      const pattern = declarator.namedChildren.find((child) => child.type === "tuple_pattern");
+      if (pattern) deconstructedNames(pattern, names);
+    }
+  }
+  return names;
+}
+
+/** One deconstructed name in a block: where the first statement declaring it ends, and its declaring tokens. */
+type BlockDeconstruction = { firstEnd: number; tokens: Map<number, number> };
+
+/** The deconstructed locals of a block's statements by normalized name, read once per block and tree. */
+const BLOCK_DECONSTRUCTIONS = new WeakMap<SyntaxTreeLike, Map<string, ReadonlyMap<string, BlockDeconstruction>>>();
+
+function blockDeconstructions(tree: SyntaxTreeLike, scope: SyntaxNodeLike): ReadonlyMap<string, BlockDeconstruction> {
+  let blocks = BLOCK_DECONSTRUCTIONS.get(tree);
+  if (!blocks) {
+    blocks = new Map();
+    BLOCK_DECONSTRUCTIONS.set(tree, blocks);
+  }
+  const key = `${scope.type}:${scope.startIndex}:${scope.endIndex}`;
+  const cached = blocks.get(key);
+  if (cached) return cached;
+  const names = new Map<string, BlockDeconstruction>();
+  for (const statement of scope.namedChildren) {
+    if (statement.type !== "local_declaration_statement") continue;
+    for (const name of deconstructedNamesOf(statement)) {
+      const normalized = normalizeCsharpIdentifier(name.text);
+      let entry = names.get(normalized);
+      if (!entry) {
+        // Statements are read in order, so the first one declaring a name is the earliest.
+        entry = { firstEnd: statement.endIndex, tokens: new Map() };
+        names.set(normalized, entry);
+      }
+      entry.tokens.set(name.startIndex, name.endIndex);
+    }
+  }
+  blocks.set(key, names);
+  return names;
+}
+
+/** Whether `use` is a name a deconstruction of `scope` declares, or `wanted` is one an earlier statement of it declares. */
+function deconstructsBefore(tree: SyntaxTreeLike, scope: SyntaxNodeLike, use: SyntaxNodeLike, wanted: string): boolean {
+  const declared = blockDeconstructions(tree, scope).get(wanted);
+  if (!declared) return false;
+  return declared.firstEnd <= use.startIndex || declared.tokens.get(use.startIndex) === use.endIndex;
+}
+
+/** The range variables a query declares: its `from`, `let`, and `join` names, and its `into` continuations. */
+function queryRangeVariables(query: SyntaxNodeLike): SyntaxNodeLike[] {
+  const names: SyntaxNodeLike[] = [];
+  for (const clause of query.namedChildren) {
+    // The grammar leaves an `into X` continuation's name as a child of the query itself.
+    if (clause.type === "identifier") names.push(clause);
+    if (!QUERY_BINDING_CLAUSE_TYPES.has(clause.type)) continue;
+    const name = clause.childForFieldName("name") ?? clause.namedChildren.find((child) => child.type === "identifier");
+    if (name) names.push(name);
+    const into = clause.namedChildren.find((child) => child.type === "join_into_clause");
+    const intoName = into?.namedChildren.find((child) => child.type === "identifier");
+    if (intoName) names.push(intoName);
+  }
+  return names;
+}
+
+/** Whether an anonymous method (`delegate (int X) { ... }`) declares the parameter `use` names, or one `wanted` in its body. */
+function anonymousMethodBinds(method: SyntaxNodeLike, use: SyntaxNodeLike, wanted: string): boolean {
+  const parameters = method.childForFieldName("parameters");
+  if (!parameters) return false;
+  const inParameters = parameters.startIndex <= use.startIndex && use.endIndex <= parameters.endIndex;
+  return parameters.namedChildren.some((parameter) => {
+    const name = parameter.childForFieldName("name");
+    return !!name && (sameNode(name, use) || (!inParameters && spells(name, wanted)));
+  });
+}
+
+/**
+ * Whether a binder the scope index does not model sits between `use` and `owner` and spells `wanted`, or declares `use`
+ * itself: a query range variable, a deconstructed local, or an anonymous method parameter. It, not a parameter or
+ * member, is the name's binding.
+ */
+function shadowedByUnmodeledBinder(
+  tree: SyntaxTreeLike,
+  use: SyntaxNodeLike,
+  owner: SyntaxNodeLike,
+  wanted: string,
+): boolean {
+  for (let node = use.parent; node && !sameNode(node, owner); node = node.parent) {
+    if (node.type === "anonymous_method_expression" && anonymousMethodBinds(node, use, wanted)) return true;
+    if (node.type === "query_expression") {
+      const bound = queryRangeVariables(node).some(
+        (name) => sameNode(name, use) || (name.endIndex <= use.startIndex && spells(name, wanted)),
+      );
+      if (bound) return true;
+    }
+    const holdsStatements = node.type === "block" || node.type === "switch_section";
+    if (holdsStatements && deconstructsBefore(tree, node, use, wanted)) return true;
+  }
+  return false;
+}
+
+/** A stop: a binder the scope index does not model sits between the use and the parameter or member the lookup picks. */
+function unmodeledBinderStop(state: NameLookupState, owner: SyntaxNodeLike): NameResolution | undefined {
+  const wanted = normalizeCsharpIdentifier(state.lookupName);
+  if (!shadowedByUnmodeledBinder(state.use.parsed.tree, state.use.node, owner, wanted)) return undefined;
+  return { status: "not_found", reason: UNPROVEN_CSHARP_BINDER_REASON };
+}
+
+/**
+ * The parameter binding a use reads, or a deferred member check, or a stop. `undefined` leaves the lookup to its
+ * ordinary order: the closest binding already answers.
+ */
+export function csharpHeaderParameterUse(state: NameLookupState): NameResolution | undefined {
+  const owner = headerParameterOwner(state.closestBinding);
+  if (owner) return nearestParameterUse(state, owner);
+  return initializerParameterUse(state);
+}
+
+/** The closest binding is a header parameter of `owner`: no closer local, parameter, or member of the body. */
+function nearestParameterUse(state: NameLookupState, owner: SyntaxNodeLike): NameResolution | undefined {
+  const { use, closestBinding } = state;
+  const context = headerParameterContext(use.node, owner);
+  if (context === "designator") return { status: "not_found", reason: UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON };
+  const stop = unmodeledBinderStop(state, owner);
+  if (stop) return stop;
+  if (context !== "member" || !csharpOwnerMayHaveOuterMembers(owner)) return undefined;
+  const parameter = closestBinding ? definitionForBinding(closestBinding, use.file, use.node, use.parsed.sup) : null;
+  return {
+    status: "deferred",
+    request: { kind: "csharp-header-parameter-member", lookupName: use.name, owner },
+    fallback: parameter ? okGoToResult(use.index, parameter, { resolution: "exact", confidence: "high" }) : null,
+  };
+}
+
+/** The closest binding is a field or property of the body that shares a header parameter's name, and the use is in an initializer. */
+function initializerParameterUse(state: NameLookupState): NameResolution | undefined {
+  const { use, closestBinding } = state;
+  const declaration = closestBinding?.node;
+  const owner = declaration ? nearestMemberContainer(declaration) : null;
+  if (!declaration || !owner || !headerParameterNamed(owner, state.lookupName)) return undefined;
+  if (!namesBodyMember(declaration, owner)) return undefined;
+  if (headerParameterContext(use.node, owner) !== "initializer") return undefined;
+  const stop = unmodeledBinderStop(state, owner);
+  if (stop) return stop;
+  const canonical = normalizeCsharpIdentifier(state.lookupName);
+  const parameter = use.scopeIndex.bindings
+    .get(canonical)
+    ?.find((candidate) => sameNode(headerParameterOwner(candidate), owner));
+  const def = parameter ? definitionForBinding(parameter, use.file, use.node, use.parsed.sup) : null;
+  return def ? okGoToResult(use.index, def, { resolution: "exact", confidence: "high" }) : undefined;
+}

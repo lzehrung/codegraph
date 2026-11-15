@@ -20,6 +20,7 @@ import { generatedMembersIn } from "../languages/generated-members.js";
 import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
+  headerParameterNamedLikeType,
   isValueNamespaceBinding,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
@@ -1072,6 +1073,28 @@ export function buildScopeIndexFromSource(
     }
   };
 
+  /**
+   * Binds the names a type's header parameter list declares (record components, primary-constructor parameters) in the
+   * type's own scope, where its header and body read them and another type cannot.
+   */
+  const bindHeaderParameters = (declaration: SyntaxNodeLike): void => {
+    const header = row.headerParameters;
+    if (!header?.declarationTypes.has(declaration.type)) return;
+    const list = declaration.namedChildren.find((child) => header.listTypes.has(child.type));
+    for (const parameter of list?.namedChildren ?? []) {
+      // A Java varargs component (`int... values`) keeps its name in a declarator.
+      const name =
+        parameter.childForFieldName("name") ??
+        parameter.namedChildren.find((child) => child.type === "variable_declarator")?.childForFieldName("name");
+      if (!name || !idSet.has(name.type)) continue;
+      if (header.leavesTypeNamedUnbound && headerParameterNamedLikeType(parameter, name, support.normalizeIdentifier)) {
+        continue;
+      }
+      addDecl(name, "param");
+      preRegisteredNameSpans.add(nameSpanKey(name));
+    }
+  };
+
   const walk = (node: SyntaxNodeLike) => {
     if (node.startIndex === node.endIndex) return;
     let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
@@ -1229,6 +1252,7 @@ export function buildScopeIndexFromSource(
       allScopes.push(scope);
       pushed = true;
       pushedScopeCount = 1;
+      bindHeaderParameters(node);
     }
 
     if (row.variableDeclarationTypes?.has(node.type)) {

@@ -1,3 +1,5 @@
+import { BATCH3_CASES } from "../helpers/header-parameter-fixture.js";
+import { withBatch3Fixture } from "../helpers/csharp-java-batch3-fixture.js";
 import { csharpImportsForName, withCsharpGlobalUsings } from "../../src/indexer/csharp-global-usings.js";
 import * as localsAndExports from "../../src/indexer/locals-and-exports.js";
 import { getCachedReferenceCandidateFiles } from "../../src/indexer/navigation-references.js";
@@ -1214,6 +1216,16 @@ describe("C# namespace aliases", () => {
 });
 
 describe("C# record components", () => {
+  describe.each(BATCH3_CASES.filter((batch3Case) => batch3Case.language === "csharp"))(
+    "C# record and primary-constructor parameters, attribute names, and static receivers: $name",
+    ({ sources, check }) => {
+      it("resolves through goto, references, and the detailed graph", async () => {
+        await withBatch3Fixture("cg-csharp-batch3-", sources, async (fixture) => {
+          await check(fixture, await buildProjectIndex(fixture.root, { cache: "off" }));
+        });
+      });
+    },
+  );
   it("indexes positional record parameters as variable-kind members and leaves a body property alone", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-record-components-"));
     const file = path.join(root, "Records.cs");

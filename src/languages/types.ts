@@ -179,6 +179,13 @@ export interface LanguageDefinition {
   bloomProbeName?: (name: string) => string;
 
   /**
+   * Other spellings under which a use can name a declaration, for reference candidates: a C# attribute class
+   * `MarkerAttribute` is written `Marker` in an attribute list. A token with one of these names is only a candidate;
+   * navigation decides whether it names the declaration.
+   */
+  alternateUseNames?: (declared: string) => readonly string[];
+
+  /**
    * Whether the language supports cross-module symbol resolution.
    */
   supportsCrossModuleSymbols?: boolean;

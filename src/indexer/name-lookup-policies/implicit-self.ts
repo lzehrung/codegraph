@@ -42,6 +42,8 @@ import {
 } from "../navigation-local.js";
 import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
+import { csharpHeaderParameterUse } from "./csharp-header-parameters.js";
+import { javaRecordComponentUse } from "./java-record-components.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import {
@@ -230,16 +232,47 @@ function namesOuterOwnerRoot({ use, closestBinding }: NameLookupState): boolean 
   return csharpTypeRootName(use.node);
 }
 
+/**
+ * Enclosing members precede aliases and imports, including nested types of another partial part or a base class.
+ */
+function enclosingMemberPrecedence(state: NameLookupState, rest: () => NameResolution | null): NameResolution | null {
+  const { use } = state;
+  const deferToMemberLookup = (): NameResolution => ({
+    status: "deferred",
+    request: { kind: "csharp-alias-member", lookupName: use.name },
+    fallback: rest(),
+  });
+  if (namesAliasRequiringMemberLookup(state)) return deferToMemberLookup();
+  if (!namesOuterOwnerRoot(state)) return rest();
+  const peeked = peekCsharpOuterMember(use.index, use.file, use.node, use.name);
+  if (!peeked) return deferToMemberLookup();
+  return csharpOuterMemberResolution(use.index, peeked) ?? rest();
+}
+
+/**
+ * A simple or generic type name written as an attribute (`[Marker]`, `[Marker()]`, `[Gen<int>]`): C# looks it up as
+ * `Marker` and as `MarkerAttribute`. A verbatim name (`[@Marker]`) skips the suffix; a qualified name is not modeled.
+ */
+function namesAttributeType(use: BareNameUse): boolean {
+  if (use.attributeSuffixTried || use.node.text.startsWith("@")) return false;
+  let name = use.node;
+  if (name.parent?.type === "generic_name" && name.parent.namedChildren[0]?.id === name.id) name = name.parent;
+  const attribute = name.parent;
+  return attribute?.type === "attribute" && attribute.childForFieldName("name")?.id === name.id;
+}
+
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
-  fromClosestBinding: ownOverloadDeclaration,
+  fromClosestBinding: (state) => ownOverloadDeclaration(state) ?? csharpHeaderParameterUse(state),
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
   // A qualified name whose type or alias root could not be resolved must not become a namespace path.
   beforeCrossModule({ use }) {
     const chainNode = csharpQualifiedNameNode(use.node);
     if (!chainNode) {
-      const root = resolveCsharpNameRoot(use.index, use.mod, use.node, use.parsed.source, use.files);
+      // Only an attribute lookup names something other than the node's own spelling (`Marker` read as `MarkerAttribute`).
+      const attributeName = use.attributeSuffixTried ? use.name : undefined;
+      const root = resolveCsharpNameRoot(use.index, use.mod, use.node, use.parsed.source, use.files, attributeName);
       if (root.kind === "namespace") {
         return { status: "not_found", reason: CSHARP_NAMESPACE_NAME_REASON };
       }
@@ -287,19 +320,10 @@ export const csharpLookupPolicy: NameLookupPolicy = {
     if (!csharpAliasAt(use.index, use.mod, use.name, use.node)) return true;
     return fileBindingIsUnshadowed(use.scopeIndex, closestBinding);
   },
-  // Enclosing members precede aliases and imports, including nested types of another partial part or a base class.
   wrapRest(state, rest) {
-    const { use } = state;
-    const deferToMemberLookup = (): NameResolution => ({
-      status: "deferred",
-      request: { kind: "csharp-alias-member", lookupName: use.name },
-      fallback: rest(),
-    });
-    if (namesAliasRequiringMemberLookup(state)) return deferToMemberLookup();
-    if (!namesOuterOwnerRoot(state)) return rest();
-    const peeked = peekCsharpOuterMember(use.index, use.file, use.node, use.name);
-    if (!peeked) return deferToMemberLookup();
-    return csharpOuterMemberResolution(use.index, peeked) ?? rest();
+    const resolved = enclosingMemberPrecedence(state, rest);
+    if (!namesAttributeType(state.use)) return resolved;
+    return { status: "deferred", request: { kind: "csharp-attribute-suffix" }, fallback: resolved };
   },
   onUnboundLocal({ use, lookupName, closestBinding }) {
     if (!closestBinding?.import || !csharpTypeOnlyName(use.node, true)) return undefined;
@@ -364,6 +388,12 @@ export const jvmLookupPolicy: NameLookupPolicy = {
     return implicitSelf(state, lexical(state, local));
   },
   afterCrossModule: (state, resolved) => implicitSelf(state, resolved),
+};
+
+/** Java: a record component binds in its record's scope, except where a pattern variable or annotation element may own the name. */
+export const javaLookupPolicy: NameLookupPolicy = {
+  ...jvmLookupPolicy,
+  fromClosestBinding: (state) => ownOverloadDeclaration(state) ?? javaRecordComponentUse(state),
 };
 
 /** A scope whose names a lambda's implicit receiver outranks: a type body or the file itself. */
