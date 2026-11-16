@@ -483,6 +483,19 @@ export async function previewRenameInSnapshot(
       });
       continue;
     }
+    if (reference && (await callsMemberPair(snapshot, reference))) {
+      unsafeSites.push({
+        location: { file: loaded.displayPath, range: candidate.range },
+        text: oldText,
+        reason: "unsupported_syntax",
+        provenance: {
+          ...provenance,
+          confidence: "low",
+          reason: "A compound assignment calls both the reader and the writer; rename them together.",
+        },
+      });
+      continue;
+    }
     edits.push({
       file: loaded.displayPath,
       range: candidate.range,
@@ -598,6 +611,18 @@ export async function previewRenameInSnapshot(
     candidateTests,
   };
 }
+/**
+ * Whether the reference `site` calls a pair of methods through one spelling (Ruby `x.total += 1` calls the reader
+ * `total` and the writer `total=`): editing it renames one call and leaves the other to a method that no longer exists.
+ */
+async function callsMemberPair(snapshot: AgentProjectSnapshot, site: Reference): Promise<boolean> {
+  const support = supportForFileWithoutHeaderSample(site.file, snapshot.index.languageExtensions);
+  const start = site.range.start.index;
+  if (!support?.siteCallsMemberPair || start === undefined) return false;
+  const parsed = await ensureParsedContextForIndex(snapshot.index, site.file);
+  return support.siteCallsMemberPair(parsed.tree.rootNode.descendantForIndex(start, site.range.end.index ?? start));
+}
+
 function addExportDeclarationConflicts(
   snapshot: AgentProjectSnapshot,
   definitions: ReadonlyMap<string, SymbolDef>,

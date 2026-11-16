@@ -13,6 +13,7 @@ symbol navigation/api.rb::initialize@7:11 -[member_of]-> navigation/api.rb::Devi
 symbol navigation/api.rb::lookup@38:11 -[member_of]-> navigation/api.rb::Registry@29:11
 symbol navigation/api.rb::name=@20:11 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/api.rb::name@24:11 -[member_of]-> navigation/api.rb::Device@3:11
+symbol navigation/api.rb::ready?@12:11 -[calls]-> navigation/api.rb::name@24:11 site=13:10
 symbol navigation/api.rb::ready?@12:11 -[member_of]-> navigation/api.rb::Device@3:11
 symbol navigation/api.rb::reset!@16:11 -[calls]-> navigation/api.rb::name=@20:11 site=17:14
 symbol navigation/api.rb::reset!@16:11 -[member_of]-> navigation/api.rb::Device@3:11
@@ -110,7 +111,9 @@ symbol navigation/consumer.rb::audit@import -[audit]-> navigation/mixins.rb::aud
 symbol navigation/consumer.rb::label@5:7 -[member_of]-> navigation/consumer.rb::Atlas::Engine::Device@4:7
 symbol navigation/consumer.rb::make@import -[make]-> navigation/mixins.rb::make@10:11
 symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::drain!@14:7 site=34:5
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::drain@19:7 site=35:5
 symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::full?@6:7 site=32:5
+symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::full@10:7 site=33:5
 symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::label=@23:7 site=37:10
 symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::label@27:7 site=38:10
 symbol navigation/members.rb::check@31:7 -[calls]-> navigation/members.rb::unit@2:23 site=36:10
@@ -121,7 +124,9 @@ symbol navigation/members.rb::drain!@14:7 -[calls]-> navigation/members.rb::mode
 symbol navigation/members.rb::drain!@14:7 -[calls]-> navigation/members.rb::target=@3:15 site=15:10
 symbol navigation/members.rb::drain!@14:7 -[member_of]-> navigation/members.rb::Gauge@1:7
 symbol navigation/members.rb::drain@19:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::full?@6:7 -[calls]-> navigation/members.rb::level@2:15 site=7:5
 symbol navigation/members.rb::full?@6:7 -[member_of]-> navigation/members.rb::Gauge@1:7
+symbol navigation/members.rb::full@10:7 -[calls]-> navigation/members.rb::level@2:15 site=11:5
 symbol navigation/members.rb::full@10:7 -[member_of]-> navigation/members.rb::Gauge@1:7
 symbol navigation/members.rb::label=@23:7 -[member_of]-> navigation/members.rb::Gauge@1:7
 symbol navigation/members.rb::label@27:7 -[member_of]-> navigation/members.rb::Gauge@1:7
@@ -168,6 +173,7 @@ symbol navigation/members_use.rb::Settings@import -[label]-> navigation/members.
 symbol navigation/mixins.rb::Device@15:11 -[mixin]-> navigation/mixins.rb::Auditable@3:12 site=16:15
 symbol navigation/mixins.rb::Device@15:11 -[mixin]-> navigation/mixins.rb::FactoryMethods@9:12 site=17:14
 symbol navigation/mixins.rb::audit@4:11 -[member_of]-> navigation/mixins.rb::Auditable@3:12
+symbol navigation/mixins.rb::audit_twice@19:11 -[calls]-> navigation/mixins.rb::audit@4:11 site=20:9
 symbol navigation/mixins.rb::audit_twice@19:11 -[member_of]-> navigation/mixins.rb::Device@15:11
 symbol navigation/mixins.rb::make@10:11 -[instantiates]-> navigation/mixins.rb::Device@15:11 site=11:9
 symbol navigation/mixins.rb::make@10:11 -[member_of]-> navigation/mixins.rb::FactoryMethods@9:12

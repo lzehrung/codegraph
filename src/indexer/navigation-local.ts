@@ -14,9 +14,12 @@ import {
   fileScopeDefinitionCoversUse,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
+  localHiddenByGate,
   pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
+  scopeIsEmptyBody,
+  scopeIsLocalGate,
   scopeNodesFor,
   closestContainingScope,
   typeOnlyName,
@@ -322,7 +325,14 @@ export function findClosestScopeBinding(
   const csharpArity = support.id === "csharp" ? csharpTypeArgumentArity(currentNode) : 0;
   const pythonModuleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
+  // A gate between the use and a scope hides that scope's local variables.
+  let crossedGate = false;
   while (currentScope) {
+    if (scopeIsEmptyBody(currentScope)) {
+      crossedGate = true;
+      currentScope = currentScope.parent;
+      continue;
+    }
     if (!scopeAllowsUse(row, currentScope, currentNode)) {
       currentScope = currentScope.parent;
       continue;
@@ -331,7 +341,9 @@ export function findClosestScopeBinding(
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
       while (binding) {
         const wrongNamespace =
-          (methodCall && binding.kind === "local") || (typeOnly && isValueNamespaceBinding(binding));
+          (methodCall && binding.kind === "local") ||
+          (typeOnly && isValueNamespaceBinding(binding)) ||
+          (crossedGate && localHiddenByGate(row, binding));
         const wrongCsharpArity = support.id === "csharp" && wrongCsharpTypeArity(binding, currentNode, csharpArity);
         if (!wrongNamespace && !wrongCsharpArity) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
@@ -355,6 +367,7 @@ export function findClosestScopeBinding(
     const blockedByLaterValue =
       !typeOnly && laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode);
     if (blockedByLaterValue) return null;
+    if (scopeIsLocalGate(currentScope)) crossedGate = true;
     currentScope = currentScope.parent;
   }
 

@@ -173,8 +173,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 161 marks Swift protocol requirements as members of their protocol, keeps the parameters of protocol
  * functions, initializers, and subscripts out of the members, shares a Swift type's bases (and an extension's
  * `where Self: Q`) with its extensions, and reads `T...` as no receiver type, rebuilding navigation and edges.
+ * Epoch 162 indexes Ruby `attr_*` methods wrapped in `private`, `protected`, or `public`, gives a Ruby class, module,
+ * and `class << self` body its own locals, hides outer locals inside a `def`, and keeps a method of one type from
+ * binding a bare name in an unrelated type, so Ruby navigation, references, and detailed edges are rebuilt.
  */
-export const CORE_ALGORITHM_EPOCH = 161;
+export const CORE_ALGORITHM_EPOCH = 162;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -195,8 +198,9 @@ export const CORE_ALGORITHM_EPOCH = 161;
  * Epoch 18 adds the Ruby hooks that name generated accessors, the method a property invokes, and the identifier token
  * and use-site spelling of a method name with a `?`, `!`, or `=` suffix.
  * Epoch 20 adds the C# hook that names an attribute class under its suffix-less spelling for reference candidates.
+ * Epoch 22 adds the Ruby hook that tells which types a bare name can reach a declared method from.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 20;
+export const LANGUAGE_BEHAVIOR_EPOCH = 22;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -301,6 +305,8 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   generatedMembers: true,
   generatedMembersMarker: true,
   generatedMemberVisibleAt: true,
+  methodVisibleAt: true,
+  siteCallsMemberPair: true,
   selfIsInstanceAt: true,
   invokedMemberName: true,
   useSiteMemberName: true,

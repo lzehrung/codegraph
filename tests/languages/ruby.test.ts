@@ -205,7 +205,7 @@ log.info "x"
     expect(froms).toEqual(["./other", "json", "lazy", "lazy_load.rb"]);
   });
 
-  it("defines accessor methods only for attr calls that are direct class or module body statements", async () => {
+  it("defines accessor methods for attr calls that are body statements, bare or under a visibility call", async () => {
     const { module } = await collectModule(`
 class Odd
   attr_reader :real
@@ -221,16 +221,37 @@ class Odd
   def build
     attr_accessor :in_method
   end
-  private attr_reader :under_modifier
+  attr_reader :under_if if build
+  memoize attr_reader :under_memoize
+  private attr_reader(*NAMES)
+  private attr_reader :under_private, "text"
+  protected(attr_accessor(:under_protected))
+  public attr_writer :under_public
+  self.private attr_reader :under_self_receiver
 end
 module Shared
   attr_writer "plain", :symbol
 end
 `);
     // An identifier spelled like an accessor macro is only a candidate; the receiver, argument, variable, definition,
-    // block, singleton class, method body, and modifier forms define nothing beyond what they already declared.
+    // block, singleton class, method body, modifier, and unknown-call forms define nothing beyond what they already
+    // declared. A `private`, `protected`, or `public` call that is a body statement keeps the attr call it wraps.
     expect(module.locals.map((local) => local.localName).sort()).toEqual(
-      ["Odd", "Shared", "attr_accessor", "attr_reader", "build", "plain=", "real", "symbol="].sort(),
+      [
+        "Odd",
+        "Shared",
+        "attr_accessor",
+        "attr_reader",
+        "build",
+        "plain=",
+        "real",
+        "symbol=",
+        "text",
+        "under_private",
+        "under_protected",
+        "under_protected=",
+        "under_public=",
+      ].sort(),
     );
   });
 });
@@ -359,6 +380,42 @@ describe("Ruby receiver navigation and calls", () => {
         ).toBe(true);
         expect(callees.some((node) => node && fileIdentityKey(node.file) === fileIdentityKey(decoy))).toBe(false);
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records no call for a bare name inside a block that hands the code another self", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-other-self-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "meter.rb"),
+        [
+          "class Meter",
+          "  def pulse = 2",
+          "  def own",
+          "    [1].each { pulse }",
+          "  end",
+          "  def other",
+          "    Object.new.instance_eval { pulse }",
+          "    Struct.new(:a) { pulse }",
+          "    Class.new { pulse }",
+          "  end",
+          "end",
+          "",
+        ].join("\n"),
+      );
+      const graph = await buildSymbolGraphDetailed(await buildProjectIndex(root, { cache: "off" }));
+      const calleesOf = (callerName: string): string[] => {
+        const caller = [...graph.nodes.values()].find((node) => node.name === callerName);
+        return graph.edges
+          .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+          .map((edge) => graph.nodes.get(edge.to)?.name ?? "")
+          .sort();
+      };
+      // An ordinary block keeps its method's `self`; `instance_eval`, `Struct.new`, and `Class.new` hand the code another.
+      expect(calleesOf("own")).toEqual(["pulse"]);
+      expect(calleesOf("other")).toEqual([]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -608,8 +665,8 @@ describe("Ruby method names, generated accessors, and writer calls", () => {
           .sort();
       };
       expect(callees("drain!")).toEqual(["mode="]);
-      // A bare `full` is an identifier read, which the graph records no call edge for.
-      expect(callees("check")).toEqual(["drain!", "full?", "label", "label=", "mode"]);
+      // A bare `full` is no local, so it calls `full` (and `full?` stays a different method).
+      expect(callees("check")).toEqual(["drain!", "full", "full?", "label", "label=", "mode"]);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -658,15 +715,84 @@ describe("Ruby method names, generated accessors, and writer calls", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("previews a reader rename as unsafe while a compound assignment calls the writer", async () => {
+    const root = await fixture();
+    try {
+      const session = createAgentSession({ root, freshness: { policy: "check" } });
+      const handleOf = async (query: string, name: string): Promise<string> => {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query });
+        const found = symbols.symbols.find((symbol) => symbol.name === name && symbol.location.file === "item.rb");
+        if (!found) throw new Error(`missing ${name}`);
+        return found.handle;
+      };
+      const lines = (ranges: ReadonlyArray<{ range: { start: { line: number } } }>): number[] =>
+        ranges.map((entry) => entry.range.start.line).sort((a, b) => a - b);
+      const reader = await previewRenameWithSession(session, {
+        root,
+        handle: await handleOf("total", "total"),
+        newName: "sum",
+      });
+      // `item.total += 1` and `item.total ||= 2` call the writer `total=` too, which a reader rename leaves behind.
+      expect(reader.safe).toBe(false);
+      expect(lines(reader.unsafeSites.map((site) => site.location))).toEqual([11, 12]);
+      expect(lines(reader.edits)).toEqual([2, 13]);
+      const accessor = await previewRenameWithSession(session, {
+        root,
+        handle: await handleOf("amount", "amount"),
+        newName: "size",
+      });
+      // An accessor is declared at its symbol token (`:amount`), which a text edit cannot rewrite, so it stays unsafe.
+      expect(accessor.safe).toBe(false);
+      expect(lines(accessor.unsafeSites.map((site) => site.location))).toEqual([8, 15]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Ruby generated methods across cache states", () => {
   type Index = Awaited<ReturnType<typeof buildProjectIndex>>;
   const NAMES = new Set(
-    "v w later name count err ay dy z mode target label full? drain! full drain other k lv ev mv limit total item ax level kind".split(
+    "v w later name count err ay dy z mode target label full? drain! full drain other k lv ev mv limit total item ax level kind reserve cap slot note reading pulse emit top_total cx mx area fill describe stamp entries notes stoke kindle beam gel around c0 c1 verify sap leaf drink wrap breeze frost make".split(
       " ",
     ),
   );
+
+  /**
+   * The fixture files each replay builds: the files its edits touch, the files that read them, and untouched files whose
+   * answers must not move. Together the groups cover the whole fixture, and each replay stays a few builds of a few files.
+   */
+  const REPLAY_FILES = {
+    attrLines: ["scope.rb", "locals.rb", "order.rb", "receivers.rb", "blocks.rb"],
+    declaringFile: ["device.rb", "decoy.rb", "operator.rb"],
+    scopes: ["shadow.rb", "selfs.rb", "statics.rb", "use_statics.rb"],
+    gates: [
+      "wrapped.rb",
+      "nested.rb",
+      "gates.rb",
+      "families.rb",
+      "heritage.rb",
+      "singletons.rb",
+      "chains.rb",
+      "mixins.rb",
+      "mixed_use.rb",
+      "includer.rb",
+      "inclusion.rb",
+      "nodraft.rb",
+      "dsl.rb",
+      "locals_ops.rb",
+    ],
+  } as const;
+
+  const sourcesOf = (group: keyof typeof REPLAY_FILES): Record<string, string> =>
+    Object.fromEntries(
+      REPLAY_FILES[group].map((name) => {
+        const source = RUBY_SCOPE_SOURCES[name];
+        if (source === undefined) throw new Error(`Missing Ruby scope fixture file ${name}`);
+        return [name, source];
+      }),
+    );
 
   /** Every goto, reference list, and call edge at each token of the names under test, from the files as they stand. */
   async function snapshot(index: Index, root: string): Promise<string[]> {
@@ -705,6 +831,62 @@ describe("Ruby generated methods across cache states", () => {
     return out.sort();
   }
 
+  type Replay = {
+    file: (name: string) => string;
+    edit: (name: string, from: string, to: string) => Promise<void>;
+    /** Builds cold, incrementally from the disk cache, reopened from it, and in memory; the last three answer like the cold one. */
+    answersAt: (step: string) => Promise<string[]>;
+    /** The files are back as they were at the start, so a cold build would repeat the baseline: the other three answer like it. */
+    restoredAt: (step: string, baseline: readonly string[]) => Promise<void>;
+  };
+
+  /** Writes `sources` to a temporary project and runs `steps` over it. */
+  async function replayAcrossCacheStates(
+    sources: Readonly<Record<string, string>>,
+    steps: (replay: Replay) => Promise<void>,
+  ): Promise<void> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-cache-"));
+    const file = (name: string): string => path.join(root, name);
+    try {
+      await writeFixtureFiles(root, sources);
+      const edit = async (name: string, from: string, to: string): Promise<void> => {
+        const text = await fsp.readFile(file(name), "utf8");
+        expect(text, `${name} contains ${from}`).toContain(from);
+        await fsp.writeFile(file(name), text.replace(from, to));
+      };
+      const filesOnDisk = async (): Promise<Record<string, string>> => {
+        const found: Record<string, string> = {};
+        for (const name of (await fsp.readdir(root)).filter((entry) => entry.endsWith(".rb")).sort()) {
+          found[name] = await fsp.readFile(file(name), "utf8");
+        }
+        return found;
+      };
+      const cachedAnswers = async () => ({
+        warm: await snapshot(await buildProjectIndexIncremental(root, { cache: "disk" }), root),
+        reopened: await snapshot(await buildProjectIndex(root, { cache: "disk" }), root),
+        memory: await snapshot(await buildProjectIndex(root, { cache: "memory" }), root),
+      });
+      const answersAt = async (step: string): Promise<string[]> => {
+        const cold = await snapshot(await buildProjectIndex(root, { cache: "off" }), root);
+        const { warm, reopened, memory } = await cachedAnswers();
+        expect(warm, `${step}: incremental disk`).toEqual(cold);
+        expect(reopened, `${step}: reopened disk`).toEqual(cold);
+        expect(memory, `${step}: memory`).toEqual(cold);
+        return cold;
+      };
+      const restoredAt = async (step: string, baseline: readonly string[]): Promise<void> => {
+        expect(await filesOnDisk(), `${step}: files as at the start`).toEqual(sources);
+        const { warm, reopened, memory } = await cachedAnswers();
+        expect(warm, `${step}: incremental disk`).toEqual(baseline);
+        expect(reopened, `${step}: reopened disk`).toEqual(baseline);
+        expect(memory, `${step}: memory`).toEqual(baseline);
+      };
+      await steps({ file, edit, answersAt, restoredAt });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }
+
   it("answers calls to generated methods, typed locals, and decoys from the detailed graph", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-graph-"));
     try {
@@ -716,26 +898,12 @@ describe("Ruby generated methods across cache states", () => {
     }
   });
 
-  it("keeps cold, memory, disk, and reopened builds equal while an attr line, a ?/! def, and a file change", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-cache-"));
-    const file = (name: string): string => path.join(root, name);
-    try {
-      await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
-      const edit = async (name: string, from: string, to: string): Promise<void> => {
-        const text = await fsp.readFile(file(name), "utf8");
-        expect(text, `${name} contains ${from}`).toContain(from);
-        await fsp.writeFile(file(name), text.replace(from, to));
-      };
-      const answersAt = async (step: string): Promise<string[]> => {
-        const cold = await snapshot(await buildProjectIndex(root, { cache: "off" }), root);
-        const warm = await snapshot(await buildProjectIndexIncremental(root, { cache: "disk" }), root);
-        const reopened = await snapshot(await buildProjectIndex(root, { cache: "disk" }), root);
-        const memory = await snapshot(await buildProjectIndex(root, { cache: "memory" }), root);
-        expect(warm, `${step}: incremental disk`).toEqual(cold);
-        expect(reopened, `${step}: reopened disk`).toEqual(cold);
-        expect(memory, `${step}: memory`).toEqual(cold);
-        return cold;
-      };
+  it("replays every file of the scope fixture", () => {
+    expect(Object.values(REPLAY_FILES).flat().sort()).toEqual(Object.keys(RUBY_SCOPE_SOURCES).sort());
+  });
+
+  it("keeps cold, memory, disk, and reopened builds equal while an attr line names another attribute or becomes a def", async () => {
+    await replayAcrossCacheStates(sourcesOf("attrLines"), async ({ edit, answersAt, restoredAt }) => {
       const baseline = await answersAt("cold");
       expect(baseline).toContain("scope.rb:3:13 v goto=scope.rb:2:v refs=scope.rb:2:15 scope.rb:3:13 complete");
 
@@ -748,7 +916,22 @@ describe("Ruby generated methods across cache states", () => {
       const renamed = await answersAt("attr line edited");
       expect(renamed).toContain("scope.rb:3:13 v goto=not_found refs=not_found");
       await edit("scope.rb", "attr_reader :u", "attr_reader :v");
-      expect(await answersAt("attr line restored")).toEqual(baseline);
+      await restoredAt("attr line restored", baseline);
+
+      // An attr line becomes a def, and a def becomes an attr line, of the same name.
+      await edit("scope.rb", "attr_reader :later", "def later; end");
+      await answersAt("attr replaced by def");
+      await edit("scope.rb", "def later; end", "attr_reader :later");
+      await restoredAt("def replaced by attr", baseline);
+    });
+  });
+
+  it("keeps cold, memory, disk, and reopened builds equal while a ?/! def loses its suffix and its file is deleted or renamed", async () => {
+    await replayAcrossCacheStates(sourcesOf("declaringFile"), async ({ file, edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("cold");
+      expect(baseline).toContain(
+        "operator.rb:11:12 full? goto=device.rb:5:full? refs=device.rb:5:7 operator.rb:11:12 complete",
+      );
 
       // A `?` and a `!` def lose their suffix, so the receiver calls that name them find nothing.
       await edit("device.rb", "def full?; true; end", "def full; true; end");
@@ -757,7 +940,7 @@ describe("Ruby generated methods across cache states", () => {
       expect(suffixed).toContain("operator.rb:11:12 full? goto=not_found refs=not_found");
       await edit("device.rb", "def full; true; end", "def full?; true; end");
       await edit("device.rb", "def drain; end", "def drain!; end");
-      expect(await answersAt("suffix restored")).toEqual(baseline);
+      await restoredAt("suffix restored", baseline);
 
       // The declaring file is deleted and restored.
       const device = await fsp.readFile(file("device.rb"), "utf8");
@@ -765,44 +948,63 @@ describe("Ruby generated methods across cache states", () => {
       const deleted = await answersAt("declaring file deleted");
       expect(deleted).toContain("operator.rb:6:12 mode goto=not_found refs=not_found");
       await fsp.writeFile(file("device.rb"), device);
-      expect(await answersAt("declaring file restored")).toEqual(baseline);
+      await restoredAt("declaring file restored", baseline);
 
       // The declaring file is renamed away and back.
       await fsp.rename(file("device.rb"), file("device_moved.rb"));
       const moved = await answersAt("declaring file renamed away");
       expect(moved).not.toEqual(baseline);
       await fsp.rename(file("device_moved.rb"), file("device.rb"));
-      expect(await answersAt("declaring file renamed back")).toEqual(baseline);
+      await restoredAt("declaring file renamed back", baseline);
+    });
+  });
+
+  it("keeps cold, memory, disk, and reopened builds equal while a lambda parameter, a singleton method, and a static method change", async () => {
+    await replayAcrossCacheStates(sourcesOf("scopes"), async ({ edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("cold");
+      expect(baseline.some((line) => line.startsWith("use_statics.rb:6:12 level goto=statics.rb:7:level "))).toBe(true);
 
       // A lambda parameter hides the reader; renaming it releases the reader, and restoring it hides the reader again.
       await edit("shadow.rb", "->(k) { k }.call(1)", "->(j) { k }.call(1)");
       const released = await answersAt("lambda parameter renamed");
       expect(released.some((line) => line.startsWith("shadow.rb:4:13 k goto=shadow.rb:2:k "))).toBe(true);
       await edit("shadow.rb", "->(j) { k }.call(1)", "->(k) { k }.call(1)");
-      expect(await answersAt("lambda parameter restored")).toEqual(baseline);
+      await restoredAt("lambda parameter restored", baseline);
 
       // `self` in a singleton method is the class; as an instance method it reaches the accessor.
       await edit("selfs.rb", "def self.single", "def single");
       const instance = await answersAt("singleton method became an instance method");
       expect(instance.some((line) => line.startsWith("selfs.rb:8:10 lv goto=selfs.rb:2:lv "))).toBe(true);
       await edit("selfs.rb", "def single", "def self.single");
-      expect(await answersAt("singleton method restored")).toEqual(baseline);
+      await restoredAt("singleton method restored", baseline);
 
       // The singleton method of the same name goes away: the constant receiver still does not reach the accessor.
       await edit("statics.rb", "def self.level", "def self.levelx");
       const withoutSingleton = await answersAt("singleton method renamed");
       expect(withoutSingleton.some((line) => line.startsWith("statics.rb:14:12 level goto=not_found "))).toBe(true);
       await edit("statics.rb", "def self.levelx", "def self.level");
-      expect(await answersAt("singleton method restored again")).toEqual(baseline);
+      await restoredAt("singleton method restored again", baseline);
+    });
+  });
 
-      // An attr line becomes a def, and a def becomes an attr line, of the same name.
-      await edit("scope.rb", "attr_reader :later", "def later; end");
-      await answersAt("attr replaced by def");
-      await edit("scope.rb", "def later; end", "attr_reader :later");
-      expect(await answersAt("def replaced by attr")).toEqual(baseline);
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
+  it("keeps cold, memory, disk, and reopened builds equal while a visibility call and a scope gate change", async () => {
+    await replayAcrossCacheStates(sourcesOf("gates"), async ({ edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("cold");
+      expect(baseline).toContain("gates.rb:10:5 cx goto=gates.rb:9:cx refs=gates.rb:10:5 gates.rb:9:3 complete");
+
+      // A visibility call around an attr macro goes away and comes back.
+      await edit("wrapped.rb", "private attr_reader :reserve", "attr_reader :reserve");
+      await answersAt("visibility call removed");
+      await edit("wrapped.rb", "attr_reader :reserve", "private attr_reader :reserve");
+      await restoredAt("visibility call restored", baseline);
+
+      // A `def` that hid a top-level local becomes a block, which reads it, and becomes a `def` again.
+      await edit("gates.rb", "def uses_top_total\n  top_total\nend", "[1].each do\n  top_total\nend");
+      const opened = await answersAt("def became a block");
+      expect(opened.some((line) => line.startsWith("gates.rb:3:3 top_total goto=gates.rb:1:top_total "))).toBe(true);
+      await edit("gates.rb", "[1].each do\n  top_total\nend", "def uses_top_total\n  top_total\nend");
+      await restoredAt("block became a def", baseline);
+    });
   });
 });
 

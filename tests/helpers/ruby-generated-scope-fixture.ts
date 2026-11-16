@@ -414,6 +414,269 @@ export const RUBY_SCOPE_LINES: Record<string, string[]> = {
     "end",
     "",
   ],
+  // A visibility call around an attr macro defines the same members; a form the index cannot read defines nothing, so
+  // the later same-named methods of `Rival` never bind.
+  "wrapped.rb": [
+    "class Vault",
+    "  private attr_reader :reserve",
+    "  protected attr_accessor :cap",
+    "  public attr_writer :note",
+    "  memoize attr_reader :slot",
+    "  private attr_reader(*SLOTS)",
+    "  def report = [reserve, cap, slot]",
+    "  def stash(value) = (self.note = value)",
+    "end",
+    "class Rival",
+    "  def reserve = 0",
+    "  def cap = 0",
+    "  def slot = 0",
+    "  def note=(value); end",
+    "end",
+    "",
+  ],
+  // A call nested in an argument, a receiver chain, or a block calls the same method as one on its own line. A block
+  // parameter and a multiple-assignment local named like a method hide it.
+  "nested.rb": [
+    "class Meter",
+    "  def reading = 1",
+    "  def pulse = 2",
+    "  def emit(value) = value",
+    "  def run",
+    "    emit(reading)",
+    "    puts reading",
+    "    emit(pulse())",
+    "    emit(self.pulse)",
+    "    [1].each { pulse }",
+    "    [1].map { |q| q + reading }",
+    "  end",
+    "  def shadowed",
+    "    [1].map { |reading| reading + 1 }",
+    "    reading, other = 1, 2",
+    "  end",
+    "end",
+    "class Mimic",
+    "  def reading = 0",
+    "  def pulse = 0",
+    "  def emit(value) = value",
+    "end",
+    "",
+  ],
+  // `def`, `class`, and `module` start a scope that reads no local of the code around it, and the locals of a class or
+  // module body end with it; a block closes over the locals around it. Ruby 3.3 raises NameError for each unreached read.
+  "gates.rb": [
+    "top_total = 5",
+    "def uses_top_total",
+    "  top_total",
+    "end",
+    "class Stranger",
+    "  def top_total = :method",
+    "end",
+    "class K1",
+    "  cx = 1",
+    "  p cx",
+    "end",
+    "class K2",
+    "  p cx",
+    "end",
+    "module M1",
+    "  mx = 1",
+    "end",
+    "module M2",
+    "  def read = mx",
+    "end",
+    "puts top_total",
+    "[1].each { |q| puts q + top_total }",
+    "",
+  ],
+  // `Base = Struct.new(:a) do ... end` and `Class.new do ... end` build a type whose methods a subclass calls by bare
+  // name; an unrelated class with the same names is never the answer. Ruby 3.3 runs each call of the subclasses.
+  "families.rb": [
+    "Shape = Struct.new(:side) do",
+    "  def self.describe(name) = name",
+    "  def area = 1",
+    "end",
+    "Mold = Class.new do",
+    "  def self.stamp(name) = name",
+    "  def fill = 2",
+    "end",
+    "class Square < Shape",
+    "  describe :square",
+    "  def perimeter = area",
+    "end",
+    "class Cast < Mold",
+    "  stamp :cast",
+    "  def pour = fill",
+    "end",
+    "class Pebble",
+    "  def area = -1",
+    "  def fill = -2",
+    "  def self.describe(name) = -1",
+    "  def self.stamp(name) = -2",
+    "  def roll = area",
+    "end",
+    "",
+  ],
+  // A subclass calls a method of its base, a base the method its subclass declares, an includer the method of its module;
+  // a class the heritage never connects (`Dust`) reaches none, and a class's own method wins over a decoy's.
+  "heritage.rb": [
+    "class Trunk",
+    "  def sap = 1",
+    "  def grow = leaf",
+    "end",
+    "class Branch < Trunk",
+    "  def leaf = 2",
+    "  def sprout = sap",
+    "end",
+    "module Water",
+    "  def drink = 3",
+    "end",
+    "class Root",
+    "  include Water",
+    "  def soak = drink",
+    "end",
+    "class Rock",
+    "  def sap = -1",
+    "  def drink = -2",
+    "  def erode = sap",
+    "end",
+    "class Dust",
+    "  def settle = sap",
+    "end",
+    "",
+  ],
+  // A `def object.name` runs on that object, so only `self` or the enclosing constant makes a class method of it.
+  "singletons.rb": [
+    "class Valve",
+    "  def self.verify = 1",
+    "  def Valve.make = verify",
+    "  def open_with(door)",
+    "    def door.flow",
+    "      verify",
+    "    end",
+    "  end",
+    "end",
+    "",
+  ],
+  // A bare method name used as a receiver is a call of that method.
+  "chains.rb": [
+    "class Ledger",
+    "  def entries = [1, 2]",
+    "  def notes = [3]",
+    "  def sum_entries = entries.sum",
+    "  def each_note = notes.each { |n| n }",
+    "  def head_entry = entries.map { |e| e }.first",
+    "end",
+    "class Archive",
+    "  def entries = []",
+    "  def notes = []",
+    "end",
+    "",
+  ],
+  // A module's method is reached from a class that includes it, and a top-level `def` from any class; a class that
+  // never names the module raises NameError for the module's method.
+  "mixins.rb": [
+    "module Stoker",
+    "  def stoke = 1",
+    "end",
+    "def kindle = 2",
+    "class Furnace",
+    "  def burn = 0",
+    "end",
+    "",
+  ],
+  "mixed_use.rb": [
+    'require_relative "mixins"',
+    "class Boiler < Furnace",
+    "  include Stoker",
+    "  def fire",
+    "    stoke",
+    "    kindle",
+    "  end",
+    "end",
+    "class Chimney",
+    "  def draw",
+    "    stoke",
+    "    kindle",
+    "  end",
+    "end",
+    "def outsider",
+    "  stoke",
+    "  kindle",
+    "end",
+    "",
+  ],
+  // A top-level `include` mixes the module into every object, so a top-level `def` of the file reaches its methods; a
+  // file that never includes the module raises NameError for them.
+  "includer.rb": ['require_relative "mixins"', "include Stoker", "def insider", "  stoke", "end", ""],
+  "inclusion.rb": ["module Draft", "  def breeze = 1", "end", "include Draft", "def window", "  breeze", "end", ""],
+  "nodraft.rb": ["module Chill", "  def frost = 1", "end", "def pane", "  frost", "end", ""],
+  // A block of a receiverless call may run with another `self` unless the file shows the method yielding, or taking a
+  // `&block` it does not evaluate. A call on a constant does not depend on `self`, so it is recorded in such a block.
+  "dsl.rb": [
+    "class Stage",
+    "  def beam = 1",
+    "  def gel(x) = x",
+    "  def around",
+    "    yield",
+    "  end",
+    "  def stage_set",
+    "    mock_app do",
+    '      get("/") { beam }',
+    "    end",
+    "  end",
+    "  def kept",
+    "    around { beam }",
+    "  end",
+    "  def with_args",
+    "    around { gel(1) }",
+    "  end",
+    "  def blind",
+    "    mock_app { gel(2) }",
+    "  end",
+    "  def wrap(&block)",
+    "    block.call",
+    "  end",
+    "  def forwards(&block)",
+    "    wrap(&block)",
+    "  end",
+    "  def evaluates(&block)",
+    "    Gadget.new.instance_eval(&block)",
+    "  end",
+    "  def closure_block",
+    "    wrap { beam }",
+    "  end",
+    "  def chained_block",
+    "    forwards { beam }",
+    "  end",
+    "  def evaluated_block",
+    "    evaluates { beam }",
+    "  end",
+    "  def qualified_in_dsl",
+    "    mock_app do",
+    "      Gadget.make",
+    "      Gadget.new",
+    "      beam",
+    "      self.beam",
+    "    end",
+    "  end",
+    "end",
+    "class Gadget",
+    "  def self.make = 1",
+    "end",
+    "",
+  ],
+  // The parser takes `c0&mask`, `c0 -c1`, and `c0 [1]` for calls of `c0`; Ruby reads the local when one is bound.
+  "locals_ops.rb": [
+    "def mask_bits(b)",
+    "  c0 = b[0]",
+    "  c1 = b[1]",
+    "  u = (c0&0x3f)<<6 | (c1&0x3f)",
+    "  v = c0 -c1",
+    "  w = c0 [1]",
+    "  [u, v, w]",
+    "end",
+    "",
+  ],
 };
 
 export const RUBY_SCOPE_SOURCES: Record<string, string> = Object.fromEntries(
@@ -775,6 +1038,169 @@ export const RUBY_SCOPE_GOTO: ReadonlyArray<readonly [use: RubyScopeSite, target
     ["use_statics.rb", 7, "name"],
     ["statics.rb", 10, "name"],
   ],
+  // A visibility call around an attr macro defines the same members. A macro the index cannot read defines nothing.
+  [
+    ["wrapped.rb", 7, "reserve"],
+    ["wrapped.rb", 2, "reserve"],
+  ],
+  [
+    ["wrapped.rb", 7, "cap"],
+    ["wrapped.rb", 3, "cap"],
+  ],
+  [["wrapped.rb", 7, "slot"], null],
+  [
+    ["wrapped.rb", 8, "note"],
+    ["wrapped.rb", 4, "note="],
+  ],
+  // A call nested in an argument, a receiver chain, or a block is a call of the same method; a block parameter hides it.
+  [
+    ["nested.rb", 6, "reading"],
+    ["nested.rb", 2, "reading"],
+  ],
+  [
+    ["nested.rb", 7, "reading"],
+    ["nested.rb", 2, "reading"],
+  ],
+  [
+    ["nested.rb", 8, "pulse"],
+    ["nested.rb", 3, "pulse"],
+  ],
+  [
+    ["nested.rb", 9, "pulse"],
+    ["nested.rb", 3, "pulse"],
+  ],
+  [
+    ["nested.rb", 10, "pulse"],
+    ["nested.rb", 3, "pulse"],
+  ],
+  [
+    ["nested.rb", 11, "reading"],
+    ["nested.rb", 2, "reading"],
+  ],
+  [
+    ["nested.rb", 14, "reading", 1],
+    ["nested.rb", 14, "reading"],
+  ],
+  // A top-level local is no local inside a def, and the locals of a class or module body end with it.
+  [["gates.rb", 3, "top_total"], null],
+  [
+    ["gates.rb", 10, "cx"],
+    ["gates.rb", 9, "cx"],
+  ],
+  [["gates.rb", 13, "cx"], null],
+  [["gates.rb", 19, "mx"], null],
+  [
+    ["gates.rb", 21, "top_total"],
+    ["gates.rb", 1, "top_total"],
+  ],
+  [
+    ["gates.rb", 22, "top_total"],
+    ["gates.rb", 1, "top_total"],
+  ],
+  // A type a block builds owns its methods for a subclass, and a decoy class of the same names is never the answer.
+  [
+    ["families.rb", 10, "describe"],
+    ["families.rb", 2, "describe"],
+  ],
+  [
+    ["families.rb", 11, "area"],
+    ["families.rb", 3, "area"],
+  ],
+  [
+    ["families.rb", 14, "stamp"],
+    ["families.rb", 6, "stamp"],
+  ],
+  [
+    ["families.rb", 15, "fill"],
+    ["families.rb", 7, "fill"],
+  ],
+  [
+    ["families.rb", 22, "area"],
+    ["families.rb", 18, "area"],
+  ],
+  [
+    ["singletons.rb", 3, "verify"],
+    ["singletons.rb", 2, "verify"],
+  ],
+  [
+    ["chains.rb", 4, "entries", 1],
+    ["chains.rb", 2, "entries"],
+  ],
+  [
+    ["chains.rb", 5, "notes"],
+    ["chains.rb", 3, "notes"],
+  ],
+  [
+    ["chains.rb", 6, "entries"],
+    ["chains.rb", 2, "entries"],
+  ],
+  [
+    ["mixed_use.rb", 5, "stoke"],
+    ["mixins.rb", 2, "stoke"],
+  ],
+  [
+    ["mixed_use.rb", 6, "kindle"],
+    ["mixins.rb", 4, "kindle"],
+  ],
+  [
+    ["mixed_use.rb", 12, "kindle"],
+    ["mixins.rb", 4, "kindle"],
+  ],
+  [
+    ["dsl.rb", 13, "beam"],
+    ["dsl.rb", 2, "beam"],
+  ],
+  [
+    ["dsl.rb", 31, "beam"],
+    ["dsl.rb", 2, "beam"],
+  ],
+  [
+    ["dsl.rb", 41, "make"],
+    ["dsl.rb", 49, "make"],
+  ],
+  [
+    ["includer.rb", 4, "stoke"],
+    ["mixins.rb", 2, "stoke"],
+  ],
+  // Heritage links a base, its subclass, and a module with its includer; nothing links `Dust`.
+  [
+    ["heritage.rb", 3, "leaf"],
+    ["heritage.rb", 6, "leaf"],
+  ],
+  [
+    ["heritage.rb", 7, "sap"],
+    ["heritage.rb", 2, "sap"],
+  ],
+  [
+    ["heritage.rb", 14, "drink"],
+    ["heritage.rb", 10, "drink"],
+  ],
+  [
+    ["heritage.rb", 19, "sap"],
+    ["heritage.rb", 17, "sap"],
+  ],
+  [["heritage.rb", 22, "sap"], null],
+  // The locals of an operator the parser took for a call.
+  [
+    ["locals_ops.rb", 4, "c0"],
+    ["locals_ops.rb", 2, "c0"],
+  ],
+  [
+    ["locals_ops.rb", 4, "c1"],
+    ["locals_ops.rb", 3, "c1"],
+  ],
+  [
+    ["locals_ops.rb", 5, "c0"],
+    ["locals_ops.rb", 2, "c0"],
+  ],
+  [
+    ["locals_ops.rb", 5, "c1"],
+    ["locals_ops.rb", 3, "c1"],
+  ],
+  [
+    ["locals_ops.rb", 6, "c0"],
+    ["locals_ops.rb", 2, "c0"],
+  ],
 ];
 
 type Coverage = "complete" | "partial";
@@ -1042,15 +1468,163 @@ export const RUBY_SCOPE_REFERENCES: ReadonlyArray<
     ],
     "partial",
   ],
+  [
+    ["wrapped.rb", 2, ":reserve"],
+    [
+      ["wrapped.rb", 2, ":reserve"],
+      ["wrapped.rb", 7, "reserve"],
+    ],
+    "complete",
+  ],
+  [
+    ["wrapped.rb", 3, ":cap"],
+    [
+      ["wrapped.rb", 3, ":cap"],
+      ["wrapped.rb", 7, "cap"],
+    ],
+    "complete",
+  ],
+  [
+    ["wrapped.rb", 4, ":note"],
+    [
+      ["wrapped.rb", 4, ":note"],
+      ["wrapped.rb", 8, "note"],
+    ],
+    "complete",
+  ],
+  [["wrapped.rb", 11, "reserve"], [["wrapped.rb", 11, "reserve"]], "complete"],
+  [["wrapped.rb", 12, "cap"], [["wrapped.rb", 12, "cap"]], "complete"],
+  [["wrapped.rb", 13, "slot"], [["wrapped.rb", 13, "slot"]], "complete"],
+  [
+    ["nested.rb", 2, "reading"],
+    [
+      ["nested.rb", 2, "reading"],
+      ["nested.rb", 6, "reading"],
+      ["nested.rb", 7, "reading"],
+      ["nested.rb", 11, "reading"],
+    ],
+    "complete",
+  ],
+  [
+    ["nested.rb", 3, "pulse"],
+    [
+      ["nested.rb", 3, "pulse"],
+      ["nested.rb", 8, "pulse"],
+      ["nested.rb", 9, "pulse"],
+      ["nested.rb", 10, "pulse"],
+    ],
+    "complete",
+  ],
+  [["nested.rb", 19, "reading"], [["nested.rb", 19, "reading"]], "complete"],
+  [["nested.rb", 20, "pulse"], [["nested.rb", 20, "pulse"]], "complete"],
+  [
+    ["gates.rb", 9, "cx"],
+    [
+      ["gates.rb", 9, "cx"],
+      ["gates.rb", 10, "cx"],
+    ],
+    "complete",
+  ],
+  [
+    ["families.rb", 3, "area"],
+    [
+      ["families.rb", 3, "area"],
+      ["families.rb", 11, "area"],
+    ],
+    "complete",
+  ],
+  [
+    ["families.rb", 7, "fill"],
+    [
+      ["families.rb", 7, "fill"],
+      ["families.rb", 15, "fill"],
+    ],
+    "complete",
+  ],
+  [
+    ["families.rb", 18, "area"],
+    [
+      ["families.rb", 18, "area"],
+      ["families.rb", 22, "area"],
+    ],
+    "complete",
+  ],
+  [
+    ["heritage.rb", 2, "sap"],
+    [
+      ["heritage.rb", 2, "sap"],
+      ["heritage.rb", 7, "sap"],
+    ],
+    "complete",
+  ],
+  [
+    ["heritage.rb", 6, "leaf"],
+    [
+      ["heritage.rb", 3, "leaf"],
+      ["heritage.rb", 6, "leaf"],
+    ],
+    "complete",
+  ],
+  [
+    ["heritage.rb", 10, "drink"],
+    [
+      ["heritage.rb", 10, "drink"],
+      ["heritage.rb", 14, "drink"],
+    ],
+    "complete",
+  ],
+  [
+    ["heritage.rb", 17, "sap"],
+    [
+      ["heritage.rb", 17, "sap"],
+      ["heritage.rb", 19, "sap"],
+    ],
+    "complete",
+  ],
+  [["heritage.rb", 18, "drink"], [["heritage.rb", 18, "drink"]], "complete"],
+  [["families.rb", 19, "fill"], [["families.rb", 19, "fill"]], "complete"],
+  [["families.rb", 20, "describe"], [["families.rb", 20, "describe"]], "complete"],
+  [["families.rb", 21, "stamp"], [["families.rb", 21, "stamp"]], "complete"],
+  [
+    ["chains.rb", 2, "entries"],
+    [
+      ["chains.rb", 2, "entries"],
+      ["chains.rb", 4, "entries", 1],
+      ["chains.rb", 6, "entries"],
+    ],
+    "complete",
+  ],
+  [
+    ["chains.rb", 3, "notes"],
+    [
+      ["chains.rb", 3, "notes"],
+      ["chains.rb", 5, "notes"],
+    ],
+    "complete",
+  ],
+  [["chains.rb", 9, "entries"], [["chains.rb", 9, "entries"]], "complete"],
+  [["chains.rb", 10, "notes"], [["chains.rb", 10, "notes"]], "complete"],
 ];
 
-/** The methods each caller reaches through `calls` edges, one entry per call site. A bare read records no edge. */
+/**
+ * The methods each caller reaches through `calls` edges, one entry per call site. A bare name that is no local calls
+ * the method it names, wherever it stands: a statement, an argument, a block, a default value.
+ */
 export const RUBY_SCOPE_CALLS: ReadonlyArray<readonly [file: string, caller: string, callees: readonly string[]]> = [
   ["locals.rb", "initialize", ["locals.rb:name="]],
-  ["order.rb", "go", ["order.rb:ay"]],
-  ["order.rb", "check", ["order.rb:dy"]],
+  ["locals.rb", "reader", ["locals.rb:name"]],
+  ["locals.rb", "multi", []],
+  ["locals.rb", "block_param", []],
+  ["locals.rb", "plain_local", []],
+  ["order.rb", "go", ["order.rb:ay", "order.rb:ay"]],
+  ["order.rb", "check", ["order.rb:dy", "order.rb:dy"]],
   ["order.rb", "probe", ["order.rb:ay", "order.rb:dy"]],
-  ["order.rb", "tick", ["order.rb:z="]],
+  ["order.rb", "tick", ["order.rb:z", "order.rb:z="]],
+  ["scope.rb", "own", ["scope.rb:w"]],
+  ["scope.rb", "early", ["scope.rb:later"]],
+  ["scope.rb", "build", []],
+  ["scope.rb", "meta", []],
+  ["scope.rb", "inside", []],
   [
     "operator.rb",
     "run",
@@ -1073,17 +1647,78 @@ export const RUBY_SCOPE_CALLS: ReadonlyArray<readonly [file: string, caller: str
   // Where `self` is an instance, `self.mv` calls the accessor; in a `class << self` body it is the class and calls none.
   ["selfs.rb", "inst2", ["selfs.rb:mv", "selfs.rb:mv="]],
   ["selfs.rb", "meta2", []],
-  ["blocks.rb", "evaled", ["blocks.rb:limit="]],
-  ["blocks.rb", "looped_def", ["blocks.rb:name"]],
+  // A block closes over its method's `self`; what a block binds ends with it, and a parameter hides the reader inside.
+  ["blocks.rb", "b1", ["blocks.rb:name"]],
+  ["blocks.rb", "b2", ["blocks.rb:total"]],
+  ["blocks.rb", "b3", ["blocks.rb:limit", "blocks.rb:limit"]],
+  ["blocks.rb", "b4", ["blocks.rb:name"]],
+  ["blocks.rb", "b5", ["blocks.rb:limit"]],
+  ["blocks.rb", "evaled", ["blocks.rb:limit", "blocks.rb:limit="]],
+  ["blocks.rb", "looped_def", ["blocks.rb:name", "blocks.rb:name"]],
   ["blocks.rb", "struct_def", []],
   ["blocks.rb", "class_def", []],
   ["blocks.rb", "inst_eval_def", []],
-  ["shadow.rb", "property_only", ["shadow.rb:k=", "shadow.rb:wrap"]],
+  ["shadow.rb", "property_only", ["shadow.rb:k", "shadow.rb:k=", "shadow.rb:wrap"]],
+  ["shadow.rb", "pattern_test", ["shadow.rb:k"]],
+  ["shadow.rb", "lambda_paren", []],
+  ["shadow.rb", "named_capture", []],
   // A constant and a `self` that is the class call the singleton method; a constant never calls a generated method.
-  ["statics.rb", "build", ["statics.rb:level", "statics.rb:level"]],
-  ["statics.rb", "run", []],
+  ["statics.rb", "build", ["statics.rb:level", "statics.rb:level", "statics.rb:name"]],
+  ["statics.rb", "run", ["statics.rb:kind"]],
   ["statics.rb", "m", ["statics.rb:level", "statics.rb:name"]],
   ["use_statics.rb", "m", ["statics.rb:level", "statics.rb:name"]],
+  ["wrapped.rb", "report", ["wrapped.rb:cap", "wrapped.rb:reserve"]],
+  ["wrapped.rb", "stash", ["wrapped.rb:note="]],
+  [
+    "nested.rb",
+    "run",
+    [
+      "nested.rb:emit",
+      "nested.rb:emit",
+      "nested.rb:emit",
+      "nested.rb:pulse",
+      "nested.rb:pulse",
+      "nested.rb:pulse",
+      "nested.rb:reading",
+      "nested.rb:reading",
+      "nested.rb:reading",
+    ],
+  ],
+  ["nested.rb", "shadowed", []],
+  ["gates.rb", "uses_top_total", []],
+  ["gates.rb", "read", []],
+  // A callee may carry `@line` to name the declaration of a same-named decoy apart.
+  ["families.rb", "perimeter", ["families.rb:area@3"]],
+  ["families.rb", "pour", ["families.rb:fill@7"]],
+  ["families.rb", "roll", ["families.rb:area@18"]],
+  ["heritage.rb", "grow", ["heritage.rb:leaf"]],
+  ["heritage.rb", "sprout", ["heritage.rb:sap@2"]],
+  ["heritage.rb", "soak", ["heritage.rb:drink@10"]],
+  ["heritage.rb", "erode", ["heritage.rb:sap@17"]],
+  ["heritage.rb", "settle", []],
+  ["singletons.rb", "make", ["singletons.rb:verify"]],
+  ["singletons.rb", "flow", []],
+  ["chains.rb", "sum_entries", ["chains.rb:entries@2"]],
+  ["chains.rb", "each_note", ["chains.rb:notes@3"]],
+  ["chains.rb", "head_entry", ["chains.rb:entries@2"]],
+  ["mixed_use.rb", "fire", ["mixins.rb:stoke", "mixins.rb:kindle"]],
+  ["mixed_use.rb", "draw", ["mixins.rb:kindle"]],
+  ["dsl.rb", "stage_set", []],
+  ["dsl.rb", "kept", ["dsl.rb:around", "dsl.rb:beam"]],
+  ["dsl.rb", "with_args", ["dsl.rb:around", "dsl.rb:gel"]],
+  ["dsl.rb", "blind", []],
+  ["dsl.rb", "wrap", []],
+  ["dsl.rb", "forwards", ["dsl.rb:wrap"]],
+  ["dsl.rb", "evaluates", []],
+  ["dsl.rb", "closure_block", ["dsl.rb:wrap", "dsl.rb:beam"]],
+  ["dsl.rb", "chained_block", ["dsl.rb:forwards", "dsl.rb:beam"]],
+  ["dsl.rb", "evaluated_block", ["dsl.rb:evaluates"]],
+  ["dsl.rb", "qualified_in_dsl", ["dsl.rb:make"]],
+  ["mixed_use.rb", "outsider", ["mixins.rb:kindle"]],
+  ["includer.rb", "insider", ["mixins.rb:stoke"]],
+  ["inclusion.rb", "window", ["inclusion.rb:breeze"]],
+  ["nodraft.rb", "pane", []],
+  ["locals_ops.rb", "mask_bits", []],
 ];
 
 const locate = (site: { file: string; line: number; column: number }): string =>
@@ -1133,9 +1768,18 @@ export async function expectRubyScopeCalls(
   phase = "index",
 ): Promise<void> {
   const graph = await buildSymbolGraphDetailed(index);
-  const nameOf = (id: string): string => {
+  const fixtureNames = Object.entries(paths);
+  // A node id ends with the index of its name token in the file, which the fixture source turns into a line.
+  const lineOf = (id: string, file: string): number | undefined => {
+    const index = Number(id.split("::").at(-1));
+    const name = fixtureNames.find(([, absolute]) => fileIdentityKey(absolute) === fileIdentityKey(file))?.[0];
+    const source = name ? RUBY_SCOPE_SOURCES[name] : undefined;
+    return source === undefined || Number.isNaN(index) ? undefined : source.slice(0, index).split("\n").length;
+  };
+  const nameOf = (id: string, pinned: ReadonlySet<string>): string => {
     const node = graph.nodes.get(id);
-    return `${fileIdentityKey(node?.file ?? "")}:${node?.name}`;
+    const key = `${fileIdentityKey(node?.file ?? "")}:${node?.name}`;
+    return pinned.has(key) ? `${key}@${lineOf(id, node?.file ?? "")}` : key;
   };
   for (const [file, callerName, callees] of RUBY_SCOPE_CALLS) {
     const callers = [...graph.nodes.values()].filter(
@@ -1143,14 +1787,16 @@ export async function expectRubyScopeCalls(
     );
     expect(callers.length, `${phase}: ${file} ${callerName}`).toBe(1);
     const caller = callers[0]!;
-    const reached = graph.edges
-      .filter((edge) => edge.from === caller.id && edge.label === "calls")
-      .map((edge) => nameOf(edge.to))
-      .sort();
     const expected = callees.map((callee) => {
       const [calleeFile, name] = callee.split(":");
       return `${fileIdentityKey(paths[calleeFile!]!)}:${name}`;
     });
+    // A callee spelled `file:name@line` names one declaration among same-named ones.
+    const pinned = new Set(expected.filter((callee) => callee.includes("@")).map((callee) => callee.split("@")[0]!));
+    const reached = graph.edges
+      .filter((edge) => edge.from === caller.id && edge.label === "calls")
+      .map((edge) => nameOf(edge.to, pinned))
+      .sort();
     expect(reached, `${phase}: calls of ${callerName} in ${file}`).toEqual(expected.sort());
   }
 }

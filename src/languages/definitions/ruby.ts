@@ -2,10 +2,12 @@ import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import {
   rubyBloomProbeName,
+  rubyCallsReaderAndWriter,
   rubyGeneratedMemberVisibleAt,
   rubyGeneratedMembers,
   rubyInvokedMethodName,
   rubyIsSetterDeclaration,
+  rubyMethodVisibleAt,
   rubySelfIsInstanceAt,
   rubyUseSiteMethodName,
 } from "../../util/ruby-tree.js";
@@ -77,6 +79,8 @@ export const RUBY_DEF: LanguageDefinition = {
   generatedMembers: rubyGeneratedMembers,
   generatedMembersMarker: "attr_",
   generatedMemberVisibleAt: rubyGeneratedMemberVisibleAt,
+  methodVisibleAt: rubyMethodVisibleAt,
+  siteCallsMemberPair: rubyCallsReaderAndWriter,
   selfIsInstanceAt: rubySelfIsInstanceAt,
   invokedMemberName: rubyInvokedMethodName,
   useSiteMemberName: rubyUseSiteMethodName,

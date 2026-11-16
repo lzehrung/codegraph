@@ -171,6 +171,23 @@ export type ScopeNodeRow = {
     iterableField: string;
   };
   /**
+   * Node types that start a scope the local variables of the enclosing scopes do not reach into (Ruby `def`, `class`,
+   * `module`, `class << self`). A block is not one: it closes over the locals around it.
+   */
+  localScopeGateTypes?: ReadonlySet<string>;
+  /**
+   * Gate node types whose body is a scope for the body's own local variables alone. Every other declaration made in
+   * the body (a method, a class, a constant) binds outside it, as in the file scope, so a name keeps its reach.
+   */
+  localOnlyScopeTypes?: ReadonlySet<string>;
+  /** Name node types of local variables, which a gate hides, unlike constants and methods. */
+  localVariableNameTypes?: ReadonlySet<string>;
+  /**
+   * Fields that a function scope's node evaluates outside its own scope: the receiver of a Ruby `def object.name` is
+   * read where the `def` stands, so the locals around the `def` are still the receiver's.
+   */
+  outerEvaluatedFields?: Readonly<Record<string, string>>;
+  /**
    * Member-access node types whose property name is not a lexical use.
    * Python `self.run` must not attach to a same-named function; the property is a member.
    */
@@ -245,11 +262,48 @@ export function isValueNamespaceBinding(binding: { kind: Binding["kind"] }): boo
 }
 
 /**
+ * Whether a gate between a use and `binding` hides it: a local variable bound outside a Ruby `def`, `class`, or
+ * `module` is not that local inside it, while a method, a class, and a constant keep their reach.
+ */
+export function localHiddenByGate(
+  row: ScopeNodeRow,
+  binding: { kind?: Binding["kind"]; node?: SyntaxNodeLike },
+): boolean {
+  const isLocal = binding.kind === "local" || binding.kind === "param";
+  return isLocal && !!binding.node && !!row.localVariableNameTypes?.has(binding.node.type);
+}
+
+/** Whether leaving `scope` for its parent crosses a gate the locals of the outer scopes do not reach through. */
+export function scopeIsLocalGate(scope: Scope): boolean {
+  return !!scope.gate;
+}
+
+/**
+ * A class or module body that declared no local: nothing in it can name a use, and climbing out of it only crosses its
+ * gate. No use is ever barred from such a body, so a lookup skips it without the checks a scope with bindings needs.
+ */
+export function scopeIsEmptyBody(scope: Scope): boolean {
+  return scope.gate === "body" && !scope.map.size;
+}
+
+/** Whether the language hides a method declared at `binding.node` from a bare name at `useNode`. */
+function methodHiddenFrom(
+  binding: { kind?: Binding["kind"]; node?: SyntaxNodeLike; generatedOwner?: SyntaxNodeLike },
+  useNode: SyntaxNodeLike | undefined,
+  support: { methodVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean },
+): boolean {
+  const declaration = binding.node;
+  if (binding.generatedOwner || binding.kind !== "function" || !declaration || !useNode) return false;
+  return !!support.methodVisibleAt && !support.methodVisibleAt(declaration, useNode);
+}
+
+/**
  * Whether `binding` in a scope of `scopeKind` names a use at `useStartIndex`.
  * Whole-scope bindings name every use in the scope. Every other binding names only uses at
  * or after its declaration. Python also rejects a function's own eager default before its
  * name is bound; other declaration-type coverage is recorded when the binding is registered.
- * A generated member names only the uses its language says its owner reaches.
+ * A generated member names only the uses its language says its owner reaches, and a method only the uses its
+ * language says the type that declares it reaches.
  */
 export function bindingCoversUse(
   row: ScopeNodeRow,
@@ -258,16 +312,21 @@ export function bindingCoversUse(
     def?: Range;
     coversEnclosingScope?: boolean;
     kind?: Binding["kind"];
+    node?: SyntaxNodeLike;
     generatedOwner?: SyntaxNodeLike;
   },
   useStartIndex: number,
   useNode: SyntaxNodeLike | undefined,
-  support: { generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean },
+  support: {
+    generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+    methodVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+  },
 ): boolean {
   const pythonFunction = row.moduleBindingsAtFunctionRuntime && binding.kind === "function";
   if (pythonFunction && useNode && pythonFunctionPendingInDefault(binding.def?.start.index, useNode)) return false;
   const owner = binding.generatedOwner;
   if (owner && !(useNode && support.generatedMemberVisibleAt?.(owner, useNode))) return false;
+  if (methodHiddenFrom(binding, useNode, support)) return false;
   if (binding.coversEnclosingScope || row.wholeScopeKinds?.has(scopeKind)) return true;
   const defIndex = binding.def?.start.index;
   if (defIndex === undefined) return true;
@@ -565,6 +624,10 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     childSkipNameTypes: new Set(["identifier"]),
     moduleRootTypes: new Set(["program", "module"]),
     wholeScopeDeclarationTypes: new Set(["class", "module", "method", "singleton_method"]),
+    localScopeGateTypes: new Set(["method", "singleton_method", "class", "module", "singleton_class"]),
+    localOnlyScopeTypes: new Set(["class", "module", "singleton_class"]),
+    localVariableNameTypes: new Set(["identifier"]),
+    outerEvaluatedFields: { singleton_method: "object" },
   },
   zig: {
     parameterParents: new Set(["parameter"]),
@@ -681,13 +744,19 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
 
 /** Python defaults use enclosing scopes; class bodies are not closures for nested runtime scopes. */
 export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeLike): boolean {
+  const scopeType = scope.node.type;
+  const outerField = scope.kind === "function" ? row.outerEvaluatedFields?.[scopeType] : undefined;
+  const outerExpression = outerField ? scope.node.childForFieldName(outerField) : null;
+  if (outerExpression && use.startIndex >= outerExpression.startIndex && use.endIndex <= outerExpression.endIndex) {
+    return false;
+  }
   // A C# foreach variable belongs to the loop body, not its collection expression.
-  if (scope.node.type === "foreach_statement") {
+  if (scopeType === "foreach_statement") {
     const iterable = scope.node.childForFieldName("right");
     if (iterable && use.startIndex >= iterable.startIndex && use.endIndex <= iterable.endIndex) return false;
   }
   // A C# lambda's parameter defaults and types are evaluated outside its parameter bindings.
-  if (scope.node.type === "lambda_expression") {
+  if (scopeType === "lambda_expression") {
     const parameters = scope.node.childForFieldName("parameters");
     const inParameters = parameters && use.startIndex >= parameters.startIndex && use.endIndex <= parameters.endIndex;
     const parameterName = use.parent?.type === "parameter" && use.parent.childForFieldName("name")?.id === use.id;
@@ -769,16 +838,27 @@ export function laterLocalBlocksOuterUse(
  */
 /** Innermost scope whose node contains `currentNode`. */
 export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
-  let best: Scope | undefined;
-  for (const scope of scopeIndex.allScopes) {
-    if (
-      currentNode.startIndex >= scope.node.startIndex &&
-      currentNode.endIndex <= scope.node.endIndex &&
-      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
-    )
-      best = scope;
+  // Scopes are pushed in tree order, so they are sorted by where they start, and the innermost scope that holds the node
+  // starts last among those that do: search for the last scope starting at or before the node, then walk back to the
+  // first that holds it, instead of testing every scope of the file.
+  const scopes = scopeIndex.allScopes;
+  let low = 0;
+  let high = scopes.length - 1;
+  let last = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (scopes[middle]!.node.startIndex <= currentNode.startIndex) {
+      last = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
-  return best;
+  for (let index = last; index >= 0; index -= 1) {
+    const scope = scopes[index]!;
+    if (currentNode.endIndex <= scope.node.endIndex) return scope;
+  }
+  return undefined;
 }
 
 /** Check a same-file definition found outside lexical lookup against file-scope declaration order. */

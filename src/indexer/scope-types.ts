@@ -63,6 +63,13 @@ export type Scope = {
   pendingCoveringNames?: Set<string>;
   /** Syntax-node ids of uses resolved when this scope closes. Absent when nothing is waiting. */
   queuedUseIds?: number[];
+  /**
+   * Set when the scope's node is a gate the locals of the outer scopes do not reach through: a Ruby `def`, or the body
+   * of a `class`, `module`, or `class << self`. A body holds only its own locals (its methods, classes, and constants
+   * bind in the scope outside it), so it never gains a binding that covers an earlier use. Reading it here keeps a
+   * lookup from reading the node's type at every scope it climbs.
+   */
+  gate?: "def" | "body";
 };
 
 export type ScopeIndex = {

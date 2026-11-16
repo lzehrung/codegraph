@@ -7888,7 +7888,7 @@ describe("Ruby member names, generated accessors, and writer calls", () => {
 });
 
 describe("Ruby generated methods outside their own class", () => {
-  it("names a generated method only inside its owner's instance methods and keeps decoy classes apart", async () => {
+  it("names a generated method only inside its owner's instance methods, reads wrapped attr macros and nested calls, and keeps decoy classes and scope gates apart", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-goto-"));
     try {
       const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);

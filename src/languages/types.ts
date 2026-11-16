@@ -148,6 +148,19 @@ export interface LanguageDefinition {
   generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
 
   /**
+   * Whether a bare name at `use` can name the method declared at the name token `declaration`. Every type of a Ruby file
+   * shares the file scope, so scope alone would bind a method of one class in an unrelated class that comes before or
+   * after it. A language that answers lets scope lookup skip the methods of types its rules do not reach from `use`.
+   */
+  methodVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+
+  /**
+   * Whether the member-access property `property` calls two methods through one spelling, so editing its text renames
+   * a call of each: Ruby `x.total += 1` and `x.total ||= 2` call the reader `total` and the writer `total=`.
+   */
+  siteCallsMemberPair?: (property: SyntaxNodeLike) => boolean;
+
+  /**
    * Whether the receiver `self` at `use` is an instance of the enclosing class, rather than the class itself. A
    * generated method is an instance method, so `self.name` reaches it only where `self` is an instance: Ruby inside an
    * instance method, never in a singleton method, a `class << self` body, or a class body.

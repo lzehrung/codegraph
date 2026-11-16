@@ -9702,7 +9702,7 @@ describe("Ruby member names, generated accessors, and writer calls", () => {
 });
 
 describe("Ruby generated methods outside their own class", () => {
-  it("lists only the sites inside the owner and reports the coverage a same-shaped def does", async () => {
+  it("lists only the sites inside the owner, wrapped attr macros and nested calls included, and reports the coverage a same-shaped def does", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-scope-references-"));
     try {
       const paths = await writeFixtureFiles(root, RUBY_SCOPE_SOURCES);
