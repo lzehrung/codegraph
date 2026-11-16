@@ -14,7 +14,8 @@ import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { defNodeId, type SymbolGraph } from "../src/graphs/symbol-graph.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { previewRenameWithSession } from "../src/agent/rename-preview.js";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import { workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 
 type Fixture = { paths: Record<string, string>; rows: Record<string, readonly string[]> };
 type Site = { file: string; line: number; column: number };
@@ -89,6 +90,17 @@ async function referenceSites(index: ProjectIndex, declaration: Site): Promise<s
   return (await referenceAnswer(index, declaration)).sites;
 }
 
+/** Every reference of the declaration at `declaration`, as `file:line:column` strings in file, line, column order. */
+async function referenceSpots(index: ProjectIndex, declaration: Site): Promise<string[]> {
+  const refs = await findReferences(index, declaration);
+  expect(refs.status).toBe("ok");
+  if (refs.status !== "ok") return [];
+  return refs.references
+    .map((ref) => ({ name: path.basename(ref.file), line: ref.range.start.line, column: ref.range.start.column }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.line - b.line || a.column - b.column)
+    .map((ref) => `${ref.name}:${ref.line}:${ref.column}`);
+}
+
 /** The `label` targets of `source` must be exactly the declarations at `declarations`. */
 async function expectEdges(
   index: ProjectIndex,
@@ -119,6 +131,146 @@ async function expectCalls(
   declarations: readonly Site[],
 ): Promise<void> {
   await expectEdges(index, graph, file, caller, "calls", declarations);
+}
+
+type RenameAnswer = { safe: boolean; edits: string[]; spots: string[]; unsafe: string[]; why: string };
+
+/** Preview renaming the `name` declared on `line` of `file`: its edits as `file:line` and `file:line:column`. */
+async function renamePreview(
+  session: AgentSession,
+  root: string,
+  name: string,
+  file: string,
+  line: number,
+): Promise<RenameAnswer> {
+  const found = await workspaceSymbolsWithSession(session, { root, query: name });
+  const symbol = found.symbols.find(
+    (candidate) => path.basename(candidate.location.file) === file && candidate.location.range.start.line === line,
+  );
+  if (!symbol) throw new Error(`Missing ${name} at ${file}:${line}`);
+  const preview = await previewRenameWithSession(session, { root, handle: symbol.handle, newName: "renamed" });
+  const ordered = [...preview.edits].sort(
+    (a, b) =>
+      path.basename(a.file).localeCompare(path.basename(b.file)) ||
+      a.range.start.line - b.range.start.line ||
+      a.range.start.column - b.range.start.column,
+  );
+  return {
+    safe: preview.safe,
+    edits: ordered.map((edit) => `${path.basename(edit.file)}:${edit.range.start.line}`),
+    spots: ordered.map((edit) => `${path.basename(edit.file)}:${edit.range.start.line}:${edit.range.start.column}`),
+    unsafe: preview.unsafeSites.map((site) => site.reason),
+    why: preview.unsafeSites.map((site) => site.provenance.reason ?? "").join("|"),
+  };
+}
+
+/** Run `run` with an agent session over `root`, first from a cold build and then from the reopened disk cache. */
+async function eachRenameSession(root: string, run: (session: AgentSession) => Promise<void>): Promise<void> {
+  for (let pass = 0; pass < 2; pass += 1) {
+    clearMemoryCache();
+    const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+    try {
+      await run(session);
+    } finally {
+      session.invalidate();
+    }
+  }
+}
+
+/** The 1-based column of the `occurrence`-th `token` on the 1-based `line` of `lines`. */
+function columnOf(lines: readonly string[], line: number, token: string, occurrence = 0): number {
+  const row = lines[line - 1];
+  if (row === undefined) throw new Error(`Missing line ${line}`);
+  let at = -1;
+  for (let count = 0; count <= occurrence; count += 1) at = row.indexOf(token, at + 1);
+  if (at < 0) throw new Error(`Missing ${token} #${occurrence} on line ${line}: ${row}`);
+  return at + 1;
+}
+
+type WarmColdProject = {
+  root: string;
+  /** Project-relative path to its current lines. A deleted file leaves this map and keeps its path below. */
+  state: Map<string, readonly string[]>;
+  /** Project-relative path to its absolute path. */
+  paths: Map<string, string>;
+};
+
+/** Goto at every occurrence of `tokens`, references of each declaration, and the call edges, in a stable order. */
+async function warmColdAnswers(
+  index: ProjectIndex,
+  project: WarmColdProject,
+  tokens: readonly string[],
+): Promise<string[]> {
+  const { root, state, paths } = project;
+  const rel = (file: string) => path.relative(root, file).replace(/\\/g, "/");
+  const out: string[] = [];
+  for (const [file, lines] of [...state].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [row, text] of lines.entries()) {
+      for (const token of tokens) {
+        for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + 1)) {
+          const site = { file: paths.get(file)!, line: row + 1, column: at + 1 };
+          const target = await goToDefinition(index, site);
+          const where =
+            target.status === "ok" ? `${rel(target.definition.file)}:${target.definition.range.start.line}` : "none";
+          out.push(`goto ${file}:${row + 1}:${at + 1} ${where}`);
+          const before = text.slice(0, at);
+          if (!before.endsWith("func ") && !before.endsWith("var ")) continue;
+          const refs = await findReferences(index, site);
+          if (refs.status !== "ok") throw new Error(`${file}:${row + 1} ${refs.status}`);
+          const found = refs.references.map((ref) => `${rel(ref.file)}:${ref.range.start.line}`).sort();
+          out.push(`refs ${file}:${row + 1} ${found.join(",")} ${refs.referenceCoverage.state}`);
+        }
+      }
+    }
+  }
+  const graph = await buildSymbolGraphDetailed(index);
+  for (const edge of graph.edges) {
+    if (edge.label === "calls" && edge.site) {
+      out.push(
+        `edge ${rel(edge.site.file)}:${edge.site.range.start.line} ${edge.to.replace(/\\/g, "/").replace(root.replace(/\\/g, "/"), "")}`,
+      );
+    }
+  }
+  return out.sort();
+}
+
+/** A warm memory build, a reopened disk build, and an incremental build must answer as a cold build does. */
+async function compareBuilds(project: WarmColdProject, tokens: readonly string[], step: string): Promise<string[]> {
+  const { root } = project;
+  const cold = await warmColdAnswers(await buildProjectIndex(root, { cache: "off", threads: 1 }), project, tokens);
+  expect(
+    await warmColdAnswers(await buildProjectIndex(root, { cache: "memory", threads: 1 }), project, tokens),
+    `memory after ${step}`,
+  ).toEqual(cold);
+  clearMemoryCache();
+  expect(
+    await warmColdAnswers(await buildProjectIndex(root, { cache: "disk", threads: 1 }), project, tokens),
+    `disk after ${step}`,
+  ).toEqual(cold);
+  expect(
+    await warmColdAnswers(await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 }), project, tokens),
+    `incremental after ${step}`,
+  ).toEqual(cold);
+  return cold;
+}
+
+async function writeProjectFile(project: WarmColdProject, file: string, lines: readonly string[]): Promise<void> {
+  project.state.set(file, lines);
+  await writeFile(project.paths.get(file)!, `${lines.join("\n")}\n`);
+}
+
+async function deleteProjectFile(project: WarmColdProject, file: string): Promise<void> {
+  await unlink(project.paths.get(file)!);
+  project.state.delete(file);
+}
+
+async function moveProjectFile(project: WarmColdProject, from: string, to: string): Promise<void> {
+  const source = project.paths.get(from)!;
+  const target = path.join(path.dirname(source), path.basename(to));
+  await rename(source, target);
+  project.state.set(to, project.state.get(from)!);
+  project.state.delete(from);
+  project.paths.set(to, target);
 }
 
 const SHAPES = [
@@ -963,55 +1115,8 @@ describe("Swift callable facts after edits, deletes, renames, and restores", () 
       );
       const state = new Map<string, readonly string[]>(Object.entries(initial));
       const paths = new Map<string, string>(Object.entries(written));
-      const rel = (file: string) => path.relative(root, file).replace(/\\/g, "/");
-      /** Goto at every `send`, references of each declaration, and the call edges, in a stable order. */
-      const answers = async (index: ProjectIndex): Promise<string[]> => {
-        const out: string[] = [];
-        for (const [file, lines] of [...state].sort(([a], [b]) => a.localeCompare(b))) {
-          for (const [row, text] of lines.entries()) {
-            for (let at = text.indexOf("send"); at >= 0; at = text.indexOf("send", at + 1)) {
-              const site = { file: paths.get(file)!, line: row + 1, column: at + 1 };
-              const target = await goToDefinition(index, site);
-              const where =
-                target.status === "ok"
-                  ? `${rel(target.definition.file)}:${target.definition.range.start.line}`
-                  : "none";
-              out.push(`goto ${file}:${row + 1}:${at + 1} ${where}`);
-              if (!text.slice(0, at).endsWith("func ")) continue;
-              const refs = await findReferences(index, site);
-              if (refs.status !== "ok") throw new Error(`${file}:${row + 1} ${refs.status}`);
-              const found = refs.references.map((ref) => `${rel(ref.file)}:${ref.range.start.line}`).sort();
-              out.push(`refs ${file}:${row + 1} ${found.join(",")} ${refs.referenceCoverage.state}`);
-            }
-          }
-        }
-        const graph = await buildSymbolGraphDetailed(index);
-        for (const edge of graph.edges) {
-          if (edge.label === "calls" && edge.site) {
-            out.push(
-              `edge ${rel(edge.site.file)}:${edge.site.range.start.line} ${edge.to.replace(/\\/g, "/").replace(root.replace(/\\/g, "/"), "")}`,
-            );
-          }
-        }
-        return out.sort();
-      };
-      const compare = async (step: string): Promise<string[]> => {
-        const cold = await answers(await buildProjectIndex(root, { cache: "off", threads: 1 }));
-        expect(
-          await answers(await buildProjectIndex(root, { cache: "memory", threads: 1 })),
-          `memory after ${step}`,
-        ).toEqual(cold);
-        clearMemoryCache();
-        expect(
-          await answers(await buildProjectIndex(root, { cache: "disk", threads: 1 })),
-          `disk after ${step}`,
-        ).toEqual(cold);
-        expect(
-          await answers(await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 })),
-          `incremental after ${step}`,
-        ).toEqual(cold);
-        return cold;
-      };
+      const project: WarmColdProject = { root, state, paths };
+      const compare = (step: string) => compareBuilds(project, ["send"], step);
       const write = async (file: string, lines: readonly string[]) => {
         state.set(file, lines);
         await writeFile(paths.get(file)!, `${lines.join("\n")}\n`);
@@ -1782,6 +1887,793 @@ describe("Swift witnesses spelled differently from their requirements", () => {
           at(lineOf("func wrap(_ value: Box<(String, Int)>)"), "wrap"),
         ]);
         await expectCalls(index, graph, file, "useBadTuple", []);
+      });
+    });
+  });
+});
+
+describe("Swift trailing closures against labeled overloads", () => {
+  it("resolves a free function and a method whose same-named overloads carry other labels", async () => {
+    const rows = [
+      "func perform(to target: Int, action: () -> Void) {}",
+      "func perform(at target: Int, action: () -> Void) {}",
+      "struct Box {",
+      "  func send(to target: Int, action: () -> Void) {}",
+      "  func send(at target: Int, action: () -> Void) {}",
+      "}",
+      "struct Decoy { func send(to target: Int, action: () -> Void) {} }",
+      "func use(box: Box) {",
+      "  perform(to: 1) {}",
+      "  box.send(to: 1) {}",
+      "  perform(at: 2) {}",
+      "  box.send(at: 2) {}",
+      "}",
+    ];
+    await withFixture("cg-swift-trailing-labels-", { "Labels.swift": rows }, async (fixture, root) => {
+      const at = (line: number, token: string) => siteOf(fixture, "Labels.swift", line, token);
+      await eachIndexPass(root, async (index) => {
+        await expectGoto(index, at(9, "perform"), at(1, "perform"));
+        await expectGoto(index, at(10, "send"), at(4, "send"));
+        await expectGoto(index, at(11, "perform"), at(2, "perform"));
+        await expectGoto(index, at(12, "send"), at(5, "send"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at(1, "perform"))).toEqual(complete("Labels.swift:1", "Labels.swift:9"));
+        expect(await referenceAnswer(index, at(2, "perform"))).toEqual(complete("Labels.swift:2", "Labels.swift:11"));
+        expect(await referenceAnswer(index, at(4, "send"))).toEqual(complete("Labels.swift:4", "Labels.swift:10"));
+        expect(await referenceAnswer(index, at(5, "send"))).toEqual(complete("Labels.swift:5", "Labels.swift:12"));
+        expect(await referenceAnswer(index, at(7, "send"))).toEqual(complete("Labels.swift:7"));
+        const graph = await buildSymbolGraphDetailed(index);
+        const file = fixture.paths["Labels.swift"]!;
+        await expectCalls(index, graph, file, "use", [
+          at(1, "perform"),
+          at(4, "send"),
+          at(2, "perform"),
+          at(5, "send"),
+        ]);
+      });
+    });
+  });
+});
+
+describe("Swift enum shorthand with an associated value", () => {
+  it("resolves the payload case from its written type, excludes another enum's case, and renames it safely", async () => {
+    const rows = [
+      "enum Event { case empty; case value(Int) }",
+      "enum Decoy { case value(Int) }",
+      "func accept(_ event: Event) {}",
+      "let first: Event = .value(1)",
+      "accept(.value(2))",
+      "func check(_ event: Event) {",
+      "  switch event {",
+      "  case .value(let number): print(number)",
+      "  case .empty: break",
+      "  }",
+      "}",
+    ];
+    await withFixture("cg-swift-payload-case-", { "Event.swift": rows }, async (fixture, root) => {
+      const at = (line: number, token: string) => siteOf(fixture, "Event.swift", line, token);
+      await eachIndexPass(root, async (index) => {
+        for (const line of [4, 5, 8]) await expectGoto(index, at(line, "value"), at(1, "value"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at(1, "value"))).toEqual(
+          complete("Event.swift:1", "Event.swift:4", "Event.swift:5", "Event.swift:8"),
+        );
+        expect(await referenceAnswer(index, at(2, "value"))).toEqual(complete("Event.swift:2"));
+      });
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+        try {
+          const found = await workspaceSymbolsWithSession(session, { root, query: "value" });
+          const preview = async (line: number) => {
+            const symbol = found.symbols.find((candidate) => candidate.location.range.start.line === line);
+            if (!symbol) throw new Error(`Missing value at ${line}`);
+            const result = await previewRenameWithSession(session, { root, handle: symbol.handle, newName: "renamed" });
+            return { safe: result.safe, lines: result.edits.map((edit) => edit.range.start.line).sort() };
+          };
+          expect(await preview(1)).toEqual({ safe: true, lines: [1, 4, 5, 8] });
+          expect(await preview(2)).toEqual({ safe: true, lines: [2] });
+        } finally {
+          session.invalidate();
+        }
+      }
+    });
+  });
+});
+
+describe("Swift protocol property requirements", () => {
+  const rows = {
+    "Protocol.swift": [
+      "protocol Named { var title: String { get set } }",
+      "protocol Refined: Named { var subtitle: String { get } }",
+    ],
+    "Models.swift": [
+      "struct Item: Named { var title: String }",
+      "struct Deep: Refined { var title: String; var subtitle: String }",
+      "struct Other { var title: String }",
+      "struct Late {}",
+      "struct Split { var title: String }",
+    ],
+    "Ext.swift": [
+      'extension Late: Named { var title: String { get { "late" } set { } } }',
+      "extension Split: Named {}",
+    ],
+    "Use.swift": [
+      "func read(_ n: Named, _ i: Item, _ d: Deep, _ o: Other, _ l: Late, _ s: Split) {",
+      "  _ = n.title",
+      "  _ = i.title",
+      "  _ = d.title",
+      "  _ = o.title",
+      "  _ = l.title",
+      "  _ = s.title",
+      "}",
+    ],
+  };
+
+  it("lists protocol-typed uses with the requirement and concrete uses with the witness", async () => {
+    await withFixture("cg-swift-property-requirement-", rows, async (fixture, root) => {
+      const at = (file: string, line: number, token: string) => siteOf(fixture, file, line, token);
+      await eachIndexPass(root, async (index) => {
+        await expectGoto(index, at("Use.swift", 2, "title"), at("Protocol.swift", 1, "title"));
+        await expectGoto(index, at("Use.swift", 3, "title"), at("Models.swift", 1, "title"));
+        await expectGoto(index, at("Use.swift", 5, "title"), at("Models.swift", 3, "title"));
+        await expectGoto(index, at("Use.swift", 6, "title"), at("Ext.swift", 1, "title"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at("Protocol.swift", 1, "title"))).toEqual(
+          complete("Protocol.swift:1", "Use.swift:2"),
+        );
+        expect(await referenceAnswer(index, at("Models.swift", 1, "title"))).toEqual(
+          complete("Models.swift:1", "Use.swift:3"),
+        );
+        expect(await referenceAnswer(index, at("Models.swift", 3, "title"))).toEqual(
+          complete("Models.swift:3", "Use.swift:5"),
+        );
+      });
+    });
+  });
+
+  it("never resolves a bare name, an argument label, or a binding in another file to a requirement", async () => {
+    const files = {
+      "Proto.swift": [
+        "protocol Relay { var title: String { get }; var count: Int { get }; associatedtype Element; func send(to value: Int) }",
+      ],
+      "Use.swift": [
+        "struct Maker { var title: String }",
+        'func make() -> Maker { Maker(title: "x") }',
+        "func use() { send(to: 1) }",
+        "func show() { print(title) }",
+        "func ifLet(_ x: String?) { if let title = x { print(title) } }",
+        'func closure() { let f = { (title: String) in print(title) }; f("y") }',
+        "func each(_ xs: [Int]) { xs.forEach { count in print(count) } }",
+        "func pattern(_ o: Int?) { if case .some(let count) = o { print(count) } }",
+        "func loop(_ ts: [String]) { for title in ts { print(title) } }",
+        "struct Box<Element> { var item: Element }",
+        "func param(title: String) { print(title) }",
+      ],
+    };
+    await withFixture("cg-swift-requirement-leak-", files, async (fixture, root) => {
+      const at = (line: number, token: string, occurrence = 0) => siteOf(fixture, "Use.swift", line, token, occurrence);
+      await eachIndexPass(root, async (index) => {
+        await expectUnresolved(index, at(2, "title"));
+        await expectUnresolved(index, at(3, "send"));
+        await expectUnresolved(index, at(4, "title"));
+        // A condition, closure, pattern, or loop binding and a generic parameter are locals the requirement never names.
+        await expectUnresolved(index, at(5, "title", 1));
+        await expectUnresolved(index, at(6, "title", 1));
+        await expectUnresolved(index, at(7, "count", 1));
+        await expectUnresolved(index, at(8, "count", 1));
+        await expectUnresolved(index, at(9, "title", 1));
+        await expectUnresolved(index, at(10, "Element", 1));
+        // A function parameter is its own declaration.
+        await expectGoto(index, at(11, "title", 1), at(11, "title"));
+      });
+    });
+  });
+
+  it("leaves a receiver typed any, some, optional, or generic unresolved and keeps the references partial", async () => {
+    const rows = [
+      "protocol Named { var title: String { get } }",
+      "func plain(_ n: Named) { _ = n.title }",
+      "func existential(_ n: any Named) { _ = n.title }",
+      "func opaque(_ n: some Named) { _ = n.title }",
+      "func optional(_ n: Named?) { _ = n?.title }",
+      "func generic<T: Named>(_ n: T) { _ = n.title }",
+    ];
+    await withFixture("cg-swift-requirement-receivers-", { "Receivers.swift": rows }, async (fixture, root) => {
+      const at = (line: number, token: string) => siteOf(fixture, "Receivers.swift", line, token);
+      await eachIndexPass(root, async (index) => {
+        // Only a type written as the protocol alone proves the receiver. The others are documented limits: the member
+        // is not named, and the requirement's references say they may be missing a use.
+        await expectGoto(index, at(2, "title"), at(1, "title"));
+        for (const line of [3, 4, 5, 6]) await expectUnresolved(index, at(line, "title"));
+        const references = await referenceAnswer(index, at(1, "title"));
+        expect(references.sites).toEqual(["Receivers.swift:1", "Receivers.swift:2"]);
+        expect(references.state).toBe("partial");
+      });
+    });
+  });
+
+  it("renames a requirement with its proven witnesses and uses, and leaves a nonconformer alone", async () => {
+    await withFixture("cg-swift-property-rename-", rows, async (_fixture, root) => {
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const session = createAgentSession({ root, buildOptions: { cache: "disk", threads: 1 } });
+        try {
+          const rename = async (name: string, file: string, line: number) => {
+            const found = await workspaceSymbolsWithSession(session, { root, query: name });
+            const symbol = found.symbols.find(
+              (candidate) =>
+                path.basename(candidate.location.file) === file && candidate.location.range.start.line === line,
+            );
+            if (!symbol) throw new Error(`Missing ${name} at ${file}:${line}`);
+            const preview = await previewRenameWithSession(session, {
+              root,
+              handle: symbol.handle,
+              newName: "renamed",
+            });
+            return {
+              safe: preview.safe,
+              edits: preview.edits.map((edit) => `${path.basename(edit.file)}:${edit.range.start.line}`).sort(),
+              unsafe: preview.unsafeSites.map((site) => site.reason),
+              why: preview.unsafeSites.map((site) => site.provenance.reason ?? "").join("|"),
+            };
+          };
+          // The requirement, the witness of a type, of an extension, of a split extension, and of a refining protocol.
+          expect(await rename("title", "Protocol.swift", 1)).toMatchObject({
+            safe: true,
+            edits: [
+              "Ext.swift:1",
+              "Models.swift:1",
+              "Models.swift:2",
+              "Models.swift:5",
+              "Protocol.swift:1",
+              "Use.swift:2",
+              "Use.swift:3",
+              "Use.swift:4",
+              "Use.swift:6",
+              "Use.swift:7",
+            ],
+          });
+          // `Other` does not conform, so its property and its use stay out of the requirement's rename and rename alone.
+          expect(await rename("title", "Models.swift", 3)).toMatchObject({
+            safe: true,
+            edits: ["Models.swift:3", "Use.swift:5"],
+          });
+          // A witness renamed alone would leave its type without the requirement.
+          for (const [file, line] of [
+            ["Models.swift", 1],
+            ["Ext.swift", 1],
+          ] as const) {
+            const witness = await rename("title", file, line);
+            expect(witness.safe).toBe(false);
+            expect(witness.unsafe).toEqual(["ambiguous_target"]);
+            expect(witness.why).toContain("protocol requirement");
+          }
+        } finally {
+          session.invalidate();
+        }
+      }
+    });
+  });
+
+  it("reports unsafe when a witness cannot be proven from the conformance clauses", async () => {
+    const unproven = [
+      "protocol Parented { var inherited: String { get } }",
+      'class Parent { var inherited: String { "p" } }',
+      "class Child: Parent, Parented {}",
+      "protocol Conditional { var cond: Int { get } }",
+      "struct Box<T> {}",
+      "extension Box: Conditional where T == Int { var cond: Int { 1 } }",
+      "protocol Aliased { var aka: Int { get } }",
+      "typealias AliasedAgain = Aliased",
+      "struct ViaAlias: AliasedAgain { var aka: Int }",
+      "protocol First { var shared: Int { get } }",
+      "protocol Second { var shared: Int { get } }",
+      "struct Both: First, Second { var shared: Int }",
+      "protocol Overridden { var over: Int { get } }",
+      "class Base: Overridden { var over: Int { 1 } }",
+      "class Sub: Base { override var over: Int { 2 } }",
+    ];
+    await withFixture("cg-swift-property-unproven-", { "Unproven.swift": unproven }, async (_fixture, root) => {
+      const session = createAgentSession({ root, buildOptions: { cache: "off", threads: 1 } });
+      try {
+        for (const [name, line] of [
+          ["inherited", 1],
+          ["cond", 4],
+          ["aka", 7],
+          ["shared", 10],
+          ["over", 13],
+        ] as const) {
+          const found = await workspaceSymbolsWithSession(session, { root, query: name });
+          const symbol = found.symbols.find((candidate) => candidate.location.range.start.line === line);
+          if (!symbol) throw new Error(`Missing ${name} at ${line}`);
+          const preview = await previewRenameWithSession(session, { root, handle: symbol.handle, newName: "renamed" });
+          expect(preview.safe, name).toBe(false);
+          expect(
+            preview.unsafeSites.map((site) => site.reason),
+            name,
+          ).toContain("ambiguous_target");
+        }
+      } finally {
+        session.invalidate();
+      }
+    });
+  });
+
+  it("reports unsafe, with its reason, for each form the witness walk cannot prove", async () => {
+    const named = "protocol Named { var title: String { get } }";
+    type Case = { name: string; rows: string[]; token: string; line: number; why: string; edits?: string[] };
+    const cases: Case[] = [
+      {
+        name: "a refining protocol that repeats the requirement",
+        rows: [
+          "protocol A { var x: Int { get } }",
+          "protocol B: A { var x: Int { get } }",
+          "struct S: B { var x: Int }",
+        ],
+        token: "x",
+        line: 2,
+        why: "a refined protocol declares the same requirement",
+      },
+      {
+        name: "an enum case",
+        rows: ["protocol Named { static var none: Self { get } }", "enum Kind: Named { case none }"],
+        token: "none",
+        line: 1,
+        why: "an enum case may witness the requirement",
+      },
+      {
+        name: "a nested conforming type",
+        rows: [named, "struct Outer { struct Item: Named { var title: String } }"],
+        token: "title",
+        line: 1,
+        why: "a nested conforming type may have uses that are not resolved",
+      },
+      {
+        name: "a constrained extension that supplies a default",
+        rows: [named, "protocol Other {}", 'extension Other where Self: Named { var title: String { "d" } }'],
+        token: "title",
+        line: 1,
+        why: "a constrained protocol extension may supply a default",
+      },
+      {
+        name: "more conforming types than the walk lists",
+        rows: [named, ...Array.from({ length: 130 }, (_, count) => `struct Many${count}: Named { var title: String }`)],
+        token: "title",
+        line: 1,
+        why: "the conforming types are too many to list",
+        // The walk stops at the bound, so no witness is listed and none of its uses is searched.
+        edits: ["Case.swift:1"],
+      },
+      {
+        name: "more refining protocols than the walk lists",
+        rows: [
+          named.replace("Named", "P0"),
+          ...Array.from({ length: 40 }, (_, count) => `protocol P${count + 1}: P${count} {}`),
+        ],
+        token: "title",
+        line: 1,
+        why: "the protocols that refine it are too many to list",
+        edits: ["Case.swift:1"],
+      },
+    ];
+    for (const { name, rows, token, line, why, edits } of cases) {
+      await withFixture("cg-swift-property-reason-", { "Case.swift": rows }, async (_fixture, root) => {
+        await eachRenameSession(root, async (session) => {
+          const answer = await renamePreview(session, root, token, "Case.swift", line);
+          expect(answer.safe, name).toBe(false);
+          expect(answer.unsafe, name).toContain("ambiguous_target");
+          expect(answer.why, name).toContain(why);
+          if (edits) expect(answer.edits, name).toEqual(edits);
+        });
+      });
+    }
+  });
+
+  it("keeps the parameters of protocol functions, initializers, and subscripts out of the requirement family", async () => {
+    const files = {
+      "Protocol.swift": [
+        "protocol Store {",
+        "  func put(_ key: Int)",
+        "  func drop(_ key: Int)",
+        "  init(_ path: String)",
+        "  subscript(index: Int) -> Int { get }",
+        "}",
+      ],
+      "Impl.swift": [
+        "struct Impl: Store {",
+        "  func put(_ key: Int) { _ = key }",
+        "  func drop(_ key: Int) { _ = key }",
+        "  init(_ path: String) { _ = path }",
+        "  subscript(index: Int) -> Int { index }",
+        "}",
+      ],
+    };
+    await withFixture("cg-swift-requirement-parameters-", files, async (_fixture, root) => {
+      await eachRenameSession(root, async (session) => {
+        // Each parameter renames alone: a conformer's parameter and another requirement's parameter of the same
+        // spelling are other declarations.
+        for (const [name, file, line, edits] of [
+          ["key", "Protocol.swift", 2, ["Protocol.swift:2"]],
+          ["key", "Protocol.swift", 3, ["Protocol.swift:3"]],
+          ["path", "Protocol.swift", 4, ["Protocol.swift:4"]],
+          ["index", "Protocol.swift", 5, ["Protocol.swift:5"]],
+          ["key", "Impl.swift", 2, ["Impl.swift:2", "Impl.swift:2"]],
+          ["path", "Impl.swift", 4, ["Impl.swift:4", "Impl.swift:4"]],
+          ["index", "Impl.swift", 5, ["Impl.swift:5", "Impl.swift:5"]],
+        ] as const) {
+          expect(await renamePreview(session, root, name, file, line), `${name} at ${file}:${line}`).toMatchObject({
+            safe: true,
+            edits,
+            unsafe: [],
+          });
+        }
+      });
+    });
+  });
+
+  it("keeps a requirement rename safe when a conformer's initializer takes a parameter spelled like the property", async () => {
+    const rows = [
+      "protocol Named { var title: String { get } }",
+      "struct Item: Named {",
+      "  var title: String",
+      "  init(title: String) { self.title = title }",
+      "}",
+      "final class Box: Named {",
+      "  let title: String",
+      "  init(_ title: String, other: Int = 0) { self.title = title }",
+      "}",
+      "func read(_ n: Named, _ i: Item, _ b: Box) { _ = n.title; _ = i.title; _ = b.title }",
+      'func build() { _ = Item(title: "x"); _ = Box("y") }',
+    ];
+    await withFixture("cg-swift-requirement-init-", { "Init.swift": rows }, async (_fixture, root) => {
+      await eachRenameSession(root, async (session) => {
+        const answer = await renamePreview(session, root, "title", "Init.swift", 1);
+        const declaration = (line: number) => `Init.swift:${line}:${columnOf(rows, line, "title")}`;
+        const member = (line: number, receiver: string) =>
+          `Init.swift:${line}:${columnOf(rows, line, `${receiver}.title`) + receiver.length + 1}`;
+        // The requirement, both witnesses, their `self.title` stores, and the three reads. The initializers keep
+        // their parameter and label, and `Item(title:)` keeps its call.
+        expect(answer).toMatchObject({ safe: true, unsafe: [] });
+        expect(answer.spots).toEqual([
+          declaration(1),
+          declaration(3),
+          member(4, "self"),
+          declaration(7),
+          member(8, "self"),
+          member(10, "n"),
+          member(10, "i"),
+          member(10, "b"),
+        ]);
+      });
+    });
+  });
+
+  it("lists a protocol default, a second protocol, and a static requirement apart, and renames each with its conformers", async () => {
+    const files = {
+      "P.swift": [
+        "protocol Named { var title: String { get } }",
+        'extension Named { var title: String { "default" } }',
+        "protocol Titled { var title: String { get } }",
+        "struct Plain: Named {}",
+        "struct Own: Named { var title: String }",
+        "struct Tx: Titled { var title: String }",
+        "protocol WithS { static var name: String { get } }",
+        "protocol WithS2 { static var name: String { get } }",
+        'struct A: WithS { static var name: String { "a" } }',
+        'struct B: WithS2 { static var name: String { "b" } }',
+      ],
+      "U.swift": [
+        "func use(_ p: Plain, _ n: Named, _ o: Own, _ t: Tx, _ tt: Titled) {",
+        "  _ = p.title",
+        "  _ = n.title",
+        "  _ = o.title",
+        "  _ = t.title",
+        "  _ = tt.title",
+        "  _ = A.name",
+        "  _ = B.name",
+        "}",
+      ],
+    };
+    await withFixture("cg-swift-requirement-default-", files, async (fixture, root) => {
+      const at = (file: string, line: number, token: string) => siteOf(fixture, file, line, token);
+      await eachIndexPass(root, async (index) => {
+        // A type that only conforms reads the default, a protocol-typed value the requirement, and a type with its own
+        // property that property.
+        await expectGoto(index, at("U.swift", 2, "title"), at("P.swift", 2, "title"));
+        await expectGoto(index, at("U.swift", 3, "title"), at("P.swift", 1, "title"));
+        await expectGoto(index, at("U.swift", 4, "title"), at("P.swift", 5, "title"));
+        await expectGoto(index, at("U.swift", 5, "title"), at("P.swift", 6, "title"));
+        await expectGoto(index, at("U.swift", 6, "title"), at("P.swift", 3, "title"));
+        await expectGoto(index, at("U.swift", 7, "name"), at("P.swift", 9, "name"));
+        await expectGoto(index, at("U.swift", 8, "name"), at("P.swift", 10, "name"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at("P.swift", 1, "title"))).toEqual(complete("P.swift:1", "U.swift:3"));
+        expect(await referenceAnswer(index, at("P.swift", 2, "title"))).toEqual(complete("P.swift:2", "U.swift:2"));
+        expect(await referenceAnswer(index, at("P.swift", 3, "title"))).toEqual(complete("P.swift:3", "U.swift:6"));
+        expect(await referenceAnswer(index, at("P.swift", 7, "name"))).toEqual(complete("P.swift:7"));
+        expect(await referenceAnswer(index, at("P.swift", 9, "name"))).toEqual(complete("P.swift:9", "U.swift:7"));
+      });
+      await eachRenameSession(root, async (session) => {
+        // The requirement brings its default, its conformer's property, and their uses, but not the other protocol's.
+        expect(await renamePreview(session, root, "title", "P.swift", 1)).toMatchObject({
+          safe: true,
+          edits: ["P.swift:1", "P.swift:2", "P.swift:5", "U.swift:2", "U.swift:3", "U.swift:4"],
+        });
+        expect(await renamePreview(session, root, "title", "P.swift", 3)).toMatchObject({
+          safe: true,
+          edits: ["P.swift:3", "P.swift:6", "U.swift:5", "U.swift:6"],
+        });
+        // A default or a witness renamed alone would break its conformance.
+        for (const line of [2, 5]) {
+          const alone = await renamePreview(session, root, "title", "P.swift", line);
+          expect(alone.safe, `title at P.swift:${line}`).toBe(false);
+          expect(alone.unsafe).toEqual(["ambiguous_target"]);
+          expect(alone.why).toContain("protocol requirement");
+        }
+        // A static requirement renames with its own conformer's static property only.
+        expect(await renamePreview(session, root, "name", "P.swift", 7)).toMatchObject({
+          safe: true,
+          edits: ["P.swift:7", "P.swift:9", "U.swift:7"],
+        });
+      });
+    });
+  });
+
+  it("gives an extension constrained to `Self: Q` the members of a protocol, a refined protocol, a class, and each part of a composition", async () => {
+    const files = {
+      "Proto.swift": [
+        "protocol Base {}",
+        "protocol Q { var wrapped: Int { get }; func needed() }",
+        "protocol R { func other() }",
+        "protocol Q0 { func deep() }",
+        "protocol QP: Q0 {}",
+        "class QC { func owned() {} }",
+        "protocol Decoy { var wrapped: Int { get }; func needed() }",
+      ],
+      "Use.swift": [
+        "extension Base where Self: Q { var value: Int { wrapped }; func f() { needed() } }",
+        "extension Base where Self: QP { func g() { deep() } }",
+        "extension Base where Self: QC { func h() { owned() } }",
+        "extension Base where Self: Q & R { func k() { needed(); other() } }",
+      ],
+    };
+    await withFixture("cg-swift-self-constraint-", files, async (fixture, root) => {
+      const at = (file: string, line: number, token: string) => siteOf(fixture, file, line, token);
+      await eachIndexPass(root, async (index) => {
+        await expectGoto(index, at("Use.swift", 1, "wrapped"), at("Proto.swift", 2, "wrapped"));
+        await expectGoto(index, at("Use.swift", 1, "needed"), at("Proto.swift", 2, "needed"));
+        await expectGoto(index, at("Use.swift", 2, "deep"), at("Proto.swift", 4, "deep"));
+        await expectGoto(index, at("Use.swift", 3, "owned"), at("Proto.swift", 6, "owned"));
+        await expectGoto(index, at("Use.swift", 4, "needed"), at("Proto.swift", 2, "needed"));
+        await expectGoto(index, at("Use.swift", 4, "other"), at("Proto.swift", 3, "other"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at("Proto.swift", 2, "needed"))).toEqual(
+          complete("Proto.swift:2", "Use.swift:1", "Use.swift:4"),
+        );
+        expect(await referenceAnswer(index, at("Proto.swift", 7, "needed"))).toEqual(complete("Proto.swift:7"));
+        expect(await referenceAnswer(index, at("Proto.swift", 4, "deep"))).toEqual(
+          complete("Proto.swift:4", "Use.swift:2"),
+        );
+        expect(await referenceAnswer(index, at("Proto.swift", 6, "owned"))).toEqual(
+          complete("Proto.swift:6", "Use.swift:3"),
+        );
+        const graph = await buildSymbolGraphDetailed(index);
+        const use = fixture.paths["Use.swift"]!;
+        await expectCalls(index, graph, use, "f", [at("Proto.swift", 2, "needed")]);
+        await expectCalls(index, graph, use, "g", [at("Proto.swift", 4, "deep")]);
+        await expectCalls(index, graph, use, "h", [at("Proto.swift", 6, "owned")]);
+        await expectCalls(index, graph, use, "k", [at("Proto.swift", 2, "needed"), at("Proto.swift", 3, "other")]);
+      });
+    });
+  });
+
+  it("keeps the members of Q out of a plain extension, an unrelated type, and a constraint to another protocol", async () => {
+    const files = {
+      "Proto.swift": ["protocol Base {}", "protocol Q { func needed() }", "protocol R { func unrelated() }"],
+      "Use.swift": [
+        "extension Base where Self: Q { func f() { unrelated() } }",
+        "extension Base { func g() { unrelated() }; func h() { needed() } }",
+        "struct Plain { func p() { needed() } }",
+      ],
+    };
+    await withFixture("cg-swift-self-constraint-peers-", files, async (fixture, root) => {
+      const at = (line: number, token: string) => siteOf(fixture, "Use.swift", line, token);
+      await eachIndexPass(root, async (index) => {
+        await expectUnresolved(index, at(1, "unrelated"));
+        await expectUnresolved(index, at(2, "unrelated"));
+        await expectUnresolved(index, at(2, "needed"));
+        await expectUnresolved(index, at(3, "needed"));
+      });
+    });
+  });
+});
+
+describe("Swift extensions share the bases and conformances of their type", () => {
+  it("resolves an inherited member and a protocol default from an extension and from a conformance an extension adds", async () => {
+    const rows = {
+      "Base.swift": [
+        "class Base { func hello() -> Int { 1 }; var prop = 2 }",
+        "class Decoy { func hello() -> Int { -1 }; var prop = -2 }",
+      ],
+      "Child.swift": ["class Child: Base {}"],
+      "Ext.swift": ["extension Child { func go() -> Int { _ = prop; return hello() } }"],
+      "P.swift": [
+        "protocol P {}",
+        "extension P { func dflt() -> Int { 3 } }",
+        "struct S { func runS() -> Int { dflt() } }",
+        "extension S: P {}",
+        "struct T { func runT() -> Int { dflt() } }",
+        "struct Stranger { func dflt() -> Int { -3 } }",
+      ],
+    };
+    await withFixture("cg-swift-extension-bases-", rows, async (fixture, root) => {
+      const at = (file: string, line: number, token: string) => siteOf(fixture, file, line, token);
+      await eachIndexPass(root, async (index) => {
+        // An extension of `Child` sees what `Child` inherits from `Base`, declared in other files.
+        await expectGoto(index, at("Ext.swift", 1, "hello"), at("Base.swift", 1, "hello"));
+        await expectGoto(index, at("Ext.swift", 1, "prop"), at("Base.swift", 1, "prop"));
+        // `S` gets its default from the conformance an extension adds, and `T`, which conforms to nothing, gets none.
+        await expectGoto(index, at("P.swift", 3, "dflt"), at("P.swift", 2, "dflt"));
+        await expectUnresolved(index, at("P.swift", 5, "dflt"));
+        const complete = (...sites: string[]): ReferenceAnswer => ({ sites, state: "complete", reasons: [] });
+        expect(await referenceAnswer(index, at("Base.swift", 1, "hello"))).toEqual(
+          complete("Base.swift:1", "Ext.swift:1"),
+        );
+        expect(await referenceAnswer(index, at("Base.swift", 1, "prop"))).toEqual(
+          complete("Base.swift:1", "Ext.swift:1"),
+        );
+        expect(await referenceAnswer(index, at("Base.swift", 2, "hello"))).toEqual(complete("Base.swift:2"));
+        expect(await referenceAnswer(index, at("Base.swift", 2, "prop"))).toEqual(complete("Base.swift:2"));
+        expect(await referenceAnswer(index, at("P.swift", 2, "dflt"))).toEqual(complete("P.swift:2", "P.swift:3"));
+        expect(await referenceAnswer(index, at("P.swift", 6, "dflt"))).toEqual(complete("P.swift:6"));
+        const graph = await buildSymbolGraphDetailed(index);
+        await expectCalls(index, graph, fixture.paths["Ext.swift"]!, "go", [at("Base.swift", 1, "hello")]);
+        await expectCalls(index, graph, fixture.paths["P.swift"]!, "runS", [at("P.swift", 2, "dflt")]);
+        await expectCalls(index, graph, fixture.paths["P.swift"]!, "runT", []);
+      });
+    });
+  });
+});
+
+describe("Swift variadic parameters", () => {
+  it("hold an array, so the members of their element type are not theirs, while a plain parameter still reaches them", async () => {
+    const rows = [
+      "struct Item { var count: Int { 1 }; func reversed() -> Int { 1 } }",
+      "struct Decoy { var count: Int { 2 }; func reversed() -> Int { 2 } }",
+      "func many(_ xs: Item...) -> Int { _ = xs.reversed(); return xs.count }",
+      "func one(_ x: Item) -> Int { _ = x.reversed(); return x.count }",
+    ];
+    await withFixture("cg-swift-variadic-", { "Variadic.swift": rows }, async (fixture, root) => {
+      const at = (line: number, token: string) => siteOf(fixture, "Variadic.swift", line, token);
+      await eachIndexPass(root, async (index) => {
+        await expectUnresolved(index, at(3, "reversed"));
+        await expectUnresolved(index, at(3, "count"));
+        await expectGoto(index, at(4, "reversed"), at(1, "reversed"));
+        await expectGoto(index, at(4, "count"), at(1, "count"));
+        const references = await referenceAnswer(index, at(1, "count"));
+        expect(references.sites).toEqual(["Variadic.swift:1", "Variadic.swift:4"]);
+        expect(references.state).toBe("partial");
+        expect((await referenceAnswer(index, at(2, "count"))).sites).toEqual(["Variadic.swift:2"]);
+        const graph = await buildSymbolGraphDetailed(index);
+        const file = fixture.paths["Variadic.swift"]!;
+        await expectCalls(index, graph, file, "many", []);
+        await expectCalls(index, graph, file, "one", [at(1, "reversed")]);
+      });
+    });
+  });
+});
+
+describe("Swift requirements and constraint extensions after edits, deletes, renames, and restores", () => {
+  it("answers from memory, reopened disk, and incremental builds as a cold build does", async () => {
+    const proto = ["protocol Named { var title: String { get } }", "protocol Base {}", "protocol Q { func needed() }"];
+    const conform = ["struct Item: Named { var title: String }"];
+    const ext = ["extension Base where Self: Q { func f() { needed() } }"];
+    const use = ["func read(_ n: Named, _ i: Item) { _ = n.title; _ = i.title }"];
+    const initial: Record<string, readonly string[]> = {
+      "Lib/Proto.swift": proto,
+      "Lib/Conform.swift": conform,
+      "Lib/Ext.swift": ext,
+      "Lib/Use.swift": use,
+      // Another protocol with a same-named requirement and method: the requirement, the constraint, and the witness
+      // never reach it.
+      "Lib/Other.swift": ["protocol Other { var title: String { get }; func needed() }"],
+    };
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-requirement-cache-"));
+    try {
+      const written = await writeFixtureFiles(
+        root,
+        Object.fromEntries(Object.entries(initial).map(([file, lines]) => [file, `${lines.join("\n")}\n`])),
+      );
+      const project: WarmColdProject = {
+        root,
+        state: new Map(Object.entries(initial)),
+        paths: new Map(Object.entries(written)),
+      };
+      const compare = (step: string) => compareBuilds(project, ["title", "heading", "needed"], step);
+      const throughProtocol = `goto Lib/Use.swift:1:${columnOf(use, 1, "title")}`;
+      const throughType = `goto Lib/Use.swift:1:${columnOf(use, 1, "title", 1)}`;
+      const call = `goto Lib/Ext.swift:1:${columnOf(ext, 1, "needed")}`;
+      const first = await compare("the initial build");
+      expect(first).toContain(`${throughProtocol} Lib/Proto.swift:1`);
+      expect(first).toContain(`${throughType} Lib/Conform.swift:1`);
+      expect(first).toContain(`${call} Lib/Proto.swift:3`);
+
+      // Rename the requirement: the protocol-typed read loses it, and the concrete read keeps its witness.
+      await writeProjectFile(
+        project,
+        "Lib/Proto.swift",
+        proto.map((line) => line.replace("var title", "var heading")),
+      );
+      const renamed = await compare("renaming the requirement");
+      expect(renamed).toContain(`${throughProtocol} none`);
+      expect(renamed).toContain(`${throughType} Lib/Conform.swift:1`);
+
+      // Delete the conformer: the concrete read loses its witness.
+      await deleteProjectFile(project, "Lib/Conform.swift");
+      expect(await compare("deleting the conformer")).toContain(`${throughType} none`);
+
+      // Restore both files: the answers return to the first build's.
+      await writeProjectFile(project, "Lib/Proto.swift", proto);
+      await writeProjectFile(project, "Lib/Conform.swift", conform);
+      expect(await compare("restoring both files")).toEqual(first);
+
+      // Constrain the extension to the other protocol: its call now reaches that protocol's method.
+      const retargeted = ext.map((line) => line.replace("Self: Q", "Self: Other"));
+      await writeProjectFile(project, "Lib/Ext.swift", retargeted);
+      expect(await compare("changing the constraint")).toContain(
+        `goto Lib/Ext.swift:1:${columnOf(retargeted, 1, "needed")} Lib/Other.swift:1`,
+      );
+      await writeProjectFile(project, "Lib/Ext.swift", ext);
+      expect(await compare("restoring the constraint")).toEqual(first);
+
+      // Rename the protocol file away and back.
+      await moveProjectFile(project, "Lib/Proto.swift", "Lib/Proto2.swift");
+      expect(await compare("renaming the protocol file")).toContain(`${throughProtocol} Lib/Proto2.swift:1`);
+      await moveProjectFile(project, "Lib/Proto2.swift", "Lib/Proto.swift");
+      expect(await compare("renaming the protocol file back")).toEqual(first);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Swift member selectors", () => {
+  it("are never uses of a parameter, in a reference list or a rename", async () => {
+    const rows = [
+      "struct Item {",
+      "  var title: String",
+      "  init(title: String) { self.title = title }",
+      "  mutating func set(title: String) { self.title = title }",
+      "}",
+      "func f(title: String, o: Item) -> String { return o.title + title }",
+    ];
+    await withFixture("cg-swift-member-selector-", { "Item.swift": rows }, async (fixture, root) => {
+      const at = (line: number) => siteOf(fixture, "Item.swift", line, "title");
+      // The first `title` of a line declares, the second sits after a dot and names the property, and the third
+      // reads the parameter.
+      const spot = (line: number, occurrence: number) =>
+        `Item.swift:${line}:${columnOf(rows, line, "title", occurrence)}`;
+      await eachIndexPass(root, async (index) => {
+        for (const line of [3, 4, 6]) {
+          const own = [spot(line, 0), spot(line, 2)];
+          expect(await referenceAnswer(index, at(line)), `parameter on line ${line}`).toMatchObject({
+            state: "complete",
+          });
+          expect(await referenceSpots(index, at(line)), `parameter on line ${line}`).toEqual(own);
+        }
+        expect(await referenceSpots(index, at(2))).toEqual([spot(2, 0), spot(3, 1), spot(4, 1), spot(6, 1)]);
+      });
+      await eachRenameSession(root, async (session) => {
+        for (const line of [3, 4, 6]) {
+          const answer = await renamePreview(session, root, "title", "Item.swift", line);
+          expect(answer, `parameter on line ${line}`).toMatchObject({ safe: true, unsafe: [] });
+          expect(answer.spots, `parameter on line ${line}`).toEqual([spot(line, 0), spot(line, 2)]);
+        }
+        // The property renames with the members that select it, and leaves every parameter alone.
+        const property = await renamePreview(session, root, "title", "Item.swift", 2);
+        expect(property).toMatchObject({ safe: true, unsafe: [] });
+        expect(property.spots).toEqual([spot(2, 0), spot(3, 1), spot(4, 1), spot(6, 1)]);
       });
     });
   });

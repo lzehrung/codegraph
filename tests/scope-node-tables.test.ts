@@ -111,6 +111,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "memberContainerTypes",
   "memberFunctionTypes",
   "memberScopeTypes",
+  "memberSelectorParentTypes",
   "moduleRootTypes",
   "nonLexicalMemberPropertyTypes",
   "parameterParents",

@@ -72,10 +72,10 @@ Each entry is a language/call-form pair the table above marks "Omitted", with th
 | Kotlin     | 36    | 0          |
 | Ruby       | 21    | 0          |
 | Rust       | 10    | 0          |
-| Swift      | 32    | 0          |
+| Swift      | 38    | 0          |
 | Zig        | 7     | 0          |
 
-Total: 412 cells across 15 languages, 0 known gaps.
+Total: 418 cells across 15 languages, 0 known gaps.
 
 ## Moved-declaration coverage
 

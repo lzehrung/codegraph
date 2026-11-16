@@ -1075,6 +1075,12 @@ function constructorFromGoBinding(
 function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string, sup: LanguageSupport): BindingProof {
   if (!BINDING_DECLARATION_TYPES.has(node.type)) return { status: "none" };
   if (!bindingDeclaresReceiverName(node, receiverName, source, sup)) return { status: "none" };
+  // A parameter written `T...` holds a collection of `T`, so its written type names no receiver type.
+  for (let index = 0; ; index += 1) {
+    const child = node.child(index);
+    if (!child) break;
+    if (child.type === "...") return { status: "unproven" };
+  }
   const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
   const annotated = annotation ? (unwrapNamedType(annotation, sup) ?? typescriptImportTypeQuery(annotation)) : null;
   if (annotated) return { status: "declared", node: annotated };

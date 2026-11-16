@@ -25,9 +25,14 @@ import {
 } from "../declaration-visibility.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../parsed-cache.js";
-import { getSharedOwnerIdentity, sharedOwnerCanUseMembers } from "../shared-owner-identity.js";
+import {
+  getSharedOwnerIdentity,
+  isSwiftExtensionContainer,
+  sharedOwnerCanUseMembers,
+} from "../shared-owner-identity.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../types.js";
 import type { MemberLookupDeps, MemberLookupPolicy, MemberOwnerRef, MemberUse } from "./types.js";
+import { swiftPropertyRenameCompanions } from "./swift-property-witness.js";
 
 /** Whether the declaration of the Swift variable `member` proves a call of it: an enum case or a function value. */
 async function variableIsInvocable(index: ProjectIndex, member: SymbolDef, deps: MemberLookupDeps): Promise<boolean> {
@@ -39,6 +44,35 @@ async function variableIsInvocable(index: ProjectIndex, member: SymbolDef, deps:
     rethrowStaleQuerySource(error);
     return false;
   }
+}
+
+/** The type annotation a Swift property writes, whitespace removed; null when it writes none. */
+async function writtenPropertyType(
+  index: ProjectIndex,
+  def: SymbolDef,
+  deps: MemberLookupDeps,
+): Promise<string | null> {
+  try {
+    const context = await ensureParsedContextForIndex(index, def.file);
+    const name = deps.nameNodeForDef(context, def);
+    const declaration = name?.parent?.type === "pattern" ? name.parent.parent : null;
+    const annotation = declaration?.namedChildren.find((child) => child.type === "type_annotation");
+    return annotation ? annotation.text.replace(/\s+/g, "") : null;
+  } catch (error) {
+    rethrowStaleQuerySource(error);
+    return null;
+  }
+}
+
+/** Whether two Swift properties write the same type, so a default implements the requirement it shares a name with. */
+async function sameWrittenPropertyType(
+  index: ProjectIndex,
+  left: SymbolDef,
+  right: SymbolDef,
+  deps: MemberLookupDeps,
+): Promise<boolean> {
+  const leftType = await writtenPropertyType(index, left, deps);
+  return leftType !== null && leftType === (await writtenPropertyType(index, right, deps));
 }
 
 /** A Swift subscript or plain read names a value; only a call invokes its callee. */
@@ -491,6 +525,7 @@ export const swiftMemberLookupPolicy: MemberLookupPolicy = {
       ambiguityReason: "Swift protocol requirement or default linkage is not proven for rename.",
     };
   },
+  renameCompanions: swiftPropertyRenameCompanions,
   async nestedMember(index, owner, name, deps) {
     return deps.declaresMembers(owner) ? await deps.nestedTypeOf(index, owner, name) : undefined;
   },
@@ -514,15 +549,27 @@ export const swiftMemberLookupPolicy: MemberLookupPolicy = {
       spansHierarchy: true,
       memberVisible: (hit, hitContext) => swiftMemberVisible(mod.file, node, useContext, hit, hitContext, deps),
       async afterOwnerMatches(owner, walkStart, matches, visible, scopeByMember) {
-        if (owner.container.type !== "protocol_declaration") return;
+        // A protocol and its extensions are one owner part, so its requirement and default can come from any file.
         for (const requirement of matches) {
-          if (fileIdentityKey(requirement.file) !== fileIdentityKey(owner.file)) continue;
-          const requirementNode = deps.nameNodeForDef(owner.context, requirement);
-          if (!visible.has(requirement) || requirementNode?.parent?.type !== "protocol_function_declaration") continue;
+          if (!visible.has(requirement)) continue;
+          const requirementContext =
+            fileIdentityKey(requirement.file) === fileIdentityKey(owner.file)
+              ? owner.context
+              : await ensureParsedContextForIndex(index, requirement.file);
+          const requirementNode = deps.nameNodeForDef(requirementContext, requirement);
+          const declaration =
+            requirementNode?.parent?.type === "pattern" ? requirementNode.parent.parent : requirementNode?.parent;
+          const isFunction = declaration?.type === "protocol_function_declaration";
+          const isRequirement = isFunction || declaration?.type === "protocol_property_declaration";
+          if (!isRequirement) continue;
           for (const implementation of matches) {
             if (implementation === requirement || !visible.has(implementation)) continue;
             if (scopeByMember.get(implementation) !== scopeByMember.get(requirement)) continue;
-            if (!(await deps.sameParameterTypes(index, implementation, requirement))) continue;
+            // An implementation has the requirement's parameter types, or for a property its written type.
+            const sameSignature = isFunction
+              ? await deps.sameParameterTypes(index, implementation, requirement)
+              : await sameWrittenPropertyType(index, requirement, implementation, deps);
+            if (!sameSignature) continue;
             if (walkStart.container.type === "protocol_declaration") {
               visible.delete(implementation);
             } else {
@@ -574,6 +621,29 @@ export const swiftMemberLookupPolicy: MemberLookupPolicy = {
         return !labels || !parameters || swiftLabelsFit(parameters, labels);
       },
       standInAtFirstDeclaringLevel: true,
+      partsShareBases: true,
+      // `extension P where Self: Q` gives the extension's members the members of `Q`, a protocol or a class.
+      async constraintBases(owner) {
+        if (!isSwiftExtensionContainer(owner.container, owner.context.source)) return [];
+        const constraints = owner.container.namedChildren.find((child) => child.type === "type_constraints");
+        const found: MemberOwnerRef[] = [];
+        for (const constraint of constraints?.namedChildren ?? []) {
+          const rule = constraint.namedChildren[0];
+          const [constrained, required] = rule?.type === "inheritance_constraint" ? rule.namedChildren : [];
+          if (constrained?.text !== "Self") continue;
+          // `Self: Q` names one type, and `Self: Q & R` each type of the composition.
+          const named = required?.type === "protocol_composition_type" ? required.namedChildren : [required];
+          for (const type of named) {
+            const name = type?.type === "user_type" && type.namedChildren.length === 1 ? type.text : "";
+            if (!name) continue;
+            const declared = deps.resolveTypeContainer(index, owner.module, name, normalize);
+            const target = declared ? await deps.typeAliasTarget(index, declared) : undefined;
+            const ref = target ? await deps.keywordClassRefFromDef(index, target) : null;
+            if (ref) found.push(ref);
+          }
+        }
+        return found;
+      },
     };
   },
   lexicalBinding(lookup) {

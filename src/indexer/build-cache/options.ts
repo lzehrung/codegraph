@@ -170,8 +170,11 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Java record's components in the declaration's own scope (a parameter named like its own type stays unbound), resolves
  * `[Marker]` to `MarkerAttribute`, keeps the detailed `calls` edge of `T.Static()` when the caller's type declares a
  * field, property, or local typed `T`, and no longer reads a base-constructor argument as an `implements` edge.
+ * Epoch 161 marks Swift protocol requirements as members of their protocol, keeps the parameters of protocol
+ * functions, initializers, and subscripts out of the members, shares a Swift type's bases (and an extension's
+ * `where Self: Q`) with its extensions, and reads `T...` as no receiver type, rebuilding navigation and edges.
  */
-export const CORE_ALGORITHM_EPOCH = 160;
+export const CORE_ALGORITHM_EPOCH = 161;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

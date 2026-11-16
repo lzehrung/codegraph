@@ -66,7 +66,12 @@ import {
   KOTLIN_QUOTED_SCOPE_SOURCES,
 } from "./helpers/kotlin-quoted-fixture.js";
 import { columnOf as columnInLines, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
-import { expectSwiftAccuracyReferences, SWIFT_ACCURACY_SOURCES } from "./helpers/swift-accuracy-fixture.js";
+import {
+  expectSwiftAccuracyReferences,
+  expectSwiftRequirementReferences,
+  SWIFT_ACCURACY_SOURCES,
+  SWIFT_REQUIREMENT_SOURCES,
+} from "./helpers/swift-accuracy-fixture.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { expectKotlinSecondaryConstructorSuperReferences } from "./helpers/kotlin-secondary-constructor-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
@@ -9620,6 +9625,15 @@ describe("Swift contextual references", () => {
     try {
       const paths = await writeFixtureFiles(root, SWIFT_ACCURACY_SOURCES);
       await expectSwiftAccuracyReferences(await buildProjectIndex(root, { cache: "off" }), paths);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("lists a protocol property requirement's protocol-typed uses apart from its witness and a decoy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-requirement-refs-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_REQUIREMENT_SOURCES);
+      await expectSwiftRequirementReferences(await buildProjectIndex(root, { cache: "off" }), paths);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

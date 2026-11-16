@@ -507,6 +507,7 @@ export const memberLookupDeps: MemberLookupDeps = {
     findDirectLocalsWithinNode(locals, name, container, context, normalize),
   hasStaticModifier: (local, context, container) => hasStaticModifier(local, context, container),
   typeAliasTarget: (index, def) => swiftBaseDeclaration(index, def),
+  resolveTypeContainer: (index, mod, name, normalize) => resolveNamedMemberContainer(index, mod, name, normalize),
 };
 
 export function nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null {
@@ -3486,6 +3487,20 @@ async function resolveKeywordReceiverMember(
   const lambdaCompatible = trailingLambda ? new Map<SymbolDef, boolean>() : undefined;
   let level: KeywordClassRef[] = [current];
   const seen = new Set<string>([ownerKey(current)]);
+  const sharedParts = new Map<string, SharedOwnerContainer[]>();
+  const sharedPartsOf = async (ref: KeywordClassRef): Promise<SharedOwnerContainer[]> => {
+    const cached = sharedParts.get(ownerKey(ref));
+    if (cached) return cached;
+    const parts = await resolveSharedOwnerContainers({
+      index,
+      ownerFile: ref.file,
+      ownerContainer: ref.container,
+      ownerSource: ref.context.source,
+      languageId: ref.context.sup.id,
+    });
+    sharedParts.set(ownerKey(ref), parts);
+    return parts;
+  };
   // The order `selectMember` searches: PHP examines the traits composed into a class, to any depth, before its parent.
   const isTraitOwner =
     current.context.sup.id === "php"
@@ -3537,13 +3552,7 @@ async function resolveKeywordReceiverMember(
           }
         }
         if (ref.context.sup.id === "csharp" || ref.context.sup.id === "swift") {
-          const shared = await resolveSharedOwnerContainers({
-            index,
-            ownerFile: ref.file,
-            ownerContainer: ref.container,
-            ownerSource: ref.context.source,
-            languageId: ref.context.sup.id,
-          });
+          const shared = await sharedPartsOf(ref);
           for (const peer of shared) {
             const peerMatches: SymbolDef[] = [];
             appendDirectKeywordMembers(
@@ -3601,15 +3610,35 @@ async function resolveKeywordReceiverMember(
       }
       if (walkRules) await walkRules.afterOwnerMatches(ref, current, matches, visible, scopeByMember);
       if (nameFound && !spansHierarchy && !preloadHiddenNames) continue;
+      const classOnly = startAtAncestor && (ref.context.sup.id !== "php" || depth === 0);
       const bases = await baseRefsFromContainer(
         index,
         ref.module,
         ref.container,
         ref.context.source,
         ref.context.sup,
-        startAtAncestor && (ref.context.sup.id !== "php" || depth === 0),
+        classOnly,
         ref.context.tree,
       );
+      if (walkRules?.partsShareBases) {
+        // The bases one part declares (a Swift type's, or the conformance an extension adds) reach every other part.
+        for (const part of await sharedPartsOf(ref)) {
+          const partBases = await baseRefsFromContainer(
+            index,
+            part.module,
+            part.container,
+            part.context.source,
+            part.context.sup,
+            classOnly,
+            part.context.tree,
+          );
+          for (const base of partBases)
+            if (!bases.some((known) => ownerKey(known) === ownerKey(base))) bases.push(base);
+        }
+      }
+      for (const base of (await walkRules?.constraintBases(ref)) ?? []) {
+        if (!bases.some((known) => ownerKey(known) === ownerKey(base))) bases.push(base);
+      }
       parentsByKey.set(key, bases);
       for (const base of bases) {
         const baseKey = ownerKey(base);

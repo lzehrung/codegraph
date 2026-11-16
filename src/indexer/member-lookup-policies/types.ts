@@ -2,7 +2,7 @@
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { MemberScope } from "../member-selection.js";
 import type { ParsedFileContext } from "../parse-context.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "../types.js";
+import type { ModuleIndex, ProjectIndex, Reference, SymbolDef } from "../types.js";
 
 /** The detailed-graph edge a resolved member call records. */
 export type MemberCallEdge = "calls" | "instantiates";
@@ -52,6 +52,13 @@ export type MemberLookupDeps = {
   hasStaticModifier(local: SymbolDef, context: ParsedFileContext, container: SyntaxNodeLike): boolean;
   /** The type a typealias provably names, or the declaration itself when it is not an alias. */
   typeAliasTarget(index: ProjectIndex, def: SymbolDef): Promise<SymbolDef | undefined>;
+  /** The type declaration (or typealias) a type name names in `mod`, when the project declares exactly one. */
+  resolveTypeContainer(
+    index: ProjectIndex,
+    mod: ModuleIndex,
+    name: string,
+    normalize: (name: string) => string,
+  ): SymbolDef | undefined;
 };
 
 /** A type that declares members: where it is written, and the syntax of its body. */
@@ -94,6 +101,10 @@ export type MemberWalkRules = {
   fitsCall(member: SymbolDef): boolean;
   /** Whether the first level of the hierarchy that declares the name offers the stand-in for a call it does not fit. */
   standInAtFirstDeclaringLevel: boolean;
+  /** The bases one part of a type declares reach every other part: a Swift type and its extensions are one type. */
+  partsShareBases: boolean;
+  /** The owners that a constraint on the owner's own syntax adds as bases: a Swift `where Self: Q` extension. */
+  constraintBases(owner: MemberOwnerRef): Promise<MemberOwnerRef[]>;
 };
 
 /** What one language decides for `receiver.member` once the receiver names a type or a value. */
@@ -168,6 +179,18 @@ export type MemberLookupPolicy = {
     target: SymbolDef,
     targetId: string,
   ): { unsupportedReason: string; ambiguityReason: string } | undefined;
+  /**
+   * The declarations the language requires to share `target`'s name (the witnesses of a protocol requirement), and why
+   * one of them cannot be proven. A rename edits every definition returned with the uses `usesOf` proves for each;
+   * `unprovenReason` makes it unsafe.
+   */
+  renameCompanions?(args: {
+    index: ProjectIndex;
+    target: SymbolDef;
+    deps: MemberLookupDeps;
+    /** Every use of `def` that rename collection proves, or null when that collection is incomplete or failed. */
+    usesOf(def: SymbolDef): Promise<readonly Reference[] | null>;
+  }): Promise<RenameCompanions | undefined>;
   /** Whether a declaration node declares a static member without a `static` modifier (an enum case). */
   isStaticDeclaration?(node: SyntaxNodeLike): boolean;
   /** Whether a callable declaration lists its parameters as its own children, with no parameter-list node. */
@@ -212,4 +235,10 @@ export type MemberLookupPolicy = {
   }): Promise<MemberWalkRules>;
   /** The declaration a bare receiver name binds, where the language checks the lexical scopes first. */
   lexicalBinding?(lookup: { scopeBindingIsImport(): boolean; binding(): SymbolDef | null }): SymbolDef | null;
+};
+
+/** The declarations that must be renamed with a target, and the reason one of them could not be proven. */
+export type RenameCompanions = {
+  definitions: readonly SymbolDef[];
+  unprovenReason?: string;
 };

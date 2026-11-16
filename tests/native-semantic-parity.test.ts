@@ -55,6 +55,9 @@ import {
   expectSwiftAccuracyGraph,
   expectSwiftAccuracyReferences,
   SWIFT_ACCURACY_SOURCES,
+  expectSwiftRequirementGoto,
+  expectSwiftRequirementReferences,
+  SWIFT_REQUIREMENT_SOURCES,
 } from "./helpers/swift-accuracy-fixture.js";
 import { JVM_PACKAGE_IMPORT_CASES, JVM_PACKAGE_IMPORT_SOURCES } from "./helpers/jvm-package-import-fixture.js";
 import { KOTLIN_DEFAULT_PACKAGE_SOURCES } from "./helpers/kotlin-default-package-fixture.js";
@@ -4927,6 +4930,21 @@ nativeDescribe("Swift contextual native parity", () => {
         await expectSwiftAccuracyGoto(index, paths);
         await expectSwiftAccuracyReferences(index, paths);
         await expectSwiftAccuracyGraph(index, paths);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps protocol property requirement goto and references identical after reopening the disk cache", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-requirement-native-"));
+    try {
+      const paths = await writeFixtureFiles(root, SWIFT_REQUIREMENT_SOURCES);
+      for (let pass = 0; pass < 2; pass += 1) {
+        clearMemoryCache();
+        const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+        for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+        await expectSwiftRequirementGoto(index, paths);
+        await expectSwiftRequirementReferences(index, paths);
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
