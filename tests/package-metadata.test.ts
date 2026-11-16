@@ -500,8 +500,11 @@ describe("package metadata", () => {
     const scripts = readStringRecord(rootPackage.scripts);
     const eslintConfig = readText("eslint.config.js");
 
-    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.mjs"');
-    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.mjs" --fix');
+    // Type-aware lint loads one program over src and tests; macOS runners default to a heap too small for it.
+    const eslint =
+      'node --max-old-space-size=4096 ./node_modules/eslint/bin/eslint.js "src/**/*.ts" "tests/**/*.ts" "scripts/**/*.mjs"';
+    expect(scripts.lint).toBe(eslint);
+    expect(scripts["lint:fix"]).toBe(`${eslint} --fix`);
     expect(eslintConfig).toContain('"tests/languages/samples/**"');
     expect(eslintConfig).toContain('"prefer-const": "error"');
   });
