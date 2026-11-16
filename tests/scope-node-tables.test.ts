@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildScopeIndexFromSource } from "../src/indexer/scope.js";
-import { SCOPE_NODE_ROWS, scopeNodesFor, type ScopeNodeRow } from "../src/indexer/scope-nodes.js";
+import {
+  SCOPE_NODE_ROWS,
+  isTypeParameterBinding,
+  scopeNodesFor,
+  type ScopeNodeRow,
+} from "../src/indexer/scope-nodes.js";
 import { getNativeSingleQueryExecution, getNativeSyntaxTreeExecution } from "../src/native/execution.js";
 import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 import { getNativeTreeSitterSupportedLanguageIds } from "../src/native/runtime.js";
@@ -121,6 +126,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "patternBindingTypes",
   "shortVariableDeclarationTypes",
   "typeNameTypes",
+  "typeOnlyUseTypes",
   "typeParameterTypes",
   "templateValueParameterTypes",
   "typeScopeTypes",
@@ -138,6 +144,8 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "requireCall",
   "classScopeComprehension",
   "headerParameters",
+  "patternDefaultValueFields",
+  "typeParameterListField",
   "moduleBindingsAtFunctionRuntime",
   "laterLocalBlocksOuterKinds",
   "namelessVariableDeclaration",
@@ -383,6 +391,71 @@ describe("scope node tables", () => {
     const bindings = scope.allScopes.flatMap((candidate) => candidate.map.get("T") ?? []);
     expect(bindings).toHaveLength(2);
     expect(bindings.map((binding) => binding.kind)).toEqual(["type", "type"]);
+  });
+
+  it("flags a type parameter only where the language row names its type-only syntax", () => {
+    const flaggedBindings = (file: string, languageId: string, source: string): boolean[] => {
+      const scope = buildScopeIndexFromSource(file, source, supportById(languageId)!);
+      const row = scopeNodesFor(languageId);
+      return scope.allScopes
+        .flatMap((candidate) => candidate.map.get("T") ?? [])
+        .map((binding) => isTypeParameterBinding(row, binding));
+    };
+    expect(flaggedBindings("probe.ts", "ts", "function f<T>(a: T) {}\n")).toEqual([true]);
+    // Other languages keep the go-to-definition and reference answers they had.
+    expect(flaggedBindings("Probe.cs", "csharp", "class Box<T> { T v; }\n")).toEqual([false]);
+    expect(flaggedBindings("Plain.kt", "kotlin", KOTLIN_TYPE_PARAMETER_FILES["Plain.kt"])).toEqual([false, false]);
+    expect(flaggedBindings("probe.go", "go", "package p\nfunc F[T any](a T) {}\n")).toEqual([false]);
+  });
+
+  it("binds TypeScript type parameters as type bindings in the scope of their own declaration", () => {
+    const support = supportById("ts")!;
+    const source =
+      "type T = string;\ninterface I { <T>(v: T): T; (w: T): T }\nfunction f<T>(a: T) {}\nconst R = 1;\nfunction g<R>(x: R) {}\n";
+    const scope = buildScopeIndexFromSource("probe.ts", source, support);
+    const bindings = scope.allScopes.flatMap((candidate) => candidate.map.get("T") ?? []);
+    expect(bindings.map((binding) => binding.kind)).toEqual(["type", "type", "type"]);
+    const row = scopeNodesFor("ts");
+    expect(bindings.filter((binding) => isTypeParameterBinding(row, binding))).toHaveLength(2);
+    // The call signature and the function each hold one parameter; the module scope holds only the alias.
+    const moduleAlias = scope.allScopes[0]?.map.get("T");
+    expect(moduleAlias && isTypeParameterBinding(row, moduleAlias)).toBe(false);
+    const typeScopes = scope.allScopes.filter((candidate) => candidate.kind === "type" && candidate.map.has("T"));
+    expect(typeScopes.map((candidate) => candidate.node.type)).toEqual(["call_signature"]);
+    expect(
+      scope.allScopes.some((candidate) => {
+        const binding = candidate.map.get("T");
+        return candidate.kind === "function" && !!binding && isTypeParameterBinding(row, binding);
+      }),
+    ).toBe(true);
+    // A value spelled like a type parameter reaches the outer value, not the parameter.
+    const valueUse = scope.bindings.get("R")?.find((binding) => !isTypeParameterBinding(row, binding));
+    expect(valueUse?.kind).toBe("local");
+  });
+
+  it("reads parameter and pattern default values instead of binding them", () => {
+    const support = supportById("ts")!;
+    const source = "function f(a = K, { b = K2, c: d = K3 }, [e = K4] = []) {}\nconst { x = K5 } = obj;\n";
+    const scope = buildScopeIndexFromSource("probe.ts", source, support);
+    const names = scope.all.map((binding) => binding.name).sort();
+    expect(names).toEqual(["a", "b", "d", "e", "f", "x"]);
+  });
+
+  it("declares only TypeScript grammar fields in the type-parameter and default-value rows", () => {
+    const support = supportById("ts")!;
+    const row = scopeNodesFor("ts");
+    expect(
+      grammarQueryCompiles(support, `(function_declaration ${row.typeParameterListField}: (type_parameters)) @x`),
+    ).toBe(true);
+    for (const [nodeType, field] of Object.entries(row.patternDefaultValueFields ?? {})) {
+      expect(grammarQueryCompiles(support, `(${nodeType} ${field}: (_)) @x`), `${nodeType}.${field}`).toBe(true);
+    }
+    for (const nodeType of row.typeScopeTypes ?? []) {
+      expect(
+        grammarQueryCompiles(support, `(${nodeType} ${row.typeParameterListField}: (type_parameters)) @x`),
+        nodeType,
+      ).toBe(true);
+    }
   });
 
   it("keeps Zig container member function names out of the file scope", () => {

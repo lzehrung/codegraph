@@ -11,10 +11,11 @@ import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandid
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import {
   bindingCoversUse,
+  bindingHiddenFromUse,
   fileScopeDefinitionCoversUse,
+  isTypeParameterBinding,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
-  localHiddenByGate,
   pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
@@ -23,13 +24,13 @@ import {
   scopeNodesFor,
   closestContainingScope,
   typeOnlyName,
-  isValueNamespaceBinding,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type Scope, type ScopeIndex } from "./scope.js";
 import { cachedParsedContextForIndexSync, cachedScopeIndexForIndex, retainScopeIndexForIndex } from "./parsed-cache.js";
 import {
   cjsRequireValueBinding,
   csharpShadowedStarsMayHold,
+  exportsOwnImportBinding,
   resolveExport,
   resolveImported,
 } from "./navigation-resolve.js";
@@ -340,10 +341,7 @@ export function findClosestScopeBinding(
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
       while (binding) {
-        const wrongNamespace =
-          (methodCall && binding.kind === "local") ||
-          (typeOnly && isValueNamespaceBinding(binding)) ||
-          (crossedGate && localHiddenByGate(row, binding));
+        const wrongNamespace = bindingHiddenFromUse(row, binding, currentNode, methodCall, typeOnly, crossedGate);
         const wrongCsharpArity = support.id === "csharp" && wrongCsharpTypeArity(binding, currentNode, csharpArity);
         if (!wrongNamespace && !wrongCsharpArity) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
@@ -485,6 +483,7 @@ export function definitionForBinding(
     kind,
     range,
     ...(binding.callable ? { callable: binding.callable } : {}),
+    ...(isTypeParameterBinding(scopeNodesFor(support.id), binding) ? { typeParameter: true } : {}),
     ...(tagRole ? { cTag: tagRole } : {}),
   };
 }
@@ -610,6 +609,9 @@ export function resolveNamedDefinition(
       });
     }
   }
+  // An import this file also exports (`import { X } from "./x"; export { X }`) stays the binding in force at its own
+  // uses: the clause forwards that binding without declaring a name, so the import answers.
+  if (hit && exportsOwnImportBinding(index, file, name)) hit = null;
   let localDefinition: SymbolDef | undefined;
   if (hit?.kind === "resolved" && fileIdentityKey(file) === fileIdentityKey(hit.def.file)) {
     localDefinition = hit.def;

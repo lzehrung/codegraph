@@ -2,7 +2,8 @@ import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
 } from "./helpers/typescript-split-method-fixture.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
@@ -20,9 +21,11 @@ import {
   type ProjectIndex,
   type SymbolGraph,
 } from "../src/index.js";
-import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import { clearMemoryCache, closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { resolveModuleExports } from "../src/indexer/navigation-resolve.js";
+import type { ResolvedExport } from "../src/indexer/types.js";
 
 function columnOf(source: string, line: number, token: string): number {
   const text = source.split("\n")[line - 1];
@@ -3109,5 +3112,990 @@ describe("TypeScript and JavaScript navigation", () => {
       closeDiskCacheDatabase(fixture.root, options);
       await rm(fixture.root, { recursive: true, force: true });
     }
+  });
+
+  describe("accuracy batch: type parameters, default values, docstrings, and re-exports", () => {
+    /** Column of the nth whole-word occurrence of a token on a line. */
+    function columnAt(source: string, line: number, token: string, nth = 1): number {
+      const text = source.split("\n")[line - 1] ?? "";
+      const matches = [...text.matchAll(new RegExp("(?<![\\w$])" + token.replace(/\$/g, "\\$") + "(?![\\w$])", "g"))];
+      const hit = matches[nth - 1];
+      if (hit?.index === undefined) throw new Error("missing " + token + "#" + nth + " on line " + line);
+      return hit.index + 1;
+    }
+    const where = async (index: ProjectIndex, file: string, source: string, line: number, token: string, nth = 1) => {
+      const result = await goToDefinition(index, { file, line, column: columnAt(source, line, token, nth) });
+      return result.status === "ok"
+        ? path.basename(result.definition.file) +
+            ":" +
+            result.definition.range.start.line +
+            ":" +
+            result.definition.range.start.column
+        : result.status;
+    };
+    const sitesOf = (result: FindReferencesResult): string[] =>
+      result.status === "ok"
+        ? result.references
+            .map((r) => path.basename(r.file) + ":" + r.range.start.line + ":" + r.range.start.column)
+            .sort()
+        : [];
+
+    it.each(["ts", "tsx"] as const)(
+      "binds a type parameter to its own declaration, never to a same-named outer type, in %s",
+      async (extension) => {
+        const name = "generics." + extension;
+        const source = [
+          "type T = string;", // 1
+          "interface Adjacent {", // 2
+          "  <T>(value: T): T", // 3 call signature, no semicolons
+          "  new <T>(value: T): T", // 4 construct signature
+          "  (plain: T): T", // 5 non-generic sibling: the outer alias
+          "  method<T>(value: T): T", // 6
+          "}", // 7
+          "interface Semi {", // 8
+          "  <T>(value: T): T;", // 9
+          "  (plain: T): T;", // 10 outer alias
+          "}", // 11
+          "function fn<T>(a: T, T2: T = a): T { return a; }", // 12
+          "class Box<T> extends Array<T> { m(x: T): T { return x; } }", // 13
+          "type Fn = <T>(a: T) => T;", // 14
+          "type Gen<T> = T;", // 15
+          "const R = 1;", // 16 a value R beside a generic <R>
+          "function usesValue<R>(x: R) { return R; }", // 17
+          "export const outer: T = 'x';", // 18
+          "",
+        ].join("\n");
+        const fixture = await project({ [name]: source });
+        const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+        try {
+          const file = fixture.file(name);
+          const observe = async (index: ProjectIndex) => {
+            const alias = await findReferences(index, { file, line: 1, column: columnAt(source, 1, "T") });
+            const call = await findReferences(index, { file, line: 3, column: columnAt(source, 3, "T", 2) });
+            const value = await findReferences(index, { file, line: 16, column: columnAt(source, 16, "R") });
+            return {
+              own: await Promise.all(
+                [
+                  [3, 2],
+                  [3, 3],
+                  [4, 2],
+                  [4, 3],
+                  [6, 2],
+                  [6, 3],
+                  [9, 2],
+                  [9, 3],
+                  [12, 2],
+                  [12, 3],
+                  [12, 4],
+                  [13, 2],
+                  [13, 3],
+                  [13, 4],
+                  [14, 2],
+                  [14, 3],
+                  [15, 2],
+                ].map(async ([line, nth]) => [line, nth, await where(index, file, source, line!, "T", nth)]),
+              ),
+              outer: await Promise.all(
+                [
+                  [5, 1],
+                  [5, 2],
+                  [10, 1],
+                  [10, 2],
+                  [18, 1],
+                ].map(async ([line, nth]) => [line, nth, await where(index, file, source, line!, "T", nth)]),
+              ),
+              valueR: await where(index, file, source, 17, "R", 3),
+              typeR: await where(index, file, source, 17, "R", 2),
+              alias: { sites: sitesOf(alias), coverage: alias.status === "ok" ? alias.referenceCoverage.state : null },
+              call: { sites: sitesOf(call), coverage: call.status === "ok" ? call.referenceCoverage.state : null },
+              value: sitesOf(value),
+            };
+          };
+          const index = fixture.index;
+          const result = await observe(index);
+          const own = (line: number): string => {
+            const declaring: Record<number, [number, number]> = {
+              3: [3, 1],
+              4: [4, 1],
+              6: [6, 1],
+              9: [9, 1],
+              12: [12, 1],
+              13: [13, 1],
+              14: [14, 1],
+              15: [15, 1],
+            };
+            const [declLine, declNth] = declaring[line]!;
+            return name + ":" + declLine + ":" + columnAt(source, declLine, "T", declNth);
+          };
+          for (const [line, nth, target] of result.own)
+            expect(target, "line " + line + " T#" + nth).toBe(own(line as number));
+          for (const [line, nth, target] of result.outer)
+            expect(target, "line " + line + " T#" + nth).toBe(name + ":1:6");
+          expect(result.valueR).toBe(name + ":16:7");
+          expect(result.typeR).toBe(name + ":17:" + columnAt(source, 17, "R", 1));
+          // The outer alias keeps only its own uses: the non-generic signatures and the typed constant.
+          expect(result.alias.sites).toEqual(
+            [
+              name + ":1:6",
+              name + ":5:" + columnAt(source, 5, "T", 1),
+              name + ":5:" + columnAt(source, 5, "T", 2),
+              name + ":10:" + columnAt(source, 10, "T", 1),
+              name + ":10:" + columnAt(source, 10, "T", 2),
+              name + ":18:" + columnAt(source, 18, "T", 1),
+            ].sort(),
+          );
+          expect(result.alias.coverage).toBe("complete");
+          expect(result.call.sites).toEqual(
+            [3, 3, 3].map((line, offset) => name + ":3:" + columnAt(source, line, "T", offset + 1)).sort(),
+          );
+          expect(result.call.coverage).toBe("complete");
+          expect(result.value).toEqual(
+            expect.arrayContaining([name + ":16:7", name + ":17:" + columnAt(source, 17, "R", 3)]),
+          );
+          expect(result.value.some((site) => site === name + ":17:" + columnAt(source, 17, "R", 1))).toBe(false);
+          const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+          expect(await observe(cold)).toEqual(result);
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          const warm = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+          expect(await observe(warm)).toEqual(result);
+          expect(
+            listSymbols(index, { file }).some((symbol) => symbol.name === "T" && symbol.range?.start.line !== 1),
+          ).toBe(false);
+        } finally {
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "keeps a comment that ends the previous line of code out of the next declaration's docstring in %s",
+      async (extension) => {
+        const typed = extension !== "js";
+        const name = "docs." + extension;
+        const lines = [
+          ...(typed
+            ? [
+                "export interface R {",
+                "  other(): R // note",
+                "  get(): R",
+                "  /** direct doc */",
+                "  put(): R",
+                "  post(): R; // after post",
+                "  del(): R",
+                "  // header for head",
+                "  head(): R",
+                "}",
+              ]
+            : []),
+          "export class C { // opens",
+          "  first() {}",
+          "  second() {} // second trailing",
+          "  third() {}",
+          "  /** third doc */ // and more",
+          "  fourth() {}",
+          "}",
+          "const o = {",
+          "  a: 1, // about a",
+          "  b() {},",
+          "};",
+          "let x = 1; // x trailing",
+          "// doc for fn",
+          "export function fn() {}",
+          "",
+        ];
+        const source = lines.join("\n");
+        const fixture = await project({ [name]: source });
+        const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+        try {
+          const observe = async (index: ProjectIndex) => {
+            const docs = new Map<string, string | null>();
+            for (const symbol of listSymbols(index, { file: fixture.file(name) })) {
+              if (symbol.kind === "function" || symbol.kind === "variable")
+                docs.set(symbol.name, symbol.docstring ?? null);
+            }
+            const graph = new Map<string, string | null>();
+            for (const node of (await buildSymbolGraphDetailed(index)).nodes.values()) {
+              if (node.file === fixture.file(name)) graph.set(node.name ?? "", node.docstring ?? null);
+            }
+            return { docs, graph };
+          };
+          const expected = {
+            fn: "doc for fn",
+            fourth: "third doc\nand more",
+            first: null,
+            third: null,
+            b: null,
+            ...(typed ? { get: null, put: "direct doc", del: null, head: "header for head" } : {}),
+          };
+          const result = await observe(fixture.index);
+          for (const [symbolName, doc] of Object.entries(expected)) {
+            expect(result.docs.get(symbolName), symbolName).toBe(doc);
+            expect(result.graph.get(symbolName) ?? null, "graph " + symbolName).toBe(doc);
+          }
+          const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+          expect(await observe(cold)).toEqual(result);
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          expect(await observe(await buildProjectIndexIncremental(fixture.root, cacheOptions))).toEqual(result);
+        } finally {
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("finds default-value, shorthand, barrel, and export-alias references", async () => {
+      const files = {
+        "x.ts": [
+          "export function X(): number { return 1 }", // 1
+          "export const K = 1", // 2
+          "export interface A { n: number }", // 3
+          "",
+        ].join("\n"),
+        "barrel.ts": ["import { X } from './x'", "export { X }", ""].join("\n"),
+        "alias.ts": ["import { K } from './x'", "export { K as Kay }", "export { K as default }", ""].join("\n"),
+        "use.ts": [
+          "import { X } from './barrel'", // 1
+          "import { K, A } from './x'", // 2
+          "export type B = A", // 3
+          "export function f(a = K, { b = K }: { b?: number } = {}) { return a + (b ?? 0) }", // 4
+          "export function g(n: number = X()) { return n }", // 5
+          "export const o = { K, X }", // 6
+          "",
+        ].join("\n"),
+        "decoy.ts": [
+          "const K = 2", // 1 a different K
+          "export function d(a = K) { return a }", // 2
+          "export const m = { K }", // 3
+          "export type C = A", // 4 an undeclared A
+          "",
+        ].join("\n"),
+      };
+      const fixture = await project(files);
+      try {
+        const at = (name: keyof typeof files, line: number, token: string, nth = 1) => ({
+          file: fixture.file(name),
+          line,
+          column: columnAt(files[name], line, token, nth),
+        });
+        const k = await findReferences(fixture.index, at("x.ts", 2, "K"));
+        expect(sitesOf(k)).toEqual(
+          [
+            "alias.ts:1:10",
+            "alias.ts:2:10",
+            "alias.ts:2:15",
+            "alias.ts:3:10",
+            "alias.ts:3:15",
+            "use.ts:2:10",
+            "use.ts:4:" + columnAt(files["use.ts"], 4, "K", 1),
+            "use.ts:4:" + columnAt(files["use.ts"], 4, "K", 2),
+            "use.ts:6:" + columnAt(files["use.ts"], 6, "K"),
+            "x.ts:2:14",
+          ].sort(),
+        );
+        expect(k.status === "ok" && k.referenceCoverage.state).toBe("complete");
+        expect(k.status === "ok" && k.references.some((r) => path.basename(r.file) === "decoy.ts")).toBe(false);
+        const x = await findReferences(fixture.index, at("x.ts", 1, "X"));
+        expect(sitesOf(x)).toEqual(
+          [
+            "barrel.ts:1:10",
+            "barrel.ts:2:10",
+            "use.ts:1:10",
+            "use.ts:5:" + columnAt(files["use.ts"], 5, "X"),
+            "use.ts:6:" + columnAt(files["use.ts"], 6, "X"),
+            "x.ts:1:17",
+          ].sort(),
+        );
+        expect(x.status === "ok" && x.referenceCoverage.state).toBe("complete");
+        expect(await where(fixture.index, fixture.file("use.ts"), files["use.ts"], 5, "X")).toBe("x.ts:1:17");
+        const a = await findReferences(fixture.index, at("x.ts", 3, "A"));
+        expect(sitesOf(a)).toContain("use.ts:3:" + columnAt(files["use.ts"], 3, "A"));
+        expect(sitesOf(a).some((site) => site.startsWith("decoy.ts"))).toBe(false);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(["ts", "tsx"] as const)(
+      "binds method, arrow, abstract, overload, nested, object-literal, and forward-constrained type parameters in %s, and invents no variance names",
+      async (extension) => {
+        const name = "forms." + extension;
+        const source = [
+          "type T = string;", // 1
+          "type U = number;", // 2
+          "const out = 1;", // 3
+          "class A { m<T>(x: T): T { return x } }", // 4
+          "const arrow = <T,>(x: T): T => x;", // 5
+          "abstract class B<T> { abstract n(x: T): T }", // 6
+          "function over<T>(a: T): T;", // 7
+          "function over(a: string): string;", // 8
+          "function over(a: any) { return a }", // 9
+          "function outer<T>() { function inner<T>(x: T): T { return x } return inner }", // 10
+          "function dep<A extends U, U>(x: A): U { return x as never }", // 11
+          "export type Keep = T;", // 12 a plain alias reads the outer T
+          "const o = { m<T>(x: T) { return x } };", // 13
+          "const C2 = class<T> { k(x: T) {} };", // 14
+          "",
+        ].join("\n");
+        const varianceName = "variance." + extension;
+        const varianceSource = [
+          "type T = string;", // 1
+          "type O = string;", // 2 decoys for the parameters of B below
+          "type P = number;", // 3
+          "const out = 1;", // 4
+          "export interface V<in W = never, out X extends string = 'x'> { f(x: W): X; g(): T }", // 5
+          "export interface B<out O, in out P> { f(x: O): P }", // 6
+          "export type Keep = O | P;", // 7 reads the outer aliases
+          "",
+        ].join("\n");
+        const fixture = await project({ [name]: source, [varianceName]: varianceSource });
+        try {
+          const file = fixture.file(name);
+          const varianceFile = fixture.file(varianceName);
+          const at = (line: number, token: string, nth: number) =>
+            name + ":" + line + ":" + columnAt(source, line, token, nth);
+          // [line, occurrence of the use, line, occurrence of the declaration] of T
+          const bound: Array<[number, number, number, number]> = [
+            [4, 2, 4, 1],
+            [4, 3, 4, 1],
+            [5, 2, 5, 1],
+            [5, 3, 5, 1],
+            [6, 2, 6, 1],
+            [6, 3, 6, 1],
+            [7, 2, 7, 1],
+            [7, 3, 7, 1],
+            [10, 3, 10, 2],
+            [10, 4, 10, 2],
+            [13, 2, 13, 1],
+            [14, 2, 14, 1],
+          ];
+          for (const [line, use, declLine, decl] of bound) {
+            expect(await where(fixture.index, file, source, line, "T", use), "line " + line + " T#" + use).toBe(
+              at(declLine, "T", decl),
+            );
+          }
+          // A constraint can name a parameter declared after it, and the outer alias `U` must not capture it.
+          expect(await where(fixture.index, file, source, 11, "U", 1)).toBe(at(11, "U", 2));
+          expect(await where(fixture.index, file, source, 11, "U", 3)).toBe(at(11, "U", 2));
+          expect(await where(fixture.index, file, source, 12, "T", 1)).toBe(name + ":1:6");
+          const alias = await findReferences(fixture.index, { file, line: 1, column: columnAt(source, 1, "T") });
+          expect(sitesOf(alias)).toEqual([name + ":1:6", at(12, "T", 1)].sort());
+          expect(alias.status === "ok" && alias.referenceCoverage.state).toBe("complete");
+          const outerU = await findReferences(fixture.index, { file, line: 2, column: columnAt(source, 2, "U") });
+          expect(sitesOf(outerU)).toEqual([name + ":2:6"]);
+          // The pinned grammar reads a variance modifier (`in T`, `out T`, `in out T`) as a parameter named `in` or `out`
+          // and keeps the real name in an error node. The keywords are never type names or symbols, the real name binds
+          // like any other type parameter, and a declaration that does not declare a T still reads the outer alias.
+          const varianceAt = (line: number, token: string, nth: number) =>
+            varianceName + ":" + line + ":" + columnAt(varianceSource, line, token, nth);
+          expect(await where(fixture.index, varianceFile, varianceSource, 5, "T", 1)).toBe(varianceName + ":1:6");
+          for (const [line, token] of [
+            [5, "W"],
+            [5, "X"],
+            [6, "O"],
+            [6, "P"],
+          ] as const) {
+            expect(await where(fixture.index, varianceFile, varianceSource, line, token, 2), line + " " + token).toBe(
+              varianceAt(line, token, 1),
+            );
+          }
+          // References of an outer alias leave the parameter and its use out, and the parameter keeps its own two tokens.
+          for (const [line, token] of [
+            [2, "O"],
+            [3, "P"],
+          ] as const) {
+            const outer = await findReferences(fixture.index, {
+              file: varianceFile,
+              line,
+              column: columnAt(varianceSource, line, token),
+            });
+            expect(sitesOf(outer), token).toEqual([varianceName + ":" + line + ":6", varianceAt(7, token, 1)].sort());
+            const parameter = await findReferences(fixture.index, {
+              file: varianceFile,
+              line: 6,
+              column: columnAt(varianceSource, 6, token, 2),
+            });
+            expect(sitesOf(parameter), token).toEqual([varianceAt(6, token, 1), varianceAt(6, token, 2)].sort());
+          }
+          for (const keyword of ["in", "out"]) {
+            const result = await goToDefinition(fixture.index, {
+              file: varianceFile,
+              line: 6,
+              column: columnAt(varianceSource, 6, keyword),
+            });
+            expect(result.status, keyword).toBe("not_found");
+          }
+          const symbols = listSymbols(fixture.index, { file: varianceFile });
+          expect(symbols.filter((symbol) => symbol.name === "in")).toEqual([]);
+          expect(symbols.filter((symbol) => symbol.name === "out").map((symbol) => symbol.kind)).toEqual(["variable"]);
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "keeps a doc comment that runs up to its declaration, and drops a trailing one, on one-line forms in %s",
+      async (extension) => {
+        const typed = extension !== "js";
+        const name = "oneline." + extension;
+        const source = [
+          "export class K { /** doc km */ km() {} kn() {} /** doc ko */ ko() {} /* doc kp */ kp() {} kq() {} // trailing kq",
+          "  kr() {} }",
+          ...(typed
+            ? ["export interface I { /** doc pb */ pb(): number; pc(): void /* trailing pc */", "  pd(): void }"]
+            : []),
+          "export const o = { /** doc om */ om() {}, on() {} };",
+          "export function f() { /** doc inner */ function inner() {} }",
+          "",
+        ].join("\n");
+        const fixture = await project({ [name]: source });
+        try {
+          const docs = new Map<string, string | null>();
+          for (const symbol of listSymbols(fixture.index, { file: fixture.file(name) })) {
+            if (symbol.kind === "function") docs.set(symbol.name, symbol.docstring ?? null);
+          }
+          const expected: Record<string, string | null> = {
+            km: "doc km",
+            kn: null,
+            ko: "doc ko",
+            kp: "doc kp",
+            kq: null,
+            kr: null,
+            om: "doc om",
+            on: null,
+            inner: "doc inner",
+            ...(typed ? { pb: "doc pb", pc: null, pd: null } : {}),
+          };
+          for (const [symbolName, doc] of Object.entries(expected)) expect(docs.get(symbolName), symbolName).toBe(doc);
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("applies the trailing-comment docstring rule to Java, C#, Kotlin, Rust, Go, Ruby, Zig, Python, and C", async () => {
+      const files = {
+        "J.java":
+          "class J { /** doc ja */ void ja() {} void jb() {} /** doc jc */ void jc() {} void jd() {} // trailing jd\n  void je() {} }\n",
+        "C.cs":
+          "class C { /** doc ca */ void ca() {} void cb() {} /** doc cc */ void cc() {} void cd() {} // trailing cd\n  void ce() {} }\n",
+        "K.kt":
+          "class K { /** doc ka */ fun ka() {} fun kb() {} /** doc kc */ fun kc() {} fun kd() {} // trailing kd\n  fun ke() {} }\n",
+        "m.rs":
+          "struct M;\nimpl M { /** doc ma */ fn ma() {} fn mb() {} /** doc mc */ fn mc() {} fn md() {} // trailing md\n  fn me() {} }\n",
+        "g.go": "package g\n\nfunc ga() {} // trailing ga\nfunc gb() {}\n/* doc gc */ func gc() {}\n",
+        "r.rb": "# doc ra\ndef ra; end\ndef rb; end # trailing rb\ndef rc; end\n",
+        "z.zig": "/// doc za\nfn za() void {}\nfn zb() void {} // trailing zb\nfn zc() void {}\n",
+        "p.py": "# doc pa\ndef pa(): pass\npx = 1  # trailing px\ndef pb(): pass\ndef pc(): pass\n",
+        "x.c": "/* doc xa */\ntypedef struct Xa Xa;\ntypedef struct Xb Xb; // trailing xb\ntypedef struct Xc Xc;\n",
+      };
+      const fixture = await project(files);
+      try {
+        const docs = new Map<string, string | null>();
+        for (const symbol of listSymbols(fixture.index))
+          docs.set(symbol.name, symbol.docstring ?? docs.get(symbol.name) ?? null);
+        const expected: Record<string, string | null> = {};
+        for (const prefix of ["j", "c", "k", "m"]) {
+          Object.assign(expected, {
+            [prefix + "a"]: "doc " + prefix + "a",
+            [prefix + "b"]: null,
+            [prefix + "c"]: "doc " + prefix + "c",
+            [prefix + "d"]: null,
+            [prefix + "e"]: null,
+          });
+        }
+        // The prefix letters collide with C#, Kotlin, and Rust members only through their own names, so check each file.
+        Object.assign(expected, { ga: null, gb: null, gc: "doc gc" });
+        Object.assign(expected, { ra: "doc ra", rb: null, rc: null, za: "doc za", zb: null, zc: null });
+        Object.assign(expected, { pa: "doc pa", pb: null, pc: null, Xa: "doc xa", Xb: null, Xc: null });
+        for (const [symbolName, doc] of Object.entries(expected)) {
+          if (!docs.has(symbolName)) continue;
+          expect(docs.get(symbolName), symbolName).toBe(doc);
+        }
+        for (const required of [
+          "ja",
+          "jc",
+          "ca",
+          "cc",
+          "ka",
+          "kc",
+          "ma",
+          "mc",
+          "gc",
+          "jb",
+          "je",
+          "gb",
+          "ra",
+          "rb",
+          "rc",
+          "za",
+          "zb",
+          "zc",
+        ]) {
+          expect(docs.has(required), required + " is indexed").toBe(true);
+        }
+        for (const required of ["pa", "pb", "pc", "Xa", "Xb", "Xc"]) {
+          expect(docs.has(required), required + " is indexed").toBe(true);
+        }
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "keeps default-value, shorthand, barrel, and export-alias answers apart from decoys and across a reopened cache in %s",
+      async (extension) => {
+        const typed = extension !== "js";
+        const ext = "." + extension;
+        const files: Record<string, string> = {
+          ["x" + ext]: ["export function X() { return 1 }", "export const K = 1", ""].join("\n"),
+          ["barrel" + ext]: ["import { X } from './x'", "export { X }", ""].join("\n"),
+          ["alias" + ext]: ["import { K } from './x'", "export { K as Kay }", ""].join("\n"),
+          ["use" + ext]: [
+            "import { X } from './barrel'", // 1
+            "import { K } from './x'", // 2
+            "export function f(a = K, { b = K } = {}) { return a + (b ?? 0) }", // 3
+            "export function g(n = X()) { return n }", // 4
+            "export const o = { K, X }", // 5
+            "export function shadow(K) { return { K } }", // 6 parameter K hides the import
+            "export function body() { const K = 2; return K }", // 7
+            "",
+          ].join("\n"),
+          ["decoy" + ext]: ["const K = 2", "export function d(a = K) { return a }", "export const m = { K }", ""].join(
+            "\n",
+          ),
+        };
+        if (typed) files["alias" + ext] += "export type B = typeof K\n";
+        const fixture = await project(files);
+        const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+        try {
+          const observe = async (index: ProjectIndex) => {
+            const refs = async (fileName: string, line: number, token: string) => {
+              const result = await findReferences(index, {
+                file: fixture.file(fileName),
+                line,
+                column: columnAt(files[fileName]!, line, token),
+              });
+              return {
+                sites: sitesOf(result),
+                coverage: result.status === "ok" ? result.referenceCoverage.state : result.status,
+              };
+            };
+            return {
+              k: await refs("x" + ext, 2, "K"),
+              x: await refs("x" + ext, 1, "X"),
+              gotoX: await where(index, fixture.file("use" + ext), files["use" + ext]!, 4, "X"),
+              gotoDefault: await where(index, fixture.file("use" + ext), files["use" + ext]!, 3, "K", 1),
+            };
+          };
+          const useAt = (line: number, token: string, nth = 1) =>
+            "use" + ext + ":" + line + ":" + columnAt(files["use" + ext]!, line, token, nth);
+          const expectedK = [
+            "alias" + ext + ":1:10",
+            "alias" + ext + ":2:10",
+            "alias" + ext + ":2:15",
+            useAt(2, "K"),
+            useAt(3, "K", 1),
+            useAt(3, "K", 2),
+            useAt(5, "K"),
+            "x" + ext + ":2:14",
+            ...(typed ? ["alias" + ext + ":3:" + columnAt(files["alias" + ext]!, 3, "K")] : []),
+          ].sort();
+          const result = await observe(fixture.index);
+          expect(result.k.sites).toEqual(expectedK);
+          expect(result.k.coverage).toBe("complete");
+          expect(result.x.sites).toEqual(
+            [
+              "barrel" + ext + ":1:10",
+              "barrel" + ext + ":2:10",
+              useAt(1, "X"),
+              useAt(4, "X"),
+              useAt(5, "X"),
+              "x" + ext + ":1:17",
+            ].sort(),
+          );
+          expect(result.gotoX).toBe("x" + ext + ":1:17");
+          expect(result.gotoDefault).toBe("x" + ext + ":2:14");
+          // Neither the parameter that hides K, the body local, nor the decoy module's K is a reference.
+          for (const site of result.k.sites) {
+            expect(site).not.toContain("decoy" + ext);
+            expect(site).not.toBe(useAt(6, "K", 1));
+            expect(site).not.toBe(useAt(6, "K", 2));
+            expect(site).not.toBe(useAt(7, "K", 1));
+          }
+          const cold = await buildProjectIndexIncremental(fixture.root, cacheOptions);
+          expect(await observe(cold)).toEqual(result);
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          clearMemoryCache();
+          expect(await observe(await buildProjectIndexIncremental(fixture.root, cacheOptions))).toEqual(result);
+        } finally {
+          closeDiskCacheDatabase(fixture.root, cacheOptions);
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx"] as const)(
+      "keeps the unmodeled forms explicit: JSDoc mentions, mapped-type keys, and infer names in %s",
+      async (extension) => {
+        const name = "limits." + extension;
+        const source = [
+          "interface BodyData { a: string }", // 1
+          "/**", // 2
+          " * @param {BodyData} form the body", // 3
+          " * {@link BodyData}", // 4
+          " */", // 5
+          "export function h(form: BodyData) { return form }", // 6
+          "type K = string", // 7
+          "export type Mapped<T> = { [K in keyof T]: T[K] }", // 8
+          "type E = number", // 9
+          "export type Unwrap<T> = T extends Array<infer E> ? E : never", // 10
+          "export type Free<T> = T extends Array<infer Item> ? Item : never", // 11
+          "export type FreeMapped<T> = { [Key in keyof T]: T[Key] }", // 12
+          "",
+        ].join("\n");
+        const fixture = await project({ [name]: source });
+        try {
+          const file = fixture.file(name);
+          // JSDoc type mentions are not read: they are neither references nor a reason for partial coverage.
+          const refs = await findReferences(fixture.index, { file, line: 1, column: columnAt(source, 1, "BodyData") });
+          expect(sitesOf(refs)).toEqual([name + ":1:11", name + ":6:25"]);
+          expect(refs.status === "ok" && refs.referenceCoverage.state).toBe("complete");
+          // A mapped-type key and an infer name bind nothing: without an outer type of that spelling nothing answers, and
+          // with one the outer type answers for them.
+          expect(await where(fixture.index, file, source, 11, "Item", 2)).toBe("not_found");
+          expect(await where(fixture.index, file, source, 12, "Key", 2)).toBe("not_found");
+          expect(await where(fixture.index, file, source, 8, "K", 2)).toBe(name + ":7:6");
+          expect(await where(fixture.index, file, source, 10, "E", 2)).toBe(name + ":9:6");
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "records an export clause with a source once, and forwards only a bare clause of an import, in %s",
+      async (extension) => {
+        const ext = "." + extension;
+        const files: Record<string, string> = {
+          ["a" + ext]: "export function A() { return 1 }\nexport function B() { return 2 }\n",
+          ["both" + ext]: [
+            "import { A, B } from './a'", // 1
+            "export { A } from './a'", // 2 names a's export, not this file's import
+            "export { B }", // 3 publishes this file's import
+            "export const used = A() + B()", // 4
+            "",
+          ].join("\n"),
+        };
+        const fixture = await project(files);
+        try {
+          const module = [...fixture.index.byFile.values()].find((entry) => path.basename(entry.file) === "both" + ext);
+          const reexports = (module?.exports ?? []).flatMap((entry) =>
+            entry.type === "reexport" ? [[entry.exportedAs, !!entry.forwardsImportBinding] as const] : [],
+          );
+          expect(reexports).toEqual([
+            ["A", false],
+            ["B", true],
+          ]);
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("resolves a module's exports once per index and matches an uncached lookup", async () => {
+      const files: Record<string, string> = {
+        "a.ts": "export function A() { return 1 }\nexport const B = 2\n",
+        "barrel.ts": "export * from './a'\nimport { A } from './a'\nexport { A as Aliased }\n",
+      };
+      const fixture = await project(files);
+      try {
+        const barrel = fixture.file("barrel.ts");
+        const first = resolveModuleExports(fixture.index, barrel, { allowLocalFallback: false });
+        // The same shape of lookup shares one answer; an option that changes resolution bypasses the memo.
+        expect(resolveModuleExports(fixture.index, barrel, { allowLocalFallback: false })).toBe(first);
+        const uncached = resolveModuleExports(fixture.index, barrel, { allowLocalFallback: false, typeOnly: false });
+        expect(uncached).not.toBe(first);
+        const summary = (exports: ReadonlyMap<string, ResolvedExport>) =>
+          [...exports.entries()]
+            .map(
+              ([name, hit]) =>
+                name + ":" + (hit.kind === "resolved" ? hit.def.localName + "@" + hit.def.range.start.line : hit.kind),
+            )
+            .sort();
+        expect(summary(first)).toEqual(["A:A@1", "Aliased:A@1", "B:B@2"]);
+        expect(summary(uncached)).toEqual(summary(first));
+        // With local fallback the memo keys differ, so a stricter answer is never served for a looser lookup.
+        expect(resolveModuleExports(fixture.index, barrel)).not.toBe(first);
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "counts the alias token of a forwarded import, including one that repeats a source spelling, in %s",
+      async (extension) => {
+        const ext = "." + extension;
+        const files: Record<string, string> = {
+          ["x" + ext]: "export function X() { return 1 }\nexport default function D() { return 5 }\n",
+          ["b1" + ext]: "import { X as Q } from './x'\nexport { Q as X }\n", // the alias repeats the source spelling X
+          ["b2" + ext]: "import D from './x'\nexport { D as default }\n", // the alias `default` names the default export
+          ["c" + ext]: "import { X } from './b1'\nimport Def from './b2'\nexport const r = [X(), Def()]\n",
+          ["decoy" + ext]: "export function X() { return 2 }\nexport { X as Y }\n", // another X, with its own alias
+        };
+        const fixture = await project(files);
+        try {
+          const refs = async (fileName: string, line: number, token: string) => {
+            const result = await findReferences(fixture.index, {
+              file: fixture.file(fileName + ext),
+              line,
+              column: columnAt(files[fileName + ext]!, line, token),
+            });
+            return {
+              sites: sitesOf(result),
+              coverage: result.status === "ok" ? result.referenceCoverage.state : result.status,
+            };
+          };
+          const sites = (entries: string[]) =>
+            entries.map((entry) => entry.replace(/^(\w+):/, "$1" + ext + ":")).sort();
+          // The alias token `X` of `export { Q as X }` and `default` of `export { D as default }` are references of the
+          // declaration, as the TypeScript service counts them, and the decoy's alias stays out.
+          expect(await refs("x", 1, "X")).toEqual({
+            sites: sites(["b1:1:10", "b1:1:15", "b1:2:10", "b1:2:15", "c:1:10", "c:3:19", "x:1:17"]),
+            coverage: "complete",
+          });
+          // The pinned JavaScript grammar does not expose the `default` alias of `export { D as default }`, so that clause is
+          // not indexed there and the barrel's consumers stay unresolved; TypeScript and TSX index it.
+          const defaultSites =
+            extension === "js"
+              ? ["b2:1:8", "b2:2:10", "x:2:25"]
+              : ["b2:1:8", "b2:2:10", "b2:2:15", "c:2:8", "c:3:24", "x:2:25"];
+          expect(await refs("x", 2, "D")).toEqual({ sites: sites(defaultSites), coverage: "complete" });
+          expect(await refs("decoy", 1, "X")).toEqual({
+            sites: sites(["decoy:1:17", "decoy:2:10", "decoy:2:15"]),
+            coverage: "complete",
+          });
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "keeps an import authoritative at its own uses when the file also exports it, in %s",
+      async (extension) => {
+        const ext = "." + extension;
+        const files: Record<string, string> = {
+          ["x" + ext]: "export function X() { return 1 }\nexport default function D() { return 2 }\n",
+          ["barrel" + ext]: [
+            "import { X } from './x'", // 1
+            "import D from './x'", // 2
+            "export { X, D }", // 3
+            "export const used = X() + D()", // 4
+            "",
+          ].join("\n"),
+        };
+        const fixture = await project(files);
+        try {
+          const barrel = "barrel" + ext;
+          const resolved = async (line: number, token: string) => {
+            const result = await goToDefinition(fixture.index, {
+              file: fixture.file(barrel),
+              line,
+              column: columnAt(files[barrel]!, line, token),
+            });
+            if (result.status !== "ok") throw new Error(token + " on line " + line + " is " + result.status);
+            return {
+              target: path.basename(result.definition.file) + ":" + result.definition.range.start.line,
+              importedFrom: path.basename(result.via?.importedFrom ?? ""),
+              exportedName: result.via?.exportedName,
+            };
+          };
+          // The export clause forwards the import without declaring a name, so each use still resolves through it.
+          for (const [line, token, exportedName, target] of [
+            [1, "X", "X", "x" + ext + ":1"],
+            [2, "D", "default", "x" + ext + ":2"],
+            [3, "X", "X", "x" + ext + ":1"],
+            [3, "D", "default", "x" + ext + ":2"],
+            [4, "X", "X", "x" + ext + ":1"],
+            [4, "D", "default", "x" + ext + ":2"],
+          ] as const) {
+            expect(await resolved(line, token), token + " on line " + line).toEqual({
+              target,
+              importedFrom: "x" + ext,
+              exportedName,
+            });
+          }
+        } finally {
+          await rm(fixture.root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each(["ts", "tsx", "js"] as const)(
+      "matches a cold build after edit, delete, rename-back, and restore for barrel forwards and type-parameter scopes in %s",
+      async (extension) => {
+        const typed = extension !== "js";
+        const ext = "." + extension;
+        const original: Record<string, string> = {
+          ["a" + ext]: [
+            "export function X() { return 1 }",
+            "export const K = 1",
+            "export default function D() { return 2 }",
+            "",
+          ].join("\n"),
+          ["barrel" + ext]: [
+            "import { X, K as Q } from './a'", // 1
+            "import D from './a'", // 2
+            "import * as NS from './a'", // 3
+            "export { X, Q, D, NS }", // 4
+            "export { X as Y }", // 5
+            "export { D as default }", // 6
+            ...(typed ? ["import type { T } from './types'", "export type { T }"] : []),
+            "",
+          ].join("\n"),
+          ["chain" + ext]: "import { X } from './barrel'\nexport { X }\n",
+          ["consumer" + ext]: [
+            "import { X } from './chain'", // 1
+            "import { Y, Q, D, NS } from './barrel'", // 2
+            "import Dflt from './barrel'", // 3
+            "export const r = [X(), Y(), Q, D(), NS.K, Dflt()]", // 4
+            "",
+          ].join("\n"),
+          ["decoy" + ext]: "export function X() { return 9 }\nexport const d = X()\n",
+          ...(typed
+            ? {
+                ["types" + ext]: "export type T = number\n",
+                ["generic" + ext]:
+                  "type Outer = string\nexport function g<Outer>(a: Outer): Outer { return a }\nexport const uses: Outer = 'x'\n",
+              }
+            : {}),
+        };
+        const root = (await mkdtemp(path.join(os.tmpdir(), "cg-tsjs-matrix-"))).replace(/\\/g, "/");
+        const cacheOptions = { cache: "disk" as const, cacheLocation: "project", threads: 1 };
+        const gotos: Array<[string, string, number, string, number]> = [
+          ["X import", "consumer", 1, "X", 1],
+          ["X call", "consumer", 4, "X", 1],
+          ["Y call", "consumer", 4, "Y", 1],
+          ["Q", "consumer", 4, "Q", 1],
+          ["D call", "consumer", 4, "D", 1],
+          ["NS", "consumer", 4, "NS", 1],
+          ["Dflt", "consumer", 4, "Dflt", 1],
+          ["chain X", "chain", 1, "X", 1],
+          ["barrel X", "barrel", 4, "X", 1],
+          ...(typed
+            ? ([
+                ["Outer param use", "generic", 2, "Outer", 2],
+                ["Outer alias use", "generic", 3, "Outer", 1],
+              ] as Array<[string, string, number, string, number]>)
+            : []),
+        ];
+        const declarations: Array<[string, string, number, string]> = [
+          ["X", "a", 1, "X"],
+          ["K", "a", 2, "K"],
+          ["D", "a", 3, "D"],
+          ["decoy X", "decoy", 1, "X"],
+          ...(typed
+            ? ([
+                ["Outer", "generic", 1, "Outer"],
+                ["T", "types", 1, "T"],
+              ] as Array<[string, string, number, string]>)
+            : []),
+        ];
+        const observe = async (index: ProjectIndex) => {
+          const out: Record<string, unknown> = {};
+          const read = async (fileName: string): Promise<string | null> => {
+            const file = root + "/" + fileName + ext;
+            return existsSync(file) ? readFile(file, "utf8") : null;
+          };
+          for (const [label, fileName, line, token, nth] of gotos) {
+            const text = await read(fileName);
+            let answer = "missing file";
+            if (text !== null) {
+              try {
+                answer = await where(index, root + "/" + fileName + ext, text, line, token, nth);
+              } catch {
+                answer = "missing token";
+              }
+            }
+            out["goto " + label] = answer;
+          }
+          for (const [label, fileName, line, token] of declarations) {
+            const text = await read(fileName);
+            let answer: unknown = "missing file";
+            if (text !== null) {
+              try {
+                const result = await findReferences(index, {
+                  file: root + "/" + fileName + ext,
+                  line,
+                  column: columnAt(text, line, token),
+                });
+                answer = {
+                  sites: sitesOf(result),
+                  coverage: result.status === "ok" ? result.referenceCoverage.state : result.status,
+                };
+              } catch {
+                answer = "missing token";
+              }
+            }
+            out["refs " + label] = answer;
+          }
+          const graph = await buildSymbolGraphDetailed(index);
+          out.edges = graph.edges
+            .map((edge) => edge.label + " " + graph.nodes.get(edge.from)?.name + "->" + graph.nodes.get(edge.to)?.name)
+            .sort();
+          return out;
+        };
+        const writeOriginal = async (fileName: string) =>
+          writeFile(root + "/" + fileName + ext, original[fileName + ext]!, "utf8");
+        try {
+          for (const [fileName, content] of Object.entries(original))
+            await writeFile(root + "/" + fileName, content, "utf8");
+          const steps: Array<[string, () => Promise<void>]> = [
+            ["initial", async () => {}],
+            [
+              "edit a",
+              async () => writeFile(root + "/a" + ext, original["a" + ext] + "export const EXTRA = 2\n", "utf8"),
+            ],
+            [
+              "edit barrel",
+              async () =>
+                writeFile(root + "/barrel" + ext, original["barrel" + ext]!.replace("export { X as Y }\n", ""), "utf8"),
+            ],
+            ["delete barrel", async () => rm(root + "/barrel" + ext)],
+            ["rename a away", async () => rename(root + "/a" + ext, root + "/a2" + ext)],
+            ["rename a back", async () => rename(root + "/a2" + ext, root + "/a" + ext)],
+            ["restore barrel", async () => writeOriginal("barrel")],
+            ["restore a", async () => writeOriginal("a")],
+          ];
+          for (const [label, mutate] of steps) {
+            await mutate();
+            const cold = await observe(await buildProjectIndex(root, { cache: "off" }));
+            const warm = await observe(await buildProjectIndexIncremental(root, cacheOptions));
+            expect(warm, label + ": warm").toEqual(cold);
+            closeDiskCacheDatabase(root, cacheOptions);
+            clearMemoryCache();
+            const reopened = await observe(await buildProjectIndexIncremental(root, cacheOptions));
+            expect(reopened, label + ": reopened").toEqual(cold);
+            if (label === "initial") {
+              // The forwards are real: the consumer reaches the declaration through the barrel and the chain.
+              expect(cold["goto X import"]).toBe("a" + ext + ":1:17");
+              expect(cold["goto Y call"]).toBe("a" + ext + ":1:17");
+              expect(cold["goto Q"]).toBe("a" + ext + ":2:14");
+              expect(cold["goto D call"]).toBe("a" + ext + ":3:25");
+              expect(cold["refs decoy X"]).toEqual({
+                sites: ["decoy" + ext + ":1:17", "decoy" + ext + ":2:18"].sort(),
+                coverage: "complete",
+              });
+              if (typed) expect(cold["goto Outer param use"]).toBe("generic" + ext + ":2:19");
+            }
+          }
+        } finally {
+          closeDiskCacheDatabase(root, cacheOptions);
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });

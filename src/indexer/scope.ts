@@ -20,11 +20,11 @@ import { generatedMembersIn } from "../languages/generated-members.js";
 import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
+  bindingHiddenFromUse,
   headerParameterNamedLikeType,
-  isValueNamespaceBinding,
   isExplicitMethodCall,
+  isValueNamespaceBinding,
   laterLocalBlocksOuterUse,
-  localHiddenByGate,
   pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
@@ -185,8 +185,7 @@ export function buildScopeIndexFromSource(
         indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
         callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode });
     }
-    const heldModuleSpecifier =
-      kind === "local" && isJsTsLanguage(support.id) ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
+    const heldModuleSpecifier = kind === "local" && jsTs ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
     return {
       name,
       canonicalName: scopeIdentifierKey(row, name, nameNode, normalizeIdentifier),
@@ -227,6 +226,7 @@ export function buildScopeIndexFromSource(
   }
 
   const row = scopeNodesFor(support.id);
+  const jsTs = isJsTsLanguage(support.id);
   const generatedMembers = generatedMembersIn(support, source);
   /** Covering-declaration names collected before a scope's body is walked, keyed by syntax node id. */
   const pendingNamesByNodeId = new Map<number, Set<string>>();
@@ -252,6 +252,10 @@ export function buildScopeIndexFromSource(
   };
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const scopeDeclarationNames = support.scopeDeclarationNames;
+  const typeOnlyUseTypes = row.typeOnlyUseTypes;
+  /** Whether a use appears only in type syntax: a row that lists those node types answers from the list. */
+  const isTypeOnlyUse = (node: SyntaxNodeLike): boolean =>
+    typeOnlyUseTypes ? typeOnlyUseTypes.has(node.type) : typeOnlyName(support.id, node);
 
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
@@ -546,7 +550,7 @@ export function buildScopeIndexFromSource(
     const canonicalName =
       support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     const methodCall = !!node && isExplicitMethodCall(row, node);
-    const typeOnly = !!node && typeOnlyName(support.id, node);
+    const typeOnly = !!node && isTypeOnlyUse(node);
     // A gate between the use and a scope hides that scope's local variables.
     let crossedGate = false;
     for (let index = stack.length - 1; index >= 0; index--) {
@@ -563,11 +567,7 @@ export function buildScopeIndexFromSource(
         }
       }
       while (hit) {
-        const wrongNamespace =
-          (methodCall && hit.kind === "local") ||
-          (typeOnly && isValueNamespaceBinding(hit)) ||
-          (crossedGate && localHiddenByGate(row, hit));
-        if (!wrongNamespace) break;
+        if (!bindingHiddenFromUse(row, hit, node, methodCall, typeOnly, crossedGate)) break;
         hit = hit.earlierSameScope;
       }
       if (hit) return hit;
@@ -588,11 +588,7 @@ export function buildScopeIndexFromSource(
       }
     }
     while (root) {
-      const wrongNamespace =
-        (methodCall && root.kind === "local") ||
-        (typeOnly && isValueNamespaceBinding(root)) ||
-        (crossedGate && localHiddenByGate(row, root));
-      if (!wrongNamespace) break;
+      if (!bindingHiddenFromUse(row, root, node, methodCall, typeOnly, crossedGate)) break;
       root = root.earlierSameScope;
     }
     return root;
@@ -650,6 +646,42 @@ export function buildScopeIndexFromSource(
     return variables;
   };
 
+  /** The default-value expression of a pattern node: a read of an enclosing name, never a name the pattern binds. */
+  const patternDefaultValue = (pattern: SyntaxNodeLike): SyntaxNodeLike | null => {
+    const field = row.patternDefaultValueFields?.[pattern.type];
+    return field ? pattern.childForFieldName(field) : null;
+  };
+
+  /** The node that lists a declaration's type parameters, or null when the language row names no such field. */
+  const typeParameterList = (declaration: SyntaxNodeLike): SyntaxNodeLike | null => {
+    const field = row.typeParameterListField;
+    return field ? declaration.childForFieldName(field) : null;
+  };
+
+  /**
+   * Whether a declaration opens a scope for its type parameters. A row that names the list field only scopes a
+   * declaration that has such a list, so a non-generic one adds no scope.
+   */
+  const opensTypeScope = (declaration: SyntaxNodeLike, declarationType: string): boolean => {
+    if (!row.typeScopeTypes?.has(declarationType)) return false;
+    return !row.typeParameterListField || !!typeParameterList(declaration);
+  };
+
+  /**
+   * Declares a declaration's type parameters as the scope it opens begins. A function's parameters are read before its
+   * type-parameter list is walked, and a constraint can name a parameter that comes after it.
+   */
+  const declareTypeParameters = (declaration: SyntaxNodeLike): void => {
+    const list = typeParameterList(declaration);
+    for (const parameter of list?.namedChildren ?? []) {
+      if (!row.typeParameterTypes?.has(parameter.type)) continue;
+      for (const name of declaredNameNodes(parameter)) {
+        addDecl(name, "type");
+        preRegisteredNameSpans.add(nameSpanKey(name));
+      }
+    }
+  };
+
   const addPatternDecls = (
     pattern: SyntaxNodeLike,
     kind: BindingKind,
@@ -662,6 +694,9 @@ export function buildScopeIndexFromSource(
       addBindingToScope(pattern, kind);
       return;
     }
+    // The names inside a parameter list are registered here and the list itself is not walked afterwards, so the reads
+    // in a pattern (a type annotation or a default value) are walked here. A variable declaration is walked later.
+    const defaultNode = patternDefaultValue(pattern);
     // Parameter type and default-value fields are reads, not additional bound names.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const nameNode = pattern.childForFieldName("name");
@@ -681,9 +716,11 @@ export function buildScopeIndexFromSource(
       for (const child of pattern.namedChildren) {
         if (typeNode && child.id === typeNode.id) continue;
         if (valueNode && child.id === valueNode.id) continue;
+        if (defaultNode && child.id === defaultNode.id) continue;
         addPatternDecls(child, kind, addBindingToScope);
       }
       if (typeNode) walk(typeNode);
+      if (defaultNode && kind === "param") walk(defaultNode);
       if (valueNode) {
         // Python defaults execute in the enclosing scope, before the function is bound.
         const functionScope = stack.pop();
@@ -700,8 +737,10 @@ export function buildScopeIndexFromSource(
       return;
     }
     for (const child of pattern.namedChildren) {
+      if (defaultNode && child.id === defaultNode.id) continue;
       addPatternDecls(child, kind, addBindingToScope);
     }
+    if (defaultNode && kind === "param") walk(defaultNode);
   };
 
   const isAwaitedDynamicImport = (node: SyntaxNodeLike | null): boolean => {
@@ -854,10 +893,12 @@ export function buildScopeIndexFromSource(
       names.add(normalizeIdentifier(sliceText(pattern, source)));
       return;
     }
+    const defaultNode = patternDefaultValue(pattern);
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
       for (const child of pattern.namedChildren) {
         if (typeNode && child.startIndex === typeNode.startIndex && child.endIndex === typeNode.endIndex) continue;
+        if (defaultNode && child.id === defaultNode.id) continue;
         rememberPatternNames(child, names);
       }
       return;
@@ -867,7 +908,10 @@ export function buildScopeIndexFromSource(
       if (value) rememberPatternNames(value, names);
       return;
     }
-    for (const child of pattern.namedChildren) rememberPatternNames(child, names);
+    for (const child of pattern.namedChildren) {
+      if (defaultNode && child.id === defaultNode.id) continue;
+      rememberPatternNames(child, names);
+    }
   };
 
   const rememberLexicalNames = (declaration: SyntaxNodeLike, names: Set<string>): void => {
@@ -901,11 +945,9 @@ export function buildScopeIndexFromSource(
         }
         return;
       }
-      if (
-        node !== scopeNode &&
-        !row.moduleRootTypes?.has(node.type) &&
-        (support.createsBlockScope(node) || !!row.typeScopeTypes?.has(node.type))
-      ) {
+      // A declaration that opens only a type scope names its type parameters there; its own name, and anything its body
+      // declares, still belong to the scope being collected.
+      if (node !== scopeNode && !row.moduleRootTypes?.has(node.type) && support.createsBlockScope(node)) {
         collectHoistedDeclarations(node);
         return;
       }
@@ -1040,7 +1082,7 @@ export function buildScopeIndexFromSource(
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
     const methodCall = isExplicitMethodCall(row, useNode);
-    const typeOnly = typeOnlyName(support.id, useNode);
+    const typeOnly = isTypeOnlyUse(useNode);
     let scope = start;
     // A gate between the use and a scope hides that scope's local variables. A use queued past its own scopes starts
     // above a gate it already left.
@@ -1060,9 +1102,7 @@ export function buildScopeIndexFromSource(
         const atModuleRuntime = scope.kind === "module" && moduleBindingAtFunctionRuntime(useNode);
         while (
           binding &&
-          ((methodCall && binding.kind === "local") ||
-            (typeOnly && isValueNamespaceBinding(binding)) ||
-            (crossedGate && localHiddenByGate(row, binding)) ||
+          (bindingHiddenFromUse(row, binding, useNode, methodCall, typeOnly, crossedGate) ||
             (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode, support)))
         ) {
           binding = binding.earlierSameScope;
@@ -1163,6 +1203,8 @@ export function buildScopeIndexFromSource(
   const walk = (node: SyntaxNodeLike) => {
     if (node.startIndex === node.endIndex) return;
     const nodeType = node.type;
+    const parentType = node.parent?.type;
+    const isIdentifierNode = idSet.has(nodeType);
     let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
     let qualifiedNamespaceScope: Scope | undefined;
     // A name-registering node puts its name in the *current* (enclosing) scope before the push
@@ -1189,7 +1231,7 @@ export function buildScopeIndexFromSource(
           }
         } else if (row.hoistedFunctionTypes?.has(nodeType)) {
           addHoistedDecl(name, "function");
-        } else if (support.id === "cpp" && node.parent?.type === "template_declaration") {
+        } else if (support.id === "cpp" && parentType === "template_declaration") {
           addDeclSkippingTypeScope(name, "function");
         } else {
           addDecl(name, "function");
@@ -1221,8 +1263,8 @@ export function buildScopeIndexFromSource(
       if (name) addDecl(name, "local");
     } else if (
       row.enumBodyMemberTypes?.has(nodeType) &&
-      node.parent &&
-      row.enumBodyParentTypes?.has(node.parent.type)
+      parentType !== undefined &&
+      row.enumBodyParentTypes?.has(parentType)
     ) {
       addDecl(node, "local");
     }
@@ -1278,6 +1320,7 @@ export function buildScopeIndexFromSource(
         }
       }
 
+      declareTypeParameters(node);
       const params = node.childForFieldName("parameters");
       if (params) addPatternDecls(params, "param");
       collectHoistedDeclarations(node);
@@ -1309,10 +1352,10 @@ export function buildScopeIndexFromSource(
       pushed = true;
       pushedScopeCount = 1;
     } else if (
-      row.typeScopeTypes?.has(nodeType) ||
+      opensTypeScope(node, nodeType) ||
       (support.id === "cpp" &&
         nodeType === "template_parameter_list" &&
-        node.parent?.type === "template_template_parameter_declaration")
+        parentType === "template_template_parameter_declaration")
     ) {
       // A generic type's parameters belong to its own declaration, not a sibling declaration.
       // Fields retain their existing scope through `addDeclSkippingTypeScope` below.
@@ -1327,6 +1370,7 @@ export function buildScopeIndexFromSource(
       allScopes.push(scope);
       pushed = true;
       pushedScopeCount = 1;
+      declareTypeParameters(node);
       bindHeaderParameters(node);
     }
 
@@ -1337,10 +1381,7 @@ export function buildScopeIndexFromSource(
       );
     }
 
-    if (
-      isJsTsLanguage(support.id) &&
-      (nodeType === "assignment_expression" || nodeType === "augmented_assignment_expression")
-    ) {
+    if (jsTs && (nodeType === "assignment_expression" || nodeType === "augmented_assignment_expression")) {
       const left = node.childForFieldName("left");
       if (left && idSet.has(left.type)) {
         const binding = lookup(sliceText(left, source), left);
@@ -1365,18 +1406,20 @@ export function buildScopeIndexFromSource(
     }
 
     const templateValueParameter =
-      node.parent?.type === "template_parameter_list" && row.templateValueParameterTypes?.has(nodeType);
+      parentType === "template_parameter_list" && row.templateValueParameterTypes?.has(nodeType);
     if (row.typeParameterTypes?.has(nodeType) || templateValueParameter) {
       // The inner parameter list of a C++ template-template parameter has its own scope.
       // The outer template's non-type parameters bind here, not in the enclosing file.
       const kind: BindingKind = templateValueParameter ? "param" : "type";
       for (const name of declaredNameNodes(node)) {
+        // A scope that declares its parameters as it opens has already registered this name.
+        if (preRegisteredNameSpans.has(nameSpanKey(name))) continue;
         addDecl(name, kind);
         preRegisteredNameSpans.add(nameSpanKey(name));
       }
     }
 
-    let declarationName = idSet.has(nodeType) && support.isDeclarationName(node);
+    let declarationName = isIdentifierNode && support.isDeclarationName(node);
     if (declarationName && support.id === "cpp" && isCppTemplateArgumentName(node)) declarationName = false;
     if (declarationName && row.shortVariableDeclarationTypes) {
       for (let current = node.parent; current; current = current.parent) {
@@ -1389,8 +1432,8 @@ export function buildScopeIndexFromSource(
       }
     }
     if (
-      scopeDeclarationNames(node) &&
       declarationName &&
+      scopeDeclarationNames(node) &&
       !isScopedEnumeratorName(node) &&
       !preRegisteredNameSpans.has(nameSpanKey(node))
     ) {
@@ -1398,8 +1441,8 @@ export function buildScopeIndexFromSource(
       addDeclSkippingTypeScope(node, kind);
     }
 
-    const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(nodeType);
-    if (idSet.has(nodeType) && !declarationName && !nestedIdentifier) {
+    const nestedIdentifier = parentType !== undefined && idSet.has(parentType) && row.childSkipNameTypes?.has(nodeType);
+    if (isIdentifierNode && !declarationName && !nestedIdentifier) {
       const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");

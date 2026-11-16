@@ -496,6 +496,10 @@ export async function previewRenameInSnapshot(
       });
       continue;
     }
+    // `{ X }` reads the variable X and names the property X at once: keep the key and rename the variable.
+    if (!isScssFile(snapshot.index, resolved.def.file) && (await isShorthandPropertySite(snapshot, candidate))) {
+      newText = `${oldText}: ${newText}`;
+    }
     edits.push({
       file: loaded.displayPath,
       range: candidate.range,
@@ -621,6 +625,21 @@ async function callsMemberPair(snapshot: AgentProjectSnapshot, site: Reference):
   if (!support?.siteCallsMemberPair || start === undefined) return false;
   const parsed = await ensureParsedContextForIndex(snapshot.index, site.file);
   return support.siteCallsMemberPair(parsed.tree.rootNode.descendantForIndex(start, site.range.end.index ?? start));
+}
+
+/** Whether a candidate is a shorthand property or destructuring name, which stands for a property and a variable. */
+async function isShorthandPropertySite(snapshot: AgentProjectSnapshot, candidate: CandidateEdit): Promise<boolean> {
+  const start = candidate.range.start.index;
+  const end = candidate.range.end.index;
+  if (start === undefined || end === undefined) return false;
+  try {
+    const parsed = await ensureParsedContextForIndex(snapshot.index, candidate.file);
+    const shorthand = parsed.sup.nodeTypes.shorthandPropertyIdentifier;
+    return !!shorthand?.includes(parsed.tree.rootNode.descendantForIndex(start, end).type);
+  } catch (error) {
+    rethrowStaleQuerySource(error);
+    return false;
+  }
 }
 
 function addExportDeclarationConflicts(
@@ -1389,7 +1408,10 @@ function getRenameExportIndex(index: ProjectIndex): ReadonlyMap<string, readonly
         });
         continue;
       }
-      if (entry.type !== "reexport") continue;
+      // An export clause that forwards an import names that binding, so its token is already an ordinary reference. A
+      // default import binds a name of its own choosing, so the declaration's name proves nothing about the names
+      // downstream: that forward stays an export declaration the preview must find, or the rename is unsafe.
+      if (entry.type !== "reexport" || (entry.forwardsImportBinding && entry.sourceSpecifier !== "default")) continue;
       const resolved = resolveExport(index, moduleIndex.file, entry.exportedAs, {
         allowLocalFallback: false,
       });
