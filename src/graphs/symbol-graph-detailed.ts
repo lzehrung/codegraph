@@ -369,15 +369,23 @@ export async function buildSymbolGraphDetailed(
   };
   // Receiver calls into runtime and dependency APIs dominate real call sites. Build these
   // indexes lazily so a scoped graph that has no receiver calls pays no allocation cost.
-  let callableNames: { exact: Set<string>; phpFolded?: Set<string>; swiftNormalized?: Set<string> } | undefined;
-  const ensureCallableNames = (): { exact: Set<string>; phpFolded?: Set<string>; swiftNormalized?: Set<string> } => {
+  type CallableNames = {
+    exact: Set<string>;
+    /** Names of functions that are not members of a type. */
+    free: Set<string>;
+    phpFolded?: Set<string>;
+    swiftNormalized?: Set<string>;
+  };
+  let callableNames: CallableNames | undefined;
+  const ensureCallableNames = (): CallableNames => {
     if (!callableNames) {
-      callableNames = { exact: new Set() };
+      callableNames = { exact: new Set(), free: new Set() };
       for (const entry of index.byFile.values()) {
         const support = supportForIndexedFile(entry.file);
         for (const local of entry.locals) {
           if (local.kind !== SymbolKind.Function) continue;
           callableNames.exact.add(local.localName);
+          if (!local.isMember) callableNames.free.add(local.localName);
           if (support?.id === "php")
             (callableNames.phpFolded ??= new Set()).add(foldPhpIdentifierCase(local.localName));
           if (support?.id === "swift") {
@@ -768,6 +776,8 @@ export async function buildSymbolGraphDetailed(
         fileHiddenMemberIds,
         nodeAliases,
         noteCallableName,
+        mayNameCallable: (name: string): boolean => ensureCallableNames().exact.has(name),
+        mayNameFreeFunction: (name: string): boolean => ensureCallableNames().free.has(name),
         loadParsedFile,
         parsedFiles: resolutionFiles,
       };
@@ -778,7 +788,7 @@ export async function buildSymbolGraphDetailed(
       await emitFunctionBodyEdges(edgePassContext, functionNodes);
       await emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
       await emitClassInheritanceEdges(edgePassContext, classNodes);
-      SPECIALIZED_EDGE_PASSES[sup.id]?.afterModule?.(edgePassContext, tree.rootNode);
+      await SPECIALIZED_EDGE_PASSES[sup.id]?.afterModule?.(edgePassContext, tree.rootNode);
     } catch (error) {
       rethrowStaleQuerySource(error);
       if (isNativeRequiredUnavailableError(error)) {

@@ -37,6 +37,8 @@ export type LanguageSupport = {
   generatedMembers?: (node: SyntaxNodeLike) => readonly GeneratedMember[];
   generatedMembersMarker?: string;
   generatedMemberVisibleAt?: (owner: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+  methodVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+  siteCallsMemberPair?: (property: SyntaxNodeLike) => boolean;
   selfIsInstanceAt?: (use: SyntaxNodeLike) => boolean;
   invokedMemberName?: (property: SyntaxNodeLike) => string;
   useSiteMemberName?: (declared: string) => string;
@@ -69,6 +71,8 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     ...(def.generatedMembers ? { generatedMembers: def.generatedMembers } : {}),
     ...(def.generatedMembersMarker ? { generatedMembersMarker: def.generatedMembersMarker } : {}),
     ...(def.generatedMemberVisibleAt ? { generatedMemberVisibleAt: def.generatedMemberVisibleAt } : {}),
+    ...(def.methodVisibleAt ? { methodVisibleAt: def.methodVisibleAt } : {}),
+    ...(def.siteCallsMemberPair ? { siteCallsMemberPair: def.siteCallsMemberPair } : {}),
     ...(def.selfIsInstanceAt ? { selfIsInstanceAt: def.selfIsInstanceAt } : {}),
     ...(def.invokedMemberName ? { invokedMemberName: def.invokedMemberName } : {}),
     ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),

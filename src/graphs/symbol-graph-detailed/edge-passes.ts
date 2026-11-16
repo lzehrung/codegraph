@@ -75,6 +75,15 @@ import {
   rustTokenTreeHoldsExpressions,
   rustTokenTreeNameFollowsSeparator,
 } from "../../util/member-access.js";
+import {
+  rubyBareCallReaches,
+  rubyBlockMayRebindSelf,
+  rubyCallDependsOnSelf,
+  rubyIsBareRead,
+  rubyIsOperatorOnLocal,
+  rubyNamesLocalVariable,
+  rubyOtherFileMethodReaches,
+} from "../../util/ruby-tree.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import { isSwiftQualifiedTypeSuffix, isSwiftSubscriptAccess } from "../../util/swift-tree.js";
 import {
@@ -189,6 +198,10 @@ type EdgePassContext = {
   ) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
   loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
+  /** Whether some function of the project, or some binding the pass proved callable, has exactly this name. */
+  mayNameCallable: (name: string) => boolean;
+  /** Whether some function of the project that is not a member of a type has exactly this name. */
+  mayNameFreeFunction: (name: string) => boolean;
   /** Files the shared name lookup reads synchronously for this module, such as `using static` targets. */
   parsedFiles: ParsedFileProvider;
 };
@@ -1071,6 +1084,10 @@ function recordRubySuper(
   });
 }
 
+/**
+ * A Ruby call records its own edge, and the walk goes on into its receiver, arguments, and block: the calls nested in
+ * them (`sink(tick())`, `[1].each { tick }`) are calls of the same method.
+ */
 function recordRubyCall(
   context: EdgePassContext,
   node: SyntaxNodeLike,
@@ -1080,8 +1097,7 @@ function recordRubyCall(
   if (node.type !== "call") return undefined;
   const methodNode = node.childForFieldName("method");
   const receiverNode = node.childForFieldName("receiver");
-  const methodName = methodNode ? sliceText(methodNode, context.source) : null;
-  if (methodName === "new" && receiverNode) {
+  if (receiverNode && methodNode && sliceText(methodNode, context.source) === "new") {
     const recorded = tryResolveNode(context, receiverNode, fromId, "instantiates");
     if (!recorded) {
       const rubyType = resolveRubyVisibleConstant(
@@ -1092,28 +1108,139 @@ function recordRubyCall(
       );
       if (rubyType) recordDefEdge(context, fromId, rubyType, "instantiates", receiverNode);
     }
-    return false;
+    return true;
   }
   if (methodNode?.type === "super") return true;
   if (methodNode) {
+    // `c0&mask` is an operator on the local `c0` that the parser took for a call.
+    if (!receiverNode && rubyIsOperatorOnLocal(methodNode, context.source)) return true;
     resolveCallTarget(node, methodNode);
-    return false;
+    return true;
   }
   const callee = getCallTarget(node);
   if (callee?.type === "super") return true;
   resolveCallTarget(node, callee);
-  return false;
+  return true;
 }
 
+const fileFunctionNamesByContext = new WeakMap<EdgePassContext, ReadonlySet<string>>();
+
+/**
+ * Whether a bare name can reach a function this pass records a call to: one this file declares, or a top-level function
+ * of another file. A method of another file's type is no target of a bare name, so a name only such methods carry costs
+ * no lookup.
+ */
+function bareNameMayCall(context: EdgePassContext, name: string): boolean {
+  let fileNames = fileFunctionNamesByContext.get(context);
+  if (!fileNames) {
+    fileNames = new Set(
+      context.moduleEntry.locals.filter((local) => local.kind === SymbolKind.Function).map((local) => local.localName),
+    );
+    fileFunctionNamesByContext.set(context, fileNames);
+  }
+  return fileNames.has(name) || context.mayNameFreeFunction(name);
+}
+
+type CrossFileBareCall = { fromId: string; node: SyntaxNodeLike; target: SymbolDef };
+const crossFileBareCallsByContext = new WeakMap<EdgePassContext, CrossFileBareCall[]>();
+
+/**
+ * Records the bare calls to a method of another file once its declaration shows the call reaches it: a top-level
+ * method, or a method of a module or class the type around the call names as a superclass or mixin. A module that no
+ * type around the call includes is no target of a bare name, though it is a function of the project.
+ */
+async function recordCrossFileBareCalls(context: EdgePassContext): Promise<void> {
+  for (const { fromId, node, target } of crossFileBareCallsByContext.get(context) ?? []) {
+    const start = target.range.start.index;
+    const end = target.range.end.index;
+    if (start === undefined || end === undefined) continue;
+    const parsed = await context.loadParsedFile(target.file);
+    const declaration = parsed?.tree.rootNode.descendantForIndex(start, end);
+    if (!declaration) continue;
+    if (!rubyOtherFileMethodReaches(declaration, node) || !rubyBareCallReaches(declaration, node)) continue;
+    recordDefEdge(context, fromId, target, "calls", node);
+  }
+}
+
+/**
+ * A bare name that is no local is a call of a method of `self`, with no receiver, arguments, or parentheses
+ * (`sink(num)`, `puts num`, `[1].each { tick }`). The shared lookup decides whether the name is a local or a method, as
+ * navigation does; the call is recorded only where `self` has the method it finds (an instance method from an instance
+ * method, a singleton method from a singleton method), and for a method of another file only a top-level one.
+ */
+function recordRubyBareCall(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): void {
+  const name = sliceText(node, context.source);
+  if (!bareNameMayCall(context, name) || !rubyIsBareRead(node)) return;
+  // A name the syntax binds as a local never names a method, so the lookup below would reject it.
+  if (rubyNamesLocalVariable(node)) return;
+  const target = context.resolveIdentifier(name, node);
+  if (target?.kind !== SymbolKind.Function) return;
+  const start = target.range.start.index;
+  const end = target.range.end.index;
+  if (fileIdentityKey(target.file) === fileIdentityKey(context.moduleEntry.file)) {
+    if (start === undefined || end === undefined) return;
+    if (!rubyBareCallReaches(context.tree.rootNode.descendantForIndex(start, end), node)) return;
+  } else if (target.isMember) {
+    return;
+  } else {
+    const pending = crossFileBareCallsByContext.get(context) ?? [];
+    pending.push({ fromId, node, target });
+    crossFileBareCallsByContext.set(context, pending);
+    return;
+  }
+  recordDefEdge(context, fromId, target, "calls", node);
+}
+
+/**
+ * Records what a Ruby function body names by position: a bare read of a method, and `super`. Inside a block that may run
+ * with another `self` (`mock_app do ... end`) a call that depends on `self` names nothing this file shows, so only the
+ * calls on a constant, a local, or another call are walked on and recorded.
+ */
+function rubyNodeVisitor(context: EdgePassContext, fn: DetailedFunctionNode, fromId: string): NodeVisitor {
+  // Where the outermost block that may rebind `self` ends, while the walk, which goes in source order, is inside it.
+  let reboundEnd = -1;
+  return (node) => {
+    const type = node.type;
+    if (reboundEnd >= 0 && node.startIndex >= reboundEnd) reboundEnd = -1;
+    const rebound = reboundEnd >= 0;
+    if (type === "identifier") {
+      if (!rebound) recordRubyBareCall(context, node, fromId);
+      return undefined;
+    }
+    if (type === "block" || type === "do_block") {
+      if (!rebound && rubyBlockMayRebindSelf(node, context.tree.rootNode)) reboundEnd = node.endIndex;
+      return undefined;
+    }
+    if (type === "super") {
+      if (!rebound) recordRubySuper(context, fn, node, fromId);
+      return true;
+    }
+    return rebound && type === "call" && rubyCallDependsOnSelf(node) ? true : undefined;
+  };
+}
+
+type NodeVisitor = (node: SyntaxNodeLike) => boolean | undefined;
+
 type SpecializedEdgePassRow = {
+  /**
+   * The child of `parent` for which the walk records no call of its own while it still walks into it: the receiver of a
+   * Ruby call is resolved with the call it belongs to, so the calls of a chain (`a.b.c(d)`) resolve once, and the
+   * arguments and blocks inside the chain still record their own.
+   */
+  ownCallSkippedChild?: (parent: SyntaxNodeLike) => SyntaxNodeLike | null;
+  /**
+   * Whether a call through a receiver can reach no target, so the receiver is not proven: Ruby has no method of that
+   * name in the project, and a deferred candidate for a name no function carries is dropped after the walk anyway.
+   */
+  skipsReceiverCall?: (context: EdgePassContext, access: ReceiverCallAccess) => boolean;
   beforeModule?: (context: EdgePassContext, rootNode: SyntaxNodeLike) => void;
-  afterModule?: (context: EdgePassContext, rootNode: SyntaxNodeLike) => void;
-  onNode?: (
-    context: EdgePassContext,
-    fn: DetailedFunctionNode,
-    node: SyntaxNodeLike,
-    fromId: string,
-  ) => boolean | undefined;
+  afterModule?: (context: EdgePassContext, rootNode: SyntaxNodeLike) => void | Promise<void>;
+  /**
+   * Called once for each function body, so a language can keep state while it walks. The visitor it returns sees every
+   * node of the body before its children; a boolean result decides whether the children record calls of their own,
+   * `undefined` leaves that to the common walker.
+   */
+  nodeVisitor?: (context: EdgePassContext, fn: DetailedFunctionNode, fromId: string) => NodeVisitor;
   onReceiverCall?: (
     context: EdgePassContext,
     access: ReceiverCallAccess,
@@ -1133,9 +1260,11 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
   python: { beforeModule: emitPythonDecoratorEdges },
   rust: {
     afterModule: emitRustImplEdges,
-    onNode(context, _fn, node, fromId) {
-      if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
-      return undefined;
+    nodeVisitor(context, _fn, fromId) {
+      return (node) => {
+        if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
+        return undefined;
+      };
     },
   },
   go: {
@@ -1148,11 +1277,14 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
     onCall: recordGoBuiltinConstruction,
   },
   ruby: {
-    onNode(context, fn, node, fromId) {
-      if (node.type !== "super") return undefined;
-      recordRubySuper(context, fn, node, fromId);
-      return true;
+    afterModule: recordCrossFileBareCalls,
+    ownCallSkippedChild(parent) {
+      return parent.type === "call" ? parent.childForFieldName("receiver") : null;
     },
+    skipsReceiverCall(context, access) {
+      return !context.mayNameCallable(invokedMemberName(context.sup, access.property, context.source));
+    },
+    nodeVisitor: rubyNodeVisitor,
     onCall: recordRubyCall,
   },
   swift: {
@@ -1639,6 +1771,7 @@ export async function emitFunctionBodyEdges(
           });
           return;
         }
+        if (specialized?.skipsReceiverCall?.(context, access)) return;
         const receiverProof = classifyReceiver(
           context.sup,
           access.receiver,
@@ -1723,8 +1856,10 @@ export async function emitFunctionBodyEdges(
       if (!tryResolveNode(context, callee, fromId, "calls")) recordImplicitSelfMemberCall(node, callee);
     };
 
+    const visitNode = specialized?.nodeVisitor?.(context, fn, fromId);
+
     const recordCallOrInstantiation = (node: SyntaxNodeLike): boolean => {
-      const nodeResult = specialized?.onNode?.(context, fn, node, fromId);
+      const nodeResult = visitNode?.(node);
       if (nodeResult !== undefined) return nodeResult;
       if (callNodeTypes.has(node.type)) {
         const callResult = specialized?.onCall?.(context, node, fromId, resolveCallTarget);
@@ -1760,12 +1895,23 @@ export async function emitFunctionBodyEdges(
       return true;
     };
 
-    const walkFunctionBody = (node: SyntaxNodeLike, allowCallProcessing: boolean): void => {
+    // The receiver of a Ruby call is resolved with its call, but a bare name there is still a read of a method.
+    const recordSkippedOwnCall = (node: SyntaxNodeLike): boolean => visitNode?.(node) ?? true;
+
+    const walkFunctionBody = (node: SyntaxNodeLike, allowCallProcessing: boolean, recordOwnCall = true): void => {
       if (node !== fn.node && nestedFunctions.has(node)) return;
       recordAliasUse(node);
       recordMemberUse(node);
-      const allowChildCallProcessing = allowCallProcessing ? recordCallOrInstantiation(node) : false;
-      for (const child of node.namedChildren ?? []) walkFunctionBody(child, allowChildCallProcessing);
+      let allowChildCallProcessing = false;
+      if (allowCallProcessing) {
+        allowChildCallProcessing = recordOwnCall ? recordCallOrInstantiation(node) : recordSkippedOwnCall(node);
+      }
+      const skippedChild = specialized?.ownCallSkippedChild?.(node) ?? null;
+      for (const child of node.namedChildren ?? []) {
+        const recordsOwnCall =
+          !skippedChild || skippedChild.startIndex !== child.startIndex || skippedChild.endIndex !== child.endIndex;
+        walkFunctionBody(child, allowChildCallProcessing, recordsOwnCall);
+      }
     };
 
     walkFunctionBody(fn.node, true);

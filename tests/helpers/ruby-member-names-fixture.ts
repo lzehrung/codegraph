@@ -72,6 +72,27 @@ export const RUBY_MEMBER_LINES: Record<string, string[]> = {
     "end",
     "",
   ],
+  // `item.total += 1` reads through the reader and writes through the writer, so a reader rename that edits the site
+  // needs the writer renamed with it. An accessor is declared at its symbol token, which a text edit cannot rewrite.
+  "item.rb": [
+    "class Item",
+    "  def total = @total",
+    "  def total=(value)",
+    "    @total = value",
+    "  end",
+    "end",
+    "class Pair",
+    "  attr_accessor :amount",
+    "end",
+    "item = Item.new",
+    "item.total += 1",
+    "item.total ||= 2",
+    "item.total",
+    "pair = Pair.new",
+    "pair.amount += 1",
+    "pair.amount",
+    "",
+  ],
 };
 
 export const RUBY_MEMBER_SOURCES: Record<string, string> = Object.fromEntries(
@@ -198,9 +219,9 @@ export const RUBY_MEMBER_REFERENCES: ReadonlyArray<readonly [declaration: RubyMe
   [["dial.rb", 9, "label"], [["dial.rb", 9, "label"]]],
 ];
 
-/** The methods each caller reaches through a `calls` edge. A bare `full` is an identifier read, so it has no edge. */
+/** The methods each caller reaches through a `calls` edge. A bare `full` is no local, so it calls `full`, not `full?`. */
 export const RUBY_MEMBER_CALLS: Readonly<Record<string, readonly string[]>> = {
-  check: ["drain!", "full?", "label", "label=", "mode"],
+  check: ["drain!", "full", "full?", "label", "label=", "mode"],
   "drain!": ["mode="],
 };
 

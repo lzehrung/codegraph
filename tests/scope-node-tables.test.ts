@@ -108,6 +108,9 @@ const SCOPE_NODE_LIST_FIELDS = [
   "functionNameTypes",
   "hoistedFunctionTypes",
   "hoistedVariableDeclarationTypes",
+  "localOnlyScopeTypes",
+  "localScopeGateTypes",
+  "localVariableNameTypes",
   "memberContainerTypes",
   "memberFunctionTypes",
   "memberScopeTypes",
@@ -131,6 +134,7 @@ const SCOPE_NODE_LIST_FIELDS = [
 
 /** Row fields that hold a call or declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
+  "outerEvaluatedFields",
   "requireCall",
   "classScopeComprehension",
   "headerParameters",

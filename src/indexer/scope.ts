@@ -24,9 +24,12 @@ import {
   isValueNamespaceBinding,
   isExplicitMethodCall,
   laterLocalBlocksOuterUse,
+  localHiddenByGate,
   pythonFunctionPendingInDefault,
   scopeAllowsUse,
   scopeIdentifierKey,
+  scopeIsEmptyBody,
+  scopeIsLocalGate,
   scopeNodesFor,
   typeOnlyName,
   type ScopeNodeRow,
@@ -475,8 +478,23 @@ export function buildScopeIndexFromSource(
     }
   };
 
+  /**
+   * The scope a declaration that is not a local variable binds in. The body of a Ruby class or module holds only its
+   * own locals, so its methods, classes, and constants bind in the scope outside it, as they did before the body had a
+   * scope of its own.
+   */
+  const nonLocalDeclarationScope = (): Scope | undefined => {
+    const localOnly = row.localOnlyScopeTypes;
+    if (!localOnly) return stack[stack.length - 1];
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const scope = stack[index]!;
+      if (!localOnly.has(scope.node.type)) return scope;
+    }
+    return rootScope;
+  };
+
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind, generated?: GeneratedMember): void => {
-    const target = stack[stack.length - 1];
+    const target = nonLocalDeclarationScope();
     if (target) addBinding(target, nameNode, kind, generated);
   };
 
@@ -517,7 +535,9 @@ export function buildScopeIndexFromSource(
       addVariableDecl(nameNode, kind);
       return;
     }
-    const target = [...stack].reverse().find((scope) => scope.kind !== "type") ?? rootScope;
+    const target =
+      [...stack].reverse().find((scope) => scope.kind !== "type" && !row.localOnlyScopeTypes?.has(scope.node.type)) ??
+      rootScope;
     addBinding(target, nameNode, kind);
   };
 
@@ -527,8 +547,14 @@ export function buildScopeIndexFromSource(
       support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     const methodCall = !!node && isExplicitMethodCall(row, node);
     const typeOnly = !!node && typeOnlyName(support.id, node);
+    // A gate between the use and a scope hides that scope's local variables.
+    let crossedGate = false;
     for (let index = stack.length - 1; index >= 0; index--) {
       const scope = stack[index]!;
+      if (scopeIsEmptyBody(scope)) {
+        crossedGate = true;
+        continue;
+      }
       if (node && !scopeAllowsUse(row, scope, node)) continue;
       let hit = scope.map.get(canonicalName);
       if (node && row.moduleBindingsAtFunctionRuntime) {
@@ -537,7 +563,10 @@ export function buildScopeIndexFromSource(
         }
       }
       while (hit) {
-        const wrongNamespace = (methodCall && hit.kind === "local") || (typeOnly && isValueNamespaceBinding(hit));
+        const wrongNamespace =
+          (methodCall && hit.kind === "local") ||
+          (typeOnly && isValueNamespaceBinding(hit)) ||
+          (crossedGate && localHiddenByGate(row, hit));
         if (!wrongNamespace) break;
         hit = hit.earlierSameScope;
       }
@@ -550,6 +579,7 @@ export function buildScopeIndexFromSource(
       ) {
         return undefined;
       }
+      if (scopeIsLocalGate(scope)) crossedGate = true;
     }
     let root = rootScope.map.get(canonicalName);
     if (node && row.moduleBindingsAtFunctionRuntime) {
@@ -558,7 +588,10 @@ export function buildScopeIndexFromSource(
       }
     }
     while (root) {
-      const wrongNamespace = (methodCall && root.kind === "local") || (typeOnly && isValueNamespaceBinding(root));
+      const wrongNamespace =
+        (methodCall && root.kind === "local") ||
+        (typeOnly && isValueNamespaceBinding(root)) ||
+        (crossedGate && localHiddenByGate(row, root));
       if (!wrongNamespace) break;
       root = root.earlierSameScope;
     }
@@ -995,17 +1028,29 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
+  /** Uses that left a local scope gate while queued for a scope above it, so the locals of that scope are out of reach. */
+  const gateCrossedUses = new Set<number>();
+
   const lookupCovering = (
     start: Scope | undefined,
     useNode: SyntaxNodeLike,
     canonical: string,
     phpThis: boolean,
+    crossedGateAtStart = false,
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
     const methodCall = isExplicitMethodCall(row, useNode);
     const typeOnly = typeOnlyName(support.id, useNode);
     let scope = start;
+    // A gate between the use and a scope hides that scope's local variables. A use queued past its own scopes starts
+    // above a gate it already left.
+    let crossedGate = crossedGateAtStart;
     while (scope) {
+      if (scopeIsEmptyBody(scope)) {
+        crossedGate = true;
+        scope = scope.parent;
+        continue;
+      }
       if (!scopeAllowsUse(row, scope, useNode)) {
         scope = scope.parent;
         continue;
@@ -1017,6 +1062,7 @@ export function buildScopeIndexFromSource(
           binding &&
           ((methodCall && binding.kind === "local") ||
             (typeOnly && isValueNamespaceBinding(binding)) ||
+            (crossedGate && localHiddenByGate(row, binding)) ||
             (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode, support)))
         ) {
           binding = binding.earlierSameScope;
@@ -1024,6 +1070,7 @@ export function buildScopeIndexFromSource(
         if (binding) return binding;
       }
       if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, useNode)) return undefined;
+      if (scopeIsLocalGate(scope)) crossedGate = true;
       scope = scope.parent;
     }
     return undefined;
@@ -1057,9 +1104,15 @@ export function buildScopeIndexFromSource(
     if (!queued) return;
     delete scope.queuedUseIds;
     let receiver: Scope | undefined;
+    // Whether a gate lies between this scope and its receiver, which the queued uses leave with them.
+    let skipsGate = false;
     if (!tracksLexicalNames) {
       receiver = scope.parent;
-      while (receiver && !scopeCanGainCoveringBinding(receiver)) receiver = receiver.parent;
+      // A class or module body holds only locals, which cover no earlier use, so a queued use climbs past it.
+      while (receiver && (receiver.gate === "body" || !scopeCanGainCoveringBinding(receiver))) {
+        if (scopeIsLocalGate(receiver)) skipsGate = true;
+        receiver = receiver.parent;
+      }
     }
     for (let index = 0; index < queued.length; index += 1) {
       const id = queued[index]!;
@@ -1067,13 +1120,17 @@ export function buildScopeIndexFromSource(
       if (!useNode) continue;
       const phpThis = support.id === "php" && isPhpThisPropertyName(useNode);
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
-      const binding = lookupCovering(scope, useNode, canonical, phpThis);
+      const binding = lookupCovering(scope, useNode, canonical, phpThis, gateCrossedUses.has(id));
       if (!binding) {
         if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)) continue;
-        if (receiver) queueUse(receiver, id);
+        if (receiver) {
+          if (skipsGate || scopeIsLocalGate(scope)) gateCrossedUses.add(id);
+          queueUse(receiver, id);
+        }
         continue;
       }
       if (receiver && !scopeOwnsBinding(scope, canonical, binding)) {
+        if (skipsGate || scopeIsLocalGate(scope)) gateCrossedUses.add(id);
         queueUse(receiver, id);
         continue;
       }
@@ -1105,13 +1162,14 @@ export function buildScopeIndexFromSource(
 
   const walk = (node: SyntaxNodeLike) => {
     if (node.startIndex === node.endIndex) return;
+    const nodeType = node.type;
     let scopedFunctionName: { node: SyntaxNodeLike; qualifiedKey: string } | null = null;
     let qualifiedNamespaceScope: Scope | undefined;
     // A name-registering node puts its name in the *current* (enclosing) scope before the push
     // below creates the node's own scope. C# local functions need that: they are callable from
     // sibling statements in the enclosing method, unlike a JS named function expression's
     // self-only visibility, which the language's `scopeDeclarationNames` hook handles instead.
-    if (row.functionNameTypes?.has(node.type)) {
+    if (row.functionNameTypes?.has(nodeType)) {
       const name = declaredNameNode(node, row);
       if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
         // The declarator chain that carries a C-family function name also carries its parameter
@@ -1129,7 +1187,7 @@ export function buildScopeIndexFromSource(
           } else {
             scopedFunctionName = { node: name, qualifiedKey };
           }
-        } else if (row.hoistedFunctionTypes?.has(node.type)) {
+        } else if (row.hoistedFunctionTypes?.has(nodeType)) {
           addHoistedDecl(name, "function");
         } else if (support.id === "cpp" && node.parent?.type === "template_declaration") {
           addDeclSkippingTypeScope(name, "function");
@@ -1140,29 +1198,29 @@ export function buildScopeIndexFromSource(
     }
     // A method that a call generates (Ruby `attr_reader :name`) binds the way a `def` of that name does.
     if (generatedMembers) for (const member of generatedMembers(node)) addDecl(member.node, "function", member);
-    if (row.classNameTypes?.has(node.type)) {
+    if (row.classNameTypes?.has(nodeType)) {
       const isExtension = support.id === "swift" && isSwiftExtensionContainer(node, source);
       if (!isExtension) {
         const name = node.childForFieldName("name");
         if (name) addDecl(name, "class");
       }
     }
-    if (row.typeNameTypes?.has(node.type)) {
+    if (row.typeNameTypes?.has(nodeType)) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
     }
-    if (row.enumMemberTypes?.has(node.type)) {
+    if (row.enumMemberTypes?.has(nodeType)) {
       const name = node.childForFieldName("name");
       if (name) {
-        if (row.enumMemberLocalTypes?.has(node.type) && !isScopedEnumeratorName(name)) addDecl(name, "local");
+        if (row.enumMemberLocalTypes?.has(nodeType) && !isScopedEnumeratorName(name)) addDecl(name, "local");
         else extraBindings.push(buildBinding(name, "local"));
       }
     }
-    if (row.enumAssignmentTypes?.has(node.type)) {
+    if (row.enumAssignmentTypes?.has(nodeType)) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "local");
     } else if (
-      row.enumBodyMemberTypes?.has(node.type) &&
+      row.enumBodyMemberTypes?.has(nodeType) &&
       node.parent &&
       row.enumBodyParentTypes?.has(node.parent.type)
     ) {
@@ -1173,10 +1231,10 @@ export function buildScopeIndexFromSource(
     let pushedScopeCount = 0;
     const namespacePathStart = cppNamespacePath.length;
     const cppNamespaceName =
-      support.id === "cpp" && node.type === "namespace_definition" ? node.childForFieldName("name") : null;
+      support.id === "cpp" && nodeType === "namespace_definition" ? node.childForFieldName("name") : null;
     const cppNamespaceIsInline = !!cppNamespaceName && /^\s*inline\s+namespace\b/u.test(sliceText(node, source));
     const createsCppNamespaceScope = !!cppNamespaceName && !cppNamespaceIsInline;
-    const createsMemberScope = !!row.memberScopeTypes?.has(node.type);
+    const createsMemberScope = !!row.memberScopeTypes?.has(nodeType);
     if (createsCppNamespaceScope) {
       const name = cppNamespaceName;
       const segments = sliceText(name, source).replace(/\s+/gu, "").split("::").filter(Boolean);
@@ -1205,6 +1263,7 @@ export function buildScopeIndexFromSource(
         node,
         parent: qualifiedNamespaceScope ?? stack[stack.length - 1],
       };
+      if (row.localScopeGateTypes?.has(nodeType)) scope.gate = "def";
       stack.push(scope);
       allScopes.push(scope);
       pushed = true;
@@ -1224,7 +1283,7 @@ export function buildScopeIndexFromSource(
       collectHoistedDeclarations(node);
       attachPendingNames(scope);
     } else if (support.createsBlockScope(node) || createsMemberScope) {
-      if (!row.moduleRootTypes?.has(node.type)) {
+      if (!row.moduleRootTypes?.has(nodeType)) {
         const scope: Scope = {
           kind: createsMemberScope ? "member" : "block",
           map: new Map(),
@@ -1241,10 +1300,18 @@ export function buildScopeIndexFromSource(
           addPatternDecls(blockParams, "param");
         }
       }
+    } else if (row.localOnlyScopeTypes?.has(nodeType)) {
+      // A Ruby class, module, or `class << self` body starts its own local scope.
+      const scope: Scope = { kind: "block", map: new Map(), node, parent: stack[stack.length - 1] };
+      if (row.localScopeGateTypes?.has(nodeType)) scope.gate = "body";
+      stack.push(scope);
+      allScopes.push(scope);
+      pushed = true;
+      pushedScopeCount = 1;
     } else if (
-      row.typeScopeTypes?.has(node.type) ||
+      row.typeScopeTypes?.has(nodeType) ||
       (support.id === "cpp" &&
-        node.type === "template_parameter_list" &&
+        nodeType === "template_parameter_list" &&
         node.parent?.type === "template_template_parameter_declaration")
     ) {
       // A generic type's parameters belong to its own declaration, not a sibling declaration.
@@ -1263,23 +1330,23 @@ export function buildScopeIndexFromSource(
       bindHeaderParameters(node);
     }
 
-    if (row.variableDeclarationTypes?.has(node.type)) {
+    if (row.variableDeclarationTypes?.has(nodeType)) {
       addVariableDeclarations(
         node,
-        row.hoistedVariableDeclarationTypes?.has(node.type) ? addHoistedDecl : addVariableDecl,
+        row.hoistedVariableDeclarationTypes?.has(nodeType) ? addHoistedDecl : addVariableDecl,
       );
     }
 
     if (
       isJsTsLanguage(support.id) &&
-      (node.type === "assignment_expression" || node.type === "augmented_assignment_expression")
+      (nodeType === "assignment_expression" || nodeType === "augmented_assignment_expression")
     ) {
       const left = node.childForFieldName("left");
       if (left && idSet.has(left.type)) {
         const binding = lookup(sliceText(left, source), left);
         if (binding?.kind === "local" && binding.heldModuleSpecifier !== null) {
           const assigned =
-            node.type === "assignment_expression" ? moduleSpecifierFromValue(node.childForFieldName("right")) : null;
+            nodeType === "assignment_expression" ? moduleSpecifierFromValue(node.childForFieldName("right")) : null;
           if (!assigned || (binding.heldModuleSpecifier && binding.heldModuleSpecifier !== assigned)) {
             binding.heldModuleSpecifier = null;
           } else {
@@ -1289,7 +1356,7 @@ export function buildScopeIndexFromSource(
       }
     }
 
-    if (row.declarationPatternTypes?.has(node.type)) {
+    if (row.declarationPatternTypes?.has(nodeType)) {
       // C# is-pattern bound variable: `if (o is string text)`. The walker registers the bound name
       // without consulting `scopeDeclarationNames`, which would also newly activate
       // isDeclarationName-driven registration for every other C# declaration form.
@@ -1298,8 +1365,8 @@ export function buildScopeIndexFromSource(
     }
 
     const templateValueParameter =
-      node.parent?.type === "template_parameter_list" && row.templateValueParameterTypes?.has(node.type);
-    if (row.typeParameterTypes?.has(node.type) || templateValueParameter) {
+      node.parent?.type === "template_parameter_list" && row.templateValueParameterTypes?.has(nodeType);
+    if (row.typeParameterTypes?.has(nodeType) || templateValueParameter) {
       // The inner parameter list of a C++ template-template parameter has its own scope.
       // The outer template's non-type parameters bind here, not in the enclosing file.
       const kind: BindingKind = templateValueParameter ? "param" : "type";
@@ -1309,7 +1376,7 @@ export function buildScopeIndexFromSource(
       }
     }
 
-    let declarationName = idSet.has(node.type) && support.isDeclarationName(node);
+    let declarationName = idSet.has(nodeType) && support.isDeclarationName(node);
     if (declarationName && support.id === "cpp" && isCppTemplateArgumentName(node)) declarationName = false;
     if (declarationName && row.shortVariableDeclarationTypes) {
       for (let current = node.parent; current; current = current.parent) {
@@ -1331,8 +1398,8 @@ export function buildScopeIndexFromSource(
       addDeclSkippingTypeScope(node, kind);
     }
 
-    const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(node.type);
-    if (idSet.has(node.type) && !declarationName && !nestedIdentifier) {
+    const nestedIdentifier = node.parent && idSet.has(node.parent.type) && row.childSkipNameTypes?.has(nodeType);
+    if (idSet.has(nodeType) && !declarationName && !nestedIdentifier) {
       const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");
@@ -1365,7 +1432,7 @@ export function buildScopeIndexFromSource(
       }
     }
 
-    if (support.id === "php" && node.type === "class_declaration") {
+    if (support.id === "php" && nodeType === "class_declaration") {
       const target = stack[stack.length - 1] ?? rootScope;
       for (const variable of promotedVariablesInClass(node)) addBinding(target, variable, "local");
     }
@@ -1380,7 +1447,7 @@ export function buildScopeIndexFromSource(
           params?.startIndex === child.startIndex &&
           params.endIndex === child.endIndex;
         const skipsNameOrParameters =
-          (row.functionNameTypes?.has(node.type) || row.classNameTypes?.has(node.type)) &&
+          (row.functionNameTypes?.has(nodeType) || row.classNameTypes?.has(nodeType)) &&
           row.childSkipNameTypes?.has(child.type);
         const skipsCppNamespaceName = createsCppNamespaceScope && node.childForFieldName("name")?.id === child.id;
         if (skipsFunctionParameters || skipsBlockParameters || skipsNameOrParameters || skipsCppNamespaceName) {
