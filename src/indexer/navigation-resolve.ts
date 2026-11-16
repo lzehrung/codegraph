@@ -201,6 +201,16 @@ export function hasNamespaceReexport(index: ProjectIndex): boolean {
   return moduleNameLookupsFor(index).hasNamespaceReexport;
 }
 
+/**
+ * Whether `file` exports one of its own import bindings under `exportedName` (`import { X } from "./x"; export { X }`).
+ * The clause exports the binding without declaring anything, so a use inside `file` still resolves through the import.
+ */
+export function exportsOwnImportBinding(index: ProjectIndex, file: FileId, exportedName: string): boolean {
+  const names = moduleNameLookup(index, file);
+  const entries = names?.reexports.get(names.normalizeIdentifier(exportedName));
+  return !!entries?.some((entry) => entry.forwardsImportBinding);
+}
+
 function sameSymbolDef(index: ProjectIndex, left: SymbolDef, right: SymbolDef): boolean {
   if (fileIdentityKey(left.file) !== fileIdentityKey(right.file) || left.kind !== right.kind) {
     return false;
@@ -826,13 +836,35 @@ function collectExportedNames(
   }
 }
 
-export function resolveModuleExports(
+/** Upper bound on the resolved names one index keeps memoized across modules; the memo is dropped past it. */
+const MODULE_EXPORTS_MEMO_MAX_NAMES = 262_144;
+
+const moduleExportsMemo = new WeakMap<
+  ProjectIndex,
+  { names: number; byKey: Map<string, ReadonlyMap<string, ResolvedExport>> }
+>();
+
+/** Whether a lookup sets an option that changes what a module's exports resolve to, which no memo may share. */
+function hasExportLookupContext(opts: ResolveExportOptions | undefined): boolean {
+  if (!opts) return false;
+  return (
+    opts.preferredKind !== undefined ||
+    opts.cNamespace !== undefined ||
+    opts.referenceIndex !== undefined ||
+    opts.csharpGenericArity !== undefined ||
+    opts.argumentCount !== undefined ||
+    opts.isCallableUse !== undefined ||
+    opts.typeOnly !== undefined
+  );
+}
+
+function computeModuleExports(
   index: ProjectIndex,
   file: FileId,
-  opts?: ResolveExportOptions,
+  includeLocalFallback: boolean,
+  opts: ResolveExportOptions | undefined,
 ): Map<string, ResolvedExport> {
   const names = new Set<string>();
-  const includeLocalFallback = opts?.allowLocalFallback ?? true;
   collectExportedNames(index, file, includeLocalFallback, names, new Set<FileId>());
 
   const resolved = new Map<string, ResolvedExport>();
@@ -840,6 +872,35 @@ export function resolveModuleExports(
     const hit = resolveExport(index, file, name, opts);
     if (hit) resolved.set(name, hit);
   }
+  return resolved;
+}
+
+/**
+ * Every name a module exports and what it resolves to. With no option beyond local fallback the answer depends only on
+ * the index, so a reference scan that meets the same barrel from many files computes it once per index.
+ */
+export function resolveModuleExports(
+  index: ProjectIndex,
+  file: FileId,
+  opts?: ResolveExportOptions,
+): ReadonlyMap<string, ResolvedExport> {
+  const includeLocalFallback = opts?.allowLocalFallback ?? true;
+  if (hasExportLookupContext(opts)) return computeModuleExports(index, file, includeLocalFallback, opts);
+  let memo = moduleExportsMemo.get(index);
+  if (!memo) {
+    memo = { names: 0, byKey: new Map() };
+    moduleExportsMemo.set(index, memo);
+  }
+  const key = `${fileIdentityKey(file)}|${includeLocalFallback ? 1 : 0}`;
+  const cached = memo.byKey.get(key);
+  if (cached) return cached;
+  const resolved = computeModuleExports(index, file, includeLocalFallback, opts);
+  if (memo.names + resolved.size > MODULE_EXPORTS_MEMO_MAX_NAMES) {
+    memo.byKey.clear();
+    memo.names = 0;
+  }
+  memo.byKey.set(key, resolved);
+  memo.names += resolved.size;
   return resolved;
 }
 

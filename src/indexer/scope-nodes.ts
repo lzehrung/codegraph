@@ -20,6 +20,7 @@ import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName } from "../util/swift-tree.js";
 import { SymbolKind } from "./types.js";
 import type { Binding, Scope, ScopeIndex } from "./scope-types.js";
+import { isRecoveredTypeParameterName } from "./type-parameters.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
@@ -70,6 +71,22 @@ export type ScopeNodeRow = {
   declarationPatternTypes?: ReadonlySet<string>;
   /** Node types that introduce type parameters (including defaulted and variadic forms). */
   typeParameterTypes?: ReadonlySet<string>;
+  /**
+   * The field of a declaration that holds its type-parameter list. Scope construction declares those parameters when the
+   * declaration's scope opens, because parameter types, constraints, and defaults are read before the list is walked
+   * (TypeScript).
+   */
+  typeParameterListField?: string;
+  /**
+   * Use-node types that occur only in type syntax (TypeScript `type_identifier`). Such a use skips value bindings, and
+   * any other use skips type-parameter bindings, so a value `R` still reaches `import * as R` beside a generic `<R>`.
+   */
+  typeOnlyUseTypes?: ReadonlySet<string>;
+  /**
+   * Pattern node types mapped to the field that holds a default-value expression. The default is a read of an
+   * enclosing name, never a name the pattern binds (ECMAScript `a = K` in a parameter or destructuring pattern).
+   */
+  patternDefaultValueFields?: Readonly<Record<string, string>>;
   /** Non-type parameter declarations in a C++ template list (not function parameters). */
   templateValueParameterTypes?: ReadonlySet<string>;
   /** Node types the variable-declaration walker inspects. */
@@ -248,12 +265,14 @@ export function csharpTypeOnlyName(node: SyntaxNodeLike, typeAliasPattern = fals
 
 /**
  * Kotlin user_type names occupy the type namespace, including qualified and nested type arguments. A Swift
- * extension header names the type it extends, so a same-named function or variable cannot bind it.
+ * extension header names the type it extends, so a same-named function or variable cannot bind it. A row's
+ * `typeOnlyUseTypes` lists the node types that appear only in type syntax.
  */
 export function typeOnlyName(languageId: string, node: SyntaxNodeLike): boolean {
   if (languageId === "csharp") return csharpTypeOnlyName(node);
   if (languageId === "swift") return isSwiftExtensionTypeName(node);
-  return languageId === "kotlin" && node.parent?.type === "user_type";
+  if (languageId === "kotlin") return node.parent?.type === "user_type";
+  return !!scopeNodesFor(languageId).typeOnlyUseTypes?.has(node.type);
 }
 
 /** A type-position name never binds a variable, parameter, or function of the same spelling. */
@@ -295,6 +314,31 @@ function methodHiddenFrom(
   const declaration = binding.node;
   if (binding.generatedOwner || binding.kind !== "function" || !declaration || !useNode) return false;
   return !!support.methodVisibleAt && !support.methodVisibleAt(declaration, useNode);
+}
+
+/**
+ * Whether the closest binding lies in another namespace than the use, or behind a gate: a method call never reads a
+ * local variable, a type-position name never reads a value, a gate crossed on the way to the binding hides its local
+ * variables, and in a language that keeps types and values apart (`typeOnlyUseTypes`) a type parameter exists only in
+ * type syntax, so any other use passes it by and reaches the outer value of that spelling.
+ */
+export function bindingHiddenFromUse(
+  row: ScopeNodeRow,
+  binding: Pick<Binding, "kind" | "node">,
+  use: SyntaxNodeLike | undefined,
+  methodCall: boolean,
+  typeOnly: boolean,
+  crossedGate: boolean,
+): boolean {
+  if (methodCall && binding.kind === "local") return true;
+  if (typeOnly && isValueNamespaceBinding(binding)) return true;
+  if (crossedGate && localHiddenByGate(row, binding)) return true;
+  if (binding.kind !== "type" || !use || !row.typeOnlyUseTypes) return false;
+  // Type syntax reads a type parameter; every other use passes it by.
+  if (row.typeOnlyUseTypes.has(use.type)) return false;
+  if (!isTypeParameterBinding(row, binding)) return false;
+  // A binding's own name token names it, whichever node type the grammar gives that token.
+  return use.startIndex !== binding.node?.startIndex || use.endIndex !== binding.node.endIndex;
 }
 
 /**
@@ -345,6 +389,7 @@ const ECMASCRIPT_SCOPE_NODES: ScopeNodeRow = {
   memberContainerTypes: new Set(["class_body", "class_declaration", "class"]),
   childSkipNameTypes: new Set(["identifier"]),
   moduleRootTypes: new Set(["program"]),
+  patternDefaultValueFields: { assignment_pattern: "right", object_assignment_pattern: "right" },
   hoistedFunctionTypes: new Set(["function_declaration", "generator_function_declaration"]),
   hoistedVariableDeclarationTypes: new Set(["variable_declaration"]),
   wholeScopeKinds: WHOLE_LEXICAL_SCOPE,
@@ -365,6 +410,30 @@ const TYPESCRIPT_SCOPE_NODES: ScopeNodeRow = {
   childSkipNameTypes: new Set(["identifier", "type_identifier"]),
   // `x: T` keeps its type annotation in the `type` field; skip it for bindings (H1).
   destructuringTypeFieldTypes: new Set(["required_parameter", "optional_parameter"]),
+  patternDefaultValueFields: {
+    ...ECMASCRIPT_SCOPE_NODES.patternDefaultValueFields,
+    required_parameter: "value",
+    optional_parameter: "value",
+  },
+  // A function, method, or arrow function holds its own type parameters in its function scope. These declarations have
+  // no function scope, so each one opens a scope that holds the parameters for its signature, heritage, and body.
+  typeScopeTypes: new Set([
+    "class_declaration",
+    "abstract_class_declaration",
+    "class",
+    "interface_declaration",
+    "type_alias_declaration",
+    "function_signature",
+    "method_signature",
+    "abstract_method_signature",
+    "call_signature",
+    "construct_signature",
+    "function_type",
+    "constructor_type",
+  ]),
+  typeParameterTypes: new Set(["type_parameter"]),
+  typeParameterListField: "type_parameters",
+  typeOnlyUseTypes: new Set(["type_identifier"]),
   moduleRootTypes: new Set(["program", "module"]),
 };
 
@@ -687,8 +756,23 @@ export function scopeNodesFor(languageId: string): ScopeNodeRow {
 
 /** Whether `node` is the name a generic type-parameter declaration introduces. */
 export function isTypeParameterName(languageId: string, node: SyntaxNodeLike): boolean {
+  return isTypeParameterNameIn(scopeNodesFor(languageId), node);
+}
+
+function isTypeParameterNameIn(row: ScopeNodeRow, node: SyntaxNodeLike): boolean {
+  const typeParameterTypes = row.typeParameterTypes;
   const parentType = node.parent?.type;
-  return !!parentType && !!scopeNodesFor(languageId).typeParameterTypes?.has(parentType);
+  if (!parentType || !typeParameterTypes) return false;
+  return typeParameterTypes.has(parentType) || isRecoveredTypeParameterName(node, typeParameterTypes);
+}
+
+/**
+ * Whether `binding` is a generic type parameter of a language whose row names its type-only syntax: such a binding
+ * exists only in type syntax, so a use anywhere else passes it by.
+ */
+export function isTypeParameterBinding(row: ScopeNodeRow, binding: Pick<Binding, "kind" | "node">): boolean {
+  if (binding.kind !== "type" || !row.typeOnlyUseTypes || !binding.node) return false;
+  return isTypeParameterNameIn(row, binding.node);
 }
 
 /**
@@ -836,29 +920,128 @@ export function laterLocalBlocksOuterUse(
  * chain, and a class body only binds uses inside itself (Python class scopes are not
  * closures for nested runtime scopes). Declarations outside the scope model stay accepted.
  */
-/** Innermost scope whose node contains `currentNode`. */
-export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
-  // Scopes are pushed in tree order, so they are sorted by where they start, and the innermost scope that holds the node
-  // starts last among those that do: search for the last scope starting at or before the node, then walk back to the
-  // first that holds it, instead of testing every scope of the file.
-  const scopes = scopeIndex.allScopes;
+/**
+ * A scope index's scopes in source order together with the nesting between them, so the innermost scope around a
+ * position takes a binary search and a short climb instead of a scan of every scope.
+ */
+type ScopeNesting = {
+  /** Start and end offsets of each scope, ordered by ascending start, then descending end, then creation order. */
+  starts: Int32Array;
+  ends: Int32Array;
+  scopes: readonly Scope[];
+  /** Position of the nearest enclosing scope in this order, or -1 when no scope encloses it. */
+  enclosing: Int32Array;
+};
+
+/**
+ * What is known about a scope index: nothing yet, that it was scanned once, its nesting, or (null) that its scopes do
+ * not nest, which keeps the scan of every scope.
+ */
+const scopeNestings = new WeakMap<ScopeIndex, "scanned" | ScopeNesting | null>();
+
+/** The nesting of `allScopes`, or null when two scopes overlap without one holding the other. */
+function buildScopeNesting(allScopes: readonly Scope[]): ScopeNesting | null {
+  const count = allScopes.length;
+  const startOf = new Int32Array(count);
+  const endOf = new Int32Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const node = allScopes[index]!.node;
+    startOf[index] = node.startIndex;
+    endOf[index] = node.endIndex;
+  }
+  const precedes = (left: number, right: number): number =>
+    startOf[left]! - startOf[right]! || endOf[right]! - endOf[left]! || left - right;
+  // Scopes are created as the walk reaches them, which is source order unless a parameter's default is walked early.
+  const order: number[] = [];
+  let sorted = true;
+  for (let index = 0; index < count; index += 1) {
+    order.push(index);
+    if (index && precedes(index, index - 1) < 0) sorted = false;
+  }
+  if (!sorted) order.sort(precedes);
+  const starts = new Int32Array(count);
+  const ends = new Int32Array(count);
+  const enclosing = new Int32Array(count);
+  const scopes: Scope[] = [];
+  const open: number[] = [];
+  for (let position = 0; position < count; position += 1) {
+    const index = order[position]!;
+    const start = startOf[index]!;
+    const end = endOf[index]!;
+    while (open.length) {
+      const top = open[open.length - 1]!;
+      if (start >= starts[top]! && end <= ends[top]!) break;
+      // A scope that begins inside the open one and ends after it overlaps it without nesting.
+      if (start < ends[top]!) return null;
+      open.pop();
+    }
+    starts[position] = start;
+    ends[position] = end;
+    scopes.push(allScopes[index]!);
+    enclosing[position] = open.length ? open[open.length - 1]! : -1;
+    open.push(position);
+  }
+  return { starts, ends, scopes, enclosing };
+}
+
+/** The last scope in the order that holds `start`..`end`: the deepest of the scopes around it. */
+function innermostScopeAround(nesting: ScopeNesting, start: number, end: number): Scope | undefined {
+  const { starts, ends, scopes, enclosing } = nesting;
   let low = 0;
-  let high = scopes.length - 1;
+  let high = starts.length - 1;
   let last = -1;
   while (low <= high) {
-    const middle = (low + high) >> 1;
-    if (scopes[middle]!.node.startIndex <= currentNode.startIndex) {
+    const middle = (low + high) >>> 1;
+    if (starts[middle]! <= start) {
       last = middle;
       low = middle + 1;
     } else {
       high = middle - 1;
     }
   }
-  for (let index = last; index >= 0; index -= 1) {
-    const scope = scopes[index]!;
-    if (currentNode.endIndex <= scope.node.endIndex) return scope;
+  // Every scope around the range encloses the last one that starts at or before it, so the climb finds the deepest.
+  for (let position = last; position >= 0; position = enclosing[position]!) {
+    if (ends[position]! >= end) return scopes[position];
   }
   return undefined;
+}
+
+/** Every scope is tried in creation order and a later one that lies inside the best so far replaces it. */
+function scanClosestContainingScope(allScopes: readonly Scope[], start: number, end: number): Scope | undefined {
+  let best: Scope | undefined;
+  for (const scope of allScopes) {
+    if (
+      start >= scope.node.startIndex &&
+      end <= scope.node.endIndex &&
+      (!best || (scope.node.startIndex >= best.node.startIndex && scope.node.endIndex <= best.node.endIndex))
+    )
+      best = scope;
+  }
+  return best;
+}
+
+/**
+ * Innermost scope whose node contains `currentNode`; of scopes with the same range, the one created last. A scope index
+ * asked once costs a scan, as it always did; the nesting is built when it is asked again, so a graph build that asks
+ * hundreds of times per file pays for it once and a lookup that touches many files once each pays nothing extra.
+ */
+export function closestContainingScope(scopeIndex: ScopeIndex, currentNode: SyntaxNodeLike): Scope | undefined {
+  const start = currentNode.startIndex;
+  const end = currentNode.endIndex;
+  // An empty range can sit on the shared edge of two scopes that touch, which only the scan orders.
+  if (start < end) {
+    const known = scopeNestings.get(scopeIndex);
+    if (known === undefined) {
+      scopeNestings.set(scopeIndex, "scanned");
+    } else if (known === "scanned") {
+      const built = buildScopeNesting(scopeIndex.allScopes);
+      scopeNestings.set(scopeIndex, built);
+      if (built) return innermostScopeAround(built, start, end);
+    } else if (known) {
+      return innermostScopeAround(known, start, end);
+    }
+  }
+  return scanClosestContainingScope(scopeIndex.allScopes, start, end);
 }
 
 /** Check a same-file definition found outside lexical lookup against file-scope declaration order. */

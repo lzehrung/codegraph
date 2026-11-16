@@ -62,6 +62,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Unused-export detection is not available.
 - `getUndocumentedApiSurface` and `apisurface --undocumented` check docstrings only for TypeScript, TSX, JavaScript, Go, Java, C#, Kotlin, Rust, Zig, and SCSS.
 - Unchecked: Python (no triple-quoted docstrings), PHP, C, C++, Ruby, Swift, SQL, Terraform, skipped files; they appear in partial `coverage.uncheckedFiles`.
+- A docstring is the run of comments directly above a declaration, except a comment that starts on the line where the previous code ends and stops before the declaration's own line: that comment belongs to the previous code (`a(); // about a`). One collector applies this to TypeScript, TSX, and JavaScript (including TypeScript in Vue and Svelte), Java, C#, Kotlin, Rust, Go, Ruby, Zig, Python, C, C++, PHP, SCSS, and Terraform, and a doc comment that runs up to its declaration on one line (`{ /** doc */ m() {} }`) still documents it.
 
 ### Navigation and references
 
@@ -162,6 +163,9 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - Unsupported, with no grammar pinned: `.sass`, Objective-C, Stylus (`.styl`), Go templates (`.templ`), Zig manifests (`.zon`).
 
 ## TypeScript, TSX, and JavaScript
+
+- TypeScript and TSX type parameters (`<T>` on a function, method, class, interface, alias, call or construct signature, or function type) are type bindings scoped to their declaration: goto and references bind a type use to the parameter, and a value of the same spelling is unaffected. Variance modifiers (`in T`, `out T`, `in out T`) parse as errors in the pinned grammar, and the parameter's real name binds all the same. Mapped-type keys and `infer` names are not modeled: a use of one resolves to nothing, or to a same-named outer type when one exists.
+- `findReferences` reads default values (`a = K`), `type B = A`, shorthand properties, `import { X }; export { X }` forwards, and `export { X as Y }` alias tokens. JSDoc types (`@param {X}`, `{@link X}`) and JSDoc `@param name` tags are not parsed, so they are neither references nor a reason for `partial` coverage. Rename previews edit a shorthand property use `{ X }` as `{ X: Renamed }` and stay unsafe through a default-import barrel. The pinned JavaScript grammar does not expose the `default` alias of `export { D as default }`, so that clause is not indexed in JavaScript.
 
 - Class fields, declaration-only overloads, and named `namespace`/`module` declarations are indexed; `declare module "ambient"` is a chunk, not a named export.
 - TypeScript and TSX parse adjacent semicolonless generic call signatures that start with `<`, preserving later type aliases, overloaded members, and exported values for navigation and references, including in declarations and embedded Vue/Svelte TypeScript scripts. TSX ends `return` before a newline followed by `<div />` or `<T,>(x) => x`; JavaScript/JSX still treats the JSX expression as the return value. A semicolonless signature after `import("x").Foo<T>` can still leave a parse `ERROR`. Generic type parameter lookup and detailed type-reference `uses` edges remain limited separately.

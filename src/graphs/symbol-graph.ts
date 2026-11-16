@@ -122,7 +122,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   const seenEdges = new Set<string>();
   const includedFiles = normalizeFileFilter(opts?.files);
   const exportResolutions = new Map<string, SymbolDef | null>();
-  const moduleExportResolutions = new Map<string, Map<string, ResolvedExport>>();
+  const moduleExportResolutions = new Map<string, ReadonlyMap<string, ResolvedExport>>();
 
   const shouldIncludeFile = (file: FileId): boolean => {
     if (!includedFiles) return true;
@@ -233,7 +233,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
         }
         if (targetFile) {
           const targetKey = fileIdentityKey(targetFile);
-          let exports: Map<string, ResolvedExport>;
+          let exports: ReadonlyMap<string, ResolvedExport>;
           if (moduleExportResolutions.has(targetKey)) {
             exports = moduleExportResolutions.get(targetKey)!;
           } else {

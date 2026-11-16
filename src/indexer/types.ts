@@ -86,6 +86,11 @@ export type ExportEntry =
       moduleSpecifier?: string;
       sourceSpecifier: string;
       typeOnly?: boolean;
+      /**
+       * Published from an import of this module (`import { X } from "./x"; export { X }`), not by an
+       * `export ... from` statement. The export clause names the import, so its token is an ordinary reference of it.
+       */
+      forwardsImportBinding?: boolean;
     }
   | {
       type: "namespaceReexport";
@@ -93,6 +98,8 @@ export type ExportEntry =
       fromModule: string;
       moduleSpecifier?: string;
       typeOnly?: boolean;
+      /** Published from a namespace import of this module (`import * as ns from "./x"; export { ns }`). */
+      forwardsImportBinding?: boolean;
     }
   | {
       type: "exportStar";

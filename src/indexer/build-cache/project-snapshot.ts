@@ -1405,7 +1405,8 @@ function isExportEntry(value: unknown): value is ExportEntry {
       typeof entry.fromModule === "string" &&
       typeof entry.sourceSpecifier === "string" &&
       (entry.moduleSpecifier === undefined || typeof entry.moduleSpecifier === "string") &&
-      isOptionalBoolean(entry.typeOnly)
+      isOptionalBoolean(entry.typeOnly) &&
+      isOptionalBoolean(entry.forwardsImportBinding)
     );
   }
   if (entry.type === "namespaceReexport") {
@@ -1413,7 +1414,8 @@ function isExportEntry(value: unknown): value is ExportEntry {
       typeof entry.exportedAs === "string" &&
       typeof entry.fromModule === "string" &&
       (entry.moduleSpecifier === undefined || typeof entry.moduleSpecifier === "string") &&
-      isOptionalBoolean(entry.typeOnly)
+      isOptionalBoolean(entry.typeOnly) &&
+      isOptionalBoolean(entry.forwardsImportBinding)
     );
   }
   if (entry.type === "exportStar") {

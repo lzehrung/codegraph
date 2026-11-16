@@ -43,7 +43,43 @@ export function declaredNameNodes(parameter: SyntaxNodeLike): SyntaxNodeLike[] {
     return [];
   }
   const name = parameter.namedChildren.find(isNameNode) ?? parameter.childForFieldName("name");
-  return name ? [name] : [];
+  if (!name) return [];
+  const holder = varianceRecoveryHolder(parameter, name);
+  if (!holder) return [name];
+  // The real name is the last word the recovery node holds: `in out T` holds both `out` and `T`.
+  const realName = holder.namedChildren.filter(isNameNode).at(-1);
+  return realName ? [realName] : [];
+}
+
+/**
+ * The pinned TypeScript grammar has no variance modifiers: `in T` parses as a parameter named `in`, and the ERROR node
+ * that follows holds the real name `T`, inside the parameter when a constraint or default follows and after it
+ * otherwise. A parameter that is really named `out` has no such node.
+ */
+function varianceRecoveryHolder(parameter: SyntaxNodeLike, name: SyntaxNodeLike): SyntaxNodeLike | null {
+  // `in` and `out` are two and three characters, so most names are told apart without reading their text.
+  const length = name.endIndex - name.startIndex;
+  if (length !== 2 && length !== 3) return null;
+  const word = name.text;
+  if (word !== "in" && word !== "out") return null;
+  const inside = parameter.namedChildren.find((child) => child.type === "ERROR");
+  if (inside) return inside;
+  const siblings = parameter.parent?.namedChildren ?? [];
+  const position = siblings.findIndex((sibling) => sibling.startIndex === parameter.startIndex);
+  const next = position >= 0 ? siblings[position + 1] : undefined;
+  return next?.type === "ERROR" ? next : null;
+}
+
+/** Whether `node` is the real name a recovered variance keyword leaves in an ERROR node of a type-parameter list. */
+export function isRecoveredTypeParameterName(node: SyntaxNodeLike, typeParameterTypes: ReadonlySet<string>): boolean {
+  const holder = node.parent;
+  if (holder?.type !== "ERROR") return false;
+  const inside = holder.parent;
+  const owner = inside && typeParameterTypes.has(inside.type) ? inside : holder.previousNamedSibling;
+  if (!owner || !typeParameterTypes.has(owner.type)) return false;
+  return declaredNameNodes(owner).some(
+    (candidate) => candidate.startIndex === node.startIndex && candidate.endIndex === node.endIndex,
+  );
 }
 
 /** Go receiver type parameters: the type arguments of `func (b Box[T]) M()` declare `T`. */

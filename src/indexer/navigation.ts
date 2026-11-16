@@ -1368,7 +1368,7 @@ async function findReferencesInternal(
     if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
       for (const entry of module.exports) {
         if (hasReachedCollectionLimit()) break;
-        if (entry.type !== "reexport") continue;
+        if (entry.type !== "reexport" || entry.forwardsImportBinding) continue;
         if (!exportedNameSet.has(entry.sourceSpecifier)) continue;
         const resolved = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
         if (resolved?.kind === "resolved" && !matchesReferenceDefinition(resolved.def)) continue;
@@ -1530,7 +1530,11 @@ async function findReferencesInternal(
           const targetModule = index.byFile.get(fileIdentityKey(targetFile));
           if (
             targetModule?.exports.some(
-              (entry) => entry.type === "namespaceReexport" || entry.type === "exportStar" || entry.type === "reexport",
+              (entry) =>
+                entry.type === "namespaceReexport" ||
+                entry.type === "exportStar" ||
+                // A forwarded named import adds no nested namespace path beyond what its own file's scan finds.
+                (entry.type === "reexport" && !entry.forwardsImportBinding),
             )
           ) {
             // A forwarded namespace can expose a member at paths such as W.helpers.helper,
@@ -1945,6 +1949,53 @@ async function findReferencesInternal(
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
         pushRef({ file: fileId, range, ...(via ? { via } : {}), ...(provenance ? { provenance } : {}) });
+      }
+    }
+  }
+
+  // An export alias token (`export { X as Y }` names `Y` for the same declaration) is a reference that only
+  // find-references reports, so rename and usages skip it (`via.reexport`).
+  if (parsedContext.sup.supportsExportFromReferences && !privateName) {
+    // Only a file whose indexed exports publish this declaration under another name holds such a token, so no other
+    // candidate is parsed for it.
+    const publishesAliased = (moduleEntry: ModuleIndex): boolean =>
+      moduleEntry.exports.some((entry) => {
+        if (entry.type === "local") {
+          return entry.exportedAs !== entry.target.localName && matchesReferenceDefinition(entry.target);
+        }
+        if (entry.type !== "reexport") return false;
+        // An export clause with a source names the source spelling, so it holds an alias token only under another name.
+        // A forwarded import names its local binding, which the entry does not record: `import D from "./x"; export { D
+        // as default }` aliases a name that equals the source spelling.
+        if (!entry.forwardsImportBinding && entry.exportedAs === entry.sourceSpecifier) return false;
+        const hit = resolveExport(index, entry.fromModule, entry.sourceSpecifier);
+        return hit?.kind === "resolved" && matchesReferenceDefinition(hit.def);
+      });
+    for (const fileId of [definitionFile, ...candidateFiles]) {
+      if (hasReachedCollectionLimit()) break;
+      const moduleEntry = index.byFile.get(fileIdentityKey(fileId));
+      if (!moduleEntry || !publishesAliased(moduleEntry)) continue;
+      const sameFile = fileIdentityKey(fileId) === fileIdentityKey(definitionFile);
+      const parsed = sameFile ? parsedContext : await ensureParsedContextForIndex(index, fileId);
+      for (const statement of parsed.tree.rootNode.namedChildren) {
+        if (statement.type !== "export_statement") continue;
+        for (const clause of statement.namedChildren) {
+          if (clause.type !== "export_clause") continue;
+          for (const specifier of clause.namedChildren) {
+            const exported = specifier.childForFieldName("alias");
+            const source = specifier.childForFieldName("name");
+            if (specifier.type !== "export_specifier" || !exported || !source) continue;
+            const { start } = toRange(source);
+            const target = await goToDefinition(
+              index,
+              { file: fileId, line: start.line, column: start.column },
+              parsed,
+            );
+            if (target.status === "ok" && matchesReferenceDefinition(target.definition)) {
+              pushRef({ file: fileId, range: toRange(exported), via: { reexport: true } });
+            }
+          }
+        }
       }
     }
   }

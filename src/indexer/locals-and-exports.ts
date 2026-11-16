@@ -24,7 +24,7 @@ import {
 } from "./callable-identity.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
-import { isTypeParameterName } from "./scope-nodes.js";
+import { isTypeParameterBinding, isTypeParameterName, scopeNodesFor } from "./scope-nodes.js";
 import { findClosestScopeBinding } from "./navigation-local.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
@@ -748,11 +748,24 @@ export function collectLocalsAndExportsFromSource(
       target = target.parent;
     }
 
-    const comments: string[] = [];
+    // The run of comments directly before the declaration, nearest first.
+    const run: SyntaxNodeLike[] = [];
     let prev = target.previousNamedSibling;
-    // Walk backwards through comments
     while (prev && (prev.type === "comment" || prev.type === "line_comment" || prev.type === "block_comment")) {
-      const text = sliceText(prev, source);
+      run.push(prev);
+      prev = prev.previousNamedSibling;
+    }
+    // A comment that starts on the line where the preceding code ends and stops before the declaration's own line
+    // belongs to that code (`a(); // about a`), not to the declaration below it. A comment that runs up to the
+    // declaration on that line (`{ /** doc */ m() {} }`) documents it. Rows only grow along the run, so the
+    // trailing comments are its earliest ones.
+    const precedingCodeRow = run.at(-1)?.previousSibling?.endPosition.row;
+    const comments: string[] = [];
+    for (const comment of run) {
+      const trailsPrecedingCode =
+        comment.startPosition.row === precedingCodeRow && comment.endPosition.row < target.startPosition.row;
+      if (trailsPrecedingCode) continue;
+      const text = sliceText(comment, source);
       // Clean up comment syntax
       const clean = text
         .replace(/^\s*\/\*\*?/, "") // /** or /*
@@ -763,7 +776,6 @@ export function collectLocalsAndExportsFromSource(
         .map((l) => normalizeDocstringLine(l))
         .join("\n");
       comments.unshift(clean.trim());
-      prev = prev.previousNamedSibling;
     }
     return comments.length ? comments.join("\n").trim() : undefined;
   };
@@ -1100,8 +1112,10 @@ export function collectLocalsAndExportsFromSource(
     const scopeTree = ensureTree();
     if (scopeTree) {
       scopeIndexForExports = buildScopeIndexFromSource(file, source, support, imports, { tree: scopeTree });
+      const scopeRow = scopeNodesFor(support.id);
       for (const b of scopeIndexForExports.all) {
-        if (!b.def) continue;
+        // A type parameter names no symbol of the module; only type syntax inside its declaration reads it.
+        if (!b.def || isTypeParameterBinding(scopeRow, b)) continue;
         const kind = bindingKindToSymbolKind(b.kind);
         pushLocal(b.name, kind, b.def, b.node, b.callable);
       }
@@ -1224,6 +1238,13 @@ export function collectLocalsAndExportsFromSource(
           local.range.start.index === definition.start.index &&
           local.range.end.index === definition.end.index,
       );
+    };
+
+    /** The import that binds `name` at module scope, or undefined when a declaration or nothing does. */
+    const moduleImportBinding = (name: string, tree: SyntaxTreeLike | undefined): ImportBinding | undefined => {
+      if (!tree) return undefined;
+      scopeIndexForExports ??= buildScopeIndexFromSource(file, source, support, imports, { tree });
+      return scopeIndexForExports.allScopes[0]?.map.get(support.normalizeIdentifier(name))?.import;
     };
 
     const defaultDeclarationNameNode = (node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined => {
@@ -1609,6 +1630,36 @@ export function collectLocalsAndExportsFromSource(
       if (map["src"]) {
         const srcName = map["src"].text;
         const alias = map["alias"]?.text ?? srcName;
+        // A bare `export { X }` of an import publishes that import under the exported name, as `export { X } from "./x"`
+        // does. An export clause with a source names that module's export instead, and its own match records it. A
+        // same-named local deeper in the file cannot be the exported name.
+        const exportStatement = nodeForCapture(map["src"])?.parent?.parent?.parent;
+        const exportsFromModule = !!exportStatement?.childForFieldName("source");
+        const forwarded = exportsFromModule ? undefined : moduleImportBinding(srcName, treeForEnrichment);
+        if (forwarded) {
+          const typeOnly = Boolean(map["type_kw"]) || isTypeOnly || forwarded.typeOnly === true;
+          if (forwarded.kind === "namespace") {
+            exports.push({
+              type: "namespaceReexport",
+              exportedAs: alias,
+              fromModule: forwarded.from,
+              moduleSpecifier: forwarded.from,
+              typeOnly,
+              forwardsImportBinding: true,
+            });
+          } else if (forwarded.kind === "named" || forwarded.kind === "default") {
+            exports.push({
+              type: "reexport",
+              exportedAs: alias,
+              fromModule: forwarded.from,
+              moduleSpecifier: forwarded.from,
+              sourceSpecifier: forwarded.kind === "named" ? forwarded.imported : "default",
+              typeOnly,
+              forwardsImportBinding: true,
+            });
+          }
+          continue;
+        }
         const local = locals.find((def) => def.localName === srcName);
         if (local) {
           exports.push({

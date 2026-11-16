@@ -1,7 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
-import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/rename-preview.js";
+import { previewRenameInSnapshot, previewRenameWithSession, type RenameEdit } from "../src/agent/rename-preview.js";
 import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import * as navigationModule from "../src/indexer/navigation.js";
@@ -101,6 +102,45 @@ async function renameInFixture(
 const editSites = (result: {
   edits: ReadonlyArray<{ file: string; range: { start: { line: number; column: number } } }>;
 }) => result.edits.map((edit) => [edit.file, edit.range.start.line, edit.range.start.column]);
+/** The source offset of a rename edit boundary; a preview edit without one cannot be applied. */
+function editOffset(position: { index?: number }): number {
+  if (position.index === undefined) throw new Error("Rename edit without a source index");
+  return position.index;
+}
+
+/**
+ * Applies rename edits to the fixture files on disk and returns the errors the TypeScript compiler reports for the
+ * edited project, so a preview that claims safety is held to producing code that still type-checks.
+ */
+async function typeErrorsAfter(root: string, edits: readonly RenameEdit[]): Promise<string[]> {
+  const byFile = new Map<string, RenameEdit[]>();
+  for (const edit of edits) byFile.set(edit.file, [...(byFile.get(edit.file) ?? []), edit]);
+  for (const [file, fileEdits] of byFile) {
+    const absolute = path.join(root, file);
+    let text = await fsp.readFile(absolute, "utf8");
+    const lastToFirst = [...fileEdits].sort(
+      (left, right) => editOffset(right.range.start) - editOffset(left.range.start),
+    );
+    for (const edit of lastToFirst) {
+      text = text.slice(0, editOffset(edit.range.start)) + edit.newText + text.slice(editOffset(edit.range.end));
+    }
+    await fsp.writeFile(absolute, text, "utf8");
+  }
+  const files = (await fsp.readdir(root)).filter((name) => name.endsWith(".ts")).map((name) => path.join(root, name));
+  const program = ts.createProgram(files, {
+    noEmit: true,
+    strict: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    types: [],
+  });
+  return ts
+    .getPreEmitDiagnostics(program)
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+}
 
 describe("rename preview", () => {
   describe.each(["ts", "tsx"] as const)("split generic method rename in %s", (extension) => {
@@ -205,6 +245,107 @@ describe("rename preview", () => {
         }
       },
     );
+  });
+
+  it("renames a function exported through an import-and-export barrel at every importer, not a same-named decoy", async () => {
+    const root = await mkTmpDir("cg-rename-barrel-");
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "x.ts": "export function X(): number { return 1 }\n",
+        "barrel.ts": 'import { X } from "./x";\nexport { X };\n',
+        "use.ts": 'import { X } from "./barrel";\nexport const r = X();\n',
+        "aliased.ts": 'import { X } from "./x";\nexport { X as Y };\n',
+        "consumer.ts": 'import { Y } from "./aliased";\nexport const q = Y();\n',
+        "decoy.ts": 'export function X(): string { return ""; }\nexport const d = X();\n',
+      });
+      const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+      const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "X" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "x.ts");
+      if (!target) throw new Error("Missing barrel rename target");
+      expect(await typeErrorsAfter(root, [])).toEqual([]);
+      const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "Renamed" });
+      expect(result.safe).toBe(true);
+      expect(result.conflicts).toEqual([]);
+      expect(result.unsafeSites).toEqual([]);
+      // The importer through the barrel is edited. The alias `Y` and its consumer keep their names, and the decoy is untouched.
+      expect(
+        result.edits
+          .map((edit) => [edit.file, edit.range.start.line, edit.oldText, edit.newText] as const)
+          .sort((left, right) => left[0].localeCompare(right[0]) || left[1] - right[1]),
+      ).toEqual([
+        ["aliased.ts", 1, "X", "Renamed"],
+        ["aliased.ts", 2, "X", "Renamed"],
+        ["barrel.ts", 1, "X", "Renamed"],
+        ["barrel.ts", 2, "X", "Renamed"],
+        ["use.ts", 1, "X", "Renamed"],
+        ["use.ts", 2, "X", "Renamed"],
+        ["x.ts", 1, "X", "Renamed"],
+      ]);
+      expect(await typeErrorsAfter(root, result.edits)).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a rename through a default-import barrel unsafe: the downstream names are the importer's own", async () => {
+    const root = await mkTmpDir("cg-rename-default-barrel-");
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "x.ts": "export default function D() { return 1 }\n",
+        "b3.ts": 'import D from "./x";\nexport { D };\n',
+        "c.ts": 'import { D } from "./b3";\nexport const r = D();\n',
+        "decoy.ts": 'export function D(): string { return ""; }\nexport const d = D();\n',
+      });
+      const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+      const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "D" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "x.ts");
+      if (!target) throw new Error("Missing default barrel rename target");
+      const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "Renamed" });
+      // Renaming the declaration must not edit the barrel's export name or the importers' `{ D }` unless the preview can
+      // keep them consistent, so it reports the barrel's export declaration as unproven instead of claiming safety.
+      expect(result.safe).toBe(false);
+      expect(result.unsafeSites.map((site) => site.location.file)).toContain("b3.ts");
+      expect(result.edits.some((edit) => edit.file === "decoy.ts")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renames a shorthand property use as `X: Renamed`, keeping the property key and member reads intact", async () => {
+    const root = await mkTmpDir("cg-rename-shorthand-");
+    try {
+      const paths = await writeFixtureFiles(root, {
+        "x.ts": "export function X(): number { return 1 }\n",
+        "use.ts": [
+          'import { X } from "./x";',
+          "export const api = { X };",
+          "export const viaMember = api.X();",
+          "export default { X, other: 1 };",
+          "",
+        ].join("\n"),
+      });
+      const snapshot = await renameSnapshotForFiles(root, Object.values(paths));
+      const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "X" });
+      const target = symbols.symbols.find((symbol) => symbol.location.file === "x.ts");
+      if (!target) throw new Error("Missing shorthand rename target");
+      const result = await previewRenameInSnapshot(snapshot, { root, handle: target.handle, newName: "Renamed" });
+      expect(result.safe).toBe(true);
+      expect(result.unsafeSites).toEqual([]);
+      expect(
+        result.edits
+          .map((edit) => [edit.file, edit.range.start.line, edit.oldText, edit.newText] as const)
+          .sort((left, right) => left[0].localeCompare(right[0]) || left[1] - right[1]),
+      ).toEqual([
+        ["use.ts", 1, "X", "Renamed"],
+        ["use.ts", 2, "X", "X: Renamed"],
+        ["use.ts", 4, "X", "X: Renamed"],
+        ["x.ts", 1, "X", "Renamed"],
+      ]);
+      // Applying the previewed edits leaves a project that still type-checks.
+      expect(await typeErrorsAfter(root, result.edits)).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("returns exact semantic edits without writing files or touching shadowed locals", async () => {

@@ -176,8 +176,12 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 162 indexes Ruby `attr_*` methods wrapped in `private`, `protected`, or `public`, gives a Ruby class, module,
  * and `class << self` body its own locals, hides outer locals inside a `def`, and keeps a method of one type from
  * binding a bare name in an unrelated type, so Ruby navigation, references, and detailed edges are rebuilt.
+ * Epoch 163 rebuilds TypeScript and TSX type-parameter scopes (a use of a signature, function, class, interface, or alias
+ * type parameter binds to it, not to a same-named outer type), parameter and pattern default values read enclosing
+ * names instead of binding them, `type B = A` reads `A`, and an export clause forwards an imported name as a
+ * re-export. A comment on the line where the previous code ends is no longer the next declaration's docstring.
  */
-export const CORE_ALGORITHM_EPOCH = 162;
+export const CORE_ALGORITHM_EPOCH = 163;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -199,8 +203,10 @@ export const CORE_ALGORITHM_EPOCH = 162;
  * and use-site spelling of a method name with a `?`, `!`, or `=` suffix.
  * Epoch 20 adds the C# hook that names an attribute class under its suffix-less spelling for reference candidates.
  * Epoch 22 adds the Ruby hook that tells which types a bare name can reach a declared method from.
+ * Epoch 23 changes the TypeScript and TSX `isDeclarationName` hook: only the name of a type alias or type parameter, and
+ * the alias of an export specifier, declare a name; the aliased type of `type B = A` and a constraint are reads.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 22;
+export const LANGUAGE_BEHAVIOR_EPOCH = 23;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

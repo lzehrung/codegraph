@@ -1,6 +1,6 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { registerLanguage } from "../registry.js";
-import { classifyByParentType, hasParentType, isNameOrPropertyFieldOnParent, nodeTypeIn } from "./shared.js";
+import { classifyByParentType, nodeTypeIn } from "./shared.js";
 import {
   ECMASCRIPT_BLOCK_SCOPE_TYPES,
   ECMASCRIPT_CONTROL_SPLIT_POINTS,
@@ -9,7 +9,6 @@ import {
   ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
   isEcmaScriptTypeOnlyStatement,
-  isEcmaScriptVariableDeclaratorName,
 } from "./js-family.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
@@ -150,6 +149,25 @@ const BASE_GRAPH = {
   `,
 };
 
+/** Declaration parents whose direct identifier children declare a name. */
+const DECLARATION_NAME_PARENT_TYPES: ReadonlySet<string> = new Set([
+  ...ECMASCRIPT_DECLARATION_NAME_PARENTS,
+  "abstract_class_declaration",
+  "interface_declaration",
+  "enum_declaration",
+  "function_signature",
+  "internal_module",
+  "module",
+  "import_equals_declaration",
+  // Method names in classes and abstract method signatures: needed so
+  // that editing a method name is classified as a definition change.
+  "method_signature",
+  "abstract_method_signature",
+  // A named function expression binds its own name inside its body:
+  // `const f = function inner() {}` and `$scope.refresh = function refresh() {}`.
+  "generator_function",
+]);
+
 const BASE_HELPERS = {
   nodeTypes: {
     identifier: ["identifier", "type_identifier"],
@@ -179,29 +197,22 @@ const BASE_HELPERS = {
   }),
   isDeclarationName: (node: SyntaxNodeLike) => {
     const parent = node.parent;
-    if (isEcmaScriptVariableDeclaratorName(node)) return true;
-    if (isNameOrPropertyFieldOnParent(node, ["public_field_definition", "enum_assignment"])) return true;
-    if (parent?.type === "enum_body") {
-      return node.type === "property_identifier";
+    const parentType = parent?.type;
+    if (!parent || !parentType) return false;
+    if (parentType === "variable_declarator") return parent.childForFieldName("name")?.id === node.id;
+    if (parentType === "public_field_definition" || parentType === "enum_assignment") {
+      const name = parent.childForFieldName("name") ?? parent.childForFieldName("property");
+      return name?.id === node.id;
     }
-    return hasParentType(node, [
-      ...ECMASCRIPT_DECLARATION_NAME_PARENTS,
-      "abstract_class_declaration",
-      "interface_declaration",
-      "type_alias_declaration",
-      "enum_declaration",
-      "function_signature",
-      "internal_module",
-      "module",
-      "import_equals_declaration",
-      // Method names in classes and abstract method signatures: needed so
-      // that editing a method name is classified as a definition change.
-      "method_signature",
-      "abstract_method_signature",
-      // A named function expression binds its own name inside its body:
-      // `const f = function inner() {}` and `$scope.refresh = function refresh() {}`.
-      "generator_function",
-    ]);
+    if (parentType === "enum_body") return node.type === "property_identifier";
+    // The aliased type of `type B = A` is a child of the declaration as well; only its name field declares.
+    // A type parameter's name declares, and its constraint and default are reads.
+    if (parentType === "type_alias_declaration" || parentType === "type_parameter") {
+      return parent.childForFieldName("name")?.id === node.id;
+    }
+    // `export { X as Y }` declares the export name `Y`; it is not a read of a binding named `Y`.
+    if (parentType === "export_specifier") return parent.childForFieldName("alias")?.id === node.id;
+    return DECLARATION_NAME_PARENT_TYPES.has(parentType);
   },
   // Scope construction has structural handling for the ordinary declaration forms. Ambient
   // overload signatures, `namespace X {}`, and a named function expression's own name are not

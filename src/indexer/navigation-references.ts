@@ -500,6 +500,8 @@ async function collectNamedNodeReferences(
     const identifierTypes = new Set<string>([
       ...parsed.sup.nodeTypes.identifier,
       ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
+      // `{ name }` reads the binding `name`; navigation proves which one before the site counts.
+      ...(parsed.sup.nodeTypes.shorthandPropertyIdentifier ?? []),
       "constant",
       "type_identifier",
       "field_identifier",
