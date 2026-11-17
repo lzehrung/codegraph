@@ -7,6 +7,21 @@ export const javaOmissions: readonly CallFormOmission[] = [];
 
 export const javaCells: MatrixCell[] = [
   {
+    id: "java/receiver-and-selector-same-name",
+    language: "java",
+    callForm: "typed-local-receiver",
+    files: {
+      "Box.java": "package example;\npublic class Box { public int ping() { return 1; } }\n",
+      "Caller.java":
+        "package example;\nclass Caller {\n  int ping() { return 2; }\n  int run(Box ping) { return ping.ping(); }\n}\n",
+    },
+    use: { file: "Caller.java", line: 4, token: "ping", occurrence: 3 },
+    expected: { file: "Box.java", line: 2, token: "ping" },
+    decoy: { file: "Caller.java", line: 3, token: "ping" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "Caller.java", fromName: "run" },
+  },
+  {
     id: "java/bare-call",
     language: "java",
     callForm: "bare-call",

@@ -153,6 +153,7 @@ const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
   class_body: true,
   class_declaration: true,
   record_declaration: true,
+  annotation_type_declaration: true,
   abstract_class_declaration: true,
   class_definition: true,
   class_specifier: true,
@@ -190,9 +191,19 @@ const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
   subscript_declaration: true,
 };
 
+/** Local binders do not become members when they appear inside a member initializer. */
+const LOCAL_BINDER_NODE_TYPES: Record<string, true> = {
+  declaration_expression: true,
+  declaration_pattern: true,
+  instanceof_expression: true,
+  record_pattern_component: true,
+  type_pattern: true,
+};
+
 function isTypeMemberDeclaration(node: SyntaxNodeLike, languageId: string): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
   if (languageId === "php" && phpConstructorPromotedVariable(node)) return true;
+  if (node.parent && LOCAL_BINDER_NODE_TYPES[node.parent.type]) return false;
   let current = node.parent?.parent ?? null;
   while (current) {
     if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
@@ -891,7 +902,8 @@ export function collectLocalsAndExportsFromSource(
         declaration?.type === "annotation_type_declaration" ||
         declaration?.type === "enum_constant" ||
         jvmOwner.type === "interface_declaration" ||
-        jvmOwner.type === "annotation_type_declaration";
+        (jvmOwner.type === "annotation_type_declaration" &&
+          declaration?.type !== "annotation_type_element_declaration");
       const explicitStatic = declaration?.namedChildren.some(
         (child) => child.type === "modifiers" && /\bstatic\b/u.test(child.text),
       );

@@ -10,11 +10,15 @@
  */
 import { nearestMemberContainer } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import { isCsharpMemberDesignator } from "../../util/csharp-designators.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
+import { fileIdentityKey } from "../../util/paths.js";
 import { UNPROVEN_CSHARP_BINDER_REASON, UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } from "../ambiguous-resolution.js";
 import { csharpOwnerMayHaveOuterMembers } from "../navigation-goto.js";
 import { definitionForBinding } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
+import { ensureParsedContextForIndex } from "../parsed-cache.js";
+import type { ProjectIndex, SymbolDef } from "../types.js";
 import type { NameLookupState, NameResolution } from "../name-resolution-types.js";
 import { headerParameterOwner as headerParameterOwnerOf, scopeNodesFor } from "../scope-nodes.js";
 import type { Binding } from "../scope-types.js";
@@ -34,59 +38,74 @@ const QUERY_BINDING_CLAUSE_TYPES: ReadonlySet<string> = new Set(["from_clause", 
 /** How a use reads a header parameter, relative to the declaration whose header declares it. */
 export type HeaderParameterContext = "header" | "initializer" | "member" | "designator";
 
-const ARRAY_CREATION_TYPES: ReadonlySet<string> = new Set([
-  "array_creation_expression",
-  "implicit_array_creation_expression",
-  "stackalloc_expression",
-  "implicit_stackalloc_expression",
-]);
-
-/** Parents whose identifier child is a designator when `=` or `:` follows it. */
-const DESIGNATOR_PARENT_TYPES: ReadonlySet<string> = new Set([
-  "with_initializer",
-  "subpattern",
-  "anonymous_object_creation_expression",
-  "attribute_argument",
-]);
-
 function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike): boolean {
   if (!left) return false;
   if (left.id !== undefined && right.id !== undefined) return left.id === right.id;
   return left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
 }
 
-/** The token that follows `node` in its parent, anonymous tokens included. */
-function followingTokenType(node: SyntaxNodeLike): string | undefined {
-  const parent = node.parent;
-  if (!parent) return undefined;
-  for (let position = 0; ; position += 1) {
-    const child = parent.child(position);
-    if (!child) return undefined;
-    if (sameNode(child, node)) return parent.child(position + 1)?.type;
-  }
-}
-
-/**
- * Whether an identifier names a member of another type instead of reading a binding: an object or `with` initializer
- * member, a named argument or tuple element, a property pattern, an anonymous-object member, or an attribute argument.
- */
-export function isMemberDesignator(node: SyntaxNodeLike): boolean {
-  const parent = node.parent;
-  if (!parent) return false;
-  if (parent.type === "argument") return sameNode(parent.childForFieldName("name"), node);
-  if (DESIGNATOR_PARENT_TYPES.has(parent.type)) {
-    const following = followingTokenType(node);
-    return following === "=" || following === ":";
-  }
-  if (parent.type !== "assignment_expression" || !sameNode(parent.childForFieldName("left"), node)) return false;
-  const container = parent.parent;
-  if (container?.type === "attribute_argument") return true;
-  return container?.type === "initializer_expression" && !ARRAY_CREATION_TYPES.has(container.parent?.type ?? "");
-}
-
 /** The declaration whose header parameter list declares `binding`, or null for every other binding. */
 export function headerParameterOwner(binding: Binding | null | undefined): SyntaxNodeLike | null {
   return binding?.kind === "param" && binding.node ? headerParameterOwnerOf("csharp", binding.node) : null;
+}
+
+/** The generated property of a simple positional record, represented by its header parameter. */
+export async function csharpRecordProperty(
+  index: ProjectIndex,
+  owner: SymbolDef,
+  name: string,
+): Promise<SymbolDef | undefined> {
+  const start = owner.range.start.index;
+  const end = owner.range.end.index;
+  if (start === undefined || end === undefined) return undefined;
+  const parsed = await ensureParsedContextForIndex(index, owner.file);
+  const record = parsed.tree.rootNode.descendantForIndex(start, end).parent;
+  if (record?.type !== "record_declaration") return undefined;
+  if (
+    record.namedChildren.some(
+      (child) => child.type === "base_list" || (child.type === "modifier" && child.text === "partial"),
+    )
+  ) {
+    return undefined;
+  }
+  const body = record.childForFieldName("body");
+  if (!body) {
+    let terminated = false;
+    for (let index = 0; ; index += 1) {
+      const child = record.child(index);
+      if (!child) break;
+      if (child.type === ";") {
+        terminated = true;
+        break;
+      }
+    }
+    if (!terminated) return undefined;
+  }
+  const locals = index.byFile.get(fileIdentityKey(owner.file))?.locals;
+  if (!locals) return undefined;
+  const wanted = normalizeCsharpIdentifier(name);
+  const hasBodyName = body
+    ? locals.some(
+        (local) =>
+          local.isMember &&
+          local.range.start.index !== undefined &&
+          local.range.start.index >= body.startIndex &&
+          local.range.end.index !== undefined &&
+          local.range.end.index <= body.endIndex &&
+          normalizeCsharpIdentifier(local.localName) === wanted,
+      )
+    : false;
+  if (hasBodyName) return undefined;
+  const parameters = record.namedChildren.find((child) => child.type === "parameter_list");
+  const parameter = parameters?.namedChildren.find((child) => {
+    const token = child.childForFieldName("name");
+    return !!token && normalizeCsharpIdentifier(token.text) === wanted;
+  });
+  const token = parameter?.childForFieldName("name");
+  if (!token) return undefined;
+  return locals.find(
+    (local) => local.range.start.index === token.startIndex && local.range.end.index === token.endIndex,
+  );
 }
 
 /** The name node of the header parameter of `owner` that `name` spells. */
@@ -122,7 +141,7 @@ function inMemberInitializer(use: SyntaxNodeLike, member: SyntaxNodeLike): boole
 
 /** How `use` reads a parameter declared in the header of `owner`. */
 export function headerParameterContext(use: SyntaxNodeLike, owner: SyntaxNodeLike): HeaderParameterContext {
-  if (isMemberDesignator(use)) return "designator";
+  if (isCsharpMemberDesignator(use)) return "designator";
   const body = owner.childForFieldName("body");
   if (!body || use.startIndex < body.startIndex || use.endIndex > body.endIndex) return "header";
   let member: SyntaxNodeLike = use;

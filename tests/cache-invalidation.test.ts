@@ -805,7 +805,7 @@ describe("Cache invalidation and strict hashing", () => {
   };
 
   const definitionFieldMutations: Array<{
-    field: "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
+    field: "usesQueryDrivenLocals" | "membersAreImplicitlyInScope" | "renameMatchesNormalizedIdentifiers";
     apply: (definition: LanguageDefinition) => void;
   }> = [
     {
@@ -818,6 +818,12 @@ describe("Cache invalidation and strict hashing", () => {
       field: "membersAreImplicitlyInScope",
       apply: (definition) => {
         definition.membersAreImplicitlyInScope = true;
+      },
+    },
+    {
+      field: "renameMatchesNormalizedIdentifiers",
+      apply: (definition) => {
+        definition.renameMatchesNormalizedIdentifiers = true;
       },
     },
   ];

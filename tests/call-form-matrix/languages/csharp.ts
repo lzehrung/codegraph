@@ -80,6 +80,20 @@ const staticReceiverFiles = (useFile: string): Record<string, string> => ({
 const partialGenericRoot = csharpPartialGenericRootFixture();
 
 export const csharpCells: MatrixCell[] = [
+  {
+    id: "csharp/receiver-and-selector-same-name",
+    language: "csharp",
+    callForm: "typed-local-receiver",
+    files: {
+      "Box.cs": "public class Box { public int ping() => 1; }\n",
+      "Caller.cs": "class Caller {\n  int ping() => 2;\n  int Run(Box ping) => ping.ping();\n}\n",
+    },
+    use: { file: "Caller.cs", line: 3, token: "ping", occurrence: 3 },
+    expected: { file: "Box.cs", line: 1, token: "ping" },
+    decoy: { file: "Caller.cs", line: 2, token: "ping" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "Caller.cs", fromName: "Run" },
+  },
   // A field, property, local, or declarator list typed `Widget` does not turn the type name `Widget` into a value receiver.
   ...(["UseField.cs", "UseProp.cs", "UseLocal.cs", "UseMulti.cs", "UseInit.cs", "UseUsing.cs"] as const).map(
     (file): MatrixCell => ({

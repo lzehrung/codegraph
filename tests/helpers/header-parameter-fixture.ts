@@ -1,7 +1,14 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
-import { buildProjectIndex, buildSymbolGraphDetailed, goToDefinition, type ProjectIndex } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  type ProjectIndex,
+} from "../../src/index.js";
+import { closeDiskCacheDatabase } from "../../src/indexer/build-cache.js";
 import {
   CSHARP_ATTRIBUTE_SOURCES,
   CSHARP_RECORD_SOURCES,
@@ -254,8 +261,8 @@ const JAVA_BINDER_FORMS: readonly BinderForm[] = [
     id: "PatternVariable",
     body: "int f(Object o) { if (o instanceof Integer value) { return value; } return 0; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
     ],
   },
   {
@@ -438,7 +445,9 @@ export const CSHARP_DESIGNATOR_SOURCES: Sources = {
     "  public (int, int) T1() => (X: X, Y: 2);",
     "  public Dto I1() => new Dto { X = X, Y = Y };",
     "  public Pat W1() => this with { X = X };",
+    "  public Other W2() { var plan = new Other(0); return plan with { X = X }; }",
     "}",
+    "public record Other(int X);",
     "",
   ].join("\n"),
 };
@@ -446,26 +455,39 @@ export const CSHARP_DESIGNATOR_SOURCES: Sources = {
 export async function expectCsharpDesignators(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
   const at = (line: number, token: string, nth = 1): Place => ({ file: "Desig.cs", line, token, nth });
   const header = (token: string): Place => at(3, token);
-  await expectGoto(fixture, index, at(4, "X"), "not_found");
-  await expectGoto(fixture, index, at(5, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(4, "X"), at(2, "X"));
+  await expectGoto(fixture, index, at(5, "X", 1), at(2, "X", 2));
   await expectGoto(fixture, index, at(5, "X", 2), header("X"));
   await expectGoto(fixture, index, at(6, "X", 1), "not_found");
   await expectGoto(fixture, index, at(6, "X", 2), header("X"));
   await expectGoto(fixture, index, at(7, "X", 1), "not_found");
   await expectGoto(fixture, index, at(7, "X", 2), header("X"));
   await expectGoto(fixture, index, at(7, "Y"), "not_found");
-  await expectGoto(fixture, index, at(8, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(8, "X", 1), at(2, "X"));
   await expectGoto(fixture, index, at(8, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(8, "Y", 1), at(2, "Y"));
   await expectGoto(fixture, index, at(8, "Y", 2), header("Y"));
-  await expectGoto(fixture, index, at(9, "X", 1), "not_found");
+  await expectGoto(fixture, index, at(9, "X", 1), header("X"));
   await expectGoto(fixture, index, at(9, "X", 2), header("X"));
+  await expectGoto(fixture, index, at(10, "X", 1), at(12, "X"));
+  await expectGoto(fixture, index, at(10, "X", 2), header("X"));
   await expectReferences(
     fixture,
     index,
     header("X"),
-    [header("X"), at(5, "X", 2), at(6, "X", 2), at(7, "X", 2), at(8, "X", 2), at(9, "X", 2)],
-    "partial",
+    [
+      header("X"),
+      at(5, "X", 2),
+      at(6, "X", 2),
+      at(7, "X", 2),
+      at(8, "X", 2),
+      at(9, "X", 1),
+      at(9, "X", 2),
+      at(10, "X", 2),
+    ],
+    "complete",
   );
+  await expectReferences(fixture, index, at(12, "X"), [at(12, "X"), at(10, "X", 1)], "complete");
 }
 
 /** Two records declared under `#if`/`#else`, beside a file whose syntax tree is unavailable. */
@@ -573,6 +595,468 @@ export async function expectAttributeTwinThroughEdits(fixture: Batch3Fixture): P
   ]);
 }
 
+/** Selectors and initializer-local variables next to same-named parameters and fields. */
+export const CSHARP_SELECTOR_SCOPE_SOURCES: Sources = {
+  "Selectors.cs": [
+    "class Box { public int Value; }",
+    "class Test {",
+    "  int Value;",
+    "  int M(Box Value) => Value.Value + this.Value + (Value?.Value ?? 0);",
+    "}",
+    "class Initializers {",
+    "  static int x = 9;",
+    '  static int A = int.TryParse("1", out var x) ? x : 0;',
+    "  static int B = x;",
+    "  static int C = 1 is int x ? x : 0;",
+    "  static int D = x;",
+    '  static int P { get; } = int.TryParse("2", out var y) ? y : 0;',
+    "  static int y = 7;",
+    "  static int Q = y;",
+    "}",
+    "class Segment {",
+    '  public string Text => "text";',
+    "  static Segment Truncate() => new Segment();",
+    "  string Render() { var truncated = Truncate(); return truncated?.Text; }",
+    "}",
+    "static class Extensions {",
+    "  static string Normalize(this string text) => text;",
+    "  static string Split(string text) => text?.Normalize();",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpSelectorAndInitializerScopes(
+  fixture: Batch3Fixture,
+  index: ProjectIndex,
+): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Selectors.cs", line, token, nth });
+  await expectGoto(fixture, index, at(4, "Value", 2), at(4, "Value", 1));
+  await expectGoto(fixture, index, at(4, "Value", 3), at(1, "Value"));
+  await expectGoto(fixture, index, at(4, "Value", 4), at(3, "Value"));
+  await expectGoto(fixture, index, at(4, "Value", 5), at(4, "Value", 1));
+  await expectReferences(
+    fixture,
+    index,
+    at(4, "Value", 1),
+    [at(4, "Value", 1), at(4, "Value", 2), at(4, "Value", 5)],
+    "complete",
+  );
+  await expectGoto(fixture, index, at(8, "x", 2), at(8, "x", 1));
+  await expectGoto(fixture, index, at(9, "x"), at(7, "x"));
+  await expectGoto(fixture, index, at(10, "x", 2), at(10, "x", 1));
+  await expectGoto(fixture, index, at(11, "x"), at(7, "x"));
+  await expectGoto(fixture, index, at(12, "y", 2), at(12, "y", 1));
+  await expectGoto(fixture, index, at(14, "y"), at(13, "y"));
+  await expectGoto(fixture, index, at(19, "Text"), at(17, "Text"));
+  await expectGoto(fixture, index, at(23, "Normalize"), at(22, "Normalize"));
+  await expectReferences(fixture, index, at(17, "Text"), [at(17, "Text"), at(19, "Text")], "complete");
+  await expectReferences(fixture, index, at(22, "Normalize"), [at(22, "Normalize"), at(23, "Normalize")], "complete");
+  await expectReferences(fixture, index, at(8, "x", 1), [at(8, "x", 1), at(8, "x", 2)], "complete");
+  await expectReferences(fixture, index, at(10, "x", 1), [at(10, "x", 1), at(10, "x", 2)], "complete");
+}
+
+/** Attribute arguments can name a callable's parameters before their declarations. */
+export const CSHARP_ATTRIBUTE_PARAMETER_SOURCES: Sources = {
+  "Attributes.cs": [
+    "using System.Diagnostics.CodeAnalysis;",
+    "class AttributeParameters {",
+    '  string word = "";',
+    '  string input = "";',
+    "  [return: NotNullIfNotNull(nameof(word))]",
+    "  string Echo(string word) => word;",
+    "  string Parameter([NotNullIfNotNull(nameof(input))] string input) => input;",
+    "  int first, second, local;",
+    "  [Name(nameof(first))] public AttributeParameters([Name(nameof(second))] int first, int second) {}",
+    "  void LocalOwner() { [Name(nameof(local))] void Local(int local) {} Local(local: 1); }",
+    "}",
+    "[System.AttributeUsage(System.AttributeTargets.All)] sealed class NameAttribute : System.Attribute { public NameAttribute(string value) {} }",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpAttributeParameters(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Attributes.cs", line, token, nth });
+  await expectGoto(fixture, index, at(5, "word"), at(6, "word", 1));
+  await expectGoto(fixture, index, at(7, "input", 1), at(7, "input", 2));
+  for (const [line, name, useCount] of [
+    [9, "first", 2],
+    [9, "second", 2],
+    [10, "local", 3],
+  ] as const) {
+    await expectGoto(fixture, index, at(line, name, 1), at(line, name, 2));
+    if (useCount === 3) await expectGoto(fixture, index, at(line, name, 3), at(line, name, 2));
+    const places = [at(line, name, 1), at(line, name, 2)];
+    if (useCount === 3) places.push(at(line, name, 3));
+    await expectReferences(fixture, index, at(line, name, 2), places, "complete");
+    await expectReferences(fixture, index, at(8, name), [at(8, name)], "complete");
+  }
+  await expectReferences(
+    fixture,
+    index,
+    at(6, "word", 1),
+    [at(5, "word"), at(6, "word", 1), at(6, "word", 2)],
+    "complete",
+  );
+  await expectReferences(
+    fixture,
+    index,
+    at(7, "input", 2),
+    [at(7, "input", 1), at(7, "input", 2), at(7, "input", 3)],
+    "complete",
+  );
+  await expectReferences(fixture, index, at(3, "word"), [at(3, "word")], "complete");
+  await expectReferences(fixture, index, at(4, "input"), [at(4, "input")], "complete");
+  const graph = await buildSymbolGraphDetailed(index);
+  const call = placeOf(fixture.sources, at(10, "Local", 2));
+  const targets = graph.edges
+    .filter((edge) => edge.label === "calls" && graph.nodes.get(edge.from)?.name === "LocalOwner")
+    .filter((edge) => edge.site?.range.start.line === call.line && edge.site.range.start.column === call.column)
+    .map((edge) => graph.nodes.get(edge.to)?.name);
+  expect(targets).toEqual(["Local"]);
+}
+
+export const CSHARP_RECOVERED_ASSIGNMENT_SOURCES: Sources = {
+  "Recovered.cs": [
+    "using System.Threading.Tasks;",
+    "class Recovered {",
+    "  public async Task M(bool async, bool defaultValue, bool expected) {",
+    "    var console = new TestConsole().EmitAnsiSequences();",
+    "    console.Input.PushKey(ConsoleKey.Enter);",
+    "    bool result;",
+    "    if (async)",
+    "    {",
+    '      result = await console.ConfirmAsync("Want some prompt?", defaultValue);',
+    "    }",
+    "    else",
+    "    {",
+    '      result = console.Confirm("Want some prompt?", defaultValue);',
+    "    }",
+    "    result.ShouldBe(expected);",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpRecoveredAssignments(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number): Place => ({ file: "Recovered.cs", line, token: "result" });
+  for (const line of [9, 13, 15]) await expectGoto(fixture, index, at(line), at(6));
+  await expectReferences(fixture, index, at(6), [at(6), at(9), at(13), at(15)], "partial");
+}
+
+export const JAVA_SELECTOR_SCOPE_SOURCES: Sources = {
+  "Selectors.java": [
+    "class Box { int value; }",
+    "class Test {",
+    "  int value;",
+    "  int run(Box value) { return value.value + this.value; }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectJavaSelectorScopes(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Selectors.java", line, token, nth });
+  await expectGoto(fixture, index, at(4, "value", 2), at(4, "value", 1));
+  await expectGoto(fixture, index, at(4, "value", 3), at(1, "value"));
+  await expectGoto(fixture, index, at(4, "value", 4), at(3, "value"));
+  await expectReferences(fixture, index, at(4, "value", 1), [at(4, "value", 1), at(4, "value", 2)], "complete");
+}
+
+export const JAVA_PATTERN_AND_ANNOTATION_SOURCES: Sources = {
+  "Patterns.java": [
+    "@interface Ann { int value(); String name(); }",
+    "record Box(int x) {}",
+    "class Test {",
+    "  int value;",
+    "  String name;",
+    '  @Ann(value = 1, name = "test")',
+    "  int run(Object o) {",
+    "    if (o instanceof String value && value.length() > 0) { return value.length(); }",
+    "    if (o instanceof Box(int value) && value > 0) { return value; }",
+    "    return switch (o) {",
+    "      case String value when value.length() > 0 -> value.length();",
+    "      case Box(int value) -> value;",
+    "      default -> this.value;",
+    "    };",
+    "  }",
+    "  int other;",
+    "  int after(Object o) { if (o instanceof Integer other) { } return other; }",
+    "  int negative(Object o) { if (!(o instanceof Integer other)) return 0; return other; }",
+    "  int alternative(Object o) { if (o instanceof Integer other) return other; else return other; }",
+    "  int lambda(java.util.List<Object> items) { return items.stream().mapToInt(o -> o instanceof Integer other ? other : 0).sum() + other; }",
+    "  int ternary(Object o) { return (o instanceof Integer other ? other : 0) + other; }",
+    "  int lambdaBlock(Object o) { java.util.function.IntSupplier a = () -> { if (!(o instanceof Integer other)) return 0; return other; }; return other; }",
+    "  int block(Object o) { { if (!(o instanceof Integer other)) return 0; } return other; }",
+    "}",
+    "enum Fields { ONE; int other; int binds(Object o) { if (!(o instanceof Integer other)) return 0; return other; } int reads() { return other; } }",
+    "",
+  ].join("\n"),
+  "scopes/Values.java": "package scopes; public class Values { public static int NAME = 1; }\n",
+  "scopes/Constants.java": [
+    "package scopes;",
+    "import static scopes.Values.NAME;",
+    "interface Constants {",
+    "  default int binds(Object o) { if (!(o instanceof Integer NAME)) return 0; return NAME; }",
+    "  default int reads() { return NAME; }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectJavaPatternAndAnnotationBindings(
+  fixture: Batch3Fixture,
+  index: ProjectIndex,
+): Promise<void> {
+  const at = (line: number, token: string, nth = 1): Place => ({ file: "Patterns.java", line, token, nth });
+  await expectGoto(fixture, index, at(6, "value"), at(1, "value"));
+  await expectGoto(fixture, index, at(6, "name"), at(1, "name"));
+  await expectReferences(fixture, index, at(1, "value"), [at(1, "value"), at(6, "value")], "complete");
+  await expectReferences(fixture, index, at(1, "name"), [at(1, "name"), at(6, "name")], "complete");
+  for (const line of [8, 9, 11, 12]) {
+    const declaration = at(line, "value", 1);
+    await expectGoto(fixture, index, at(line, "value", 2), declaration);
+    if (line !== 12) await expectGoto(fixture, index, at(line, "value", 3), declaration);
+    const refs = [declaration, at(line, "value", 2)];
+    if (line !== 12) refs.push(at(line, "value", 3));
+    await expectReferences(fixture, index, declaration, refs, "complete");
+  }
+  await expectGoto(fixture, index, at(13, "value"), at(4, "value"));
+  await expectGoto(fixture, index, at(17, "other", 2), at(16, "other"));
+  await expectGoto(fixture, index, at(18, "other", 2), "not_found");
+  await expectGoto(fixture, index, at(19, "other", 3), at(16, "other"));
+  for (const line of [20, 21, 22]) {
+    await expectGoto(fixture, index, at(line, "other", 2), "not_found");
+    await expectGoto(fixture, index, at(line, "other", 3), at(16, "other"));
+  }
+  await expectGoto(fixture, index, at(23, "other", 2), at(16, "other"));
+  await expectGoto(fixture, index, at(25, "other", 3), "not_found");
+  await expectGoto(fixture, index, at(25, "other", 4), at(25, "other", 1));
+  const inInterface = (line: number, nth = 1): Place => ({ file: "scopes/Constants.java", line, token: "NAME", nth });
+  await expectGoto(fixture, index, inInterface(4, 2), "not_found");
+  await expectGoto(fixture, index, inInterface(5), { file: "scopes/Values.java", token: "NAME" });
+}
+
+export const JAVA_ANNOTATION_COVERAGE_SOURCES: Sources = {
+  "AnnotationCoverage.java": [
+    "import external.Column;",
+    "@interface Other { String name(); }",
+    "class Entity {",
+    '  @Column(name = "n")',
+    "  String name;",
+    "  String read() { return name; }",
+    "  String name() { return name; }",
+    "  String call() { return name(); }",
+    "  void param(String name) { System.out.println(name); }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectJavaAnnotationCoverage(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, nth = 1): Place => ({ file: "AnnotationCoverage.java", line, token: "name", nth });
+  await expectGoto(fixture, index, at(4), "not_found");
+  await expectReferences(fixture, index, at(5), [at(5), at(6), at(7, 2)], "complete");
+  await expectReferences(fixture, index, at(7), [at(7), at(8)], "complete");
+  await expectReferences(fixture, index, at(9), [at(9), at(9, 2)], "complete");
+  await expectReferences(fixture, index, at(2), [at(2)], "partial");
+}
+
+export const CSHARP_LABEL_COVERAGE_SOURCES: Sources = {
+  "Labels.cs": [
+    "class Labels {",
+    "  int value;",
+    "  int Run(int value) {",
+    "    var tuple = (value: value, other: 0);",
+    "    var anonymous = new { value = value };",
+    "    var shorthand = new { value };",
+    "    return value + this.value;",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpLabelCoverage(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (line: number, nth = 1): Place => ({ file: "Labels.cs", line, token: "value", nth });
+  await expectGoto(fixture, index, at(4), "not_found");
+  await expectGoto(fixture, index, at(5), "not_found");
+  await expectReferences(fixture, index, at(2), [at(2), at(7, 2)], "complete");
+  await expectReferences(fixture, index, at(3), [at(3), at(4, 2), at(5, 2), at(6), at(7)], "complete");
+}
+
+/** Call labels name the selected callable's parameters, not fields of the calling type. */
+export const CSHARP_NAMED_ARGUMENT_SOURCES: Sources = {
+  "Api.cs": [
+    "namespace Labels;",
+    "public class Api {",
+    "  public int Echo(int item) => item;",
+    "  public Api(int number) { }",
+    "  public const int Unit = 8;",
+    "}",
+    "",
+  ].join("\n"),
+  "Use.cs": [
+    "namespace Labels;",
+    "class Use {",
+    "  int item = 7;",
+    "  int number = 8;",
+    "  int Run(Api other) => other.Echo(item: item);",
+    "  Api Make() => new Api(number: number);",
+    "  int U() => Api.Unit;",
+    "  int Unit = 1;",
+    "  int V() => Unit;",
+    "}",
+    "",
+  ].join("\n"),
+  "Comments.cs": [
+    "namespace Labels;",
+    "class Comments {",
+    "  int Run(Api api, int value) => api.Echo(@item /* label */ : value);",
+    "  int Next(Api api, int value) => api.Echo(item // label",
+    "    : value);",
+    "}",
+    "",
+  ].join("\n"),
+  "Unicode.cs": [
+    "namespace Labels;",
+    "class Unicode {",
+    "  int Run(Api api, int value) => api.Echo(it\u200cem: value);",
+    "}",
+    "",
+  ].join("\n"),
+  "Extension.cs": [
+    "namespace Labels;",
+    "static class Extensions { public static int Convert(this string text, int amount) => amount; }",
+    "class ExtensionUse {",
+    "  int amount;",
+    "  int Convert(int amount) => amount;",
+    "  int Run(string text) => text.Convert(amount: amount);",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export async function expectCsharpNamedArguments(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  const at = (file: string, line: number, token: string, nth = 1): Place => ({ file, line, token, nth });
+  const methodParameter = at("Api.cs", 3, "item");
+  const constructorParameter = at("Api.cs", 4, "number");
+  await expectGoto(fixture, index, at("Use.cs", 5, "item"), methodParameter);
+  await expectGoto(fixture, index, at("Use.cs", 5, "item", 2), at("Use.cs", 3, "item"));
+  await expectGoto(fixture, index, at("Comments.cs", 3, "item"), methodParameter);
+  await expectGoto(fixture, index, at("Comments.cs", 4, "item"), methodParameter);
+  await expectGoto(fixture, index, at("Unicode.cs", 3, "it\u200cem"), methodParameter);
+  await expectGoto(fixture, index, at("Use.cs", 6, "number"), constructorParameter);
+  await expectGoto(fixture, index, at("Use.cs", 6, "number", 2), at("Use.cs", 4, "number"));
+  await expectGoto(fixture, index, at("Use.cs", 7, "Unit"), at("Api.cs", 5, "Unit"));
+  await expectGoto(fixture, index, at("Use.cs", 9, "Unit"), at("Use.cs", 8, "Unit"));
+  await expectGoto(fixture, index, at("Extension.cs", 6, "amount"), "not_found");
+  await expectGoto(fixture, index, at("Extension.cs", 6, "amount", 2), at("Extension.cs", 4, "amount"));
+  await expectReferences(
+    fixture,
+    index,
+    at("Api.cs", 5, "Unit"),
+    [at("Api.cs", 5, "Unit"), at("Use.cs", 7, "Unit")],
+    "complete",
+  );
+  await expectReferences(
+    fixture,
+    index,
+    at("Extension.cs", 2, "amount"),
+    [at("Extension.cs", 2, "amount"), at("Extension.cs", 2, "amount", 2)],
+    "partial",
+  );
+  await expectReferences(
+    fixture,
+    index,
+    at("Extension.cs", 5, "amount"),
+    [at("Extension.cs", 5, "amount"), at("Extension.cs", 5, "amount", 2)],
+    "partial",
+  );
+  await expectReferences(
+    fixture,
+    index,
+    methodParameter,
+    [
+      methodParameter,
+      at("Api.cs", 3, "item", 2),
+      at("Comments.cs", 3, "item"),
+      at("Comments.cs", 4, "item"),
+      at("Unicode.cs", 3, "it\u200cem"),
+      at("Use.cs", 5, "item"),
+    ],
+    "complete",
+  );
+  await expectReferences(
+    fixture,
+    index,
+    constructorParameter,
+    [constructorParameter, at("Use.cs", 6, "number")],
+    "complete",
+  );
+}
+
+/** Named labels follow their callable as its declaration is edited, removed, restored, and renamed. */
+export async function expectCsharpNamedArgumentsThroughEdits(fixture: Batch3Fixture): Promise<void> {
+  const apiFile = path.join(fixture.root, "Api.cs");
+  const renamedFile = path.join(fixture.root, "ApiRenamed.cs");
+  const original = CSHARP_NAMED_ARGUMENT_SOURCES["Api.cs"]!;
+  const edited = original.replace("Echo(int item) => item;", "Echo(int entry) => entry;");
+  const label = placeOf(fixture.sources, { file: "Use.cs", line: 5, token: "item" });
+  const value = placeOf(fixture.sources, { file: "Use.cs", line: 5, token: "item", nth: 2 });
+  const answer = async (index: ProjectIndex) => {
+    const result = await goToDefinition(index, { file: fixture.files["Use.cs"]!, ...label });
+    const field = await goToDefinition(index, { file: fixture.files["Use.cs"]!, ...value });
+    const fieldTarget =
+      field.status === "ok"
+        ? `${path.basename(field.definition.file)}:${field.definition.range.start.line}`
+        : field.status;
+    if (result.status !== "ok") return { target: result.status, fieldTarget, references: [], coverage: "" };
+    const definition = result.definition;
+    const refs = await findReferences(index, { file: definition.file, ...definition.range.start });
+    if (refs.status !== "ok") throw new Error(`Named argument references: ${refs.status}`);
+    return {
+      target: `${path.basename(definition.file)}:${definition.range.start.line}`,
+      fieldTarget,
+      references: refs.references
+        .map((ref) => `${path.basename(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`)
+        .sort(),
+      coverage: refs.referenceCoverage.state,
+    };
+  };
+  const mutations = [
+    { label: "initial", apply: async () => {}, target: "Api.cs:3" },
+    { label: "edit", apply: () => fsp.writeFile(apiFile, edited), target: "not_found" },
+    { label: "delete", apply: () => fsp.rm(apiFile), target: "not_found" },
+    { label: "restore", apply: () => fsp.writeFile(apiFile, original), target: "Api.cs:3" },
+    { label: "rename", apply: () => fsp.rename(apiFile, renamedFile), target: "ApiRenamed.cs:3" },
+    { label: "rename back", apply: () => fsp.rename(renamedFile, apiFile), target: "Api.cs:3" },
+  ];
+  try {
+    for (const mutation of mutations) {
+      await mutation.apply();
+      const cold = await answer(await buildProjectIndex(fixture.root, { cache: "off" }));
+      const warm = await answer(await buildProjectIndex(fixture.root, { cache: "disk", threads: 1 }));
+      const memory = await answer(await buildProjectIndex(fixture.root, { cache: "disk", threads: 1 }));
+      closeDiskCacheDatabase(fixture.root);
+      const reopened = await answer(await buildProjectIndex(fixture.root, { cache: "disk", threads: 1 }));
+      expect(cold.target, mutation.label).toBe(mutation.target);
+      expect(cold.fieldTarget, mutation.label).toBe("Use.cs:3");
+      if (mutation.target !== "not_found") {
+        expect(cold.coverage, mutation.label).toBe("complete");
+        expect(cold.references, mutation.label).toContain(`Use.cs:${label.line}:${label.column}`);
+        expect(cold.references, mutation.label).not.toContain(`Use.cs:${value.line}:${value.column}`);
+      }
+      expect(warm, mutation.label).toEqual(cold);
+      expect(memory, mutation.label).toEqual(cold);
+      expect(reopened, mutation.label).toEqual(cold);
+    }
+  } finally {
+    closeDiskCacheDatabase(fixture.root);
+  }
+}
+
 export type Batch3Case = {
   name: string;
   language: "csharp" | "java";
@@ -641,6 +1125,48 @@ export const BATCH3_CASES: readonly Batch3Case[] = [
     check: expectCsharpDesignators,
   },
   {
+    name: "selectors and initializer variables",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_SELECTOR_SCOPE_SOURCES,
+    check: expectCsharpSelectorAndInitializerScopes,
+  },
+  {
+    name: "parameters in attributes",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_ATTRIBUTE_PARAMETER_SOURCES,
+    check: expectCsharpAttributeParameters,
+  },
+  {
+    name: "recovered assignments",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_RECOVERED_ASSIGNMENT_SOURCES,
+    check: expectCsharpRecoveredAssignments,
+  },
+  {
+    name: "named arguments",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_NAMED_ARGUMENT_SOURCES,
+    check: expectCsharpNamedArguments,
+  },
+  {
+    name: "member selectors",
+    language: "java",
+    references: true,
+    sources: JAVA_SELECTOR_SCOPE_SOURCES,
+    check: expectJavaSelectorScopes,
+  },
+  {
+    name: "pattern variables and annotation elements",
+    language: "java",
+    references: true,
+    sources: JAVA_PATTERN_AND_ANNOTATION_SOURCES,
+    check: expectJavaPatternAndAnnotationBindings,
+  },
+  {
     name: "record components",
     language: "java",
     references: true,
@@ -653,5 +1179,19 @@ export const BATCH3_CASES: readonly Batch3Case[] = [
     references: true,
     sources: JAVA_BINDER_SOURCES,
     check: expectJavaBinderForms,
+  },
+  {
+    name: "annotation key coverage",
+    language: "java",
+    references: true,
+    sources: JAVA_ANNOTATION_COVERAGE_SOURCES,
+    check: expectJavaAnnotationCoverage,
+  },
+  {
+    name: "non-reference labels",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_LABEL_COVERAGE_SOURCES,
+    check: expectCsharpLabelCoverage,
   },
 ];

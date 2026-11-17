@@ -33,6 +33,8 @@ export const AMBIGUOUS_CSHARP_ATTRIBUTE_REASON = "C# attribute name is ambiguous
  */
 export const UNPROVEN_JAVA_RECORD_COMPONENT_REASON =
   "Java record component may be shadowed by a pattern, lambda, loop, catch, or resource variable";
+/** An annotation element key requires the annotation type's member, not an enclosing lexical name. */
+export const UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON = "Java annotation element type or member is unproven";
 /** An implicit receiver has multiple viable or unproven same-name member candidates. */
 export const AMBIGUOUS_IMPLICIT_MEMBER_REASON = "No unique member through the implicit receiver";
 /** A known receiver declares the name, but its members compete for the call or leave the target unproven. */
@@ -73,6 +75,7 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   UNPROVEN_CSHARP_BINDER_REASON,
   UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON,
   UNPROVEN_JAVA_RECORD_COMPONENT_REASON,
+  UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON,
   AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
 ]);

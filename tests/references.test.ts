@@ -6,7 +6,13 @@ import {
   withMemberSelectorFixture,
 } from "./helpers/member-selector-fixture.js";
 import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
-import { withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
+import {
+  eachIndexMode,
+  expectGoto,
+  expectReferences,
+  placeOf,
+  withBatch3Fixture,
+} from "./helpers/csharp-java-batch3-fixture.js";
 import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
@@ -40,9 +46,10 @@ import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
-import { ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
+import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
 import { createReferenceLookupCache } from "../src/impact/reference-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN } from "../src/util/identifiers.js";
 import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
@@ -4680,6 +4687,140 @@ describe("Find References", () => {
         });
       },
     );
+    it("does not parse unrelated same-name files while finding named parameter references", async () => {
+      const sources = {
+        "Api.cs": "class Api { public int Echo(int item) => item; }\n",
+        "Unrelated.cs": [
+          "#if true",
+          'class Unrelated { int item; int Echo() => item; string Text() => "\u00e9"; }',
+          "#endif",
+          "",
+        ].join("\n"),
+        "OtherMethod.cs": "class OtherMethod { int Other(int item) => item; int Run() => Other(item: 1); }\n",
+      };
+      await withBatch3Fixture("cg-csharp-parameter-candidates-", sources, async (fixture) => {
+        const index = await buildProjectIndex(fixture.root, { cache: "off" });
+        expect(cachedParsedContextForIndexSync(index, fixture.files["Unrelated.cs"]!)).toBeUndefined();
+        expect(cachedParsedContextForIndexSync(index, fixture.files["OtherMethod.cs"]!)).toBeUndefined();
+        const bloom = index.bloomFilters?.get(fileIdentityKey(fixture.files["OtherMethod.cs"]!));
+        if (!bloom) throw new Error("Expected a reference Bloom filter");
+        bloom.add("Echo");
+        const declaration = { file: "Api.cs", token: "item", nth: 1 };
+        await expectReferences(
+          fixture,
+          index,
+          declaration,
+          [declaration, { file: "Api.cs", token: "item", nth: 2 }],
+          "complete",
+        );
+        expect(cachedParsedContextForIndexSync(index, fixture.files["Unrelated.cs"]!)).toBeUndefined();
+        expect(cachedParsedContextForIndexSync(index, fixture.files["OtherMethod.cs"]!)).toBeUndefined();
+        await fsp.writeFile(
+          fixture.files["Unrelated.cs"]!,
+          "class Unrelated { int item; int Run(Api api) => api.Echo(item: 1); }\n",
+        );
+        await expect(
+          findReferences(index, { file: fixture.files["Api.cs"]!, ...placeOf(sources, declaration) }),
+        ).rejects.toThrow("Query source changed or disappeared");
+      });
+    });
+    it("keeps a named parameter reference separated from its colon by Unicode whitespace", async () => {
+      const sources = {
+        "Api.cs": "class Api { public int Echo(int item) => item; }\n",
+        "Caller.cs": "class Caller { int Run(Api api) => api.Echo(item\u00a0: 1); }\n",
+      };
+      await withBatch3Fixture("cg-csharp-parameter-trivia-", sources, async (fixture) => {
+        const index = await buildProjectIndex(fixture.root, { cache: "off" });
+        const declaration = { file: "Api.cs", token: "item", nth: 1 };
+        await expectReferences(
+          fixture,
+          index,
+          declaration,
+          [declaration, { file: "Api.cs", token: "item", nth: 2 }, { file: "Caller.cs", token: "item" }],
+          "complete",
+        );
+      });
+    });
+    it("parses possible calls with formatting characters or escapes and reports partial coverage", async () => {
+      const sources = {
+        "Api.cs": "class Api { public int Echo(int item) => item; }\n",
+        "Caller.cs": "class Caller { int Run(Api api) => api.E\u200ccho(item: 1); }\n",
+        "Escaped.cs": "class Escaped { int Run(Api api) => api.\\u0045cho(item: 1); }\n",
+      };
+      await withBatch3Fixture("cg-csharp-complex-call-", sources, async (fixture) => {
+        await eachIndexMode(fixture, async (index) => {
+          const declaration = { file: "Api.cs", token: "item", nth: 1 };
+          for (const file of ["Caller.cs", "Escaped.cs"]) {
+            const bloom = index.bloomFilters?.get(fileIdentityKey(fixture.files[file]!));
+            expect(bloom?.mightContain(UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN)).toBe(true);
+          }
+          await expectReferences(
+            fixture,
+            index,
+            declaration,
+            [declaration, { file: "Api.cs", token: "item", nth: 2 }],
+            "partial",
+          );
+          expect(cachedParsedContextForIndexSync(index, fixture.files["Caller.cs"]!)).toBeDefined();
+          expect(cachedParsedContextForIndexSync(index, fixture.files["Escaped.cs"]!)).toBeDefined();
+        });
+      });
+    });
+    it("finds named parameters around comments, line breaks, and verbatim labels", async () => {
+      const sources = {
+        "Api.cs": "class Api { public int Echo(int number) => number; }\n",
+        "Caller.cs": [
+          "class Caller {",
+          "  int Comment(Api api) => api.Echo(number /* label */ : 1);",
+          "  int Line(Api api) => api.Echo(number",
+          "    : 1);",
+          "  int Verbatim(Api api) => api.Echo(@number: 1);",
+          "}",
+          "",
+        ].join("\n"),
+      };
+      await withBatch3Fixture("cg-csharp-named-trivia-", sources, async (fixture) => {
+        const index = await buildProjectIndex(fixture.root, { cache: "off" });
+        const declaration = { file: "Api.cs", token: "number", nth: 1 };
+        const labels = [2, 3, 5].map((line) => ({ file: "Caller.cs", token: "number", line }));
+        for (const label of labels) await expectGoto(fixture, index, label, declaration);
+        await expectReferences(
+          fixture,
+          index,
+          declaration,
+          [declaration, { file: "Api.cs", token: "number", nth: 2 }, ...labels],
+          "complete",
+        );
+      });
+    });
+    it("keeps directive-split named arguments unresolved with partial coverage", async () => {
+      const sources = {
+        "Api.cs": "class Api { public int Echo(int number) => number; }\n",
+        "Directives.cs": [
+          "class Directives {",
+          "  int number;",
+          "  int Run(Api api) => api.Echo(number",
+          "#if true",
+          "    :",
+          "#endif",
+          "    1);",
+          "}",
+          "",
+        ].join("\n"),
+      };
+      await withBatch3Fixture("cg-csharp-directive-label-", sources, async (fixture) => {
+        const index = await buildProjectIndex(fixture.root, { cache: "off" });
+        const declaration = { file: "Api.cs", token: "number", nth: 1 };
+        await expectGoto(fixture, index, { file: "Directives.cs", line: 3, token: "number" }, "not_found");
+        await expectReferences(
+          fixture,
+          index,
+          declaration,
+          [declaration, { file: "Api.cs", token: "number", nth: 2 }],
+          "partial",
+        );
+      });
+    });
     it("should find all references to static method", async () => {
       const index = await createTestIndex("csharp");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "csharp");

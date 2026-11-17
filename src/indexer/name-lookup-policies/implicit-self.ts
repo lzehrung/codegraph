@@ -7,6 +7,8 @@
 import {
   AMBIGUOUS_STAR_IMPORT_REASON,
   CSHARP_NAMESPACE_NAME_REASON,
+  UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON,
+  UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON,
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "../ambiguous-resolution.js";
 import {
@@ -14,7 +16,15 @@ import {
   nearestMemberContainer,
   nodeInStaticMemberContext,
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
+import {
+  csharpDesignatorReceiver,
+  csharpDesignatorType,
+  csharpNamedArgumentCall,
+  isCsharpMemberDesignator,
+} from "../../util/csharp-designators.js";
+import { isJavaAnnotationElementName, javaAnnotationTypeForElement } from "../../util/java-designators.js";
 import { csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceMemberKind } from "../compilation-units.js";
 import {
@@ -38,12 +48,13 @@ import {
   csharpQualifiedNameNode,
   csharpQualifiedThroughGenericOwner,
   definitionForBinding,
+  findClosestScopeBinding,
   findDeclarationNameNode,
 } from "../navigation-local.js";
 import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { csharpHeaderParameterUse } from "./csharp-header-parameters.js";
-import { javaRecordComponentUse } from "./java-record-components.js";
+import { javaPatternVariableFallback, javaRecordComponentUse } from "./java-record-components.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import {
@@ -53,7 +64,7 @@ import {
   type NameLookupState,
   type NameResolution,
 } from "../name-resolution-types.js";
-import type { GoToResult, SymbolDef } from "../types.js";
+import { SymbolKind, type GoToResult, type SymbolDef } from "../types.js";
 import {
   isSwiftExtensionTypeName,
   isSwiftQualifiedExtensionSuffix,
@@ -261,8 +272,41 @@ function namesAttributeType(use: BareNameUse): boolean {
   return attribute?.type === "attribute" && attribute.childForFieldName("name")?.id === name.id;
 }
 
+/** The declared type of a simple value used as the receiver of a pattern or `with` expression. */
+function csharpDesignatorReceiverType(use: BareNameUse): SyntaxNodeLike | null {
+  const receiver = csharpDesignatorReceiver(use.node);
+  if (!receiver) return null;
+  const binding = findClosestScopeBinding(use.scopeIndex, receiver.text, receiver, use.parsed.sup);
+  if (!binding?.node || (binding.kind !== "local" && binding.kind !== "param")) return null;
+  const declarator = binding.node.parent?.type === "variable_declarator" ? binding.node.parent : null;
+  const declaration = declarator?.parent ?? binding.node.parent;
+  const type = declaration?.childForFieldName("type");
+  if (type && type.type !== "implicit_type") return type;
+  const creation = declarator?.namedChildren.find((child) => child.type === "object_creation_expression");
+  return creation?.childForFieldName("type") ?? null;
+}
+
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
+  beforeLexical(use) {
+    if (!isCsharpMemberDesignator(use.node)) return undefined;
+    const fallback = { status: "not_found", reason: UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } as const;
+    const call = csharpNamedArgumentCall(use.node);
+    if (call) return { status: "deferred", request: { kind: "csharp-named-argument", call }, fallback };
+    const owner = csharpDesignatorType(use.node) ?? csharpDesignatorReceiverType(use);
+    if (!owner) return fallback;
+    return {
+      status: "deferred",
+      request: {
+        kind: "contextual-member",
+        owner,
+        expectedKind: SymbolKind.Variable,
+        jvmTypeOnly: false,
+        allowRecordProperty: true,
+      },
+      fallback,
+    };
+  },
   fromClosestBinding: (state) => ownOverloadDeclaration(state) ?? csharpHeaderParameterUse(state),
   crossModuleName: ({ use, lookupName }) =>
     csharpAliasQualifiedLookupName(use.node, use.parsed.source, lookupName, use.mod.imports),
@@ -393,7 +437,19 @@ export const jvmLookupPolicy: NameLookupPolicy = {
 /** Java: a record component binds in its record's scope, except where a pattern variable or annotation element may own the name. */
 export const javaLookupPolicy: NameLookupPolicy = {
   ...jvmLookupPolicy,
-  fromClosestBinding: (state) => ownOverloadDeclaration(state) ?? javaRecordComponentUse(state),
+  beforeLexical(use) {
+    if (!isJavaAnnotationElementName(use.node)) return undefined;
+    const fallback = { status: "not_found", reason: UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON } as const;
+    const owner = javaAnnotationTypeForElement(use.node);
+    if (!owner) return fallback;
+    return {
+      status: "deferred",
+      request: { kind: "contextual-member", owner, expectedKind: SymbolKind.Function, jvmTypeOnly: true },
+      fallback,
+    };
+  },
+  fromClosestBinding: (state) =>
+    ownOverloadDeclaration(state) ?? javaPatternVariableFallback(state) ?? javaRecordComponentUse(state),
 };
 
 /** A scope whose names a lambda's implicit receiver outranks: a type body or the file itself. */

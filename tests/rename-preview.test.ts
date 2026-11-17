@@ -25,6 +25,17 @@ import {
 } from "./helpers/swift-extension-owner-fixture.js";
 import { writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { PHP_TRAIT_COMPOSITION_FILES } from "./helpers/php-trait-composition-fixture.js";
+import {
+  CSHARP_ATTRIBUTE_PARAMETER_SOURCES,
+  CSHARP_DESIGNATOR_SOURCES,
+  CSHARP_NAMED_ARGUMENT_SOURCES,
+  CSHARP_LABEL_COVERAGE_SOURCES,
+  CSHARP_SELECTOR_SCOPE_SOURCES,
+  JAVA_PATTERN_AND_ANNOTATION_SOURCES,
+  JAVA_ANNOTATION_COVERAGE_SOURCES,
+  JAVA_SELECTOR_SCOPE_SOURCES,
+} from "./helpers/header-parameter-fixture.js";
+import { placeOf } from "./helpers/csharp-java-batch3-fixture.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 
 async function renameFixture() {
@@ -84,7 +95,7 @@ async function tryCreateFileSymlink(target: string, linkPath: string): Promise<b
 
 async function renameInFixture(
   sources: Readonly<Record<string, string>>,
-  target: { file: string; name: string },
+  target: { file: string; name: string; line?: number },
   newName: string,
 ) {
   const root = await mkTmpDir("cg-rename-header-parameter-");
@@ -96,7 +107,12 @@ async function renameInFixture(
   });
   try {
     const symbols = await workspaceSymbolsWithSession(session, { root, query: target.name });
-    const symbol = symbols.symbols.find((item) => item.name === target.name && item.location.file === target.file);
+    const symbol = symbols.symbols.find(
+      (item) =>
+        item.name === target.name &&
+        item.location.file === target.file &&
+        (target.line === undefined || item.location.range.start.line === target.line),
+    );
     expect(symbol, `${target.file}::${target.name}`).toBeDefined();
     return await previewRenameWithSession(session, { root, handle: symbol!.handle, newName });
   } finally {
@@ -2662,6 +2678,26 @@ describe("rename preview", () => {
     };
   }
 
+  it("keeps PHP property references unsafe when their spelling omits the declaration sigil", async () => {
+    const files = {
+      "Counter.php": [
+        "<?php",
+        "class Counter {",
+        "  private $count = 0;",
+        "  public function read() { return $this->count; }",
+        "}",
+      ].join("\n"),
+    };
+    await withPhpRenameSessions(files, async (session, root) => {
+      const result = await phpRename(session, root, "count", { file: "Counter.php", line: 3 }, "Renamed_x");
+      expect(result).toMatchObject({
+        safe: false,
+        edits: ["Counter.php:3"],
+        unsafe: ["Counter.php:4:unresolved_reference"],
+      });
+    });
+  });
+
   it("renames a PHP method composed through nested traits apart from the inherited method it shadows", async () => {
     const files = {
       "t.php": [
@@ -2728,6 +2764,238 @@ describe("rename preview", () => {
       expect(limit.edits.some((edit) => edit.startsWith("decoy.php"))).toBe(false);
     });
   });
+  it("renames C# and Java parameters without editing same-spelled member selectors", async () => {
+    for (const [sources, file, name] of [
+      [CSHARP_SELECTOR_SCOPE_SOURCES, "Selectors.cs", "Value"],
+      [JAVA_SELECTOR_SCOPE_SOURCES, "Selectors.java", "value"],
+    ] as const) {
+      const result = await renameInFixture(sources, { file, name, line: 4 }, "renamed");
+      const uses = file.endsWith(".cs") ? [1, 2, 5] : [1, 2];
+      const wanted = uses.map((nth) => {
+        const place = placeOf(sources, { file, line: 4, token: name, nth });
+        return [file, place.line, place.column];
+      });
+      expect(editSites(result)).toEqual(wanted);
+    }
+  });
+  it("keeps tuple and anonymous-property labels out of a C# parameter rename without losing its reads", async () => {
+    const result = await renameInFixture(
+      CSHARP_LABEL_COVERAGE_SOURCES,
+      { file: "Labels.cs", name: "value", line: 3 },
+      "renamed",
+    );
+    expect(result.safe).toBe(true);
+    expect(result.unsafeSites).toEqual([]);
+    expect(editSites(result)).toEqual(
+      [
+        [3, 1],
+        [4, 2],
+        [5, 2],
+        [6, 1],
+        [7, 1],
+      ].map(([line, nth]) => {
+        const at = placeOf(CSHARP_LABEL_COVERAGE_SOURCES, { file: "Labels.cs", token: "value", line, nth });
+        return ["Labels.cs", at.line, at.column];
+      }),
+    );
+  });
+  it("keeps unresolved Java annotation keys out of field renames and their coverage", async () => {
+    const result = await renameInFixture(
+      JAVA_ANNOTATION_COVERAGE_SOURCES,
+      { file: "AnnotationCoverage.java", name: "name", line: 5 },
+      "renamed",
+    );
+    expect(result.safe).toBe(true);
+    expect(result.unsafeSites).toEqual([]);
+    expect(editSites(result)).toEqual(
+      [
+        [5, 1],
+        [6, 1],
+        [7, 2],
+      ].map(([line, nth]) => {
+        const at = placeOf(JAVA_ANNOTATION_COVERAGE_SOURCES, {
+          file: "AnnotationCoverage.java",
+          token: "name",
+          line,
+          nth,
+        });
+        return ["AnnotationCoverage.java", at.line, at.column];
+      }),
+    );
+  });
+  it("includes equivalent Java formatting-character spellings in a rename", async () => {
+    const sources = {
+      "Names.java": "class Names { int value; int read() { return va\u200clue; } }\n",
+    };
+    const result = await renameInFixture(sources, { file: "Names.java", name: "value" }, "renamed");
+    expect(result.safe).toBe(true);
+    expect(result.edits.map((edit) => edit.oldText)).toEqual(["value", "va\u200clue"]);
+  });
+  it("renames C# parameters in return and parameter attributes without editing fields", async () => {
+    for (const [name, line, places] of [
+      [
+        "word",
+        6,
+        [
+          { line: 5, nth: 1 },
+          { line: 6, nth: 1 },
+          { line: 6, nth: 2 },
+        ],
+      ],
+      [
+        "input",
+        7,
+        [
+          { line: 7, nth: 1 },
+          { line: 7, nth: 2 },
+          { line: 7, nth: 3 },
+        ],
+      ],
+      [
+        "first",
+        9,
+        [
+          { line: 9, nth: 1 },
+          { line: 9, nth: 2 },
+        ],
+      ],
+      [
+        "second",
+        9,
+        [
+          { line: 9, nth: 1 },
+          { line: 9, nth: 2 },
+        ],
+      ],
+      [
+        "local",
+        10,
+        [
+          { line: 10, nth: 1 },
+          { line: 10, nth: 2 },
+          { line: 10, nth: 3 },
+        ],
+      ],
+    ] as const) {
+      const file = "Attributes.cs";
+      const result = await renameInFixture(CSHARP_ATTRIBUTE_PARAMETER_SOURCES, { file, name, line }, "renamed");
+      expect(result.safe).toBe(true);
+      expect(result.unsafeSites).toEqual([]);
+      expect(editSites(result)).toEqual(
+        places.map(({ line: useLine, nth }) => {
+          const position = placeOf(CSHARP_ATTRIBUTE_PARAMETER_SOURCES, { file, line: useLine, token: name, nth });
+          return [file, position.line, position.column];
+        }),
+      );
+    }
+  });
+
+  it("renames C# named arguments and initializer locals without editing field decoys", async () => {
+    const method = await renameInFixture(CSHARP_NAMED_ARGUMENT_SOURCES, { file: "Api.cs", name: "item" }, "entry");
+    expect(method.safe).toBe(true);
+    expect(method.unsafeSites).toEqual([]);
+    expect(method.edits.map((edit) => [edit.oldText, edit.newText])).toEqual([
+      ["item", "entry"],
+      ["item", "entry"],
+      ["@item", "entry"],
+      ["item", "entry"],
+      ["it\u200cem", "entry"],
+      ["item", "entry"],
+    ]);
+    const methodPlaces = [
+      { file: "Api.cs", line: 3, token: "item", nth: 1 },
+      { file: "Api.cs", line: 3, token: "item", nth: 2 },
+      { file: "Comments.cs", line: 3, token: "item", nth: 1 },
+      { file: "Comments.cs", line: 4, token: "item", nth: 1 },
+      { file: "Unicode.cs", line: 3, token: "it\u200cem", nth: 1 },
+      { file: "Use.cs", line: 5, token: "item", nth: 1 },
+    ];
+    expect(editSites(method)).toEqual(
+      methodPlaces.map((place) => {
+        const position = placeOf(CSHARP_NAMED_ARGUMENT_SOURCES, place);
+        return [place.file, position.line, position.column];
+      }),
+    );
+    const constant = await renameInFixture(CSHARP_NAMED_ARGUMENT_SOURCES, { file: "Api.cs", name: "Unit" }, "Scale");
+    expect(editSites(constant)).toEqual(
+      [
+        { file: "Api.cs", line: 5, token: "Unit" },
+        { file: "Use.cs", line: 7, token: "Unit" },
+      ].map((place) => {
+        const position = placeOf(CSHARP_NAMED_ARGUMENT_SOURCES, place);
+        return [place.file, position.line, position.column];
+      }),
+    );
+    const decoy = await renameInFixture(
+      CSHARP_NAMED_ARGUMENT_SOURCES,
+      { file: "Extension.cs", name: "amount", line: 5 },
+      "count",
+    );
+    expect(decoy.safe).toBe(false);
+    expect(editSites(decoy)).toEqual(
+      [1, 2].map((nth) => {
+        const position = placeOf(CSHARP_NAMED_ARGUMENT_SOURCES, {
+          file: "Extension.cs",
+          line: 5,
+          token: "amount",
+          nth,
+        });
+        return ["Extension.cs", position.line, position.column];
+      }),
+    );
+    const property = await renameInFixture(
+      CSHARP_DESIGNATOR_SOURCES,
+      { file: "Desig.cs", name: "X", line: 12 },
+      "Size",
+    );
+    expect(editSites(property)).toEqual(
+      [10, 12].map((line) => {
+        const position = placeOf(CSHARP_DESIGNATOR_SOURCES, { file: "Desig.cs", line, token: "X" });
+        return ["Desig.cs", position.line, position.column];
+      }),
+    );
+    const local = await renameInFixture(
+      CSHARP_SELECTOR_SCOPE_SOURCES,
+      { file: "Selectors.cs", name: "x", line: 8 },
+      "parsed",
+    );
+    expect(editSites(local)).toEqual(
+      [1, 2].map((nth) => {
+        const position = placeOf(CSHARP_SELECTOR_SCOPE_SOURCES, { file: "Selectors.cs", line: 8, token: "x", nth });
+        return ["Selectors.cs", position.line, position.column];
+      }),
+    );
+  });
+
+  it("renames Java pattern variables and annotation elements without touching same-named fields", async () => {
+    const pattern = await renameInFixture(
+      JAVA_PATTERN_AND_ANNOTATION_SOURCES,
+      { file: "Patterns.java", name: "value", line: 8 },
+      "text",
+    );
+    expect(editSites(pattern)).toEqual(
+      [1, 2, 3].map((nth) => {
+        const position = placeOf(JAVA_PATTERN_AND_ANNOTATION_SOURCES, {
+          file: "Patterns.java",
+          line: 8,
+          token: "value",
+          nth,
+        });
+        return ["Patterns.java", position.line, position.column];
+      }),
+    );
+    const annotation = await renameInFixture(
+      JAVA_PATTERN_AND_ANNOTATION_SOURCES,
+      { file: "Patterns.java", name: "name", line: 1 },
+      "label",
+    );
+    expect(editSites(annotation)).toEqual(
+      [1, 6].map((line) => {
+        const position = placeOf(JAVA_PATTERN_AND_ANNOTATION_SOURCES, { file: "Patterns.java", line, token: "name" });
+        return ["Patterns.java", position.line, position.column];
+      }),
+    );
+  });
 });
 
 it("keeps inherited decoy rename unsafe through an ancestor's adapted PHP trait use after cache reload", async () => {
@@ -2782,7 +3050,7 @@ it("renames a C# record parameter and its uses, but not a same-named member of a
   ]);
 });
 
-it("marks a C# record parameter rename unsafe when a `with` or object initializer designates a member of that name", async () => {
+it("renames a C# record property designator but not a same-named member of another initialized type", async () => {
   const result = await renameInFixture(
     {
       "Point.cs": [
@@ -2792,16 +3060,17 @@ it("marks a C# record parameter rename unsafe when a `with` or object initialize
         "",
       ].join("\n"),
     },
-    { file: "Point.cs", name: "X" },
+    { file: "Point.cs", name: "X", line: 3 },
     "Horizontal",
   );
-  expect(result.safe).toBe(false);
-  // The designators `X =` name a member of the initialized type, so no edit reaches them.
-  const designators = [
-    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { ",
-    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { X = X + 1 }; public Dto ToDto() => new Dto { ",
-  ].map((prefix) => prefix.length + 1);
-  for (const column of designators) expect(editSites(result)).not.toContainEqual(["Point.cs", 3, column]);
+  expect(result.safe).toBe(true);
+  const recordDesignator =
+    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { ".length + 1;
+  const dtoDesignator =
+    "public record Point(int X, int Y) { public int Sum() => X + Y; public Point Move() => this with { X = X + 1 }; public Dto ToDto() => new Dto { "
+      .length + 1;
+  expect(editSites(result)).toContainEqual(["Point.cs", 3, recordDesignator]);
+  expect(editSites(result)).not.toContainEqual(["Point.cs", 3, dtoDesignator]);
 });
 
 it("marks the suffix-less attribute spelling unsafe when renaming an Attribute-suffixed class", async () => {

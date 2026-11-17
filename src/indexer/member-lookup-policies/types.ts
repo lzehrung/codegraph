@@ -13,6 +13,14 @@ export type MemberCallEdge = "calls" | "instantiates";
  */
 export type MemberUse = "call" | "value" | "unbound";
 
+/** Candidate narrowing for a callable parameter's references outside its declaration file. */
+export type ParameterReferenceScanFilter = {
+  mayContain(source: string, name: string, callName?: string): boolean;
+  includes(node: SyntaxNodeLike): boolean;
+  unprobeableNameMarker?: string;
+  unproven?(node: SyntaxNodeLike, reason: string | undefined): boolean;
+};
+
 /**
  * Navigation helpers a policy needs but cannot import: the modules that define them import this registry, and a policy
  * that imported them back would close a dependency cycle. Each consumer passes the helpers it already imports.
@@ -126,6 +134,10 @@ export type MemberLookupPolicy = {
    * sets this where member names fold case, so a method called `deep` would otherwise match `class Deep`.
    */
   excludesContainerNameFromMembers?: boolean;
+  /** Resolve a declared receiver type through positioned source-unit lookup; a value itself cannot own members. */
+  declaredReceiverUsesNameLookup?: boolean;
+  /** A nominal receiver's members are resolved on that receiver, not through its source file's exports. */
+  membersBeforeFileExports?: boolean;
   /**
    * The edge a resolved dotted member call records, or `null` when its target cannot be the callee. Without this
    * hook, a target that accepts the call's argument count records `calls`.
@@ -159,6 +171,8 @@ export type MemberLookupPolicy = {
   ): boolean;
   /** Whether the lookup's `reason` for an unplaced `node` leaves a reference possible. */
   unprovenReference?(node: SyntaxNodeLike, reason: string | undefined): boolean;
+  /** Whether an unplaced use's syntax can name the target at all, using the query's owned declaration token. */
+  unprovenReferenceCandidate?(node: SyntaxNodeLike, definitionName: SyntaxNodeLike): boolean;
   /** The enum case or static member a leading-dot use selects in the type `target` names (or in the type around a node). */
   contextualMember?(
     index: ProjectIndex,
@@ -211,6 +225,10 @@ export type MemberLookupPolicy = {
   }): Promise<boolean | undefined>;
   /** A reference scan of a callable verifies each candidate through navigation, because overloads differ in labels. */
   verifiesCallableReferences?: boolean;
+  /** Callable name for a named parameter, empty for an unprobeable constructor, or null for other bindings. */
+  parameterNamedAtCall?(definition: SymbolDef, context: ParsedFileContext): string | null;
+  /** Other files can refer to a parameter only through their named-argument syntax. */
+  parameterReferenceScanFilter?: ParameterReferenceScanFilter;
   /** The type `name` that a resolved type nests, if the language nests types. */
   nestedMember?(
     index: ProjectIndex,

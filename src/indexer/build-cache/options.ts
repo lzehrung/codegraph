@@ -181,8 +181,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * names instead of binding them, `type B = A` reads `A`, and an export clause forwards an imported name as a
  * re-export. A comment on the line where the previous code ends is no longer the next declaration's docstring.
  * Epoch 164 rebuilds selector references while retaining Rust qualified items and excluding C initializer field labels.
+ * Epoch 165 rebuilds Java and C# selectors, Java annotation and pattern bindings, C# initializer and designator facts,
+ * and C# Bloom filters that mark unprobeable identifier spellings.
  */
-export const CORE_ALGORITHM_EPOCH = 164;
+export const CORE_ALGORITHM_EPOCH = 165;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -207,8 +209,10 @@ export const CORE_ALGORITHM_EPOCH = 164;
  * Epoch 23 changes the TypeScript and TSX `isDeclarationName` hook: only the name of a type alias or type parameter, and
  * the alias of an export specifier, declare a name; the aliased type of `type B = A` and a constraint are reads.
  * Epoch 24 distinguishes declared C fields and Rust items from lexical variable bindings at selectors.
+ * Epoch 25 isolates C# initializer variables, marks unprobeable identifier spellings, and classifies Java pattern
+ * and annotation declarations.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 24;
+export const LANGUAGE_BEHAVIOR_EPOCH = 25;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -243,6 +247,8 @@ type LanguageDefinitionFingerprintDescriptor = {
     usesQueryDrivenLocals: boolean;
     membersAreImplicitlyInScope: boolean;
     supportsExportFromReferences: boolean;
+    bloomUnprobeableIdentifiers: boolean;
+    renameMatchesNormalizedIdentifiers: boolean;
     exportScopeBlockers: string[];
   };
 };
@@ -276,6 +282,8 @@ function languageDefinitionFingerprintDescriptor(
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
       membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? false,
       supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
+      bloomUnprobeableIdentifiers: definition.bloomUnprobeableIdentifiers ?? false,
+      renameMatchesNormalizedIdentifiers: definition.renameMatchesNormalizedIdentifiers ?? false,
       exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
       ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
     },
@@ -303,6 +311,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   isDeclarationName: true,
   scopeDeclarationNames: true,
   normalizeIdentifier: true,
+  renameMatchesNormalizedIdentifiers: true,
   createsBlockScope: true,
   createsFunctionScope: true,
   membersAreImplicitlyInScope: true,
@@ -320,6 +329,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   useSiteMemberName: true,
   isDeclarationSpelling: true,
   bloomProbeName: true,
+  bloomUnprobeableIdentifiers: true,
   alternateUseNames: true,
 };
 

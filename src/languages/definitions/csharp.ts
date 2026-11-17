@@ -33,12 +33,35 @@ function isForeachDesignation(node: SyntaxNodeLike): boolean {
   return loop?.type === "foreach_statement" && loop.childForFieldName("left")?.id === designation.id;
 }
 
+/** Out and pattern variables in a field or property initializer belong only to that initializer. */
+function isMemberInitializer(node: SyntaxNodeLike): boolean {
+  const parent = node.parent;
+  if (parent?.type === "property_declaration") {
+    const value = parent.childForFieldName("value");
+    return !!value && value.startIndex === node.startIndex && value.endIndex === node.endIndex;
+  }
+  if (parent?.type !== "variable_declarator" || parent.parent?.type !== "variable_declaration") return false;
+  const declaration = parent.parent.parent;
+  if (declaration?.type !== "field_declaration" && declaration?.type !== "event_field_declaration") return false;
+  const initializer = parent.namedChildren[1];
+  return !!initializer && initializer.startIndex === node.startIndex && initializer.endIndex === node.endIndex;
+}
+
+const createsCsharpBlockScope = nodeTypeIn([
+  "block",
+  "declaration_list",
+  "foreach_statement",
+  "catch_clause",
+  "for_statement",
+]);
+
 const ATTRIBUTE_SUFFIX = "Attribute";
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs", ".csx"],
   usesQueryDrivenLocals: true,
+  bloomUnprobeableIdentifiers: true,
   structure: {
     blocks: [
       {
@@ -114,6 +137,7 @@ export const CSHARP_DEF: LanguageDefinition = {
       (record_declaration (parameter_list (parameter name: (identifier) @name)))
       (method_declaration (parameter_list (parameter name: (identifier) @name)))
       (constructor_declaration (parameter_list (parameter name: (identifier) @name)))
+      (local_function_statement (parameter_list (parameter name: (identifier) @name)))
       (struct_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
@@ -124,6 +148,7 @@ export const CSHARP_DEF: LanguageDefinition = {
       (property_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
       (declaration_pattern name: (identifier) @name)
+      (declaration_expression name: (identifier) @name)
     `,
     // C# using and extern-alias directives are read from the syntax tree (src/util/csharp-tree.ts), so no
     // import-binding query runs.
@@ -155,13 +180,14 @@ export const CSHARP_DEF: LanguageDefinition = {
     "local_function_statement",
     "lambda_expression",
   ]),
-  createsBlockScope: nodeTypeIn(["block", "declaration_list", "foreach_statement", "catch_clause", "for_statement"]),
+  createsBlockScope: (node) => createsCsharpBlockScope(node) || isMemberInitializer(node),
   scopeDeclarationNames: (node) => isNameFieldOnParent(node, SCOPED_DECLARATION_PARENTS) || isForeachDesignation(node),
   isDeclarationName: (node) =>
     node.type === "implicit_parameter" ||
     isForeachDesignation(node) ||
     isNameFieldOnParent(node, DECLARATION_NAME_PARENTS),
   normalizeIdentifier: normalizeCsharpIdentifier,
+  renameMatchesNormalizedIdentifiers: true,
   // An attribute list writes the class `MarkerAttribute` as `Marker`.
   alternateUseNames: (declared) =>
     declared.length > ATTRIBUTE_SUFFIX.length && declared.endsWith(ATTRIBUTE_SUFFIX)

@@ -111,6 +111,9 @@ export interface LanguageDefinition {
    */
   normalizeIdentifier?: (name: string) => string;
 
+  /** Rename edits may use equivalent identifier spellings rather than identical source text. */
+  renameMatchesNormalizedIdentifiers?: boolean;
+
   /**
    * Helper to check if a node creates a block scope.
    */
@@ -190,6 +193,9 @@ export interface LanguageDefinition {
    * `empty`, because `?` is no identifier character.
    */
   bloomProbeName?: (name: string) => string;
+
+  /** Mark files whose identifier spellings cannot be ruled out by a single normalized Bloom probe. */
+  bloomUnprobeableIdentifiers?: boolean;
 
   /**
    * Other spellings under which a use can name a declaration, for reference candidates: a C# attribute class

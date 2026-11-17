@@ -258,9 +258,9 @@ export async function expectCsharpRecordComponents(fixture: Batch3Fixture, index
   await goto(5, "Y", 2, own(5, "Y"));
   await goto(5, "Y", 3, own(5, "Y"));
   // `X =` in an object or `with` initializer names a member of the initialized type; the value read is the parameter.
-  await goto(5, "X", 3, "not_found");
+  await goto(5, "X", 3, own(2, "X"));
   await goto(5, "X", 4, own(5, "X"));
-  await goto(5, "X", 5, "not_found");
+  await goto(5, "X", 5, own(5, "X"));
   await goto(5, "X", 6, own(5, "X"));
   // A body member of the same name wins in a member body; an initializer still reads the parameter.
   await goto(6, "Name", 3, own(6, "Name"));
@@ -274,13 +274,13 @@ export async function expectCsharpRecordComponents(fixture: Batch3Fixture, index
   await goto(10, "X", 2, own(10, "X"));
   await goto(10, "Y", 1, "not_found");
   await expectReferences(fixture, index, own(5, "Y"), [own(5, "Y"), own(5, "Y", 2), own(5, "Y", 3)], "complete");
-  // `with { X = ... }` and `new Dto { X = ... }` may name another type's member, so coverage says so.
+  // The `with` designator names the record's generated property; the object initializer names Dto.X.
   await expectReferences(
     fixture,
     index,
     own(5, "X"),
-    [own(5, "X"), own(5, "X", 2), own(5, "X", 4), own(5, "X", 6)],
-    "partial",
+    [own(5, "X"), own(5, "X", 2), own(5, "X", 4), own(5, "X", 5), own(5, "X", 6)],
+    "complete",
   );
 }
 
@@ -335,8 +335,8 @@ export async function expectJavaRecordComponents(fixture: Batch3Fixture, index: 
   await goto("Order.java", 3, "Money", 1, money);
   await goto("Order.java", 3, "Money", 2, money);
   await goto("Order.java", 4, "LIMIT", 1, { file: "Money.java", token: "LIMIT", line: 2 });
-  // A pattern variable of the component's name is not bound by the scope, so the use stays unresolved.
-  await goto("Pat.java", 2, "value", 2, "not_found");
+  // The if body reads the pattern variable, not the component.
+  await goto("Pat.java", 2, "value", 2, declared("Pat.java", 2, "value"));
   await goto("Pat.java", 3, "value", 1, declared("Pat.java", 1, "value"));
   await expectReferences(
     fixture,

@@ -6571,7 +6571,6 @@ describe("C# global using review regressions", () => {
         [4, "Height"],
         [7, "Height"],
         [8, "Build"],
-        [9, "Height"],
         [14, "Build"],
       ] as const) {
         const result = await goToDefinition(index, {
@@ -6581,6 +6580,15 @@ describe("C# global using review regressions", () => {
         });
         expect(result.status, `${line}:${token}`).toBe("not_found");
       }
+      const initializer = await goToDefinition(index, {
+        file: files["Use.cs"]!,
+        line: 9,
+        column: lines[8]!.indexOf("Height") + 1,
+      });
+      expect(initializer.status).toBe("ok");
+      if (initializer.status !== "ok") throw new Error("Expected Settings.Height initializer member");
+      expect(normalizePath(initializer.definition.file)).toBe(files["Use.cs"]);
+      expect(initializer.definition.range.start.line).toBe(3);
       const type = await goToDefinition(index, {
         file: files["Use.cs"]!,
         line: 10,

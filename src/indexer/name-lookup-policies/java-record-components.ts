@@ -7,54 +7,47 @@
  *  - an annotation element name (`@A(name = 1)`).
  */
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import { isJavaAnnotationElementName } from "../../util/java-designators.js";
+import {
+  isJavaPatternVariableName,
+  javaPatternMayReachUse,
+  javaPatternMember,
+  javaPatternVariableName,
+} from "../../util/java-patterns.js";
 import { UNPROVEN_JAVA_RECORD_COMPONENT_REASON } from "../ambiguous-resolution.js";
 import type { NameLookupState, NameResolution } from "../name-resolution-types.js";
 import { headerParameterOwner } from "../scope-nodes.js";
 
-/** Nodes that declare a pattern variable: it is their `name` field, or their last identifier. */
-const PATTERN_DECLARATION_TYPES: ReadonlySet<string> = new Set([
-  "instanceof_expression",
-  "type_pattern",
-  "record_pattern_component",
-]);
+/** Pattern declarations in each member, keyed by normalized name and read once per member and tree. */
+const PATTERN_VARIABLES = new WeakMap<SyntaxTreeLike, Map<string, ReadonlyMap<string, readonly SyntaxNodeLike[]>>>();
 
-function patternVariableName(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  if (!PATTERN_DECLARATION_TYPES.has(node.type)) return null;
-  const named = node.childForFieldName("name");
-  if (named) return named;
-  if (node.type === "instanceof_expression") return null;
-  return node.namedChildren.findLast((child) => child.type === "identifier") ?? null;
-}
-
-/** The first start of each pattern variable a member declares, by normalized name, read once per member and tree. */
-const PATTERN_VARIABLE_STARTS = new WeakMap<SyntaxTreeLike, Map<string, ReadonlyMap<string, number>>>();
-
-function patternVariableStarts(
+function patternVariables(
   tree: SyntaxTreeLike,
   member: SyntaxNodeLike,
   normalize: (name: string) => string,
-): ReadonlyMap<string, number> {
-  let members = PATTERN_VARIABLE_STARTS.get(tree);
+): ReadonlyMap<string, readonly SyntaxNodeLike[]> {
+  let members = PATTERN_VARIABLES.get(tree);
   if (!members) {
     members = new Map();
-    PATTERN_VARIABLE_STARTS.set(tree, members);
+    PATTERN_VARIABLES.set(tree, members);
   }
   const key = `${member.type}:${member.startIndex}:${member.endIndex}`;
   const cached = members.get(key);
   if (cached) return cached;
-  const starts = new Map<string, number>();
+  const variables = new Map<string, SyntaxNodeLike[]>();
   const visit = (node: SyntaxNodeLike): void => {
-    const variable = patternVariableName(node);
+    const variable = javaPatternVariableName(node);
     if (variable) {
       const name = normalize(variable.text);
-      const known = starts.get(name);
-      if (known === undefined || variable.startIndex < known) starts.set(name, variable.startIndex);
+      const known = variables.get(name);
+      if (known) known.push(variable);
+      else variables.set(name, [variable]);
     }
     for (const child of node.namedChildren) visit(child);
   };
   visit(member);
-  members.set(key, starts);
-  return starts;
+  members.set(key, variables);
+  return variables;
 }
 
 /** Whether the member holding `use` declares a pattern variable spelled `wanted` at or before the use. */
@@ -64,11 +57,10 @@ function patternVariableBefore(
   wanted: string,
   normalize: (name: string) => string,
 ): boolean {
-  let member = use;
-  while (member.parent && member.parent.type !== "class_body") member = member.parent;
+  const member = javaPatternMember(use);
   // The variable's own declaration token is as unproven as its uses.
-  const start = patternVariableStarts(tree, member, normalize).get(wanted);
-  return start !== undefined && start <= use.startIndex;
+  const declarations = patternVariables(tree, member, normalize).get(wanted);
+  return !!declarations?.some((declaration) => javaPatternMayReachUse(declaration, use));
 }
 
 function sameNode(left: SyntaxNodeLike, right: SyntaxNodeLike): boolean {
@@ -142,11 +134,21 @@ function unmodeledBinderInScope(
   return false;
 }
 
-/** The key of an annotation's `name = value` pair names an element of the annotation type. */
-function isAnnotationElementName(node: SyntaxNodeLike): boolean {
-  const parent = node.parent;
-  const key = parent?.type === "element_value_pair" ? parent.namedChildren[0] : undefined;
-  return !!key && key.startIndex === node.startIndex && key.endIndex === node.endIndex;
+/** A not-yet-modeled pattern must not fall through to a same-named field or import. */
+export function javaPatternVariableFallback(state: NameLookupState): NameResolution | undefined {
+  const { use, closestBinding } = state;
+  const bindingName = closestBinding?.node;
+  if (bindingName && isJavaPatternVariableName(bindingName)) return undefined;
+  const declaration = bindingName?.parent;
+  const field = declaration?.type === "variable_declarator" && declaration.parent?.type === "field_declaration";
+  if (closestBinding && !closestBinding.import && !field) return undefined;
+  const { normalizeIdentifier } = use.parsed.sup;
+  const wanted = normalizeIdentifier(state.lookupName);
+  const member = javaPatternMember(use.node);
+  const declarations = patternVariables(use.parsed.tree, member, normalizeIdentifier).get(wanted);
+  return declarations?.some((name) => javaPatternMayReachUse(name, use.node))
+    ? { status: "not_found", reason: UNPROVEN_JAVA_RECORD_COMPONENT_REASON }
+    : undefined;
 }
 
 /** A use that binds a record component but may name an unbound variable or an annotation element stops unresolved. */
@@ -158,7 +160,7 @@ export function javaRecordComponentUse(state: NameLookupState): NameResolution |
   const { normalizeIdentifier } = use.parsed.sup;
   const wanted = normalizeIdentifier(state.lookupName);
   const shadowed =
-    isAnnotationElementName(use.node) ||
+    isJavaAnnotationElementName(use.node) ||
     unmodeledBinderInScope(use.node, owner, wanted, normalizeIdentifier) ||
     patternVariableBefore(use.parsed.tree, use.node, wanted, normalizeIdentifier);
   return shadowed ? { status: "not_found", reason: UNPROVEN_JAVA_RECORD_COMPONENT_REASON } : undefined;

@@ -176,6 +176,7 @@ const RECEIVER_CALL_NODE_TYPES: Record<string, true> = {
 /** Declaration nodes that lexically own the methods declared inside them. */
 const MEMBER_CONTAINER_TYPES: Record<string, true> = {
   abstract_class_declaration: true,
+  annotation_type_declaration: true,
   class: true,
   class_declaration: true,
   class_definition: true,
