@@ -7,6 +7,7 @@
 import { csharpMemberLookupPolicy } from "./csharp.js";
 import { phpMemberLookupPolicy } from "./php.js";
 import { swiftMemberLookupPolicy } from "./swift.js";
+import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
 import type { MemberLookupPolicy } from "./types.js";
 
 export type {
@@ -25,6 +26,11 @@ const NO_POLICY: MemberLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
   csharp: csharpMemberLookupPolicy,
+  java: {
+    declaredReceiverUsesNameLookup: true,
+    membersBeforeFileExports: true,
+    unprovenReferenceCandidate: javaUnprovenReferenceCandidate,
+  },
   php: phpMemberLookupPolicy,
   swift: swiftMemberLookupPolicy,
 };

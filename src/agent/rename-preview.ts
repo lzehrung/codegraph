@@ -230,8 +230,8 @@ export async function previewRenameInSnapshot(
     referenceFailure = errorMessage(error);
   }
   const semanticDefinitions = new Map<string, SymbolDef>([[resolved.id, resolved.def]]);
-  const targetLanguage =
-    supportForFileWithoutHeaderSample(resolved.def.file, snapshot.index.languageExtensions)?.id ?? "";
+  const targetSupport = supportForFileWithoutHeaderSample(resolved.def.file, snapshot.index.languageExtensions);
+  const targetLanguage = targetSupport?.id ?? "";
   const unprovenLinkage = memberLookupPolicyFor(targetLanguage).renameLinkageUnproven?.(
     snapshot.symbolGraph,
     resolved.def,
@@ -474,7 +474,11 @@ export async function previewRenameInSnapshot(
         continue;
       }
       newText = replaced;
-    } else if (oldText !== resolved.def.localName) {
+    } else if (
+      oldText !== resolved.def.localName &&
+      (!targetSupport?.renameMatchesNormalizedIdentifiers ||
+        targetSupport.normalizeIdentifier(oldText) !== targetSupport.normalizeIdentifier(resolved.def.localName))
+    ) {
       unsafeSites.push({
         location: { file: loaded.displayPath, range: candidate.range },
         text: oldText,

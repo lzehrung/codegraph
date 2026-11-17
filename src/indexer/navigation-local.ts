@@ -2,7 +2,7 @@ import { csharpImportsForName, withCsharpGlobalUsings } from "./csharp-global-us
 import type { LanguageSupport } from "../languages.js";
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import type { FileId, Range } from "../types.js";
+import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { csharpGenericArity, csharpTypeArgumentArity } from "../util/csharp-tree.js";
 import { okGoToResult } from "./navigation-provenance.js";
@@ -493,17 +493,17 @@ export function toModuleRef(resolved?: FileId | { external: string }): string | 
   return typeof resolved === "string" ? resolved : resolved.external;
 }
 
+/** Whether a source position names an import's source or local declaration token, not a later use. */
 function importBindingCoversIndex(imp: ImportBinding, index: number): boolean {
-  const ranges: Range[] = [];
-  if ((imp.kind === "named" || imp.kind === "default" || imp.kind === "namespace") && imp.localRange) {
-    ranges.push(imp.localRange);
-  }
-  if (imp.kind === "named" && imp.importedRange) ranges.push(imp.importedRange);
-  return ranges.some((range) => {
-    const start = range.start.index;
-    const end = range.end.index;
-    return start !== undefined && end !== undefined && index >= start && index < end;
-  });
+  if (imp.kind === "star") return false;
+  const localRange = imp.localRange;
+  const localStart = localRange?.start.index;
+  const localEnd = localRange?.end.index;
+  if (localStart !== undefined && localEnd !== undefined && index >= localStart && index < localEnd) return true;
+  if (imp.kind !== "named") return false;
+  const importedStart = imp.importedRange?.start.index;
+  const importedEnd = imp.importedRange?.end.index;
+  return importedStart !== undefined && importedEnd !== undefined && index >= importedStart && index < importedEnd;
 }
 
 function starImportGoTo(index: ProjectIndex, imp: ImportBinding, def: SymbolDef, name: string): GoToResult {

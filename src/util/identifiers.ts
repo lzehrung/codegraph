@@ -56,6 +56,13 @@ export const JAVA_IDENTIFIER_IGNORABLE_SOURCE = String.raw`\p{Cf}\u0000-\u0008\u
 /** C# formatting characters permitted in identifier-part-character. */
 export const CSHARP_IDENTIFIER_FORMAT_SOURCE = String.raw`\p{Cf}`;
 
+/** Source spellings that cannot always be excluded by one normalized identifier Bloom probe. */
+export const UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN = "__codegraph_unprobeable_identifier__";
+const UNPROBEABLE_IDENTIFIER_PATTERN = /\p{Cf}|\\[uU]/u;
+export function hasUnprobeableIdentifierSpelling(source: string): boolean {
+  return UNPROBEABLE_IDENTIFIER_PATTERN.test(source);
+}
+
 const CSHARP_IDENTIFIER_FORMAT_PATTERN = new RegExp(`[${CSHARP_IDENTIFIER_FORMAT_SOURCE}]`, "gu");
 
 /**

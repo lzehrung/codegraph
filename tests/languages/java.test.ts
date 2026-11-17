@@ -202,7 +202,10 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "AnnotationTypes.java",
-          symbols: [{ name: "AnnotatedMarker", kind: "interface" }],
+          symbols: [
+            { name: "AnnotatedMarker", kind: "interface" },
+            { name: "value", kind: "function" },
+          ],
         },
       ],
       references: [

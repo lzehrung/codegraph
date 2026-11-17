@@ -21,6 +21,7 @@ import {
   CSHARP_COLOR_COLOR_SOURCES,
   CSHARP_DESIGNATOR_SOURCES,
   CSHARP_HERITAGE_SOURCES,
+  CSHARP_NAMED_ARGUMENT_SOURCES,
   CSHARP_PARTIAL_SOURCES,
   CSHARP_TWIN_NO_TREE_MARKER,
   CSHARP_TWIN_SOURCES,
@@ -29,6 +30,7 @@ import {
   expectCsharpColorColorHeaders,
   expectCsharpDesignators,
   expectCsharpHeritageArguments,
+  expectCsharpNamedArgumentsThroughEdits,
   expectCsharpPartialAndInheritedMembers,
   expectAttributeTwinThroughEdits,
   expectCsharpTwinRecordStructs,
@@ -3430,7 +3432,15 @@ describe("Go to Definition", () => {
       await withBatch3Fixture("cg-csharp-twin-edits-", CSHARP_ATTRIBUTE_SOURCES, expectAttributeTwinThroughEdits);
     });
 
-    it("leaves names written before = or : unresolved and the values after them on the parameter", async () => {
+    it("keeps named argument goto and references correct through declaration edits and cache reopen", async () => {
+      await withBatch3Fixture(
+        "cg-csharp-named-argument-edits-",
+        CSHARP_NAMED_ARGUMENT_SOURCES,
+        expectCsharpNamedArgumentsThroughEdits,
+      );
+    });
+
+    it("resolves proven designators and leaves anonymous labels unbound", async () => {
       await withBatch3Fixture("cg-csharp-designators-", CSHARP_DESIGNATOR_SOURCES, async (fixture) => {
         await eachIndexMode(fixture, (index) => expectCsharpDesignators(fixture, index));
       });

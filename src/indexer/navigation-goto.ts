@@ -2044,7 +2044,7 @@ export async function resolveMemberAccessDefinition(params: {
               }
             }
           }
-          if (sup.id === "java" || sup.id === "csharp") {
+          if (memberLookupPolicyFor(sup.id).membersBeforeFileExports && declaresMembers(base.def)) {
             const memberDef = await resolveMemberDefinitionForBase(
               index,
               base.def,
@@ -5321,6 +5321,25 @@ async function resolveReceiverDefinition(
         memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
       };
     }
+    if (memberLookupPolicyFor(sup.id).declaredReceiverUsesNameLookup) {
+      const named = resolveNamedDefinition(
+        index,
+        mod,
+        mod.file,
+        sup,
+        typeName,
+        undefined,
+        constructor.startIndex,
+        {
+          node: constructor,
+          source,
+          typeOnly: true,
+        },
+        getScopeIndex(),
+      );
+      const type = named?.status === "ok" ? asMemberContainer(index, named.definition) : undefined;
+      if (type) return { def: type, memberScope: "instance" };
+    }
     // Ruby `require` exposes a class as a namespace import. A bare constant already
     // resolves through resolveNamedDefinition; `Klass.new` must use that same path
     // so goto, references, and call edges agree. Same-file classes returned above.
@@ -5333,7 +5352,7 @@ async function resolveReceiverDefinition(
         };
       }
     }
-    if (typedLocals[0]) {
+    if (typedLocals[0] && !memberLookupPolicyFor(sup.id).declaredReceiverUsesNameLookup) {
       return {
         def: typedLocals[0],
         memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
@@ -5356,6 +5375,7 @@ async function resolveReceiverDefinition(
   if (isJsTsLanguage(sup.id) && isReceiverNameNode(sup, obj.type)) {
     return null;
   }
+  if (memberLookupPolicyFor(sup.id).declaredReceiverUsesNameLookup) return null;
   if (direct?.kind === "resolved") {
     return { def: direct.def, memberScope: "any" };
   }

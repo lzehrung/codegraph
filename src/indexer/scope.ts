@@ -1118,6 +1118,7 @@ export function buildScopeIndexFromSource(
 
   const attachOccurrence = (binding: Binding, useNode: SyntaxNodeLike): void => {
     if (rejectsLexicalBindingAtSelector(row, binding, useNode)) return;
+    if (row.nonLexicalUse?.(useNode)) return;
     const range = toRange(useNode);
     if (support.id === "cpp" && binding.kind === "function") {
       cppFunctionOccurrences.push({ binding, node: useNode, range });
@@ -1391,11 +1392,14 @@ export function buildScopeIndexFromSource(
     }
 
     if (row.declarationPatternTypes?.has(nodeType)) {
-      // C# is-pattern bound variable: `if (o is string text)`. The walker registers the bound name
-      // without consulting `scopeDeclarationNames`, which would also newly activate
-      // isDeclarationName-driven registration for every other C# declaration form.
-      const name = node.childForFieldName("name");
-      if (name) addDecl(name, "local");
+      const patternScope = stack[stack.length - 1];
+      const allowed =
+        !row.declarationPatternScopeTypes ||
+        (!!patternScope && row.declarationPatternScopeTypes.has(patternScope.node.type));
+      if (allowed) {
+        const name = row.declarationPatternName?.(node) ?? node.childForFieldName("name");
+        if (name) addDecl(name, "local");
+      }
     }
 
     const templateValueParameter =
@@ -1473,13 +1477,13 @@ export function buildScopeIndexFromSource(
       for (const variable of promotedVariablesInClass(node)) addBinding(target, variable, "local");
     }
 
+    const params = pushed ? node.childForFieldName("parameters") : null;
     for (const child of node.namedChildren) {
       if (pushed) {
-        const params = node.childForFieldName("parameters");
-        const skipsFunctionParameters = support.createsFunctionScope(node) && params?.id === child.id;
+        const skipsFunctionParameters = params?.id === child.id && support.createsFunctionScope(node);
         const skipsBlockParameters =
-          support.createsBlockScope(node) &&
           (child.type === "block_parameters" || child.type === "lambda_parameters") &&
+          support.createsBlockScope(node) &&
           params?.startIndex === child.startIndex &&
           params.endIndex === child.endIndex;
         const skipsNameOrParameters =

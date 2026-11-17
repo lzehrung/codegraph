@@ -18,6 +18,11 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName } from "../util/swift-tree.js";
+import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
+import { isJavaAnnotationElementName } from "../util/java-designators.js";
+import { javaPatternBindingVisibleAt, javaPatternVariableName } from "../util/java-patterns.js";
+import { csharpAttributeParameterCoversUse } from "./name-lookup-policies/csharp-attribute-parameters.js";
+import { blocksCsharpJavaSelectorBinding } from "./name-lookup-policies/csharp-java-selectors.js";
 import { SymbolKind } from "./types.js";
 import type { Binding, Scope, ScopeIndex } from "./scope-types.js";
 import { isRecoveredTypeParameterName } from "./type-parameters.js";
@@ -25,6 +30,11 @@ import { isRecoveredTypeParameterName } from "./type-parameters.js";
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
   parameterParents?: ReadonlySet<string>;
+  /** A declaration that covers a specific earlier use without covering the whole scope. */
+  bindingCoversBeforeDeclaration?: (
+    binding: { kind?: Binding["kind"]; node?: SyntaxNodeLike },
+    use: SyntaxNodeLike,
+  ) => boolean;
   /** Node types whose `name` field is registered in the enclosing scope before the body scope is pushed. */
   functionNameTypes?: ReadonlySet<string>;
   /**
@@ -69,6 +79,10 @@ export type ScopeNodeRow = {
   enumBodyParentTypes?: ReadonlySet<string>;
   /** Pattern node types whose `name` field is a bound variable (C# `is` patterns). */
   declarationPatternTypes?: ReadonlySet<string>;
+  /** Pattern names without a `name` field, their scope boundaries, and flow-sensitive visibility. */
+  declarationPatternName?: (node: SyntaxNodeLike) => SyntaxNodeLike | null;
+  declarationPatternScopeTypes?: ReadonlySet<string>;
+  patternBindingVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
   /** Node types that introduce type parameters (including defaulted and variadic forms). */
   typeParameterTypes?: ReadonlySet<string>;
   /**
@@ -223,6 +237,8 @@ export type ScopeNodeRow = {
   memberSelectorReceiverFields?: Readonly<Record<string, string>>;
   /** Whether a selector rejects this lexical binding; member declarations can share a binding kind with locals. */
   memberSelectorRejectsBinding?: (binding: Pick<Binding, "kind" | "node">) => boolean;
+  /** A syntactic member or argument designator cannot be an occurrence of a lexical binding. */
+  nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
 };
 
 const C_MEMBER_BINDING_NAME_TYPES: Readonly<Record<string, true>> = { field_identifier: true };
@@ -356,6 +372,8 @@ export function bindingHiddenFromUse(
   if (methodCall && binding.kind === "local") return true;
   if (typeOnly && isValueNamespaceBinding(binding)) return true;
   if (crossedGate && localHiddenByGate(row, binding)) return true;
+  if (use && binding.node && row.patternBindingVisibleAt && !row.patternBindingVisibleAt(binding.node, use))
+    return true;
   if (binding.kind !== "type" || !use || !row.typeOnlyUseTypes) return false;
   // Type syntax reads a type parameter; every other use passes it by.
   if (row.typeOnlyUseTypes.has(use.type)) return false;
@@ -397,7 +415,8 @@ export function bindingCoversUse(
   if (binding.coversEnclosingScope || row.wholeScopeKinds?.has(scopeKind)) return true;
   const defIndex = binding.def?.start.index;
   if (defIndex === undefined) return true;
-  return defIndex <= useStartIndex;
+  if (defIndex <= useStartIndex) return true;
+  return !!useNode && !!row.bindingCoversBeforeDeclaration?.(binding, useNode);
 }
 
 const ECMASCRIPT_SCOPE_NODES: ScopeNodeRow = {
@@ -562,6 +581,10 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     },
     enumMemberTypes: new Set(["enum_constant"]),
     enumBodyParentTypes: new Set(["enum_body"]),
+    declarationPatternTypes: new Set(["instanceof_expression", "type_pattern", "record_pattern_component"]),
+    declarationPatternName: javaPatternVariableName,
+    declarationPatternScopeTypes: new Set(["if_statement", "switch_rule"]),
+    patternBindingVisibleAt: javaPatternBindingVisibleAt,
     variableDeclarationTypes: new Set(["field_declaration", "local_variable_declaration"]),
     destructuringTypeFieldTypes: new Set(["formal_parameter"]),
     variableDeclaratorTypes: new Set(["variable_declarator"]),
@@ -569,6 +592,10 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberContainerTypes: new Set(["class_body", "class_declaration"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
     moduleRootTypes: new Set(["program"]),
+    memberSelectorFields: { field_access: "field", method_invocation: "name" },
+    memberSelectorReceiverFields: { method_invocation: "object" },
+    memberSelectorRejectsBinding: blocksCsharpJavaSelectorBinding,
+    nonLexicalUse: isJavaAnnotationElementName,
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set([
       "method_declaration",
@@ -579,6 +606,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   },
   csharp: {
     parameterParents: new Set(["parameter"]),
+    bindingCoversBeforeDeclaration: csharpAttributeParameterCoversUse,
     functionNameTypes: new Set(["method_declaration", "local_function_statement"]),
     unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration", "lambda_expression"]),
     classNameTypes: new Set(["class_declaration", "struct_declaration", "record_declaration"]),
@@ -605,6 +633,10 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberFunctionTypes: new Set(["method_declaration"]),
     memberContainerTypes: new Set(["class_declaration"]),
     childSkipNameTypes: new Set(["identifier"]),
+    memberSelectorParentTypes: new Set(["member_binding_expression"]),
+    memberSelectorFields: { member_access_expression: "name" },
+    memberSelectorRejectsBinding: blocksCsharpJavaSelectorBinding,
+    nonLexicalUse: isCsharpMemberDesignator,
     wholeScopeDeclarationTypes: new Set([
       "method_declaration",
       "local_function_statement",

@@ -15,7 +15,7 @@ import {
   withParsedFiles,
 } from "./parsed-cache.js";
 import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
-import { isBloomIdentifierToken } from "../util/bloom-filter.js";
+import { BloomFilter, isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { isGoExportedMemberName } from "./declaration-visibility.js";
@@ -888,6 +888,7 @@ async function findReferencesInternal(
   const definition = family.definition;
   const referenceDef = family.referenceDef;
   const localBinding = family.localBinding;
+  const referenceDefinitionName = family.definitionNameNode ?? syntaxNodeForDefinition(parsedContext, definition);
   pushRef({ file: definitionFile, range: definition.range });
   const canHavePrivateMember = isJsTsLanguage(parsedContext.sup.id) && definition.isMember;
   const definitionStart = definition.range.start.index;
@@ -1017,8 +1018,20 @@ async function findReferencesInternal(
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
+  const parameterCallName =
+    memberLookupPolicyFor(parsedContext.sup.id).parameterNamedAtCall?.(definition, parsedContext) ?? null;
+  const scansNamedArgumentReferences = parameterCallName !== null;
+  const parameterProbeName = parameterCallName ?? undefined;
+  const parameterCallDigest =
+    parameterProbeName && isBloomIdentifierToken(parameterProbeName)
+      ? BloomFilter.digestOf(parameterProbeName)
+      : undefined;
+  const parameterFilter = scansNamedArgumentReferences
+    ? memberLookupPolicyFor(parsedContext.sup.id).parameterReferenceScanFilter
+    : undefined;
   const scansReceiverReferences =
-    !privateName && shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition);
+    !privateName &&
+    (scansNamedArgumentReferences || shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition));
   const scansNamespaceReferences =
     parsedContext.sup.id === "csharp" &&
     !definition.isMember &&
@@ -1124,6 +1137,7 @@ async function findReferencesInternal(
       definitionFile,
       referenceDef.localName,
       referenceDef,
+      referenceDefinitionName,
       (params, parsed) => goToDefinition(index, params, parsed),
       remainingCollectionSlots(),
       verifiedReferenceFilter(definitionFile),
@@ -1141,6 +1155,7 @@ async function findReferencesInternal(
       definitionFile,
       referenceDef.localName,
       referenceDef,
+      referenceDefinitionName,
       (params, parsed) => goToDefinition(index, params, parsed),
       remainingCollectionSlots(),
       verifiedReferenceFilter(definitionFile),
@@ -1378,6 +1393,7 @@ async function findReferencesInternal(
           fileId,
           entry.sourceSpecifier,
           definition,
+          referenceDefinitionName,
           (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
           verifiedReferenceFilter(fileId),
@@ -1413,6 +1429,7 @@ async function findReferencesInternal(
               fileId,
               exportedName,
               definition,
+              referenceDefinitionName,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingCollectionSlots(),
               verifiedReferenceFilter(fileId),
@@ -1482,6 +1499,7 @@ async function findReferencesInternal(
             fileId,
             imp.local,
             definition,
+            referenceDefinitionName,
             (params, parsed) => goToDefinition(index, params, parsed),
             remainingCollectionSlots(),
             verifiedReferenceFilter(fileId),
@@ -1598,6 +1616,7 @@ async function findReferencesInternal(
                 ? (exportedName.split("::").pop() ?? exportedName)
                 : exportedName,
               definition,
+              referenceDefinitionName,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
               verifiedReferenceFilter(fileId),
@@ -1754,6 +1773,7 @@ async function findReferencesInternal(
                 fileId,
                 exportedName,
                 definition,
+                referenceDefinitionName,
                 (params, parsed) => goToDefinition(index, params, parsed),
                 remainingReferences,
                 verifiedReferenceFilter(fileId),
@@ -1791,6 +1811,7 @@ async function findReferencesInternal(
               fileId,
               scansQualifiedCppImport ? (importedLocalName.split("::").pop() ?? importedLocalName) : importedLocalName,
               definition,
+              referenceDefinitionName,
               (params, parsed) => goToDefinition(index, params, parsed),
               remainingReferences,
               verifiedReferenceFilter(fileId),
@@ -1841,11 +1862,15 @@ async function findReferencesInternal(
         fileId,
         referenceDef.localName,
         definition,
+        referenceDefinitionName,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingCollectionSlots(),
         verifiedReferenceFilter(fileId),
         (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
         equivalentDefinitions,
+        parameterFilter,
+        parameterProbeName,
+        parameterCallDigest,
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
@@ -1891,6 +1916,7 @@ async function findReferencesInternal(
         fileId,
         referenceDef.localName,
         referenceDef,
+        referenceDefinitionName,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
@@ -1912,11 +1938,13 @@ async function findReferencesInternal(
       parsedContext.sup.id === "swift" &&
       !isBloomIdentifierToken(parsedContext.sup.normalizeIdentifier(referenceDef.localName));
     const mayHaveUnprobeableName = parsedContext.sup.id === "kotlin" || swiftNameRequiresFullScan;
+    const parameterFileKey = parameterFilter ? fileIdentityKey(definitionFile) : undefined;
     const canonicalNames = new Map<LanguageSupport | undefined, string>();
     for (const entry of referenceModuleTable(index).entries) {
       if (hasReachedCollectionLimit()) break;
       receiverScannedFileCount += 1;
       const fileId = entry.file;
+      if (scansNamedArgumentReferences && entry.support?.id !== parsedContext.sup.id) continue;
       const filter = index.bloomFilters?.get(entry.key);
       let canonicalName = canonicalNames.get(entry.support);
       if (canonicalName === undefined) {
@@ -1940,11 +1968,15 @@ async function findReferencesInternal(
         fileId,
         referenceDef.localName,
         referenceDef,
+        referenceDefinitionName,
         (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
         verifiedReferenceFilter(fileId),
         (unavailableFile) => receiverProofUnavailableFiles.set(fileIdentityKey(unavailableFile), unavailableFile),
         equivalentDefinitions,
+        entry.key === parameterFileKey ? undefined : parameterFilter,
+        entry.key === parameterFileKey ? undefined : parameterProbeName,
+        entry.key === parameterFileKey ? undefined : parameterCallDigest,
       );
       for (const { range, provenance, via } of ranges) {
         if (hasReachedCollectionLimit()) break;
@@ -2246,6 +2278,8 @@ type CppEquivalentCallableFamily = {
   definition: SymbolDef;
   /** Definition with the out-of-line member name normalized (Box::helper -> helper) for reference scans. */
   referenceDef: SymbolDef;
+  /** Already-read declaration token, retained with the owned parse context for reference candidate checks. */
+  definitionNameNode?: SyntaxNodeLike;
   /** Resolved receiver owner for out-of-line member definitions (e.g. Box for Box::helper). */
   receiverOwner: SymbolDef | null;
   /** Definition-file scope binding at the definition site, when that scope registers one. */
@@ -2430,7 +2464,7 @@ async function cppEquivalentCallableFamily(
   } else {
     equivalents = sameFileFunctionEquivalentDefinitions;
   }
-  return { definition, referenceDef, receiverOwner, localBinding, equivalents };
+  return { definition, referenceDef, definitionNameNode, receiverOwner, localBinding, equivalents };
 }
 
 async function cppOutOfLineReceiverOwner(

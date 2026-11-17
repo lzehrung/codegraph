@@ -44,8 +44,10 @@ export type LanguageSupport = {
   useSiteMemberName?: (declared: string) => string;
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
   bloomProbeName?: (name: string) => string;
+  bloomUnprobeableIdentifiers?: boolean;
   alternateUseNames?: (declared: string) => readonly string[];
   normalizeIdentifier: (name: string) => string;
+  renameMatchesNormalizedIdentifiers?: boolean;
 };
 
 function adaptDefinition(def: LanguageDefinition): LanguageSupport {
@@ -78,7 +80,9 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),
     ...(def.isDeclarationSpelling ? { isDeclarationSpelling: def.isDeclarationSpelling } : {}),
     ...(def.bloomProbeName ? { bloomProbeName: def.bloomProbeName } : {}),
+    ...(def.bloomUnprobeableIdentifiers ? { bloomUnprobeableIdentifiers: true } : {}),
     ...(def.alternateUseNames ? { alternateUseNames: def.alternateUseNames } : {}),
+    ...(def.renameMatchesNormalizedIdentifiers ? { renameMatchesNormalizedIdentifiers: true } : {}),
   };
 }
 

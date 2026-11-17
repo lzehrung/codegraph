@@ -11,6 +11,7 @@ import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import type { ParameterReferenceScanFilter } from "./member-lookup-policies/types.js";
 import {
   classifyReceiver,
   declaresMembers,
@@ -18,7 +19,7 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpTraitPropertyMayUseDefinition, provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
+import { ensureParsedContextForIndex, readQuerySourceForIndexSync, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import {
@@ -490,12 +491,29 @@ async function collectNamedNodeReferences(
   fileId: string,
   symbolName: string,
   symbolKind?: string,
+  candidateFilter?: ParameterReferenceScanFilter,
+  candidateCallName?: string,
+  candidateCallDigest?: Buffer,
 ): Promise<{
   matched: Array<{ range: Range; node: SyntaxNodeLike }>;
   parsed: ParsedFileContext;
   nameEquivalenceUnavailable: boolean;
 } | null> {
   try {
+    const fileKey = fileIdentityKey(fileId);
+    const moduleIndex = index.byFile.get(fileKey);
+    const filter = moduleIndex && !moduleIndex.parseErrorRanges?.length ? candidateFilter : undefined;
+    if (filter && candidateCallDigest) {
+      const bloom = index.bloomFilters?.get(fileKey);
+      if (bloom && !bloom.mightContainDigest(candidateCallDigest)) {
+        const marker = filter.unprobeableNameMarker;
+        if (!marker || !bloom.mightContain(marker)) return null;
+      }
+    }
+    if (filter) {
+      const source = readQuerySourceForIndexSync(index, fileId);
+      if (source !== null && !filter.mayContain(source, symbolName, candidateCallName)) return null;
+    }
     const parsed = await ensureParsedContextForIndex(index, fileId);
     const identifierTypes = new Set<string>([
       ...parsed.sup.nodeTypes.identifier,
@@ -521,7 +539,6 @@ async function collectNamedNodeReferences(
     );
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
     let nameEquivalenceUnavailable = false;
-    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
     const row = scopeNodesFor(parsed.sup.id);
     const walk = (node: SyntaxNodeLike): void => {
@@ -551,7 +568,7 @@ async function collectNamedNodeReferences(
           if (comparison === "unverified") nameEquivalenceUnavailable = true;
           isMatch = comparison === "equivalent";
         }
-        if (isMatch) {
+        if (isMatch && (!filter || filter.includes(node))) {
           const range = toRange(node);
           if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
             matched.push({ range, node });
@@ -717,13 +734,25 @@ export async function collectVerifiedNamedNodeReferences(
   fileId: string,
   symbolName: string,
   expectedDef: SymbolDef,
+  expectedNameNode: SyntaxNodeLike,
   resolveDefinition: ReferenceDefinitionResolver,
   maxVerified?: number,
   includeReference?: (reference: VerifiedNamedNodeReference) => boolean,
   onReceiverProofUnavailable?: (file: FileId) => void,
   equivalentDefinitions: readonly SymbolDef[] = [],
+  candidateFilter?: ParameterReferenceScanFilter,
+  candidateCallName?: string,
+  candidateCallDigest?: Buffer,
 ): Promise<VerifiedNamedNodeReference[]> {
-  const collected = await collectNamedNodeReferences(index, fileId, symbolName, expectedDef.kind);
+  const collected = await collectNamedNodeReferences(
+    index,
+    fileId,
+    symbolName,
+    expectedDef.kind,
+    candidateFilter,
+    candidateCallName,
+    candidateCallDigest,
+  );
   if (!collected) return [];
   const { matched, parsed, nameEquivalenceUnavailable } = collected;
   const policy = memberLookupPolicyFor(parsed.sup.id);
@@ -831,6 +860,7 @@ export async function collectVerifiedNamedNodeReferences(
       continue;
     }
     if (resolved.reason === CSHARP_NAMESPACE_NAME_REASON) continue;
+    if (policy.unprovenReferenceCandidate && !policy.unprovenReferenceCandidate(node, expectedNameNode)) continue;
     let recoveredByLanguageFallback = false;
     if (parsed.sup.id === "php" && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
@@ -894,6 +924,7 @@ export async function collectVerifiedNamedNodeReferences(
     }
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable && mayReferenceDefinition()) {
       if (
+        candidateFilter?.unproven?.(node, resolved.reason) ||
         policy.unprovenReference?.(node, resolved.reason) ||
         resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
         // Qualified C# bases are reachable without an import-closure edge.

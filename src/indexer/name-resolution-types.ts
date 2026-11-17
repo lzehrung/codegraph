@@ -23,6 +23,16 @@ export type DeferredNameRequest =
   | { kind: "csharp-attribute-suffix" }
   /** An enclosing C# member (only a nested type in type positions) binds before a using alias of that name. */
   | { kind: "csharp-alias-member"; lookupName: string }
+  /** A C# named argument selects a parameter of its uniquely resolved callable. */
+  | { kind: "csharp-named-argument"; call: SyntaxNodeLike }
+  /** A C# initializer/pattern or Java annotation element names a member of an explicit type. */
+  | {
+      kind: "contextual-member";
+      owner: SyntaxNodeLike;
+      expectedKind: SymbolDef["kind"];
+      jvmTypeOnly: boolean;
+      allowRecordProperty?: true;
+    }
   /**
    * A C# header parameter (a record's positional parameter or a primary-constructor parameter) read in a member body
    * binds after a member of another `partial` part or a project base class of the same name. `owner` is the declaration

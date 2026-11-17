@@ -46,6 +46,7 @@ import {
   csharpAliasAt,
   csharpAliasMemberLookup,
   csharpHeaderParameterOverride,
+  findReceiverTypeMember,
   memberAcceptsCallAt,
   resolveCppOutOfLineImplicitMember,
   resolveImplicitSelfMember,
@@ -67,6 +68,8 @@ import { createLoadingParsedFileProvider, ensureParsedContextForIndex, withParse
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
 import { rejectsLexicalBindingAtSelector, scopeNodesFor } from "./scope-nodes.js";
+import { csharpRecordProperty } from "./name-lookup-policies/csharp-header-parameters.js";
+import { resolveCsharpNamedArgument } from "./name-lookup-policies/csharp-named-arguments.js";
 import type {
   BareNameUse,
   DeferredNameRequest,
@@ -494,6 +497,28 @@ export async function settleNameResolution(
     } else if (request.kind === "csharp-header-parameter-member") {
       const settled = await settleCsharpHeaderParameterMember(use, request);
       if (settled) return settled;
+    } else if (request.kind === "csharp-named-argument") {
+      const parameter = await resolveCsharpNamedArgument(
+        use,
+        request.call,
+        (callee) => settleNameResolution(callee, resolveBareName(callee), options),
+        resolveJvmTypeName,
+      );
+      if (parameter) return okGoToResult(index, parameter, { resolution: "exact", confidence: "high" });
+    } else if (request.kind === "contextual-member") {
+      const ownerUse = { ...use, node: request.owner, name: sliceText(request.owner, parsed.source) };
+      const ownerResolution = resolveBareName(ownerUse, request.jvmTypeOnly);
+      const owner = await settleNameResolution(ownerUse, ownerResolution, options);
+      if (owner?.status === "ok" && declaresMembers(owner.definition)) {
+        const result = await findReceiverTypeMember(index, mod, node, owner.definition, name, undefined);
+        if (result.status === "member" && result.member.kind === request.expectedKind) {
+          return okGoToResult(index, result.member, { resolution: "member-access", confidence: "high" });
+        }
+        if (request.allowRecordProperty) {
+          const property = await csharpRecordProperty(index, owner.definition, name);
+          if (property) return okGoToResult(index, property, { resolution: "member-access", confidence: "high" });
+        }
+      }
     } else if (request.kind === "swift-enum-case") {
       const member = await settleSwiftEnumCase(use, options);
       if (member) return okGoToResult(index, member, { resolution: "member-access", confidence: "medium" });

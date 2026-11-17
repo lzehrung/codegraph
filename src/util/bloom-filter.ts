@@ -5,7 +5,13 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
-import { BLOOM_FILTER_IDENTIFIER_SOURCE, BLOOM_FILTER_SEPARATOR_SOURCE, foldPhpIdentifierCase } from "./identifiers.js";
+import {
+  BLOOM_FILTER_IDENTIFIER_SOURCE,
+  BLOOM_FILTER_SEPARATOR_SOURCE,
+  UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN,
+  foldPhpIdentifierCase,
+  hasUnprobeableIdentifierSpelling,
+} from "./identifiers.js";
 import type { LanguageSupport } from "../languages.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
@@ -209,7 +215,7 @@ export function isBloomIdentifierToken(text: string): boolean {
  */
 export function buildBloomFilterFromSource(
   source: string,
-  support: Pick<LanguageSupport, "normalizeIdentifier" | "id">,
+  support: Pick<LanguageSupport, "normalizeIdentifier" | "id" | "bloomUnprobeableIdentifiers">,
   falsePositiveRate = 0.01,
 ): BloomFilter {
   const identifierPattern = new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu");
@@ -232,6 +238,9 @@ export function buildBloomFilterFromSource(
     }
   }
   if (support.id === "java" && source.includes("\\u")) unique.add(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN);
+  if (support.bloomUnprobeableIdentifiers && hasUnprobeableIdentifierSpelling(source)) {
+    unique.add(UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN);
+  }
 
   const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
   for (const identifier of unique) {

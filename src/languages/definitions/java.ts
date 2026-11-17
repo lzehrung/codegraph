@@ -2,6 +2,7 @@ import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../util/identifiers.js";
+import { isJavaPatternVariableName } from "../../util/java-patterns.js";
 
 const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
@@ -61,6 +62,7 @@ export const JAVA_DEF: LanguageDefinition = {
       (annotation_type_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
       (method_declaration name: (identifier) @name)
+      (annotation_type_element_declaration name: (identifier) @name)
       (field_declaration (variable_declarator name: (identifier) @name))
     `,
     locals: `
@@ -71,10 +73,14 @@ export const JAVA_DEF: LanguageDefinition = {
       (annotation_type_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
       (method_declaration name: (identifier) @name)
+      (annotation_type_element_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
       (formal_parameter name: (identifier) @name)
       (spread_parameter (variable_declarator name: (identifier) @name))
       (receiver_parameter (identifier) @name)
+      (instanceof_expression name: (identifier) @name)
+      (type_pattern (identifier) @name)
+      (record_pattern_component (identifier) @name)
     `,
     // Java imports are read from the syntax tree (src/util/jvm-tree.ts), so no import-binding query runs.
     importBindings: "",
@@ -88,6 +94,7 @@ export const JAVA_DEF: LanguageDefinition = {
   exportScopeBlockers: ["block", "constructor_body"],
   classifyDefinition: classifyByParentType({
     method_declaration: "method",
+    annotation_type_element_declaration: "method",
     constructor_declaration: "method",
     class_declaration: "class",
     record_declaration: "class",
@@ -96,7 +103,7 @@ export const JAVA_DEF: LanguageDefinition = {
     enum_declaration: "type",
   }),
   createsFunctionScope: nodeTypeIn(["method_declaration", "constructor_declaration"]),
-  createsBlockScope: nodeTypeIn(["block", "class_body"]),
+  createsBlockScope: nodeTypeIn(["block", "class_body", "if_statement", "switch_rule"]),
   isDeclarationName: (node) =>
     isNameFieldOnParent(node, [
       "class_declaration",
@@ -106,15 +113,18 @@ export const JAVA_DEF: LanguageDefinition = {
       "enum_declaration",
       "enum_constant",
       "method_declaration",
+      "annotation_type_element_declaration",
       "constructor_declaration",
       "variable_declarator",
       "formal_parameter",
     ]) ||
+    isJavaPatternVariableName(node) ||
     // `spread_parameter` (`int... rest`) has no `name` field; its declared name is the
     // `variable_declarator` child, so that node is the declaration name.
     (node.type === "variable_declarator" && node.parent?.type === "spread_parameter") ||
     (node.parent?.type === "receiver_parameter" && node.type === "identifier"),
   normalizeIdentifier: (name) =>
     hasNonAsciiCodePoint(name, true) ? name.replace(JAVA_IDENTIFIER_IGNORABLE_PATTERN, "") : name,
+  renameMatchesNormalizedIdentifiers: true,
 };
 registerLanguage(JAVA_DEF);
