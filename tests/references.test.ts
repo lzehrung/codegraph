@@ -2,6 +2,7 @@ import {
   MEMBER_SELECTOR_FIXTURES,
   MEMBER_SELECTOR_CONTROLS,
   RUST_QUALIFIED_ITEM_FIXTURE,
+  RUST_NAMESPACE_COLLISION_FIXTURE,
   expectMemberSelectorReferences,
   withMemberSelectorFixture,
 } from "./helpers/member-selector-fixture.js";
@@ -412,6 +413,12 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
 }
 
 describe("Find References", () => {
+  it("keeps Rust value and module reference lists complete and separate", async () => {
+    await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
+      await expectMemberSelectorReferences(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+    });
+  });
+
   it("keeps qualified Rust item reads in complete reference lists", async () => {
     await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
       await expectMemberSelectorReferences(index, RUST_QUALIFIED_ITEM_FIXTURE, file);

@@ -155,6 +155,28 @@ export class ProjectedSyntaxNode {
     return null;
   }
 
+  childForFieldNameAt(fieldName: string, startIndex: number): ProjectedSyntaxNode | null {
+    const fieldNameId = this.tree.fieldNameId(fieldName);
+    if (fieldNameId === undefined) return null;
+    const columns = this.tree.columns;
+    let start = columns.childOffsets[this.id]!;
+    const end = columns.childOffsets[this.id + 1]!;
+    let upper = end;
+    while (start < upper) {
+      const middle = start + Math.floor((upper - start) / 2);
+      const childId = columns.childIds[middle]!;
+      const childStart = this.tree.stringIndexForByte(columns.startIndex[childId]!);
+      if (childStart < startIndex) start = middle + 1;
+      else upper = middle;
+    }
+    for (let slot = start; slot < end; slot += 1) {
+      const childId = columns.childIds[slot]!;
+      if (this.tree.stringIndexForByte(columns.startIndex[childId]!) !== startIndex) break;
+      if (columns.childFieldNameIds[slot] === fieldNameId) return this.tree.nodeById(childId) ?? null;
+    }
+    return null;
+  }
+
   /**
    * Return the smallest named descendant holding a UTF-16 range. As in Tree-sitter's
    * `named_descendant_for_byte_range`, an earlier nonempty child ending at the range start

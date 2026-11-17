@@ -106,7 +106,12 @@ export const MEMBER_SELECTOR_FIXTURES: readonly MemberSelectorFixture[] = [
       },
       { declaration: [5, "other"], reads: [[7, "other"]] },
     ],
-    members: [{ use: [7, "name"] }, { use: [8, "name"] }, { use: [9, "name"] }, { use: [9, "other"] }],
+    members: [
+      { use: [7, "name"] },
+      { use: [8, "name"] },
+      { use: [9, "name"] },
+      { use: [9, "other"], declaration: [2, "other"] },
+    ],
   },
   {
     language: "c",
@@ -161,16 +166,31 @@ export const MEMBER_SELECTOR_FIXTURES: readonly MemberSelectorFixture[] = [
       "  let box = Foo(value: value)",
       "  let result = f(title: title)",
       "  let quoted = f(`title`: title)",
-      "  return value + title + box.value + result + quoted",
+      "  let labeled = (title: title, value: value)",
+      "  let plain = (title, value)",
+      "  let second = (other: title, kept: value)",
+      "  let local = value",
+      "  let pair2 = (local: local, value: value)",
+      "  let quotedTuple = (`title`: title, value: value)",
+      "  return value + title + box.value + result + quoted + labeled.value + pair2.local",
       "}",
-      "precondition(run(3, 5) == 21)",
+      "precondition(run(3, 5) == 27)",
+      "func typeLabels(_ value: Int, _ title: Int) {",
+      "  let _: (value: Int, title: Int) = (value: value, title: title)",
+      "}",
     ],
     targets: [
       {
         declaration: [3, "value"],
         reads: [
           [4, "value", 1],
-          [7, "value"],
+          [7, "value", 1],
+          [8, "value"],
+          [9, "value"],
+          [10, "value"],
+          [11, "value", 1],
+          [12, "value", 1],
+          [13, "value"],
         ],
       },
       {
@@ -178,13 +198,84 @@ export const MEMBER_SELECTOR_FIXTURES: readonly MemberSelectorFixture[] = [
         reads: [
           [5, "title", 1],
           [6, "title", 1],
-          [7, "title"],
+          [7, "title", 1],
+          [8, "title"],
+          [9, "title"],
+          [12, "title", 1],
+          [13, "title"],
         ],
       },
+      { declaration: [10, "local"], reads: [[11, "local", 1]] },
+      { declaration: [16, "value"], reads: [[17, "value", 2]] },
+      { declaration: [16, "title"], reads: [[17, "title", 2]] },
     ],
-    members: [{ use: [4, "value"] }, { use: [5, "title"] }, { use: [6, "title"] }, { use: [7, "value", 1] }],
+    members: [
+      { use: [4, "value"] },
+      { use: [5, "title"] },
+      { use: [6, "title"] },
+      { use: [7, "title"] },
+      { use: [7, "value"] },
+      { use: [9, "other"] },
+      { use: [9, "kept"] },
+      { use: [11, "local"] },
+      { use: [11, "value"] },
+      { use: [12, "title"] },
+      { use: [12, "value"] },
+      { use: [13, "value", 1] },
+      { use: [13, "value", 2] },
+      { use: [13, "local"] },
+      { use: [17, "value"] },
+      { use: [17, "title"] },
+      { use: [17, "value", 1] },
+      { use: [17, "title", 1] },
+    ],
   },
 ];
+
+/** Value calls and module paths share spelling without sharing their references or rename edits. */
+export const RUST_NAMESPACE_COLLISION_FIXTURE: MemberSelectorFixture = {
+  language: "rust",
+  file: "namespace.rs",
+  lines: [
+    "mod inner { pub const K: i32 = 3; }",
+    "fn invoke() -> i32 {",
+    "  let pointer = inner;",
+    "  inner() + inner::K",
+    "}",
+    "fn inner() -> i32 { 2 }",
+    "fn local() -> i32 {",
+    "  let inner = 4;",
+    "  inner + crate::inner::K",
+    "}",
+    "use inner::K as IMPORTED;",
+    "fn read_imported() -> i32 { IMPORTED }",
+    "fn before() -> i32 { swapped() + swapped::K }",
+    "fn swapped() -> i32 { 1 }",
+    "mod swapped { pub const K: i32 = 2; }",
+  ],
+  targets: [
+    {
+      declaration: [1, "inner"],
+      reads: [
+        [4, "inner", 1],
+        [9, "inner", 1],
+        [11, "inner"],
+      ],
+      noRename: true,
+    },
+    {
+      declaration: [6, "inner"],
+      reads: [
+        [3, "inner"],
+        [4, "inner"],
+      ],
+    },
+    { declaration: [8, "inner"], reads: [[9, "inner"]] },
+    { declaration: [14, "swapped"], reads: [[13, "swapped"]] },
+    { declaration: [15, "swapped"], reads: [], noRename: true },
+  ],
+  members: [],
+};
 
 /** Item names stay valid in qualified paths; same-named functions still cannot be namespace qualifiers. */
 export const RUST_QUALIFIED_ITEM_FIXTURE: MemberSelectorFixture = {
@@ -445,6 +536,16 @@ export async function expectMemberSelectorGraph(index: ProjectIndex, fixture: Me
   const graph = await buildSymbolGraphDetailed(index);
   for (const edge of graph.edges) {
     if (edge.site) expect(path.resolve(edge.site.file)).toBe(path.resolve(file));
+  }
+  if (fixture === RUST_NAMESPACE_COLLISION_FIXTURE) {
+    const calls = graph.edges
+      .filter((edge) => edge.label === "calls")
+      .map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.name, edge.site?.range.start.line]);
+    expect(calls).toEqual([
+      ["invoke", "inner", 4],
+      ["before", "swapped", 13],
+    ]);
+    return;
   }
   const expected: Record<string, readonly (readonly [string, string, string, number | null])[]> = {
     ruby: [

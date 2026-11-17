@@ -1,6 +1,7 @@
 import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
+  RUST_NAMESPACE_COLLISION_FIXTURE,
   expectRustQualifiedItemGoto,
   expectMemberSelectorGoto,
   RUST_SELECTOR_NAMESPACE_SOURCES,
@@ -195,6 +196,12 @@ import {
 } from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("Go to Definition", () => {
+  it("selects Rust values and namespace qualifiers separately", async () => {
+    await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
+      await expectMemberSelectorGoto(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+    });
+  });
+
   it("preserves qualified Rust function, const, static, and associated item targets", async () => {
     await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
       await expectRustQualifiedItemGoto(index, file);
