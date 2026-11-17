@@ -1,3 +1,9 @@
+import {
+  MEMBER_SELECTOR_FIXTURES,
+  RUST_QUALIFIED_ITEM_FIXTURE,
+  expectMemberSelectorRename,
+  withMemberSelectorFixture,
+} from "./helpers/member-selector-fixture.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
@@ -143,6 +149,21 @@ async function typeErrorsAfter(root: string, edits: readonly RenameEdit[]): Prom
 }
 
 describe("rename preview", () => {
+  it("renames every qualified Rust item read but not namespace qualifier decoys", async () => {
+    await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (_index, file, session, root) => {
+      await expectMemberSelectorRename(session, RUST_QUALIFIED_ITEM_FIXTURE, root, file);
+    });
+  });
+
+  it.each(MEMBER_SELECTOR_FIXTURES)(
+    "leaves $language member selectors unchanged in a lexical rename",
+    async (fixture) => {
+      await withMemberSelectorFixture(fixture, async (_index, file, session, root) => {
+        await expectMemberSelectorRename(session, fixture, root, file);
+      });
+    },
+  );
+
   describe.each(["ts", "tsx"] as const)("split generic method rename in %s", (extension) => {
     it.each(["m", "m?", "readonly m", "readonly m?"])(
       "safely renames %s and cross-file calls, not its inherited decoy",

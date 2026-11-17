@@ -1,3 +1,16 @@
+import {
+  MEMBER_SELECTOR_FIXTURES,
+  RUST_QUALIFIED_ITEM_FIXTURE,
+  expectRustQualifiedItemGoto,
+  expectMemberSelectorRename,
+  expectMemberSelectorGoto,
+  expectMemberSelectorReferences,
+  expectMemberSelectorGraph,
+  expectMemberSelectorCacheTransitions,
+  RUST_SELECTOR_NAMESPACE_SOURCES,
+  expectRustSelectorNamespace,
+  withMemberSelectorFixture,
+} from "./helpers/member-selector-fixture.js";
 import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
 import { eachIndexMode, withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
 import {
@@ -1038,6 +1051,40 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
 }
 
 nativeDescribe("native semantic coverage", () => {
+  it("preserves native qualified Rust item goto, references, and rename across cache reloads", async () => {
+    await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file, session, root) => {
+      await expectRustQualifiedItemGoto(index, file);
+      await expectMemberSelectorReferences(index, RUST_QUALIFIED_ITEM_FIXTURE, file);
+      await expectMemberSelectorRename(session, RUST_QUALIFIED_ITEM_FIXTURE, root, file);
+    });
+  });
+
+  it("preserves native Rust namespace roots and aliased import sources beside member selector exclusions", async () => {
+    await withBatch3Fixture("cg-rust-selector-namespaces-native-", RUST_SELECTOR_NAMESPACE_SOURCES, async (fixture) => {
+      await eachIndexMode(fixture, async (index) => {
+        await expectRustSelectorNamespace(index, fixture.files);
+      });
+    });
+  });
+
+  it.each(MEMBER_SELECTOR_FIXTURES)(
+    "keeps $language member selector answers cold-equivalent after edits, renames, deletes, and restores",
+    async (fixture) => {
+      await expectMemberSelectorCacheTransitions(fixture);
+    },
+  );
+
+  it.each(MEMBER_SELECTOR_FIXTURES)(
+    "preserves $language member selector native consumers across cache reloads",
+    async (fixture) => {
+      await withMemberSelectorFixture(fixture, async (index, file) => {
+        await expectMemberSelectorGoto(index, fixture, file);
+        await expectMemberSelectorReferences(index, fixture, file);
+        await expectMemberSelectorGraph(index, fixture, file);
+      });
+    },
+  );
+
   it.each(BATCH3_CASES)(
     "keeps $language $name identical through the native runtime and a reopened disk cache",
     async ({ sources, check }) => {

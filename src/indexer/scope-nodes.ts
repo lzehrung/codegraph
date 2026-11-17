@@ -210,11 +210,34 @@ export type ScopeNodeRow = {
    */
   nonLexicalMemberPropertyTypes?: ReadonlySet<string>;
   /**
-   * Node types whose identifier child is the name after a dot (Swift `navigation_suffix`). That name selects a member
-   * of its receiver, so it never uses a variable, parameter, or function of the same spelling.
+   * Node types whose identifier children are selector positions: Swift member suffixes and argument labels, or
+   * Rust path segments. The binding policy below distinguishes lexical variables from items and namespaces.
    */
   memberSelectorParentTypes?: ReadonlySet<string>;
+  /**
+   * Member-access parent types mapped to their selector field. Other children, including the receiver, remain lexical
+   * reads. An explicit method call without a receiver still reads its method binding.
+   */
+  memberSelectorFields?: Readonly<Record<string, string>>;
+  /** Receiver fields distinguish receiverless calls and type/namespace segments of a qualified value path. */
+  memberSelectorReceiverFields?: Readonly<Record<string, string>>;
+  /** Whether a selector rejects this lexical binding; member declarations can share a binding kind with locals. */
+  memberSelectorRejectsBinding?: (binding: Pick<Binding, "kind" | "node">) => boolean;
 };
+
+const C_MEMBER_BINDING_NAME_TYPES: Readonly<Record<string, true>> = { field_identifier: true };
+const RUST_ITEM_DECLARATION_TYPES: ReadonlySet<string> = new Set([
+  "function_item",
+  "struct_item",
+  "enum_item",
+  "trait_item",
+  "const_item",
+  "static_item",
+  "mod_item",
+  "union_item",
+  "type_item",
+  "macro_definition",
+]);
 
 const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
 const CPP_MEMBER_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["member"]);
@@ -613,21 +636,22 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     // real declaration and makes goto/references resolve the use to itself.
     destructuringTypeFieldTypes: new Set(["parameter"]),
     childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
+    memberSelectorFields: { scoped_identifier: "name" },
+    memberSelectorParentTypes: new Set(["scoped_identifier"]),
+    memberSelectorReceiverFields: { scoped_identifier: "path" },
+    memberSelectorRejectsBinding: (binding) => {
+      const declaration = binding.node?.parent;
+      return !declaration || !RUST_ITEM_DECLARATION_TYPES.has(declaration.type);
+    },
     wholeScopeKinds: WHOLE_FILE_SCOPE,
-    wholeScopeDeclarationTypes: new Set([
-      "function_item",
-      "struct_item",
-      "enum_item",
-      "trait_item",
-      "const_item",
-      "static_item",
-      "mod_item",
-      "union_item",
-      "type_item",
-      "macro_definition",
-    ]),
+    wholeScopeDeclarationTypes: RUST_ITEM_DECLARATION_TYPES,
   },
-  c: C_SCOPE_NODES,
+  c: {
+    ...C_SCOPE_NODES,
+    memberSelectorFields: { field_expression: "field" },
+    memberSelectorParentTypes: new Set(["field_designator"]),
+    memberSelectorRejectsBinding: (binding) => !binding.node || !C_MEMBER_BINDING_NAME_TYPES[binding.node.type],
+  },
   cpp: {
     ...C_SCOPE_NODES,
     memberScopeTypes: new Set(["field_declaration_list"]),
@@ -678,7 +702,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     childSkipNameTypes: new Set(["identifier", "type_identifier"]),
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
-    memberSelectorParentTypes: new Set(["navigation_suffix"]),
+    memberSelectorParentTypes: new Set(["navigation_suffix", "value_argument_label"]),
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),
@@ -697,6 +721,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     localOnlyScopeTypes: new Set(["class", "module", "singleton_class"]),
     localVariableNameTypes: new Set(["identifier"]),
     outerEvaluatedFields: { singleton_method: "object" },
+    memberSelectorFields: { call: "method" },
+    memberSelectorReceiverFields: { call: "receiver" },
   },
   zig: {
     parameterParents: new Set(["parameter"]),
@@ -824,6 +850,48 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
   if (!call || !row.explicitMethodCallTypes?.has(call.type) || call.childForFieldName("receiver")) return false;
   const method = call.childForFieldName("method");
   return !!method && node.startIndex >= method.startIndex && node.endIndex <= method.endIndex;
+}
+
+/** Identify selector positions before applying their binding and namespace policy. */
+export function isNonLexicalValueUse(row: ScopeNodeRow, useNode: SyntaxNodeLike): boolean {
+  if (!row.memberSelectorParentTypes && !row.memberSelectorFields) return false;
+  const parent = useNode.parent;
+  if (!parent) return false;
+  if (row.memberSelectorParentTypes?.has(parent.type)) return true;
+  const field = row.memberSelectorFields?.[parent.type];
+  if (!field) return false;
+  const receiverField = row.memberSelectorReceiverFields?.[parent.type];
+  if (receiverField && !parent.childForFieldName(receiverField)) return false;
+  const selector = parent.childForFieldName(field);
+  return selector?.startIndex === useNode.startIndex && selector.endIndex === useNode.endIndex;
+}
+
+/** Namespace qualifier fields apply to every nonterminal segment of a qualified path. */
+function isValuePathQualifier(row: ScopeNodeRow, useNode: SyntaxNodeLike): boolean {
+  const qualifierFields = row.memberSelectorReceiverFields;
+  if (!qualifierFields) return false;
+  let segment = useNode;
+  for (let path = segment.parent; path; path = path.parent) {
+    if (!row.memberSelectorParentTypes?.has(path.type) || !qualifierFields[path.type]) return false;
+    const nameField = row.memberSelectorFields?.[path.type];
+    const name = nameField ? path.childForFieldName(nameField) : null;
+    if (name?.startIndex !== segment.startIndex || name.endIndex !== segment.endIndex) return true;
+    segment = path;
+  }
+  return false;
+}
+
+/** One selector decision for both scope occurrences and lexical name resolution. */
+export function rejectsLexicalBindingAtSelector(
+  row: ScopeNodeRow,
+  binding: Pick<Binding, "kind" | "node"> | null,
+  useNode: SyntaxNodeLike,
+): boolean {
+  if (!isNonLexicalValueUse(row, useNode)) return false;
+  if (!binding) return !row.memberSelectorRejectsBinding;
+  if (!isValueNamespaceBinding(binding)) return false;
+  if (isValuePathQualifier(row, useNode)) return true;
+  return row.memberSelectorRejectsBinding?.(binding) ?? true;
 }
 
 /** Python defaults use enclosing scopes; class bodies are not closures for nested runtime scopes. */

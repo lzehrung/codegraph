@@ -138,9 +138,12 @@ const SCOPE_NODE_LIST_FIELDS = [
   "wholeScopeMemberDeclarationTypes",
 ] as const satisfies ReadonlyArray<keyof ScopeNodeRow>;
 
-/** Row fields that hold a call or declaration shape rather than a bare node-type list. */
+/** Row fields that hold behavior or a call/declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "outerEvaluatedFields",
+  "memberSelectorFields",
+  "memberSelectorReceiverFields",
+  "memberSelectorRejectsBinding",
   "requireCall",
   "classScopeComprehension",
   "headerParameters",
@@ -288,6 +291,20 @@ describe("scope node tables", () => {
           expect(
             grammarQueryCompiles(support, `(${nodeType}) @x`),
             `${support.id}.${field} declares ${nodeType}, which its grammar does not have`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("declares member selector fields that the pinned grammar produces", () => {
+    for (const support of LANGUAGE_SUPPORTS) {
+      const row = scopeNodesFor(support.id);
+      for (const fields of [row.memberSelectorFields, row.memberSelectorReceiverFields]) {
+        for (const [nodeType, field] of Object.entries(fields ?? {})) {
+          expect(
+            grammarQueryCompiles(support, `(${nodeType} ${field}: (_)) @x`),
+            `${support.id} ${nodeType}.${field}`,
           ).toBe(true);
         }
       }

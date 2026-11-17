@@ -1,4 +1,13 @@
 import {
+  MEMBER_SELECTOR_FIXTURES,
+  RUST_QUALIFIED_ITEM_FIXTURE,
+  expectRustQualifiedItemGoto,
+  expectMemberSelectorGoto,
+  RUST_SELECTOR_NAMESPACE_SOURCES,
+  expectRustSelectorNamespace,
+  withMemberSelectorFixture,
+} from "./helpers/member-selector-fixture.js";
+import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
 } from "./helpers/typescript-split-method-fixture.js";
@@ -184,6 +193,26 @@ import {
 } from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("Go to Definition", () => {
+  it("preserves qualified Rust function, const, static, and associated item targets", async () => {
+    await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
+      await expectRustQualifiedItemGoto(index, file);
+    });
+  });
+
+  it("preserves Rust namespace roots and aliased import sources beside member selector exclusions", async () => {
+    await withBatch3Fixture("cg-rust-selector-namespaces-", RUST_SELECTOR_NAMESPACE_SOURCES, async (fixture) => {
+      await eachIndexMode(fixture, async (index) => {
+        await expectRustSelectorNamespace(index, fixture.files);
+      });
+    });
+  });
+
+  it.each(MEMBER_SELECTOR_FIXTURES)("keeps $language member selectors out of lexical goto", async (fixture) => {
+    await withMemberSelectorFixture(fixture, async (index, file) => {
+      await expectMemberSelectorGoto(index, fixture, file);
+    });
+  });
+
   it.each(["ts", "tsx"] as const)(
     "resolves cross-file %s split methods ahead of inherited decoys",
     async (extension) => {

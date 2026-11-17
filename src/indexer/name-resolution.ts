@@ -66,6 +66,7 @@ import { okGoToResult } from "./navigation-provenance.js";
 import { createLoadingParsedFileProvider, ensureParsedContextForIndex, withParsedFiles } from "./parsed-cache.js";
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
+import { rejectsLexicalBindingAtSelector, scopeNodesFor } from "./scope-nodes.js";
 import type {
   BareNameUse,
   DeferredNameRequest,
@@ -229,6 +230,10 @@ export function resolveBareName(
   const early = policy.beforeLexical?.(use, lookupName);
   if (early !== undefined) return early;
   let found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
+  const row = scopeNodesFor(sup.id);
+  if (rejectsLexicalBindingAtSelector(row, found, node)) {
+    return { status: "not_found", reason: "A selector or argument label does not name a lexical value" };
+  }
   // A binding the language never reads at this use gives way to the earlier one declared in the same scope.
   while (found && policy.ignoresBinding?.(use, found)) found = found.earlierSameScope ?? null;
   const state: NameLookupState = {
