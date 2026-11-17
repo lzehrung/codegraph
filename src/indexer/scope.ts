@@ -23,7 +23,7 @@ import {
   bindingHiddenFromUse,
   headerParameterNamedLikeType,
   isExplicitMethodCall,
-  isValueNamespaceBinding,
+  rejectsLexicalBindingAtSelector,
   laterLocalBlocksOuterUse,
   pythonFunctionPendingInDefault,
   scopeAllowsUse,
@@ -1116,15 +1116,8 @@ export function buildScopeIndexFromSource(
     return undefined;
   };
 
-  /** A name after a dot selects a member of its receiver, so it never uses a variable, parameter, or function. */
-  const isMemberSelectorOfValue = (binding: Binding, useNode: SyntaxNodeLike): boolean => {
-    const selectorParents = row.memberSelectorParentTypes;
-    if (!selectorParents || !isValueNamespaceBinding(binding)) return false;
-    return !!useNode.parent && selectorParents.has(useNode.parent.type);
-  };
-
   const attachOccurrence = (binding: Binding, useNode: SyntaxNodeLike): void => {
-    if (isMemberSelectorOfValue(binding, useNode)) return;
+    if (rejectsLexicalBindingAtSelector(row, binding, useNode)) return;
     const range = toRange(useNode);
     if (support.id === "cpp" && binding.kind === "function") {
       cppFunctionOccurrences.push({ binding, node: useNode, range });

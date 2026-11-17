@@ -1,3 +1,12 @@
+import {
+  RUST_SELECTOR_NAMESPACE_SOURCES,
+  RUST_QUALIFIED_ITEM_FIXTURE,
+  expectRustSelectorNamespace,
+  expectRustQualifiedItemGoto,
+  expectMemberSelectorReferences,
+  withMemberSelectorFixture,
+} from "../helpers/member-selector-fixture.js";
+import { eachIndexMode, withBatch3Fixture } from "../helpers/csharp-java-batch3-fixture.js";
 import fsp, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -2421,6 +2430,25 @@ describe("Rust nested grouped use and path attributes", () => {
 });
 
 describe("Rust function-local items and re-export aliases", () => {
+  it("preserves function, const, and static items throughout qualified value paths", async () => {
+    await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
+      await expectRustQualifiedItemGoto(index, file);
+      await expectMemberSelectorReferences(index, RUST_QUALIFIED_ITEM_FIXTURE, file);
+    });
+  });
+
+  it("preserves namespace roots and aliased import sources beside member selector exclusions", async () => {
+    await withBatch3Fixture(
+      "cg-rust-selector-namespaces-language-",
+      RUST_SELECTOR_NAMESPACE_SOURCES,
+      async (fixture) => {
+        await eachIndexMode(fixture, async (index) => {
+          await expectRustSelectorNamespace(index, fixture.files);
+        });
+      },
+    );
+  });
+
   it("does not export block-local types while keeping nested module items", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-local-type-"));
     const file = path.join(root, "example.rs");

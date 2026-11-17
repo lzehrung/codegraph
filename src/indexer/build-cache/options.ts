@@ -180,8 +180,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * type parameter binds to it, not to a same-named outer type), parameter and pattern default values read enclosing
  * names instead of binding them, `type B = A` reads `A`, and an export clause forwards an imported name as a
  * re-export. A comment on the line where the previous code ends is no longer the next declaration's docstring.
+ * Epoch 164 rebuilds selector references while retaining Rust qualified items and excluding C initializer field labels.
  */
-export const CORE_ALGORITHM_EPOCH = 163;
+export const CORE_ALGORITHM_EPOCH = 164;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -205,8 +206,9 @@ export const CORE_ALGORITHM_EPOCH = 163;
  * Epoch 22 adds the Ruby hook that tells which types a bare name can reach a declared method from.
  * Epoch 23 changes the TypeScript and TSX `isDeclarationName` hook: only the name of a type alias or type parameter, and
  * the alias of an export specifier, declare a name; the aliased type of `type B = A` and a constraint are reads.
+ * Epoch 24 distinguishes declared C fields and Rust items from lexical variable bindings at selectors.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 23;
+export const LANGUAGE_BEHAVIOR_EPOCH = 24;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

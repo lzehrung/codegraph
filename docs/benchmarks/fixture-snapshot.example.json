@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-16T18:37:21.484Z",
+  "generatedAt": "2026-11-17T02:11:11.582Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1527,
+  "numTotalTests": 1529,
   "numFailedTests": 0,
   "languages": [
     {
@@ -220,8 +220,8 @@
       "files": [
         "tests/languages/rust.test.ts"
       ],
-      "tests": 75,
-      "passed": 75,
+      "tests": 77,
+      "passed": 77,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

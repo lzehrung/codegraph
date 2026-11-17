@@ -1,3 +1,10 @@
+import {
+  MEMBER_SELECTOR_FIXTURES,
+  MEMBER_SELECTOR_CONTROLS,
+  RUST_QUALIFIED_ITEM_FIXTURE,
+  expectMemberSelectorReferences,
+  withMemberSelectorFixture,
+} from "./helpers/member-selector-fixture.js";
 import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
 import { withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
 import {
@@ -398,6 +405,30 @@ function markCandidateParserDegraded(index: indexer.ProjectIndex, file: string):
 }
 
 describe("Find References", () => {
+  it("keeps qualified Rust item reads in complete reference lists", async () => {
+    await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
+      await expectMemberSelectorReferences(index, RUST_QUALIFIED_ITEM_FIXTURE, file);
+    });
+  });
+
+  it.each(MEMBER_SELECTOR_CONTROLS)(
+    "preserves complete $language member selector reference controls",
+    async (fixture) => {
+      await withMemberSelectorFixture(fixture, async (index, file) => {
+        await expectMemberSelectorReferences(index, fixture, file);
+      });
+    },
+  );
+
+  it.each(MEMBER_SELECTOR_FIXTURES)(
+    "excludes $language member selectors from complete lexical references",
+    async (fixture) => {
+      await withMemberSelectorFixture(fixture, async (index, file) => {
+        await expectMemberSelectorReferences(index, fixture, file);
+      });
+    },
+  );
+
   it("parses disk-cached files once across lookups without full native extraction", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-parse-cache-"));
     try {
