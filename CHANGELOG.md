@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [Unreleased]
 
+### Security
+
+- The production audit accepts `picomatch` advisory [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) until 2026-12-17. No patched `picomatch` release exists. Glob patterns from CLI flags, MCP arguments, and `codegraph.config.json` (which an indexed repository can supply) reach it directly and through `tinyglobby`, so a crafted pattern can make one index run or query spend excessive CPU. Tracked in [#582](https://github.com/lzehrung/codegraph/issues/582).
+
 ### Fixed
 
 - Ruby receiver-qualified method selectors and C member/designated-initializer field names no longer count as references or rename edits of same-named local variables, parameters, or free functions. Rust qualified item names keep references and rename edits for functions, constants, and statics (`super::shared()`, `self::f()`, `crate::LIMIT`, `inner::K`, `Self::CONST`); only variable-like bindings are excluded at item-name segments, while namespace qualifiers reject value bindings. Swift call argument labels stay out of local references and rename edits, while their argument expressions and member receivers remain real reads.
