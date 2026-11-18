@@ -1,4 +1,13 @@
 {
   "schemaVersion": 1,
-  "exceptions": []
+  "exceptions": [
+    {
+      "advisory": "GHSA-FC5Q-39XC-VJPF",
+      "package": "picomatch",
+      "reason": "No patched picomatch release exists (<= 4.0.7 affected). Reached directly and through tinyglobby with glob patterns from CLI flags, MCP arguments, and codegraph.config.json, which can come from an indexed repository; impact is excessive CPU in one index run or query, with no data access.",
+      "owner": "lzehrung",
+      "expires": "2026-12-17",
+      "trackingIssue": "https://github.com/lzehrung/codegraph/issues/582"
+    }
+  ]
 }
