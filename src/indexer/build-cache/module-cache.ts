@@ -32,6 +32,7 @@ import type { BuildOptions, BuildReport, ExportEntry, ModuleIndex, ParseErrorRan
 import { callableIdentityWithFile, isCallableIdentity } from "../callable-identity.js";
 import { isCsharpNamespaceFacts } from "../../util/csharp-tree.js";
 import { isJvmFileFacts } from "../../util/jvm-tree.js";
+import { syntaxProjectionLimitDetail } from "../parse-context.js";
 import type { Pos, Range } from "../../types.js";
 import {
   assertFilePathWithinRoot,
@@ -462,6 +463,8 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     nativeOutcome?: unknown;
     parseErrorRanges?: unknown;
     parserDegraded?: unknown;
+    syntaxTreeUnavailableReason?: unknown;
+    syntaxTreeUnavailableFingerprint?: unknown;
   };
   return (
     typeof mod.file === "string" &&
@@ -469,6 +472,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     (mod.docstringsChecked === undefined || typeof mod.docstringsChecked === "boolean") &&
     isOptionalNativeOutcome(mod.nativeOutcome) &&
     (mod.parserDegraded === undefined || typeof mod.parserDegraded === "boolean") &&
+    isOptionalSyntaxProjectionLimit(mod.syntaxTreeUnavailableReason, mod.syntaxTreeUnavailableFingerprint) &&
     (mod.importLookupIncomplete === undefined || typeof mod.importLookupIncomplete === "boolean") &&
     Array.isArray(mod.exports) &&
     Array.isArray(mod.imports) &&
@@ -492,6 +496,14 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
 
 export function isOptionalNativeOutcome(value: unknown): value is ModuleIndex["nativeOutcome"] {
   return value === undefined || value === "used" || value === "skipped";
+}
+
+export function isOptionalSyntaxProjectionLimit(reason: unknown, fingerprint: unknown): boolean {
+  if (reason === undefined && fingerprint === undefined) return true;
+  if (typeof reason !== "string" || typeof fingerprint !== "string") return false;
+  if (!/^[0-9a-f]{64}$/.test(fingerprint)) return false;
+  // Only the native limit message is stored. A corrupted row must not be shown to a caller.
+  return syntaxProjectionLimitDetail(reason) === reason;
 }
 
 export function isParseErrorRange(value: unknown): value is ParseErrorRange {

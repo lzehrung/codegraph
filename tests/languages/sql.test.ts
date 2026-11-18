@@ -181,6 +181,42 @@ describe("native-only SQL support", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps table edges on a cold build and a warm one", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-projection-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-projection-cache-"));
+    const edgesFrom = (index: ProjectIndex, base: string): string[] =>
+      index.graph.edges
+        .filter((edge) => path.basename(edge.from) === base)
+        .map((edge) => `${edge.to.type === "file" ? path.basename(edge.to.path) : edge.to.type}:${edge.raw}`)
+        .sort();
+    try {
+      const inserts = Array.from({ length: 25000 }, (_, index) => `INSERT INTO target (id) VALUES (${index});`).join(
+        "\n",
+      );
+      await fsp.writeFile(path.join(root, "lib.sql"), "CREATE TABLE target (id INT);\n");
+      await fsp.writeFile(path.join(root, "consumer.sql"), "CREATE VIEW v_consumer AS SELECT id FROM target;\n");
+      await fsp.writeFile(
+        path.join(root, "big.sql"),
+        `CREATE VIEW v_big AS SELECT id FROM target;\nALTER TABLE target ADD COLUMN extra INT;\n${inserts}\n`,
+      );
+      const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+      const cold = await buildProjectIndex(root, options);
+      const warm = await buildProjectIndex(root, options);
+      const big = [...cold.byFile.values()].find((mod) => path.basename(mod.file) === "big.sql");
+      expect(big?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      const coldEdges = edgesFrom(cold, "big.sql");
+      expect(coldEdges).toEqual(edgesFrom(warm, "big.sql"));
+      expect(coldEdges.some((edge) => edge.includes("sql:reads_from:target"))).toBe(true);
+      expect(coldEdges.some((edge) => edge.includes("sql:alters_table:target"))).toBe(true);
+      expect(coldEdges.some((edge) => edge.includes("sql:writes_to:target"))).toBe(true);
+      expect(edgesFrom(warm, "consumer.sql")).toEqual(edgesFrom(cold, "consumer.sql"));
+      expect(edgesFrom(cold, "consumer.sql").some((edge) => edge.includes("sql:reads_from:target"))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("SQL routine symbols", () => {

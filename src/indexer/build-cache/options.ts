@@ -184,8 +184,10 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 165 rebuilds Java and C# selectors, Java annotation and pattern bindings, C# initializer and designator facts,
  * and C# Bloom filters that mark unprobeable identifier spellings.
  * Epoch 167 rebuilds Rust namespace and tuple-pattern bindings and Swift tuple-label references and edges.
+ * Epoch 168 records that a file's syntax tree cannot be projected because it exceeds the native node or depth
+ * limit, so a later query or warm build reuses that fact for the same content instead of projecting the file again.
  */
-export const CORE_ALGORITHM_EPOCH = 167;
+export const CORE_ALGORITHM_EPOCH = 168;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

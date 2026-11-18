@@ -3,6 +3,7 @@ import {
   csharpProjectConfigurationWithoutUsings,
 } from "../src/util/csharp-project-usings.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -30,10 +31,11 @@ import { loadBinding } from "../src/native/runtime.js";
 import { getCsharpNamespaceRegions } from "../src/indexer/compilation-units.js";
 import type { BuildReport, ImportBinding, ProjectIndex } from "../src/indexer/types.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
-import { clearMemoryCache } from "../src/indexer/build-cache.js";
+import { clearMemoryCache, closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
 import { captureCli } from "./helpers/cli.js";
+import { createCodegraphMcpHandlers } from "../src/mcp/handlers.js";
 import { collectCsharpImportDirectives, collectCsharpNamespaceFacts, csharpNamePath } from "../src/util/csharp-tree.js";
 import { parseSyntaxTree } from "../src/util/syntax-tree.js";
 import {
@@ -148,6 +150,28 @@ function countNativeTreeParses(): () => number {
             },
           }
         : {}),
+    },
+  });
+  return () => count;
+}
+function countNativeReadsContaining(marker: string): () => number {
+  const state = loadBinding();
+  if (!state.loaded) throw new Error("Native addon required for C# tree tests");
+  const { parseSyntaxTree, extractLanguage } = state.binding;
+  if (!parseSyntaxTree || !extractLanguage) throw new Error("Native addon does not expose parse and extract");
+  let count = 0;
+  __setNativeTreeSitterBindingForTests({
+    ...state,
+    binding: {
+      ...state.binding,
+      parseSyntaxTree: (source, languageId) => {
+        if (source.includes(marker)) count += 1;
+        return parseSyntaxTree(source, languageId);
+      },
+      extractLanguage: (source, querySetId) => {
+        if (source.includes(marker)) count += 1;
+        return extractLanguage(source, querySetId);
+      },
     },
   });
   return () => count;
@@ -1401,6 +1425,7 @@ describe("C# project with a file whose syntax tree is unavailable", () => {
   const unprojectable = [
     "namespace Gen {",
     "  public class Big {",
+    "    public A Field;",
     ...Array.from({ length: 70000 }, (_, field) => `    public int F${field};`),
     "  }",
     "}",
@@ -1414,6 +1439,174 @@ describe("C# project with a file whose syntax tree is unavailable", () => {
       "Big.cs": unprojectable,
     });
   }
+
+  it.each([
+    "native parser is unavailable",
+    "unexpected failure: syntax tree projection exceeded max node limit (250000)",
+  ])("propagates non-projection parse failures: %s", async (message) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-error-"));
+    try {
+      const file = path.join(root, "A.cs");
+      await writeFile(file, targetLines.join("\n") + "\n");
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      setNativeTreeParseFailure(message);
+      const position = { file, line: 1, column: columnOf(targetLines, 1, "A ") };
+      await expect(goToDefinition(index, position)).rejects.toThrow(message);
+      await expect(findReferences(index, position)).rejects.toThrow(message);
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reread an unprojectable file during goto or member reference scans", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-reads-"));
+    try {
+      await writeProject(root);
+      const big = path.join(root, "Big.cs");
+      await writeFile(
+        big,
+        unprojectable.replace("  public class Big {", "  public class Big {\n    public int UseIt() { return A.M(); }"),
+      );
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect(index.byFile.get(fileIdentityKey(big))?.syntaxTreeUnavailableReason).toContain("projection exceeded");
+      const asyncReads = vi.spyOn(fsp, "readFile");
+      const syncReads = vi.spyOn(fs, "readFileSync");
+      try {
+        const request = { file: path.join(root, "A.cs"), line: 1, column: columnOf(targetLines, 1, "M()") };
+        const bigRequest = { file: big, line: 2, column: columnOf(unprojectable.split("\n"), 2, "Big") };
+        for (let query = 0; query < 2; query += 1) {
+          expect(await goToDefinition(index, bigRequest)).toMatchObject({
+            status: "not_found",
+            reason: expect.stringContaining("projection exceeded"),
+          });
+          const references = await findReferences(index, request);
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected references of M");
+          expect(references.referenceCoverage.state).toBe("partial");
+          expect(references.referenceCoverage.reasons).toContain("parser_degraded");
+        }
+        const bigKey = fileIdentityKey(big);
+        expect(
+          asyncReads.mock.calls.filter(([file]) => typeof file === "string" && fileIdentityKey(file) === bigKey),
+        ).toHaveLength(0);
+        expect(
+          syncReads.mock.calls.filter(([file]) => typeof file === "string" && fileIdentityKey(file) === bigKey),
+        ).toHaveLength(0);
+        const changedTime = ((await fsp.stat(big)).mtimeMs + 2000) / 1000;
+        await fsp.utimes(big, changedTime, changedTime);
+        for (let query = 0; query < 2; query += 1) {
+          expect(await goToDefinition(index, bigRequest)).toMatchObject({
+            status: "not_found",
+            reason: expect.stringContaining("projection exceeded"),
+          });
+          const references = await findReferences(index, request);
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected references after touching Big.cs");
+          expect(references.referenceCoverage.state).toBe("partial");
+        }
+        expect(
+          asyncReads.mock.calls.filter(([file]) => typeof file === "string" && fileIdentityKey(file) === bigKey),
+        ).toHaveLength(0);
+        expect(
+          syncReads.mock.calls.filter(([file]) => typeof file === "string" && fileIdentityKey(file) === bigKey),
+        ).toHaveLength(1);
+      } finally {
+        asyncReads.mockRestore();
+        syncReads.mockRestore();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["off", "disk"] as const)(
+    "rejects changed unprojectable sources until the index is rebuilt (%s cache)",
+    async (cache) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-stale-"));
+      const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-stale-cache-"));
+      const options = { cache, cacheDir, threads: 1, useNativeWorkers: false };
+      try {
+        await writeProject(root);
+        const big = path.join(root, "Big.cs");
+        const bigRequest = { file: big, line: 2, column: columnOf(unprojectable.split("\n"), 2, "Big") };
+        const referenceRequest = { file: path.join(root, "A.cs"), line: 1, column: columnOf(targetLines, 1, "A ") };
+        const gotoIndex = await buildProjectIndex(root, options);
+        const referencesIndex = await buildProjectIndex(root, options);
+        expect(referencesIndex).not.toBe(gotoIndex);
+        expect(await goToDefinition(gotoIndex, bigRequest)).toMatchObject({
+          status: "not_found",
+          reason: expect.stringContaining("projection exceeded"),
+        });
+        const beforeReferences = await findReferences(referencesIndex, referenceRequest);
+        expect(beforeReferences.status).toBe("ok");
+        if (beforeReferences.status !== "ok") throw new Error("Expected references before the edit");
+        expect(beforeReferences.referenceCoverage.affectedFiles?.some((file) => file.endsWith("Big.cs"))).toBe(true);
+
+        const originalStat = await fsp.stat(big);
+        const smallSource = "namespace Gen;\npublic class Big { public int Value; }\n";
+        await writeFile(big, smallSource);
+        const changedTime = (originalStat.mtimeMs + 2000) / 1000;
+        await fsp.utimes(big, changedTime, changedTime);
+        const stale = { name: "StaleQuerySourceError", message: expect.stringMatching(/rebuild/i) };
+        await expect(goToDefinition(gotoIndex, bigRequest)).rejects.toMatchObject(stale);
+        await expect(findReferences(referencesIndex, referenceRequest)).rejects.toMatchObject(stale);
+        await writeFile(big, unprojectable);
+        await fsp.utimes(big, originalStat.atimeMs / 1000, originalStat.mtimeMs / 1000);
+        await expect(goToDefinition(gotoIndex, bigRequest)).rejects.toMatchObject(stale);
+        await expect(findReferences(referencesIndex, referenceRequest)).rejects.toMatchObject(stale);
+        await writeFile(big, smallSource);
+        await fsp.utimes(big, changedTime, changedTime);
+
+        const rebuilt = await buildProjectIndex(root, options);
+        const fresh = await goToDefinition(rebuilt, {
+          file: big,
+          line: 2,
+          column: columnOf(smallSource.split("\n"), 2, "Big"),
+        });
+        expect(fresh.status).toBe("ok");
+        if (fresh.status !== "ok") throw new Error("Expected the rebuilt declaration");
+        expect(fresh.definition.localName).toBe("Big");
+      } finally {
+        closeDiskCacheDatabase(root, { cache: "disk", cacheDir });
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+        await rm(cacheDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["off", "disk"] as const)(
+    "rejects a deleted unprojectable source until the index is rebuilt (%s cache)",
+    async (cache) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-deleted-"));
+      const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-deleted-cache-"));
+      const options = { cache, cacheDir, threads: 1, useNativeWorkers: false };
+      try {
+        await writeProject(root);
+        const big = path.join(root, "Big.cs");
+        const bigRequest = { file: big, line: 2, column: columnOf(unprojectable.split("\n"), 2, "Big") };
+        const referenceRequest = { file: path.join(root, "A.cs"), line: 1, column: columnOf(targetLines, 1, "A ") };
+        const gotoIndex = await buildProjectIndex(root, options);
+        const referencesIndex = await buildProjectIndex(root, options);
+        await rm(big);
+        const stale = { name: "StaleQuerySourceError", message: expect.stringMatching(/rebuild/i) };
+        await expect(goToDefinition(gotoIndex, bigRequest)).rejects.toMatchObject(stale);
+        await expect(findReferences(referencesIndex, referenceRequest)).rejects.toMatchObject(stale);
+
+        const rebuilt = await buildProjectIndex(root, options);
+        const fresh = await findReferences(rebuilt, referenceRequest);
+        expect(fresh.status).toBe("ok");
+        if (fresh.status !== "ok") throw new Error("Expected references after the rebuild");
+        expect(fresh.referenceCoverage.affectedFiles?.some((file) => file.endsWith("Big.cs")) ?? false).toBe(false);
+      } finally {
+        closeDiskCacheDatabase(root, { cache: "disk", cacheDir });
+        clearMemoryCache();
+        await rm(root, { recursive: true, force: true });
+        await rm(cacheDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("answers every disk-cached CLI goto the same", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-unprojectable-cli-"));
@@ -1482,6 +1675,179 @@ describe("C# project with a file whose syntax tree is unavailable", () => {
       await rm(cacheDir, { recursive: true, force: true });
     }
   });
+  it.each(["disk", "memory"] as const)(
+    "returns not_found for an unprojectable file and does not project it again for the same content (%s cache)",
+    async (cache) => {
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "cg-csharp-projection-limit-"));
+      const root = path.join(temporary, "project");
+      const cacheDir = path.join(temporary, "cache");
+      const diskOptions = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+      const options = cache === "disk" ? diskOptions : { cache, threads: 1, useNativeWorkers: false };
+      const hugeLines = unprojectable.split("\n");
+      const bigColumn = columnOf(hugeLines, 2, "Big");
+      const smallSource = "namespace Gen;\npublic class Big { public int Value; }\n";
+      const smallLines = smallSource.split("\n");
+      const readsOfHugeFile = countNativeReadsContaining("public int F0;");
+      const reason = "Syntax tree unavailable: syntax tree projection exceeded max node limit (250000)";
+      const bigFile = () => path.join(root, "Big.cs");
+      const answers = async (index: ProjectIndex) => {
+        const target = await goToDefinition(index, { file: bigFile(), line: 2, column: bigColumn });
+        const references = await findReferences(index, {
+          file: path.join(root, "A.cs"),
+          line: 1,
+          column: columnOf(targetLines, 1, "A "),
+        });
+        return {
+          goto: target.status === "ok" ? target.definition.localName : target.reason,
+          references:
+            references.status === "ok"
+              ? references.references.map(
+                  (reference) => `${path.basename(reference.file)}:${reference.range.start.line}`,
+                )
+              : references.reason,
+          coverage: references.status === "ok" ? references.referenceCoverage : references.status,
+        };
+      };
+      try {
+        clearMemoryCache();
+        await writeProject(root);
+        const beforeFirst = readsOfHugeFile();
+        const first = await buildProjectIndex(root, options);
+        expect(readsOfHugeFile() - beforeFirst).toBe(1);
+        const beforeQueries = readsOfHugeFile();
+        const observed = await answers(first);
+        expect(await answers(first)).toEqual(observed);
+        expect(readsOfHugeFile() - beforeQueries).toBe(0);
+        expect(observed.goto).toBe(reason);
+        expect(observed.references).toEqual(["A.cs:1", "B.cs:1"]);
+        expect(observed.coverage).toMatchObject({
+          state: "partial",
+          reasons: expect.arrayContaining(["parser_degraded"]),
+        });
+        if (observed.coverage === "not_found" || typeof observed.coverage === "string") {
+          throw new Error("Expected partial reference coverage");
+        }
+        expect(observed.coverage.affectedFiles?.some((file) => file.endsWith("Big.cs"))).toBe(true);
+        const beforeSecond = readsOfHugeFile();
+        const second = await buildProjectIndex(root, options);
+        expect(readsOfHugeFile() - beforeSecond).toBe(0);
+        expect(await answers(second)).toEqual(observed);
+        const cold = await answers(
+          await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false }),
+        );
+        expect(cold).toEqual(observed);
+
+        if (cache === "disk") {
+          const beforeConsumers = readsOfHugeFile();
+          const position = `${bigFile()}:2:${bigColumn}`;
+          const cliGoto = await captureCli([
+            "goto",
+            position,
+            "--root",
+            root,
+            "--cache",
+            "disk",
+            "--cache-dir",
+            cacheDir,
+            "--threads",
+            "1",
+            "--json",
+          ]);
+          expect(cliGoto.exitCode).toBe(1);
+          expect(JSON.parse(cliGoto.stdout)).toMatchObject({ status: "not_found", reason });
+          const cliRefs = await captureCli([
+            "refs",
+            `${path.join(root, "A.cs")}:1:${columnOf(targetLines, 1, "A ")}`,
+            "--root",
+            root,
+            "--cache",
+            "disk",
+            "--cache-dir",
+            cacheDir,
+            "--threads",
+            "1",
+            "--json",
+          ]);
+          expect(cliRefs.exitCode).toBeUndefined();
+          const refsJson = JSON.parse(cliRefs.stdout) as {
+            referenceCoverage?: { state?: string; reasons?: string[]; affectedFiles?: string[] };
+          };
+          expect(refsJson.referenceCoverage?.state).toBe("partial");
+          expect(refsJson.referenceCoverage?.reasons).toContain("parser_degraded");
+          expect(refsJson.referenceCoverage?.affectedFiles?.some((file) => file.endsWith("Big.cs"))).toBe(true);
+          const handlers = createCodegraphMcpHandlers({
+            root,
+            readOnly: true,
+            useConfig: false,
+            buildOptions: diskOptions,
+          });
+          await expect(handlers.goto({ file: bigFile(), line: 2, column: bigColumn })).resolves.toMatchObject({
+            status: "not_found",
+            reason,
+          });
+          const mcpRefs = await handlers.refs({
+            file: path.join(root, "A.cs"),
+            line: 1,
+            column: columnOf(targetLines, 1, "A "),
+          });
+          expect(mcpRefs.referenceCoverage?.state).toBe("partial");
+          expect(mcpRefs.referenceCoverage?.reasons).toContain("parser_degraded");
+          expect(readsOfHugeFile() - beforeConsumers).toBe(0);
+        }
+
+        await writeFile(bigFile(), smallSource, "utf8");
+        const edited = await buildProjectIndex(root, options);
+        const editedGoto = await goToDefinition(edited, {
+          file: bigFile(),
+          line: 2,
+          column: columnOf(smallLines, 2, "Big"),
+        });
+        expect(editedGoto.status).toBe("ok");
+        if (editedGoto.status !== "ok") throw new Error("Expected the edited file to be projectable");
+        expect(editedGoto.definition.localName).toBe("Big");
+        const coldEdited = await goToDefinition(
+          await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false }),
+          { file: bigFile(), line: 2, column: columnOf(smallLines, 2, "Big") },
+        );
+        expect(coldEdited).toMatchObject({
+          status: "ok",
+          definition: { localName: "Big", file: editedGoto.definition.file },
+        });
+
+        await rm(bigFile());
+        const deleted = await buildProjectIndex(root, options);
+        expect(deleted.byFile.has(fileIdentityKey(normalizePath(bigFile())))).toBe(false);
+        const deletedAnswers = await answers(deleted);
+        const coldDeleted = await answers(
+          await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false }),
+        );
+        expect(deletedAnswers).toEqual(coldDeleted);
+        expect(deletedAnswers.goto).not.toBe(reason);
+
+        await writeFile(bigFile(), unprojectable, "utf8");
+        const beforeRestore = readsOfHugeFile();
+        const restored = await buildProjectIndex(root, options);
+        expect(readsOfHugeFile() - beforeRestore).toBe(1);
+        const beforeRestoredQuery = readsOfHugeFile();
+        const restoredAnswers = await answers(restored);
+        expect(readsOfHugeFile() - beforeRestoredQuery).toBe(0);
+        const beforeRestoredWarm = readsOfHugeFile();
+        const restoredWarm = await buildProjectIndex(root, options);
+        expect(readsOfHugeFile() - beforeRestoredWarm).toBe(0);
+        expect(await answers(restoredWarm)).toEqual(restoredAnswers);
+        const coldRestored = await answers(
+          await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false }),
+        );
+        expect(restoredAnswers).toEqual(coldRestored);
+        expect(restoredAnswers).toEqual(observed);
+      } finally {
+        closeDiskCacheDatabase(root, diskOptions);
+        clearMemoryCache();
+        __resetNativeTreeSitterBindingForTests();
+        await rm(temporary, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("C# namespace scan with a file that cannot be parsed", () => {

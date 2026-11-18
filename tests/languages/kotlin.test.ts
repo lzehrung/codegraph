@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
 import { defNodeId, type SymbolGraph } from "../../src/graphs/symbol-graph.js";
-import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "../../src/index.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import type { ImportBinding, ProjectIndex } from "../../src/indexer/types.js";
@@ -1580,6 +1580,51 @@ describe("Kotlin package files without a usable syntax tree", () => {
       }
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the wildcard edge after a warm edit and rename", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-wildcard-"));
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-kotlin-wildcard-cache-"));
+    const fields = Array.from({ length: 70000 }, (_, index) => `  val f${index}: Int = ${index}`).join("\n");
+    const wildSource = "package app\nimport big.*\nclass Wild { fun useIt(): Int = Thing().x }\n";
+    const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+    const edgesFrom = (index: ProjectIndex, fromBase: string): string[] =>
+      index.graph.edges
+        .filter((edge) => path.basename(edge.from) === fromBase)
+        .map((edge) => {
+          const target = edge.to.type === "file" ? path.basename(edge.to.path) : edge.to.type;
+          return `${target}:${edge.raw}`;
+        })
+        .sort();
+    try {
+      await fsp.mkdir(path.join(root, "app"), { recursive: true });
+      await fsp.mkdir(path.join(root, "big"), { recursive: true });
+      await fsp.writeFile(path.join(root, "big", "Thing.kt"), "package big\nclass Thing { val x: Int = 1 }\n");
+      await fsp.writeFile(path.join(root, "big", "Big.kt"), `package big\nclass Big {\n${fields}\n}\n`);
+      await fsp.writeFile(path.join(root, "app", "Wild.kt"), wildSource);
+      const cold = await buildProjectIndexIncremental(root, options);
+      const big = [...cold.byFile.values()].find((mod) => path.basename(mod.file) === "Big.kt");
+      expect(big?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      expect(big?.jvmFacts).toEqual({ packageName: "big", symbols: [], incomplete: true });
+      expect(edgesFrom(cold, "Wild.kt").some((edge) => edge.startsWith("Big.kt:"))).toBe(true);
+      const warm = await buildProjectIndexIncremental(root, options);
+      expect(edgesFrom(warm, "Wild.kt")).toEqual(edgesFrom(cold, "Wild.kt"));
+      expect([...warm.byFile.values()].find((mod) => path.basename(mod.file) === "Big.kt")?.jvmFacts).toEqual(
+        big?.jvmFacts,
+      );
+      await fsp.writeFile(path.join(root, "app", "Wild.kt"), `${wildSource}// touch\n`);
+      const edited = await buildProjectIndexIncremental(root, options);
+      expect(edgesFrom(edited, "Wild.kt")).toEqual(edgesFrom(cold, "Wild.kt"));
+      await fsp.writeFile(path.join(root, "app", "Renamed.kt"), wildSource.replace("class Wild", "class Renamed"));
+      await fsp.rm(path.join(root, "app", "Wild.kt"));
+      const renamed = await buildProjectIndexIncremental(root, options);
+      const coldFinal = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect(edgesFrom(renamed, "Renamed.kt")).toEqual(edgesFrom(coldFinal, "Renamed.kt"));
+      expect(edgesFrom(renamed, "Renamed.kt").some((edge) => edge.startsWith("Big.kt:"))).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheDir, { recursive: true, force: true });
     }
   });
 });

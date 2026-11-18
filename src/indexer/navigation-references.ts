@@ -1,13 +1,14 @@
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import path from "node:path";
-import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
+import { JS_SUPPORT, supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
+import { detectSFCFramework } from "../languages/sfc.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { isBloomIdentifierToken } from "../util/bloom-filter.js";
-import { normalizeKotlinIdentifier } from "../util/identifiers.js";
+import { UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
@@ -19,7 +20,12 @@ import {
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import { phpTraitPropertyMayUseDefinition, provenClassifiedReceiverOmitsMember } from "./navigation-goto.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import { ensureParsedContextForIndex, readQuerySourceForIndexSync, rethrowStaleQuerySource } from "./parsed-cache.js";
+import {
+  ensureParsedContextForIndex,
+  assertIndexedOversizedSourceCurrent,
+  readQuerySourceForIndexSync,
+  rethrowStaleQuerySource,
+} from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
 import {
@@ -502,6 +508,12 @@ async function collectNamedNodeReferences(
   try {
     const fileKey = fileIdentityKey(fileId);
     const moduleIndex = index.byFile.get(fileKey);
+    // Receiver and named-argument scans also reach candidates outside the import loop. A known
+    // projection failure must not reread the file before coverage records the incomplete scan.
+    if (moduleIndex?.syntaxTreeUnavailableReason) {
+      assertIndexedOversizedSourceCurrent(index, fileId);
+      return null;
+    }
     const filter = moduleIndex && !moduleIndex.parseErrorRanges?.length ? candidateFilter : undefined;
     if (filter && candidateCallDigest) {
       const bloom = index.bloomFilters?.get(fileKey);
@@ -1426,6 +1438,41 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
   return found;
 }
 
+/** Whether the definition's own module publishes it as a local export. */
+function definitionIsExported(index: ProjectIndex, def: SymbolDef, definitionKey: string): boolean {
+  return !!index.byFile
+    .get(definitionKey)
+    ?.exports.some((entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions));
+}
+
+/** Same language, or both in the JavaScript/TypeScript family (`.js`, `.ts`, `.tsx`). */
+function sharesReferenceLanguage(definitionLanguage: string, candidateLanguage: string | undefined): boolean {
+  if (!candidateLanguage) return false;
+  if (candidateLanguage === definitionLanguage) return true;
+  return isJsTsLanguage(definitionLanguage) && isJsTsLanguage(candidateLanguage);
+}
+
+/** A missing filter, or a name that is not a Bloom token, may still contain the name. A definite miss does not. */
+function unprojectableFileMayContainName(
+  index: ProjectIndex,
+  fileKey: string,
+  support: LanguageSupport | undefined,
+  names: ReadonlySet<string>,
+): boolean {
+  const filter = index.bloomFilters?.get(fileKey);
+  if (!filter) return true;
+  // Escaped or otherwise unprobeable identifier spellings can name the symbol even when the
+  // normalized name is absent from the filter. The markers are populated during indexing.
+  if (filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN)) return true;
+  if (filter.mightContain(UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN)) return true;
+  for (const name of names) {
+    const normalized = support?.normalizeIdentifier(name) ?? name;
+    const probe = support?.bloomProbeName?.(normalized) ?? normalized;
+    if (!isBloomIdentifierToken(probe) || filter.mightContain(probe)) return true;
+  }
+  return false;
+}
+
 export function getCachedReferenceCandidateFiles(
   index: ProjectIndex,
   def: SymbolDef,
@@ -1506,11 +1553,7 @@ export function getCachedReferenceCandidateFiles(
     const packageName = getPackageDeclarationName(index, def.file, languageId);
     const rootName = packageName?.split(".")[0];
     if (rootName) {
-      const exported =
-        def.isMember ||
-        index.byFile
-          .get(definitionKey)
-          ?.exports.some((entry) => entry.type === "local" && sameDef(entry.target, def, index.languageExtensions));
+      const exported = def.isMember || definitionIsExported(index, def, definitionKey);
       if (exported) {
         for (const jvmModule of jvmModuleEntries(index)) {
           const samePackage = getPackageDeclarationName(index, jvmModule.file, jvmModule.languageId) === packageName;
@@ -1541,6 +1584,33 @@ export function getCachedReferenceCandidateFiles(
       candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
     }
   }
+  const unprojectable = coverageFacts(index).unprojectable;
+  if (unprojectable.length) {
+    const names = new Set([def.localName, ...exportedNames]);
+    const definitionSupport = supportForFileWithoutHeaderSample(def.file, index.languageExtensions);
+    for (const alternate of definitionSupport?.alternateUseNames?.(def.localName) ?? []) names.add(alternate);
+    // An exported JS-family definition can be imported under an arbitrary spelling. When this
+    // file's imports were not extracted, these tokens keep possible aliases in the candidate set.
+    if (isJsTsLanguage(languageId) && definitionIsExported(index, def, definitionKey)) {
+      names.add("import");
+      names.add("require");
+      names.add("export");
+    }
+    for (const file of exportingFileIds) {
+      const moduleIndex = index.byFile.get(fileIdentityKey(file));
+      if (!moduleIndex || fileIdentityKey(file) === definitionKey) continue;
+      for (const name of moduleExportProbeNames(index, moduleIndex, exportedNames)) names.add(name);
+    }
+    const modules = referenceModuleTable(index);
+    for (const entry of unprojectable) {
+      if (entry.key === definitionKey || candidates.has(entry.key)) continue;
+      const support = detectSFCFramework(entry.file) ? JS_SUPPORT : modules.entries[entry.rank]?.support;
+      if (!sharesReferenceLanguage(languageId, support?.id)) continue;
+      if (!unprojectableFileMayContainName(index, entry.file, support, names)) continue;
+      candidates.set(entry.key, entry.file);
+    }
+  }
+
   const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
   cache.set(key, sorted);
   return sorted;

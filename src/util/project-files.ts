@@ -965,7 +965,7 @@ async function listGitCandidateFiles(
     const gitRoot = (await isGitRepo(root, gitCache)) ? root : realRoot;
     if (!(await isGitRepo(gitRoot, gitCache))) return null;
     if (await isGitProjectRootIgnored(realRoot, gitCache)) return null;
-    const gitRepositoryRoot = await getGitRepositoryRoot(gitRoot);
+    const gitRepositoryRoot = await getGitRepositoryRoot(gitRoot, gitCache);
     if (!gitRepositoryRoot) return null;
     emitDiscoveryActivity(opts?.onDiscoveryProgress, "Listing Git files");
     const listStartedAt = performance.now();
@@ -1887,7 +1887,7 @@ export async function collectConfigHashInputFiles(
   if (await isGitProjectRootIgnored(realRoot, gitCache)) {
     const scanned = new Set<string>();
     await addGitignoreFilesForRoots(files, [root], state, scanned);
-    const gitRoot = await getGitRepositoryRoot(gitRootCandidate);
+    const gitRoot = await getGitRepositoryRoot(gitRootCandidate, gitCache);
     if (gitRoot) {
       await addGitExcludeFiles(files, gitRoot, gitCache);
       const submoduleDirectories = await listGitSubmoduleDirectories(gitRoot, { recurse: true });
@@ -1899,7 +1899,7 @@ export async function collectConfigHashInputFiles(
     return { files: Array.from(files).sort() };
   }
 
-  const gitRoot = await getGitRepositoryRoot(gitRootCandidate);
+  const gitRoot = await getGitRepositoryRoot(gitRootCandidate, gitCache);
   if (gitRoot) {
     for (const file of await collectAncestorGitignoreFiles(root, gitRoot)) {
       files.add(normalizePath(file));

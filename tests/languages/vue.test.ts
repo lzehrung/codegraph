@@ -1,16 +1,23 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunk-sfc.js";
-import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { prepareSourceInput } from "../../src/languages/file-prep.js";
 import { parseSFC } from "../../src/languages/sfc.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
+import type { ProjectIndex } from "../../src/indexer/types.js";
+import {
+  __resetNativeTreeSitterBindingForTests,
+  __setNativeTreeSitterBindingForTests,
+} from "../../src/native/tree-sitter-native.js";
+import { loadBinding } from "../../src/native/runtime.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const samplePath = path.join(dirname, "samples", "vue.sample.vue");
@@ -66,6 +73,90 @@ describe("Vue SFC chunking", () => {
     }
     expect(chunks.some((chunk) => chunk.text.includes("\n\n"))).toBe(true);
     expect(chunks.every((chunk) => chunk.tokenCount <= 4)).toBe(true);
+  });
+
+  it("keeps style imports and reuses a projection failure for an oversized script", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-vue-projection-"));
+    const cacheDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-vue-projection-cache-"));
+    const styleTargets = (index: ProjectIndex): string[] =>
+      index.graph.edges
+        .filter((edge) => path.basename(edge.from) === "Deep.vue")
+        .flatMap((edge) => (edge.to.type === "file" ? [path.basename(edge.to.path)] : []))
+        .sort();
+    try {
+      const script = `const x = ${"[".repeat(600)}0${"]".repeat(600)};`;
+      const file = path.join(root, "Deep.vue");
+      const component = `<script>\n${script}\ntarget();\n</script>\n<style>\n@import "./x.css";\n</style>\n`;
+      await fs.promises.writeFile(file, component);
+      await fs.promises.writeFile(path.join(root, "lib.ts"), "export function target() { return 1; }\n");
+      await fs.promises.writeFile(path.join(root, "x.css"), "body { color: red; }\n");
+      const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+      const cold = await buildProjectIndex(root, options);
+      const warm = await buildProjectIndex(root, options);
+      const vue = [...cold.byFile.values()].find((mod) => path.basename(mod.file) === "Deep.vue");
+      expect(vue?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      expect(vue?.syntaxTreeUnavailableFingerprint).toBe(createHash("sha256").update(component).digest("hex"));
+      expect(styleTargets(cold)).toContain("x.css");
+      expect(styleTargets(warm)).toEqual(styleTargets(cold));
+
+      const state = loadBinding();
+      if (!state.loaded || !state.binding.parseSyntaxTree) throw new Error("Native syntax parser required");
+      const parse = state.binding.parseSyntaxTree;
+      let projections = 0;
+      __setNativeTreeSitterBindingForTests({
+        ...state,
+        binding: {
+          ...state.binding,
+          parseSyntaxTree: (text, language) => {
+            projections += 1;
+            return parse(text, language);
+          },
+        },
+      });
+      const result = await goToDefinition(warm, { file, line: 2, column: 7 });
+      expect(result).toMatchObject({ status: "not_found", reason: expect.stringContaining("projection exceeded") });
+      expect(projections).toBe(0);
+      __resetNativeTreeSitterBindingForTests();
+      const references = await findReferences(warm, { file: path.join(root, "lib.ts"), line: 1, column: 17 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references of target");
+      expect(references.referenceCoverage.state).toBe("partial");
+      expect(
+        references.referenceCoverage.affectedFiles?.some((candidate) => path.basename(candidate) === "Deep.vue"),
+      ).toBe(true);
+      await fs.promises.utimes(file, 0, 0);
+      const fileKey = fileIdentityKey(file);
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        const afterTouch = await findReferences(warm, { file: path.join(root, "lib.ts"), line: 1, column: 17 });
+        expect(afterTouch).toEqual(references);
+        for (let query = 0; query < 2; query += 1) {
+          expect(await goToDefinition(warm, { file, line: 2, column: 7 })).toMatchObject({
+            status: "not_found",
+            reason: expect.stringContaining("projection exceeded"),
+          });
+        }
+        const readsOfFile = reads.mock.calls.filter(
+          ([candidate]) => typeof candidate === "string" && fileIdentityKey(candidate) === fileKey,
+        );
+        expect(readsOfFile).toHaveLength(1);
+      } finally {
+        reads.mockRestore();
+      }
+      await fs.promises.writeFile(path.join(root, "y.css"), "body { color: blue; }\n");
+      await fs.promises.writeFile(file, component.replace("./x.css", "./y.css"));
+      await fs.promises.utimes(file, 2, 2);
+      await expect(goToDefinition(warm, { file, line: 2, column: 7 })).rejects.toMatchObject({
+        name: "StaleQuerySourceError",
+      });
+      const rebuilt = await buildProjectIndex(root, options);
+      expect(styleTargets(rebuilt)).toContain("y.css");
+      expect(styleTargets(rebuilt)).not.toContain("x.css");
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      await fs.promises.rm(root, { recursive: true, force: true });
+      await fs.promises.rm(cacheDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -133,11 +133,10 @@ export type ModuleIndex = {
    */
   csharpNamespaceFacts?: CsharpNamespaceFacts;
   /**
-   * Java and Kotlin only: the package and top-level declared names of this file alone, read from its own syntax
-   * tree when it is indexed. Package lookups read them here instead of parsing the file, and project-wide
-   * lookups combine them across files when they run, so a cached module never holds another file's
-   * declarations. `incomplete` marks a file whose tree held a syntax error that left declarations unread. Absent
-   * when the file's tree was unavailable.
+   * Java and Kotlin only: the package and top-level declared names of this file alone. Package lookups
+   * read them here instead of parsing the file, and project-wide lookups combine them across files.
+   * `incomplete` marks a tree with unread declarations or a bounded package-head parse when the whole
+   * file could not be projected. Absent when neither produced facts.
    */
   jvmFacts?: JvmFileFacts;
   /** PHP only: own-file qualified declarations and namespace prefixes, plus an identity marking incomplete facts. */
@@ -160,6 +159,17 @@ export type ModuleIndex = {
    * the project snapshot, when that build's report no longer records the degradation.
    */
   parserDegraded?: boolean;
+  /**
+   * Set when this file's syntax tree cannot be projected because it exceeds the native node or depth limit.
+   * The value is that native message, with no path. A later query or warm build reuses it for the same content
+   * instead of projecting the file again. Absent when the tree was projected or the failure was not this limit.
+   */
+  syntaxTreeUnavailableReason?: string;
+  /**
+   * SHA-256 of the raw UTF-8 source the projection-limit fact was recorded for, including the non-script
+   * parts of Vue and Svelte files.
+   */
+  syntaxTreeUnavailableFingerprint?: string;
   /**
    * Set, together with `parserDegraded`, when a lookup over other project files could not read one of them, so an
    * import of this file may have stayed unresolved only because of it (a C# alias or static using whose type lookup
