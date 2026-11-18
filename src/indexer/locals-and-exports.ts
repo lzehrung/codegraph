@@ -1057,6 +1057,7 @@ export function collectLocalsAndExportsFromSource(
     if (!nativeQueries) return false;
     if (!support.usesQueryDrivenLocals) return false;
     let capturedLocals = false;
+    const acceptLocalCapture = scopeNodesFor(support.id).acceptLocalCapture;
     try {
       // Lazily get the tree only for enrichment (classification + docstrings).
       // If the tree was already provided or the language benefits from it, use
@@ -1079,6 +1080,7 @@ export function collectLocalsAndExportsFromSource(
           const node =
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
+          if (node && acceptLocalCapture && !acceptLocalCapture(node)) continue;
           if (capture.name === "declarator") {
             const namedNode = declaratorNameNode(node);
             if (namedNode) {

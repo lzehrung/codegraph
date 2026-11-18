@@ -186,7 +186,7 @@ export function buildScopeIndexFromSource(
         callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode });
     }
     const heldModuleSpecifier = kind === "local" && jsTs ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
-    return {
+    const binding: Binding = {
       name,
       canonicalName: scopeIdentifierKey(row, name, nameNode, normalizeIdentifier),
       kind,
@@ -196,6 +196,9 @@ export function buildScopeIndexFromSource(
       node: nameNode,
       occurrences: [],
     };
+    const conditionalParents = row.conditionalBindingParents;
+    if (conditionalParents?.has(nameNode.parent?.type ?? "")) binding.conditionalVisibility = true;
+    return binding;
   };
 
   const addImportBinding = (name: string, kind: BindingKind, importBinding: ImportBinding): void => {
@@ -487,18 +490,20 @@ export function buildScopeIndexFromSource(
    * own locals, so its methods, classes, and constants bind in the scope outside it, as they did before the body had a
    * scope of its own.
    */
-  const nonLocalDeclarationScope = (): Scope | undefined => {
+  const nonLocalDeclarationScope = (name: SyntaxNodeLike): Scope | undefined => {
     const localOnly = row.localOnlyScopeTypes;
-    if (!localOnly) return stack[stack.length - 1];
+    const declarationOutsideScope = row.declarationOutsideScope;
+    if (!localOnly && !declarationOutsideScope) return stack[stack.length - 1];
     for (let index = stack.length - 1; index >= 0; index -= 1) {
       const scope = stack[index]!;
-      if (!localOnly.has(scope.node.type)) return scope;
+      if (localOnly?.has(scope.node.type) || declarationOutsideScope?.(name, scope.node)) continue;
+      return scope;
     }
     return rootScope;
   };
 
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind, generated?: GeneratedMember): void => {
-    const target = nonLocalDeclarationScope();
+    const target = nonLocalDeclarationScope(nameNode);
     if (target) addBinding(target, nameNode, kind, generated);
   };
 
@@ -540,8 +545,14 @@ export function buildScopeIndexFromSource(
       return;
     }
     const target =
-      [...stack].reverse().find((scope) => scope.kind !== "type" && !row.localOnlyScopeTypes?.has(scope.node.type)) ??
-      rootScope;
+      [...stack]
+        .reverse()
+        .find(
+          (scope) =>
+            scope.kind !== "type" &&
+            !row.localOnlyScopeTypes?.has(scope.node.type) &&
+            !row.declarationOutsideScope?.(nameNode, scope.node),
+        ) ?? rootScope;
     addBinding(target, nameNode, kind);
   };
 
@@ -1124,6 +1135,10 @@ export function buildScopeIndexFromSource(
   const attachOccurrence = (binding: Binding, useNode: SyntaxNodeLike): void => {
     if (rejectsLexicalBindingAtSelector(row, binding, useNode)) return;
     if (row.nonLexicalUse?.(useNode)) return;
+    if (row.referenceNeedsVerification?.(useNode)) {
+      binding.occurrencesComplete = false;
+      return;
+    }
     const range = toRange(useNode);
     if (support.id === "cpp" && binding.kind === "function") {
       cppFunctionOccurrences.push({ binding, node: useNode, range });

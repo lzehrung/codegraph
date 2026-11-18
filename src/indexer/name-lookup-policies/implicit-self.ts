@@ -24,7 +24,11 @@ import {
   csharpNamedArgumentCall,
   isCsharpMemberDesignator,
 } from "../../util/csharp-designators.js";
-import { isJavaAnnotationElementName, javaAnnotationTypeForElement } from "../../util/java-designators.js";
+import {
+  isJavaAnnotationElementName,
+  isJavaSwitchLabelName,
+  javaAnnotationTypeForElement,
+} from "../../util/java-designators.js";
 import { csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceMemberKind } from "../compilation-units.js";
 import {
@@ -55,6 +59,7 @@ import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { csharpHeaderParameterUse } from "./csharp-header-parameters.js";
 import { javaPatternVariableFallback, javaRecordComponentUse } from "./java-record-components.js";
+import { javaSwitchCase } from "./java-switch-cases.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveCsharpQualifiedName, resolveImported } from "../navigation-resolve.js";
 import {
@@ -449,7 +454,13 @@ export const javaLookupPolicy: NameLookupPolicy = {
     };
   },
   fromClosestBinding: (state) =>
-    ownOverloadDeclaration(state) ?? javaPatternVariableFallback(state) ?? javaRecordComponentUse(state),
+    isJavaSwitchLabelName(state.use.node)
+      ? undefined
+      : (ownOverloadDeclaration(state) ?? javaPatternVariableFallback(state) ?? javaRecordComponentUse(state)),
+  wrapRest: (state, rest) => {
+    const result = javaSwitchCase(state, rest);
+    return result === undefined ? rest() : result;
+  },
 };
 
 /** A scope whose names a lambda's implicit receiver outranks: a type body or the file itself. */

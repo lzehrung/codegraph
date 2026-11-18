@@ -5795,6 +5795,17 @@ const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
   "statement_block",
 ]);
 
+/** Declarations directly under these expression binders are never members of the enclosing type. */
+const NESTED_MEMBER_DECLARATION_PARENTS: ReadonlySet<string> = new Set([
+  "lambda_expression",
+  "inferred_parameters",
+  "from_clause",
+  "let_clause",
+  "join_clause",
+  "join_into_clause",
+  "query_expression",
+]);
+
 function matchesReceiverMemberName(
   local: SymbolDef,
   normalizedMember: string,
@@ -5855,6 +5866,7 @@ function directLocalsWithinNode(
       column: start.column - 1,
     };
     let current = targetContext.tree.rootNode.descendantForPosition(position, position).parent;
+    if (current && NESTED_MEMBER_DECLARATION_PARENTS.has(current.type)) continue;
     let isDeclarationParent = true;
     while (current && current !== container) {
       const isDirectBody =
@@ -5996,6 +6008,7 @@ function isPropertyParameter(declarationNode: SyntaxNodeLike, list: SyntaxNodeLi
 }
 
 export function isDirectKeywordMemberDeclaration(declarationNode: SyntaxNodeLike, container: SyntaxNodeLike): boolean {
+  if (declarationNode.parent && NESTED_MEMBER_DECLARATION_PARENTS.has(declarationNode.parent.type)) return false;
   if (isSwiftShadowingNonMember(declarationNode)) return false;
   if (nearestMemberContainer(declarationNode) !== container) return false;
   let functionDepth = 0;

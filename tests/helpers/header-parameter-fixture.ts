@@ -25,6 +25,16 @@ import {
   type Place,
   type Sources,
 } from "./csharp-java-batch3-fixture.js";
+import {
+  CSHARP_BATCH5_REVIEW_SOURCES,
+  CSHARP_BATCH5_SOURCES,
+  JAVA_BATCH5_REVIEW_SOURCES,
+  JAVA_BATCH5_SOURCES,
+  expectCsharpBatch5,
+  expectCsharpBatch5Review,
+  expectJavaBatch5,
+  expectJavaBatch5Review,
+} from "./csharp-java-batch5-fixture.js";
 
 /**
  * One record per binder form: a nearer binder of `X`, or a binder the scope index does not model, beside the header
@@ -68,35 +78,35 @@ const CSHARP_BINDER_FORMS: readonly BinderForm[] = [
     id: "QueryFrom",
     body: "int A(int[] xs) => (from X in xs select X).Count() + X;",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
-    references: { names: [1, 4], coverage: "partial" },
+    references: { names: [1, 4], coverage: "complete" },
   },
   {
     id: "QueryLet",
     body: "int A(int[] xs) => (from v in xs let X = v select X).Count();",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
     ],
   },
   {
     id: "QueryJoin",
     body: "int A(int[] xs, int[] ys) => (from a in xs join X in ys on a equals X select X).Count();",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
-      [4, "not_found"],
+      [2, 2],
+      [3, 2],
+      [4, 2],
     ],
   },
   {
     id: "QueryInto",
     body: "int A(int[] xs) => (from a in xs group a by a into X select X.Key).Count();",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
     ],
   },
   {
@@ -196,18 +206,18 @@ const JAVA_BINDER_FORMS: readonly BinderForm[] = [
     id: "LambdaName",
     body: "int f(java.util.List<Integer> xs) { xs.forEach(value -> value.hashCode()); return value; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
-    references: { names: [1, 4], coverage: "partial" },
+    references: { names: [1, 4], coverage: "complete" },
   },
   {
     id: "LambdaTyped",
     body: "int f(java.util.List<Integer> xs) { xs.forEach((Integer value) -> value.hashCode()); return value; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
   },
@@ -215,8 +225,8 @@ const JAVA_BINDER_FORMS: readonly BinderForm[] = [
     id: "LambdaInferred",
     body: "int f(java.util.List<Integer> xs) { xs.forEach((value) -> value.hashCode()); return value; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
   },
@@ -252,8 +262,8 @@ const JAVA_BINDER_FORMS: readonly BinderForm[] = [
     id: "NestedLambda",
     body: "int f(java.util.List<Integer> xs) { xs.forEach(a -> { xs.forEach(value -> value.hashCode()); a.hashCode(); }); return value; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
   },
@@ -1068,6 +1078,34 @@ export type Batch3Case = {
 
 /** Every static-receiver, record-parameter, attribute, and binder fixture, with the assertions that go with it. */
 export const BATCH3_CASES: readonly Batch3Case[] = [
+  {
+    name: "initializer members, record selectors, and query source variables",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_BATCH5_REVIEW_SOURCES,
+    check: expectCsharpBatch5Review,
+  },
+  {
+    name: "initializer lambda members and varargs parameters",
+    language: "java",
+    references: true,
+    sources: JAVA_BATCH5_REVIEW_SOURCES,
+    check: expectJavaBatch5Review,
+  },
+  {
+    name: "query ranges, pointer expressions, and selector coverage",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_BATCH5_SOURCES,
+    check: expectCsharpBatch5,
+  },
+  {
+    name: "switch labels, lambda parameters, and ternary patterns",
+    language: "java",
+    references: true,
+    sources: JAVA_BATCH5_SOURCES,
+    check: expectJavaBatch5,
+  },
   {
     name: "T.Static() beside typed members",
     language: "csharp",

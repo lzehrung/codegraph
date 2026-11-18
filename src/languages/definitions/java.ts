@@ -77,6 +77,8 @@ export const JAVA_DEF: LanguageDefinition = {
       (variable_declarator name: (identifier) @name)
       (formal_parameter name: (identifier) @name)
       (spread_parameter (variable_declarator name: (identifier) @name))
+      (lambda_expression parameters: (identifier) @name)
+      (inferred_parameters (identifier) @name)
       (receiver_parameter (identifier) @name)
       (instanceof_expression name: (identifier) @name)
       (type_pattern (identifier) @name)
@@ -102,7 +104,7 @@ export const JAVA_DEF: LanguageDefinition = {
     annotation_type_declaration: "interface",
     enum_declaration: "type",
   }),
-  createsFunctionScope: nodeTypeIn(["method_declaration", "constructor_declaration"]),
+  createsFunctionScope: nodeTypeIn(["method_declaration", "constructor_declaration", "lambda_expression"]),
   createsBlockScope: nodeTypeIn(["block", "class_body", "if_statement", "switch_rule"]),
   isDeclarationName: (node) =>
     isNameFieldOnParent(node, [
@@ -118,6 +120,8 @@ export const JAVA_DEF: LanguageDefinition = {
       "variable_declarator",
       "formal_parameter",
     ]) ||
+    (node.parent?.type === "lambda_expression" && node.parent.childForFieldName("parameters")?.id === node.id) ||
+    (node.parent?.type === "inferred_parameters" && node.type === "identifier") ||
     isJavaPatternVariableName(node) ||
     // `spread_parameter` (`int... rest`) has no `name` field; its declared name is the
     // `variable_declarator` child, so that node is the declaration name.

@@ -31,6 +31,8 @@ export type DeferredNameRequest =
       owner: SyntaxNodeLike;
       expectedKind: SymbolDef["kind"];
       jvmTypeOnly: boolean;
+      ownerDeclarationType?: string;
+      memberDeclarationType?: string;
       allowRecordProperty?: true;
     }
   /**
