@@ -52,6 +52,12 @@ import {
   expectStaticReceiverEdges,
   withBatch3Fixture,
 } from "./helpers/csharp-java-batch3-fixture.js";
+import {
+  CSHARP_BATCH5_SOURCES,
+  JAVA_BATCH5_SOURCES,
+  expectCsharpBatch5,
+  expectJavaBatch5,
+} from "./helpers/csharp-java-batch5-fixture.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -3207,6 +3213,12 @@ describe("Go to Definition", () => {
   });
 
   describe("Java", () => {
+    it("binds switch labels and lambda parameters without capturing fields", async () => {
+      await withBatch3Fixture("cg-java-switch-lambda-", JAVA_BATCH5_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectJavaBatch5(fixture, index));
+      });
+    });
+
     it("resolves record components inside the record, its compact constructor, and inner classes only", async () => {
       await withBatch3Fixture("cg-java-record-components-", JAVA_RECORD_SOURCES, async (fixture) => {
         await eachIndexMode(fixture, (index) => expectJavaRecordComponents(fixture, index));
@@ -3392,6 +3404,12 @@ describe("Go to Definition", () => {
   });
 
   describe("C#", () => {
+    it("binds query ranges and ignores pointer-shaped multiplication", async () => {
+      await withBatch3Fixture("cg-csharp-query-pointer-", CSHARP_BATCH5_SOURCES, async (fixture) => {
+        await eachIndexMode(fixture, (index) => expectCsharpBatch5(fixture, index));
+      });
+    });
+
     it("keeps the call edge of T.Static() beside a field, property, local, or parameter typed T", async () => {
       await withBatch3Fixture("cg-csharp-static-receiver-", CSHARP_STATIC_RECEIVER_SOURCES, async (fixture) => {
         await eachIndexMode(fixture, (index) => expectStaticReceiverEdges(fixture, index));

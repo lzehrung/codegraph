@@ -55,8 +55,17 @@ export function isCsharpMemberDesignator(node: SyntaxNodeLike): boolean {
 }
 
 /** Tuple labels and explicit anonymous-property names never name an existing indexed declaration. */
-export function csharpUnprovenReferenceCandidate(node: SyntaxNodeLike): boolean {
+export function csharpUnprovenReferenceCandidate(node: SyntaxNodeLike, definitionName: SyntaxNodeLike): boolean {
   const parent = node.parent;
+  const parameterList = definitionName.parent?.parent;
+  const recordParameter =
+    parameterList?.type === "parameter_list" && parameterList.parent?.type === "record_declaration";
+  const parameter =
+    !recordParameter && (definitionName.parent?.type === "parameter" || definitionName.type === "implicit_parameter");
+  if (parameter && parent?.type === "member_access_expression" && sameNode(parent.childForFieldName("name"), node)) {
+    return false;
+  }
+  if (parameter && parent?.type === "member_binding_expression") return false;
   if (parent?.type === "anonymous_object_creation_expression") return !isCsharpMemberDesignator(node);
   if (parent?.type !== "argument") return true;
   if (parent.parent?.type !== "tuple_expression") return true;

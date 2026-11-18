@@ -32,9 +32,6 @@ const BODY_MEMBER_TYPES: ReadonlySet<string> = new Set([
   "property_declaration",
 ]);
 
-/** Query clauses that declare a range variable. */
-const QUERY_BINDING_CLAUSE_TYPES: ReadonlySet<string> = new Set(["from_clause", "let_clause", "join_clause"]);
-
 /** How a use reads a header parameter, relative to the declaration whose header declares it. */
 export type HeaderParameterContext = "header" | "initializer" | "member" | "designator";
 
@@ -225,22 +222,6 @@ function deconstructsBefore(tree: SyntaxTreeLike, scope: SyntaxNodeLike, use: Sy
   return declared.firstEnd <= use.startIndex || declared.tokens.get(use.startIndex) === use.endIndex;
 }
 
-/** The range variables a query declares: its `from`, `let`, and `join` names, and its `into` continuations. */
-function queryRangeVariables(query: SyntaxNodeLike): SyntaxNodeLike[] {
-  const names: SyntaxNodeLike[] = [];
-  for (const clause of query.namedChildren) {
-    // The grammar leaves an `into X` continuation's name as a child of the query itself.
-    if (clause.type === "identifier") names.push(clause);
-    if (!QUERY_BINDING_CLAUSE_TYPES.has(clause.type)) continue;
-    const name = clause.childForFieldName("name") ?? clause.namedChildren.find((child) => child.type === "identifier");
-    if (name) names.push(name);
-    const into = clause.namedChildren.find((child) => child.type === "join_into_clause");
-    const intoName = into?.namedChildren.find((child) => child.type === "identifier");
-    if (intoName) names.push(intoName);
-  }
-  return names;
-}
-
 /** Whether an anonymous method (`delegate (int X) { ... }`) declares the parameter `use` names, or one `wanted` in its body. */
 function anonymousMethodBinds(method: SyntaxNodeLike, use: SyntaxNodeLike, wanted: string): boolean {
   const parameters = method.childForFieldName("parameters");
@@ -254,8 +235,7 @@ function anonymousMethodBinds(method: SyntaxNodeLike, use: SyntaxNodeLike, wante
 
 /**
  * Whether a binder the scope index does not model sits between `use` and `owner` and spells `wanted`, or declares `use`
- * itself: a query range variable, a deconstructed local, or an anonymous method parameter. It, not a parameter or
- * member, is the name's binding.
+ * itself: a deconstructed local or an anonymous method parameter. It, not a parameter or member, is the binding.
  */
 function shadowedByUnmodeledBinder(
   tree: SyntaxTreeLike,
@@ -265,12 +245,6 @@ function shadowedByUnmodeledBinder(
 ): boolean {
   for (let node = use.parent; node && !sameNode(node, owner); node = node.parent) {
     if (node.type === "anonymous_method_expression" && anonymousMethodBinds(node, use, wanted)) return true;
-    if (node.type === "query_expression") {
-      const bound = queryRangeVariables(node).some(
-        (name) => sameNode(name, use) || (name.endIndex <= use.startIndex && spells(name, wanted)),
-      );
-      if (bound) return true;
-    }
     const holdsStatements = node.type === "block" || node.type === "switch_section";
     if (holdsStatements && deconstructsBefore(tree, node, use, wanted)) return true;
   }

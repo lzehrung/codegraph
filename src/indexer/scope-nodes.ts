@@ -19,7 +19,12 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
-import { isJavaAnnotationElementName } from "../util/java-designators.js";
+import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
+import {
+  csharpDeclarationOutsideQuery,
+  csharpQueryBindingVisibleAt,
+  isCsharpPointerExpression,
+} from "../util/csharp-bindings.js";
 import { javaPatternBindingVisibleAt, javaPatternVariableName } from "../util/java-patterns.js";
 import { csharpAttributeParameterCoversUse } from "./name-lookup-policies/csharp-attribute-parameters.js";
 import { blocksCsharpJavaSelectorBinding } from "./name-lookup-policies/csharp-java-selectors.js";
@@ -30,6 +35,10 @@ import { isRecoveredTypeParameterName } from "./type-parameters.js";
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
   parameterParents?: ReadonlySet<string>;
+  /** Reject a native local capture when the language grammar parsed an expression as a declaration. */
+  acceptLocalCapture?: (name: SyntaxNodeLike) => boolean;
+  /** A declaration in this scope's outer-evaluated expression belongs in the enclosing scope instead. */
+  declarationOutsideScope?: (name: SyntaxNodeLike, scope: SyntaxNodeLike) => boolean;
   /** A declaration that covers a specific earlier use without covering the whole scope. */
   bindingCoversBeforeDeclaration?: (
     binding: { kind?: Binding["kind"]; node?: SyntaxNodeLike },
@@ -83,6 +92,8 @@ export type ScopeNodeRow = {
   declarationPatternName?: (node: SyntaxNodeLike) => SyntaxNodeLike | null;
   declarationPatternScopeTypes?: ReadonlySet<string>;
   patternBindingVisibleAt?: (declaration: SyntaxNodeLike, use: SyntaxNodeLike) => boolean;
+  /** Exhaustive declaration parents that the visibility hook can hide; absent means every binding needs it. */
+  conditionalBindingParents?: ReadonlySet<string>;
   /** Node types that introduce type parameters (including defaulted and variadic forms). */
   typeParameterTypes?: ReadonlySet<string>;
   /**
@@ -250,6 +261,8 @@ export type ScopeNodeRow = {
   ) => boolean;
   /** A syntactic member or argument designator cannot be an occurrence of a lexical binding. */
   nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
+  /** Occurrences whose target needs the shared name resolver rather than lexical scope alone. */
+  referenceNeedsVerification?: (node: SyntaxNodeLike) => boolean;
 };
 
 const C_MEMBER_BINDING_NAME_TYPES: Readonly<Record<string, true>> = { field_identifier: true };
@@ -374,22 +387,23 @@ export function pythonFunctionPendingInDefault(defStart: number | undefined, use
  * alias lookup can prove that spelling is a type, while ordinary constant patterns must remain value reads.
  */
 export function csharpTypeOnlyName(node: SyntaxNodeLike, typeAliasPattern = false): boolean {
-  for (let current = node; current.parent; current = current.parent) {
-    const parent = current.parent;
+  for (let current = node, parent = node.parent; parent; current = parent, parent = current.parent) {
+    const parentType = parent.type;
+    if (parentType === "pointer_type" && isCsharpPointerExpression(parent.parent ?? parent)) return false;
     if (parent.childForFieldName("type")?.id === current.id) return true;
     if (parent.childForFieldName("returns")?.id === current.id) return true;
-    const typeOperand = parent.type === "as_expression" || parent.type === "is_expression";
+    const typeOperand = parentType === "as_expression" || parentType === "is_expression";
     if (typeOperand && parent.childForFieldName("right")?.id === current.id) return true;
-    if (typeAliasPattern && parent.type === "constant_pattern") {
+    if (typeAliasPattern && parentType === "constant_pattern") {
       return parent.parent?.type === "is_pattern_expression";
     }
-    if (parent.type === "type_argument_list" || parent.type === "attribute") return true;
+    if (parentType === "type_argument_list" || parentType === "attribute") return true;
     const nameWrapper =
-      parent.type === "qualified_name" ||
-      parent.type === "alias_qualified_name" ||
-      parent.type === "generic_name" ||
-      parent.type === "nullable_type" ||
-      parent.type === "array_type";
+      parentType === "qualified_name" ||
+      parentType === "alias_qualified_name" ||
+      parentType === "generic_name" ||
+      parentType === "nullable_type" ||
+      parentType === "array_type";
     if (!nameWrapper) return false;
   }
   return false;
@@ -456,7 +470,7 @@ function methodHiddenFrom(
  */
 export function bindingHiddenFromUse(
   row: ScopeNodeRow,
-  binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
+  binding: Pick<Binding, "kind" | "node" | "earlierSameScope" | "conditionalVisibility">,
   use: SyntaxNodeLike | undefined,
   methodCall: boolean,
   typeOnly: boolean,
@@ -465,8 +479,10 @@ export function bindingHiddenFromUse(
   if (methodCall && binding.kind === "local") return true;
   if (typeOnly && isValueNamespaceBinding(binding)) return true;
   if (crossedGate && localHiddenByGate(row, binding)) return true;
-  if (use && binding.node && row.patternBindingVisibleAt && !row.patternBindingVisibleAt(binding.node, use))
-    return true;
+  if (use && binding.node && row.patternBindingVisibleAt) {
+    const needsCheck = !row.conditionalBindingParents || binding.conditionalVisibility;
+    if (needsCheck && !row.patternBindingVisibleAt(binding.node, use)) return true;
+  }
   if (use && row.namespaceHidesBinding?.(row, binding, use)) return true;
   if (binding.kind !== "type" || !use || !row.typeOnlyUseTypes) return false;
   // Type syntax reads a type parameter; every other use passes it by.
@@ -663,7 +679,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   },
   java: {
     functionNameTypes: new Set(["method_declaration"]),
-    unnamedFunctionScopeTypes: new Set(["constructor_declaration"]),
+    unnamedFunctionScopeTypes: new Set(["constructor_declaration", "lambda_expression"]),
     classNameTypes: new Set(["class_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration"]),
     // A record's components are bound in the record's own scope, which the header and the body share.
@@ -690,6 +706,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     memberSelectorReceiverFields: { method_invocation: "object" },
     memberSelectorRejectsBinding: blocksCsharpJavaSelectorBinding,
     nonLexicalUse: isJavaAnnotationElementName,
+    referenceNeedsVerification: isJavaSwitchLabelName,
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set([
       "method_declaration",
@@ -699,6 +716,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     ]),
   },
   csharp: {
+    acceptLocalCapture: (name) => !isCsharpPointerExpression(name),
+    declarationOutsideScope: csharpDeclarationOutsideQuery,
     parameterParents: new Set(["parameter"]),
     bindingCoversBeforeDeclaration: csharpAttributeParameterCoversUse,
     functionNameTypes: new Set(["method_declaration", "local_function_statement"]),
@@ -721,6 +740,16 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     typeParameterTypes: new Set(["type_parameter"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
     declarationPatternTypes: new Set(["declaration_pattern"]),
+    conditionalBindingParents: new Set([
+      "declaration_expression",
+      "declaration_pattern",
+      "from_clause",
+      "join_clause",
+      "join_into_clause",
+      "let_clause",
+      "query_expression",
+    ]),
+    patternBindingVisibleAt: csharpQueryBindingVisibleAt,
     variableDeclarationTypes: new Set(["variable_declaration", "field_declaration"]),
     destructuringTypeFieldTypes: new Set(["parameter"]),
     variableDeclaratorTypes: new Set(["variable_declarator"]),
@@ -1051,9 +1080,16 @@ export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeL
   if (scopeType === "lambda_expression") {
     const parameters = scope.node.childForFieldName("parameters");
     const inParameters = parameters && use.startIndex >= parameters.startIndex && use.endIndex <= parameters.endIndex;
-    const parameterName = use.parent?.type === "parameter" && use.parent.childForFieldName("name")?.id === use.id;
-    const declaresParameter = use.type === "implicit_parameter" || parameterName;
-    if (inParameters && !declaresParameter) return false;
+    if (inParameters) {
+      const parameter = use.parent?.type === "parameter" || use.parent?.type === "formal_parameter";
+      const parameterName = parameter && use.parent?.childForFieldName("name")?.id === use.id;
+      const inferred = use.parent?.type === "inferred_parameters" || parameters?.id === use.id;
+      const spreadDeclarator =
+        use.parent?.type === "variable_declarator" && use.parent.parent?.type === "spread_parameter";
+      const spreadName = spreadDeclarator && use.parent?.childForFieldName("name")?.id === use.id;
+      const declaresParameter = use.type === "implicit_parameter" || parameterName || inferred || spreadName;
+      if (!declaresParameter) return false;
+    }
   }
   if (row.moduleBindingsAtFunctionRuntime && scope.kind === "function") {
     const body = scope.node.childForFieldName("body");

@@ -99,6 +99,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "childSkipNameTypes",
   "classScopeBoundaryTypes",
   "classNameTypes",
+  "conditionalBindingParents",
   "declarationPatternTypes",
   "declarationPatternScopeTypes",
   "destructuringObjectPatternTypes",
@@ -141,6 +142,9 @@ const SCOPE_NODE_LIST_FIELDS = [
 
 /** Row fields that hold behavior or a call/declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
+  "acceptLocalCapture",
+  "declarationOutsideScope",
+  "referenceNeedsVerification",
   "destructuringTypeFieldBindingTypes",
   "outerEvaluatedFields",
   "memberSelectorFields",
@@ -417,6 +421,40 @@ describe("scope node tables", () => {
     const lambda = scope.allScopes.find((candidate) => candidate.node.type === "lambda_expression");
     expect([...lambda!.map.keys()]).toEqual(["x"]);
     expect(lambda?.map.get("x")?.kind).toBe("param");
+  });
+
+  it("marks only conditionally visible C# declarations for flow checks", () => {
+    const source = [
+      "class Query {",
+      " int field; int[] xs;",
+      " void Test(int parameter) {",
+      "  int ordinary = 0;",
+      "  var q = from first in xs let second = first join third in xs on second equals third into grouped",
+      "          select grouped into continuation select continuation;",
+      "  Consume(out var output);",
+      "  if (ordinary is int pattern) Consume(pattern);",
+      " }",
+      "}",
+    ].join("\n");
+    const scope = buildScopeIndexFromSource("Query.cs", source, supportById("csharp")!);
+    for (const [name, parent] of [
+      ["first", "from_clause"],
+      ["second", "let_clause"],
+      ["third", "join_clause"],
+      ["grouped", "join_into_clause"],
+      ["continuation", "query_expression"],
+      ["output", "declaration_expression"],
+      ["pattern", "declaration_pattern"],
+    ]) {
+      const binding = scope.all.find((candidate) => candidate.name === name);
+      expect(binding?.node?.parent?.type, name).toBe(parent);
+      expect(binding?.conditionalVisibility, name).toBe(true);
+    }
+    for (const name of ["field", "parameter", "ordinary"]) {
+      const binding = scope.all.find((candidate) => candidate.name === name);
+      expect(binding, name).toBeDefined();
+      expect(binding?.conditionalVisibility, name).toBeUndefined();
+    }
   });
 
   it("binds Kotlin class and function type parameters as type bindings", () => {

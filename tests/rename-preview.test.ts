@@ -38,6 +38,12 @@ import {
 } from "./helpers/header-parameter-fixture.js";
 import { placeOf } from "./helpers/csharp-java-batch3-fixture.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
+import {
+  CSHARP_BATCH5_REVIEW_SOURCES,
+  CSHARP_BATCH5_SOURCES,
+  JAVA_BATCH5_REVIEW_SOURCES,
+  JAVA_BATCH5_SOURCES,
+} from "./helpers/csharp-java-batch5-fixture.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -2972,6 +2978,297 @@ describe("rename preview", () => {
         return ["Selectors.cs", position.line, position.column];
       }),
     );
+  });
+
+  it("renames C# query variables and multiplication operands without editing decoys or selectors", async () => {
+    for (const [file, name, line, places] of [
+      [
+        "Fixture.cs",
+        "b",
+        4,
+        [
+          [4, 1],
+          [9, 1],
+          [9, 2],
+          [9, 3],
+        ],
+      ],
+      [
+        "Fixture.cs",
+        "item",
+        13,
+        [
+          [13, 1],
+          [13, 2],
+          [13, 3],
+          [13, 4],
+        ],
+      ],
+      [
+        "Fixture.cs",
+        "x",
+        13,
+        [
+          [13, 1],
+          [13, 3],
+        ],
+      ],
+      [
+        "Fixture.cs",
+        "grouped",
+        13,
+        [
+          [13, 1],
+          [13, 2],
+        ],
+      ],
+      [
+        "Selectors.cs",
+        "value",
+        2,
+        [
+          [2, 1],
+          [2, 2],
+        ],
+      ],
+    ] as const) {
+      const result = await renameInFixture(CSHARP_BATCH5_SOURCES, { file, name, line }, "renamed");
+      expect(result.safe, `${file}:${line}:${name}`).toBe(true);
+      const expected = places.map(([useLine, nth]) => {
+        const position = placeOf(CSHARP_BATCH5_SOURCES, { file, line: useLine, token: name, nth });
+        return [file, position.line, position.column];
+      });
+      expect(editSites(result).sort()).toEqual(expected.sort());
+    }
+  });
+
+  it("keeps C# initializer, query-source, and record renames separate", async () => {
+    for (const [file, name, line, places] of [
+      [
+        "Initializers.cs",
+        "item",
+        4,
+        [
+          [4, 1],
+          [8, 1],
+          [8, 2],
+        ],
+      ],
+      [
+        "Initializers.cs",
+        "i",
+        5,
+        [
+          [5, 1],
+          [8, 1],
+          [8, 2],
+        ],
+      ],
+      [
+        "Initializers.cs",
+        "item",
+        6,
+        [
+          [6, 1],
+          [6, 2],
+        ],
+      ],
+      [
+        "Queries.cs",
+        "n",
+        6,
+        [
+          [6, 1],
+          [6, 2],
+          [6, 3],
+        ],
+      ],
+      [
+        "Queries.cs",
+        "j",
+        7,
+        [
+          [7, 1],
+          [7, 2],
+          [7, 3],
+        ],
+      ],
+      [
+        "Queries.cs",
+        "m",
+        4,
+        [
+          [4, 1],
+          [8, 2],
+          [8, 3],
+        ],
+      ],
+      [
+        "Queries.cs",
+        "zz",
+        4,
+        [
+          [4, 1],
+          [13, 3],
+          [13, 4],
+        ],
+      ],
+      [
+        "Queries.cs",
+        "zz",
+        13,
+        [
+          [13, 1],
+          [13, 2],
+        ],
+      ],
+      [
+        "Patterns.cs",
+        "p",
+        4,
+        [
+          [4, 1],
+          [4, 2],
+          [4, 3],
+          [4, 4],
+        ],
+      ],
+    ] as const) {
+      const result = await renameInFixture(CSHARP_BATCH5_REVIEW_SOURCES, { file, name, line }, "renamed");
+      expect(result.safe, `${file}:${line}:${name}`).toBe(true);
+      const expected = places.map(([useLine, nth]) => {
+        const position = placeOf(CSHARP_BATCH5_REVIEW_SOURCES, { file, line: useLine, token: name, nth });
+        return [file, position.line, position.column];
+      });
+      expect(editSites(result).sort()).toEqual(expected.sort());
+    }
+    for (const [line, name] of [
+      [1, "Name"],
+      [2, "Label"],
+      [3, "Tag"],
+      [4, "Title"],
+    ] as const) {
+      const result = await renameInFixture(CSHARP_BATCH5_REVIEW_SOURCES, { file: "Records.cs", name, line }, "renamed");
+      expect(result.safe, name).toBe(false);
+    }
+  });
+
+  it("keeps Java initializer lambdas and varargs renames separate from fields", async () => {
+    const file = "ji/Cache.java";
+    for (const [name, line, places] of [
+      [
+        "value",
+        4,
+        [
+          [4, 1],
+          [6, 1],
+          [6, 2],
+          [6, 3],
+        ],
+      ],
+      [
+        "value",
+        5,
+        [
+          [5, 1],
+          [5, 2],
+        ],
+      ],
+      ["a", 13, [[13, 1]]],
+      [
+        "a",
+        14,
+        [
+          [14, 1],
+          [14, 2],
+        ],
+      ],
+    ] as const) {
+      const result = await renameInFixture(JAVA_BATCH5_REVIEW_SOURCES, { file, name, line }, "renamed");
+      expect(result.safe, `${line}:${name}`).toBe(true);
+      const expected = places.map(([useLine, nth]) => {
+        const position = placeOf(JAVA_BATCH5_REVIEW_SOURCES, { file, line: useLine, token: name, nth });
+        return [file, position.line, position.column];
+      });
+      if (line === 4) {
+        const position = placeOf(JAVA_BATCH5_REVIEW_SOURCES, { file: "ji/User.java", line: 2, token: "value" });
+        expected.push(["ji/User.java", position.line, position.column]);
+      }
+      expect(editSites(result).sort()).toEqual(expected.sort());
+    }
+  });
+
+  it("renames Java enum labels and lambda parameters without editing same-named fields", async () => {
+    for (const [name, line, places, safe] of [
+      [
+        "SMALL",
+        2,
+        [
+          [2, 1],
+          [9, 2],
+          [29, 2],
+        ],
+        false,
+      ],
+      [
+        "BIG",
+        2,
+        [
+          [2, 1],
+          [9, 1],
+        ],
+        true,
+      ],
+      [
+        "SMALL",
+        9,
+        [
+          [9, 1],
+          [9, 3],
+        ],
+        true,
+      ],
+      [
+        "x",
+        10,
+        [
+          [10, 1],
+          [10, 2],
+        ],
+        true,
+      ],
+      [
+        "a",
+        10,
+        [
+          [10, 1],
+          [10, 2],
+        ],
+        true,
+      ],
+      [
+        "b",
+        10,
+        [
+          [10, 1],
+          [10, 2],
+        ],
+        true,
+      ],
+    ] as const) {
+      const file = "Fixture.java";
+      const result = await renameInFixture(JAVA_BATCH5_SOURCES, { file, name, line }, "renamed");
+      expect(result.safe, `${line}:${name}`).toBe(safe);
+      const expected = places.map(([useLine, nth]) => {
+        const position = placeOf(JAVA_BATCH5_SOURCES, { file, line: useLine, token: name, nth });
+        return [file, position.line, position.column];
+      });
+      expect(editSites(result).sort()).toEqual(expected.sort());
+    }
+    const field = await renameInFixture(JAVA_BATCH5_SOURCES, { file: "Fixture.java", name: "s", line: 8 }, "text");
+    expect(field.safe).toBe(false);
+    const consequence = placeOf(JAVA_BATCH5_SOURCES, { file: "Fixture.java", line: 11, token: "s", nth: 2 });
+    expect(editSites(field)).toContainEqual(["Fixture.java", consequence.line, consequence.column]);
   });
 
   it("renames Java pattern variables and annotation elements without touching same-named fields", async () => {

@@ -15,6 +15,11 @@ import {
 import { BATCH3_CASES } from "./helpers/header-parameter-fixture.js";
 import { eachIndexMode, withBatch3Fixture } from "./helpers/csharp-java-batch3-fixture.js";
 import {
+  CSHARP_BATCH5_SOURCES,
+  JAVA_BATCH5_SOURCES,
+  expectBatch5CacheTransitions,
+} from "./helpers/csharp-java-batch5-fixture.js";
+import {
   expectTypeScriptSplitMethods,
   typescriptSplitMethodSources,
 } from "./helpers/typescript-split-method-fixture.js";
@@ -1060,6 +1065,13 @@ nativeDescribe("native semantic coverage", () => {
       await expectMemberSelectorGraph(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
     });
     await expectMemberSelectorCacheTransitions(RUST_NAMESPACE_COLLISION_FIXTURE);
+  });
+
+  it.each([
+    { language: "csharp" as const, sources: CSHARP_BATCH5_SOURCES },
+    { language: "java" as const, sources: JAVA_BATCH5_SOURCES },
+  ])("keeps $language bindings stable through incremental and reopened caches", async ({ language, sources }) => {
+    await withBatch3Fixture("cg-batch5-cache-", sources, (fixture) => expectBatch5CacheTransitions(fixture, language));
   });
 
   it("preserves native qualified Rust item goto, references, and rename across cache reloads", async () => {

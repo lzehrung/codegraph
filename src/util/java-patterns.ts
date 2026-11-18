@@ -117,6 +117,17 @@ export function javaPatternMayReachUse(declaration: SyntaxNodeLike, use: SyntaxN
     const alternative = scope.childForFieldName("alternative");
     if (contains(condition, pattern)) {
       if (provesPattern(condition, pattern) && contains(alternative, use)) return false;
+      let unwrapped = condition;
+      while (unwrapped?.type === "parenthesized_expression") unwrapped = unwrapped.namedChildren[0] ?? null;
+      const negated = unwrapped?.type === "unary_expression" && unwrapped.childForFieldName("operator")?.type === "!";
+      if (
+        unwrapped &&
+        negated &&
+        contains(consequence, use) &&
+        provesPattern(unwrapped.namedChildren[0] ?? null, pattern)
+      ) {
+        return false;
+      }
     } else {
       const operand = contains(consequence, pattern) ? consequence : alternative;
       if (!contains(operand, use)) return false;

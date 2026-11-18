@@ -186,8 +186,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 167 rebuilds Rust namespace and tuple-pattern bindings and Swift tuple-label references and edges.
  * Epoch 168 records that a file's syntax tree cannot be projected because it exceeds the native node or depth
  * limit, so a later query or warm build reuses that fact for the same content instead of projecting the file again.
+ * Epoch 169 rebuilds C# query and pointer bindings and Java lambda, switch-label, and pattern-flow resolutions.
  */
-export const CORE_ALGORITHM_EPOCH = 168;
+export const CORE_ALGORITHM_EPOCH = 169;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -215,8 +216,9 @@ export const CORE_ALGORITHM_EPOCH = 168;
  * Epoch 25 isolates C# initializer variables, marks unprobeable identifier spellings, and classifies Java pattern
  * and annotation declarations.
  * Epoch 27 adds the Rust value and type namespace hook and the Swift tuple-label selector field.
+ * Epoch 28 scopes C# query ranges and Java lambda parameters and excludes misparsed C# pointer expressions.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 27;
+export const LANGUAGE_BEHAVIOR_EPOCH = 28;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

@@ -1128,7 +1128,10 @@ async function findReferencesInternal(
   const requiresHeaderParameterVerifiedScan =
     !!localBinding?.node && !!headerParameterOwner(parsedContext.sup.id, localBinding.node);
   const bindingNeedsVerifiedScan =
-    requiresTypeScriptOverloadVerifiedScan || requiresRuntimeBindingVerifiedScan || requiresHeaderParameterVerifiedScan;
+    requiresTypeScriptOverloadVerifiedScan ||
+    requiresRuntimeBindingVerifiedScan ||
+    requiresHeaderParameterVerifiedScan ||
+    localBinding?.occurrencesComplete === false;
   const kotlinNeedsVerifiedScan = kotlinExtension || kotlinCallableCollision;
   const requiresSameFileVerifiedScan =
     privateName ||

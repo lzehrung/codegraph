@@ -350,6 +350,14 @@ async function namesAttributeBase(index: ProjectIndex, def: SymbolDef): Promise<
   });
 }
 
+/** Check a contextual owner's or member's declaration syntax before accepting the result. */
+async function hasDeclarationType(index: ProjectIndex, definition: SymbolDef, type: string): Promise<boolean> {
+  const start = definition.range.start.index;
+  if (start === undefined) return false;
+  const parsed = await ensureParsedContextForIndex(index, definition.file).catch(() => null);
+  return parsed?.tree.rootNode.descendantForIndex(start, start).parent?.type === type;
+}
+
 /**
  * A C# header parameter read in a member body: a member of another part or a project base class that shares its name
  * binds first. Nothing found leaves the parameter as the answer.
@@ -509,9 +517,19 @@ export async function settleNameResolution(
       const ownerUse = { ...use, node: request.owner, name: sliceText(request.owner, parsed.source) };
       const ownerResolution = resolveBareName(ownerUse, request.jvmTypeOnly);
       const owner = await settleNameResolution(ownerUse, ownerResolution, options);
-      if (owner?.status === "ok" && declaresMembers(owner.definition)) {
+      const ownerMatches =
+        owner?.status === "ok" &&
+        declaresMembers(owner.definition) &&
+        (!request.ownerDeclarationType ||
+          (await hasDeclarationType(index, owner.definition, request.ownerDeclarationType)));
+      if (ownerMatches && owner?.status === "ok") {
         const result = await findReceiverTypeMember(index, mod, node, owner.definition, name, undefined);
-        if (result.status === "member" && result.member.kind === request.expectedKind) {
+        const memberMatches =
+          result.status === "member" &&
+          result.member.kind === request.expectedKind &&
+          (!request.memberDeclarationType ||
+            (await hasDeclarationType(index, result.member, request.memberDeclarationType)));
+        if (memberMatches && result.status === "member") {
           return okGoToResult(index, result.member, { resolution: "member-access", confidence: "high" });
         }
         if (request.allowRecordProperty) {
