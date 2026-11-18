@@ -6,11 +6,17 @@ import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type Lang
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { parseNavigationContext, type ParsedFileContext } from "./parse-context.js";
+import {
+  isSyntaxProjectionLimitError,
+  parseNavigationContext,
+  syntaxTreeUnavailablePublicReason,
+  type ParsedFileContext,
+} from "./parse-context.js";
 import {
   assertQuerySourceForIndex,
   createLoadingParsedFileProvider,
   ensureParsedContextForIndex,
+  assertIndexedOversizedSourceCurrent,
   rethrowStaleQuerySource,
   withParsedFiles,
 } from "./parsed-cache.js";
@@ -203,10 +209,19 @@ function importScanTarget(
   return typeof imp.resolved === "string" && !csharpShadowedImports(index).has(imp) ? imp.resolved : undefined;
 }
 
-export async function goToDefinition(
+export function goToDefinition(
   index: ProjectIndex,
   req: GoToRequest,
   parsedContext?: ParsedFileContext,
+): Promise<GoToResult> {
+  return goToDefinitionInternal(index, req, parsedContext);
+}
+
+async function goToDefinitionInternal(
+  index: ProjectIndex,
+  req: GoToRequest,
+  parsedContext?: ParsedFileContext,
+  propagateProjectionLimit = false,
 ): Promise<GoToResult> {
   const { file, line, column } = req;
   const indexed = index.byFile.get(fileIdentityKey(file));
@@ -221,7 +236,16 @@ export async function goToDefinition(
   const scssResult = await goToScssDefinition(index, req);
   if (scssResult) return scssResult;
 
-  const context = parsedContext ?? (await ensureParsedContextForIndex(index, file));
+  let context: ParsedFileContext;
+  try {
+    context = parsedContext ?? (await ensureParsedContextForIndex(index, file));
+  } catch (error) {
+    if (isSyntaxProjectionLimitError(error)) {
+      if (propagateProjectionLimit) throw error;
+      return { status: "not_found", reason: syntaxTreeUnavailablePublicReason(error) };
+    }
+    throw error;
+  }
   const sup = context.sup;
   const source = context.source;
   const tree = context.tree;
@@ -774,10 +798,17 @@ async function findReferencesInternal(
         provenance = canonical.provenance;
       }
     } else {
-      const gotoResult = await goToDefinition(index, req);
-      if (gotoResult.status === "ok") {
-        def = gotoResult.definition;
-        provenance = gotoResult.provenance;
+      try {
+        const gotoResult = await goToDefinitionInternal(index, req, undefined, true);
+        if (gotoResult.status === "ok") {
+          def = gotoResult.definition;
+          provenance = gotoResult.provenance;
+        }
+      } catch (error) {
+        if (isSyntaxProjectionLimitError(error)) {
+          return { status: "not_found", reason: syntaxTreeUnavailablePublicReason(error) };
+        }
+        throw error;
       }
     }
   }
@@ -849,7 +880,15 @@ async function findReferencesInternal(
     if (collectionMode === "all") return (reference) => !seenRefs.has(referenceSiteKey(fileId, reference.range));
     return (reference) => !reference.via?.reexport && referenceSiteKey(fileId, reference.range) !== definitionSiteKey;
   };
-  const parsedContext = await ensureParsedContextForIndex(index, definitionFile);
+  let parsedContext: ParsedFileContext;
+  try {
+    parsedContext = await ensureParsedContextForIndex(index, definitionFile);
+  } catch (error) {
+    if (isSyntaxProjectionLimitError(error)) {
+      return { status: "not_found", reason: syntaxTreeUnavailablePublicReason(error) };
+    }
+    throw error;
+  }
   let cNamespace: "tag" | "ordinary" | undefined;
   if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
@@ -1298,18 +1337,31 @@ async function findReferencesInternal(
     const indexedCandidate = index.byFile.get(fileIdentityKey(fileId));
     if (!indexedCandidate) continue;
     const module = withCsharpGlobalUsings(index, indexedCandidate);
+    if (indexedCandidate.syntaxTreeUnavailableReason) {
+      assertIndexedOversizedSourceCurrent(index, fileId);
+      continue;
+    }
 
     let scopeIndex: ScopeIndex | null = null;
     let candidateParsedContext: ParsedFileContext | null = null;
-    const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
+    let candidateParseFailed = false;
+    const ensureCandidateParsed = async (): Promise<ParsedFileContext | null> => {
+      if (candidateParseFailed) return null;
       if (!candidateParsedContext) {
-        candidateParsedContext = await ensureParsedContextForIndex(index, fileId);
+        try {
+          candidateParsedContext = await ensureParsedContextForIndex(index, fileId);
+        } catch (error) {
+          if (!isSyntaxProjectionLimitError(error)) throw error;
+          candidateParseFailed = true;
+          return null;
+        }
       }
       return candidateParsedContext;
     };
-    const ensureScope = async (): Promise<ScopeIndex> => {
+    const ensureScope = async (): Promise<ScopeIndex | null> => {
       if (!scopeIndex) {
         const parsed = await ensureCandidateParsed();
+        if (!parsed) return null;
         scopeIndex = getCachedScope(index, fileId, module, parsed);
       }
       return scopeIndex;
@@ -1337,6 +1389,8 @@ async function findReferencesInternal(
           for (const [visibleMemberName, nestedHit] of namespaceExports) {
             if (nestedHit.kind !== "resolved" || !matchesReferenceDefinition(nestedHit.def)) continue;
             const parsed = await ensureCandidateParsed();
+            const scope = await ensureScope();
+            if (!parsed || !scope) return;
             const ranges = await collectNamespaceMemberRefs(
               fileId,
               namespacePath.name,
@@ -1345,7 +1399,7 @@ async function findReferencesInternal(
               index.languageExtensions,
               importBinding,
               module.imports,
-              await ensureScope(),
+              scope,
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) return;
@@ -1462,6 +1516,7 @@ async function findReferencesInternal(
           return verifiedBindingMatches;
         }
         const parsed = await ensureCandidateParsed();
+        if (!parsed) return verifiedBindingMatches;
         for (const verificationSite of importBindingIdentityVerificationSites(imp)) {
           const resolved = await goToDefinition(
             index,
@@ -1562,6 +1617,8 @@ async function findReferencesInternal(
           }
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
+          const scope = await ensureScope();
+          if (!parsed || !scope) continue;
           const ranges = await collectNamespaceMemberRefs(
             fileId,
             namespaceSearchName,
@@ -1570,7 +1627,7 @@ async function findReferencesInternal(
             index.languageExtensions,
             imp,
             module.imports,
-            await ensureScope(),
+            scope,
           );
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
@@ -1639,6 +1696,7 @@ async function findReferencesInternal(
           // namespace under the same precedence as navigation before attributing its member use.
           const namespaceExports = resolveModuleExports(index, targetFile);
           const parsed = await ensureCandidateParsed();
+          if (!parsed) continue;
           for (const [namespaceName, namespaceResult] of namespaceExports) {
             if (namespaceResult.kind !== "namespace") continue;
             if (
@@ -1650,6 +1708,8 @@ async function findReferencesInternal(
             }
             const namespaceDecision = resolveStarImportedNamespace(index, module, parsed.sup.id, namespaceName);
             if (namespaceDecision.status !== "resolved" || namespaceDecision.imp !== imp) continue;
+            const scope = await ensureScope();
+            if (!scope) continue;
             const ranges = await collectNamespaceMemberRefs(
               fileId,
               namespaceName,
@@ -1658,7 +1718,7 @@ async function findReferencesInternal(
               index.languageExtensions,
               undefined,
               module.imports,
-              await ensureScope(),
+              scope,
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) break;
@@ -1718,6 +1778,8 @@ async function findReferencesInternal(
               )
             ) {
               const parsed = await ensureCandidateParsed();
+              const scope = await ensureScope();
+              if (!parsed || !scope) continue;
               const ranges = await collectNamespaceMemberRefs(
                 fileId,
                 imp.local,
@@ -1726,7 +1788,7 @@ async function findReferencesInternal(
                 index.languageExtensions,
                 undefined,
                 module.imports,
-                await ensureScope(),
+                scope,
               );
               for (const range of ranges) {
                 if (hasReachedCollectionLimit()) break;
@@ -1831,6 +1893,7 @@ async function findReferencesInternal(
           }
           const parsed = await ensureCandidateParsed();
           const resolvedScope = await ensureScope();
+          if (!parsed || !resolvedScope) continue;
           const localName = parsed.sup.normalizeIdentifier(importedLocalName);
           const declarationKeys = importBindingDeclarationRangeKeys(module);
           const bindings = resolvedScope.bindings.get(localName) ?? [];
@@ -1883,6 +1946,8 @@ async function findReferencesInternal(
     if (parsedContext.sup.id === "python" && !definition.isMember && !hasReachedCollectionLimit()) {
       for (const { namespace, importBinding } of pythonParentPackageNamespacePaths(module, definitionFile)) {
         const parsed = await ensureCandidateParsed();
+        const scope = await ensureScope();
+        if (!parsed || !scope) continue;
         const ranges = await collectNamespaceMemberRefs(
           fileId,
           namespace,
@@ -1891,7 +1956,7 @@ async function findReferencesInternal(
           index.languageExtensions,
           importBinding,
           module.imports,
-          await ensureScope(),
+          scope,
         );
         for (const range of ranges) {
           if (hasReachedCollectionLimit()) break;

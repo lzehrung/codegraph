@@ -1,4 +1,5 @@
 import { isGraphOnlyLanguage } from "../document-links.js";
+import { createHash } from "node:crypto";
 import type { LanguageExtensionMap } from "../languages.js";
 import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/file-prep.js";
 import {
@@ -31,6 +32,7 @@ export type ParsedFileCacheEntry = {
 export type PreparedFileContext = {
   file: string;
   source: string;
+  originalSource?: string;
   sup: LanguageSupport;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
   nativeQueries: NativeQueryResults | null;
@@ -49,10 +51,46 @@ export type PreparedFileParseAttempt = {
 
 /** A query parse could not produce a syntax tree, even though the source was readable. */
 export class SyntaxTreeUnavailableError extends Error {
-  constructor(file: string, reason: string) {
+  /**
+   * Set only for the native node or depth projection limit, and only to that native message.
+   * Other failures, including a source over the byte limit, leave it unset so callers still throw.
+   */
+  readonly projectionLimit: string | undefined;
+
+  constructor(file: string, reason: string, projectionLimit?: string) {
     super(`Failed to reconstruct native syntax tree for ${file}: ${reason}`);
     this.name = "SyntaxTreeUnavailableError";
+    this.projectionLimit = projectionLimit;
   }
+}
+
+const SYNTAX_PROJECTION_LIMIT = /^syntax tree projection exceeded max (?:node|depth) limit \(\d+\)$/;
+
+/** The native projection-limit message, or undefined when `message` is a different failure. */
+export function syntaxProjectionLimitDetail(message: string | undefined): string | undefined {
+  if (!message) return undefined;
+  return SYNTAX_PROJECTION_LIMIT.exec(message)?.[0];
+}
+
+/** True when `error` is the native projection limit, not another syntax-tree failure. */
+export function isSyntaxProjectionLimitError(
+  error: unknown,
+): error is SyntaxTreeUnavailableError & { readonly projectionLimit: string } {
+  if (!(error instanceof SyntaxTreeUnavailableError)) return false;
+  const limit = error.projectionLimit;
+  return typeof limit === "string" && syntaxProjectionLimitDetail(limit) === limit;
+}
+
+/** SHA-256 of the source text a projection-limit fact was recorded for. */
+export function sourceContentFingerprint(source: string): string {
+  return createHash("sha256").update(source).digest("hex");
+}
+
+/** Consumer-facing reason. It names the failure and does not include a file path. */
+export function syntaxTreeUnavailablePublicReason(
+  error: SyntaxTreeUnavailableError & { readonly projectionLimit: string },
+): string {
+  return `Syntax tree unavailable: ${error.projectionLimit}`;
 }
 
 function createGraphOnlySyntaxTree(): SyntaxTreeLike {
@@ -107,6 +145,14 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       ...(context.nativeError ? { nativeError: context.nativeError } : {}),
     };
   }
+  const projectionLimit = syntaxProjectionLimitDetail(context.nativeError);
+  if (projectionLimit) {
+    return {
+      parsed: null,
+      nativeFallbackReason: context.nativeFallbackReason ?? "queryFailure",
+      ...(context.nativeError ? { nativeError: context.nativeError } : {}),
+    };
+  }
   const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup);
   if (nativeTreeExecution.tree) {
     return {
@@ -133,7 +179,12 @@ export function tryParsePreparedFileContext(context: PreparedFileContext): Parse
 export function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
   const attempt = attemptParsePreparedFileContext(context);
   if (attempt.parsed) return attempt.parsed;
-  throw new SyntaxTreeUnavailableError(context.file, attempt.nativeError ?? attempt.nativeFallbackReason ?? "no tree");
+  const projectionLimit = syntaxProjectionLimitDetail(attempt.nativeError);
+  throw new SyntaxTreeUnavailableError(
+    context.file,
+    attempt.nativeError ?? attempt.nativeFallbackReason ?? "no tree",
+    projectionLimit,
+  );
 }
 
 export async function prepareFileForIndexing(
@@ -181,6 +232,7 @@ export async function prepareFileForIndexing(
   return {
     file,
     source: prep.source,
+    ...(prep.originalSource !== undefined ? { originalSource: prep.originalSource } : {}),
     sup: prep.sup,
     ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
     nativeQueries: nativeExecution.results,

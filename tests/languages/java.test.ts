@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getUnresolvedImports } from "../../src/graphs/unresolved.js";
-import { buildProjectIndex, findReferences, goToDefinition } from "../../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "../../src/index.js";
+import type { ProjectIndex } from "../../src/indexer/types.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
 import { defNodeId, type SymbolGraph } from "../../src/graphs/symbol-graph.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
@@ -1142,7 +1143,11 @@ describe("Java package files without a usable syntax tree", () => {
 
       const index = await buildProjectIndex(root, { cache: "off" });
 
-      expect(index.byFile.get(fileIdentityKey(big))?.jvmFacts).toBeUndefined();
+      expect(index.byFile.get(fileIdentityKey(big))?.jvmFacts).toEqual({
+        packageName: "com.acme.p3",
+        symbols: [],
+        incomplete: true,
+      });
       const importsFrom = index.graph.edges
         .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(use) && edge.to.type === "file")
         .map((edge) => (edge.to.type === "file" ? normalizePath(edge.to.path) : ""))
@@ -1428,6 +1433,52 @@ describe("Java package files without a usable syntax tree", () => {
       expect(moduleOf("app/UseQuiet.java")?.importLookupIncomplete).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the wildcard edge after a warm edit and rename", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-java-wildcard-"));
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), "cg-java-wildcard-cache-"));
+    const fields = Array.from({ length: 70000 }, (_, index) => `  public int f${index};`).join("\n");
+    const wildSource =
+      "package app;\nimport big.*;\npublic class Wild { public int useIt() { return new Thing().x; } }\n";
+    const options = { cache: "disk" as const, cacheDir, threads: 1, useNativeWorkers: false };
+    const edgesFrom = (index: ProjectIndex, fromBase: string): string[] =>
+      index.graph.edges
+        .filter((edge) => path.basename(edge.from) === fromBase)
+        .map((edge) => {
+          const target = edge.to.type === "file" ? path.basename(edge.to.path) : edge.to.type;
+          return `${target}:${edge.raw}`;
+        })
+        .sort();
+    try {
+      await mkdir(path.join(root, "app"), { recursive: true });
+      await mkdir(path.join(root, "big"), { recursive: true });
+      await writeFile(path.join(root, "big", "Thing.java"), "package big;\npublic class Thing { public int x; }\n");
+      await writeFile(path.join(root, "big", "Big.java"), `package big;\npublic class Big {\n${fields}\n}\n`);
+      await writeFile(path.join(root, "app", "Wild.java"), wildSource);
+      const cold = await buildProjectIndexIncremental(root, options);
+      const big = [...cold.byFile.values()].find((mod) => path.basename(mod.file) === "Big.java");
+      expect(big?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      expect(big?.jvmFacts).toEqual({ packageName: "big", symbols: [], incomplete: true });
+      expect(edgesFrom(cold, "Wild.java").some((edge) => edge.startsWith("Big.java:"))).toBe(true);
+      const warm = await buildProjectIndexIncremental(root, options);
+      expect(edgesFrom(warm, "Wild.java")).toEqual(edgesFrom(cold, "Wild.java"));
+      expect([...warm.byFile.values()].find((mod) => path.basename(mod.file) === "Big.java")?.jvmFacts).toEqual(
+        big?.jvmFacts,
+      );
+      await writeFile(path.join(root, "app", "Wild.java"), `${wildSource}// touch\n`);
+      const edited = await buildProjectIndexIncremental(root, options);
+      expect(edgesFrom(edited, "Wild.java")).toEqual(edgesFrom(cold, "Wild.java"));
+      await writeFile(path.join(root, "app", "Renamed.java"), wildSource.replace("class Wild", "class Renamed"));
+      await rm(path.join(root, "app", "Wild.java"));
+      const renamed = await buildProjectIndexIncremental(root, options);
+      const coldFinal = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect(edgesFrom(renamed, "Renamed.java")).toEqual(edgesFrom(coldFinal, "Renamed.java"));
+      expect(edgesFrom(renamed, "Renamed.java").some((edge) => edge.startsWith("Big.java:"))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(cacheDir, { recursive: true, force: true });
     }
   });
 });

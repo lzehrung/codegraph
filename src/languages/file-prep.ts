@@ -26,6 +26,8 @@ export interface PreparedSFCEmbeddedBlock {
 
 export interface SourceInput {
   source: string;
+  /** The original SFC text, when `source` is a masked script. */
+  originalSource?: string;
   sup: LanguageSupport;
   embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 }
@@ -94,6 +96,7 @@ function prepareSFCSourceInput(source: string, framework: SFCFramework): SourceI
   const embeddedBlocks = prepareEmbeddedSFCBlocks(source, framework, blocks);
   return {
     source: maskedSource,
+    originalSource: source,
     sup,
     ...(embeddedBlocks.length ? { embeddedBlocks } : {}),
   };

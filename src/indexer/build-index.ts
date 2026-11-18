@@ -25,6 +25,7 @@ import { clearResolutionCaches, loadNearestTsconfigFor, type MatchPathFn } from 
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import { collectJvmFileFacts } from "../util/jvm-tree.js";
+import { projectFactsSlot } from "../util/project-file-facts.js";
 import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
 import { primeCsharpNamespaceFacts, setCsharpNamespaceFactsReader } from "../util/resolution/csharp.js";
 import { primeJvmFileFacts, resolveJvmPackageImportPaths, setJvmFileFactsReader } from "../util/resolution/jvm.js";
@@ -51,7 +52,12 @@ import { collectEdgesForFile, type FileEdgeSource } from "../graph-edge-collecto
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
-import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
+import {
+  attemptParsePreparedFileContext,
+  sourceContentFingerprint,
+  syntaxProjectionLimitDetail,
+  type ParsedFileContext,
+} from "./parse-context.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import type { ImportDegradedHook } from "./imports/context.js";
@@ -126,7 +132,7 @@ import {
   type PendingModuleCacheWrite,
 } from "./build-cache.js";
 import { computeResolverEnvironmentFingerprint } from "./build-cache/resolver-environment.js";
-import { cacheRoot } from "./build-cache/location.js";
+import { cacheRoot, repositoryAnchorMemoActive, runWithRepositoryAnchorMemo } from "./build-cache/location.js";
 import {
   type BuildOptions,
   type BuildReport,
@@ -561,8 +567,21 @@ function cachedModuleHasExternalImport(mod: ModuleIndex): boolean {
  * keeps them valid.
  */
 function primeReusedFileFacts(file: string, mod: ModuleIndex, opts: BuildOptions | undefined): void {
-  if (mod.csharpNamespaceFacts) primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
-  if (mod.jvmFacts) primeJvmFileFacts(file, mod.jvmFacts);
+  const slot = mod.syntaxTreeUnavailableReason
+    ? projectFactsSlot(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id)
+    : undefined;
+  if (mod.csharpNamespaceFacts) {
+    primeCsharpNamespaceFacts(file, mod.csharpNamespaceFacts, opts?.languageExtensions);
+  } else if (slot === "csharp" && mod.syntaxTreeUnavailableReason) {
+    // The reused module already recorded that this file cannot be projected. A namespace scan must not read it again.
+    primeCsharpNamespaceFacts(file, null, opts?.languageExtensions);
+  }
+  if (mod.jvmFacts) {
+    primeJvmFileFacts(file, mod.jvmFacts);
+  } else if (slot === "jvm" && mod.syntaxTreeUnavailableReason) {
+    // No bounded package head was stored. A package scan must not read the unprojectable file again.
+    primeJvmFileFacts(file, null);
+  }
   if (mod.phpDeclarationNames) {
     primePhpModuleImportNames(file, phpModuleImportNamesFromDeclarations(mod.phpDeclarationNames, mod));
   }
@@ -761,8 +780,11 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   }
 
   const jvmLanguageId = isJvmLanguage(sup.id) ? sup.id : undefined;
+  // A projected tree supplies full facts. An unprojectable file still keeps the bounded package head
+  // `collectProjectFileFacts` already parsed, so a warm build primes the same package as a cold one.
+  const preparedJvmFacts = jvmLanguageId ? prepared.projectFacts?.jvmFacts : undefined;
   const jvmFacts =
-    jvmLanguageId && tree ? (prepared.projectFacts?.jvmFacts ?? collectJvmFileFacts(tree, jvmLanguageId)) : undefined;
+    jvmLanguageId && tree ? (preparedJvmFacts ?? collectJvmFileFacts(tree, jvmLanguageId)) : preparedJvmFacts;
   const csharpFacts =
     sup.id === "csharp" && tree
       ? (prepared.projectFacts?.csharpNamespaceFacts ?? collectCsharpNamespaceFacts(tree))
@@ -866,6 +888,11 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   const nativeOutcome = preparedNativeOutcome(prepared);
   if (nativeOutcome) mod.nativeOutcome = nativeOutcome;
   if (parserDegraded) mod.parserDegraded = true;
+  const projectionLimit = syntaxProjectionLimitDetail(prepared.nativeError);
+  if (projectionLimit) {
+    mod.syntaxTreeUnavailableReason = projectionLimit;
+    mod.syntaxTreeUnavailableFingerprint = sourceContentFingerprint(prepared.originalSource ?? source);
+  }
   if (importLookupIncomplete) mod.importLookupIncomplete = true;
   if (sup.id === "cpp") {
     const declaredContainers = collectCppDeclaredModules(source);
@@ -891,21 +918,28 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     args.matchPath,
   );
 
-  const cacheSignature = !prepared.nativeFallbackReason && !lacksParserContext ? moduleCacheSignature(args) : undefined;
+  const cacheSignature =
+    projectionLimit || (!prepared.nativeFallbackReason && !lacksParserContext) ? moduleCacheSignature(args) : undefined;
   const cacheWrite: PendingModuleCacheWrite | undefined = cacheSignature
     ? { file: args.file, sig: await cacheSignature(), mod }
     : undefined;
 
+  // Languages that read directives from the syntax tree have none once projection fails, and collecting edges
+  // must not project the file again. SQL and single-file components still contribute edges from their source
+  // and embedded blocks, on a cold build and on a warm one.
+  const projectionAlreadyFailed = projectionLimit !== undefined && !tree && readsSyntaxTree(sup.id);
   return {
     module: mod,
     ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    graphContext: {
-      source,
-      sup,
-      ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-      ...(tree ? { tree } : {}),
-      ...(embeddedBlocks ? { embeddedBlocks } : {}),
-    },
+    graphContext: projectionAlreadyFailed
+      ? { sup, specifiers: [] }
+      : {
+          source,
+          sup,
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          ...(tree ? { tree } : {}),
+          ...(embeddedBlocks ? { embeddedBlocks } : {}),
+        },
   };
 }
 
@@ -2170,6 +2204,11 @@ async function buildIndexFromFileListInProbeCache(
           cacheWrite = built.cacheWrite;
         } else {
           collectJsonDependencies(mod.imports, jsonDependencies);
+          // The module was reused, so this build has no parse to hand to edge collection. A file whose tree
+          // cannot be projected has no directives to recover; collecting edges must not project it again.
+          if (mod.syntaxTreeUnavailableReason && readsSyntaxTree(support.id)) {
+            graphContext = { sup: support, specifiers: [] };
+          }
         }
         edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
           ...(graphContext ? { parsed: graphContext } : {}),
@@ -2516,6 +2555,9 @@ async function buildProjectIndexWithManifestOptions(
  * discovery, so a caller rendering progress reports the wait the user observed.
  */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
+  if (!repositoryAnchorMemoActive()) {
+    return runWithRepositoryAnchorMemo(() => buildProjectIndex(projectRoot, opts));
+  }
   const progressStartedAt = opts?.progressStartedAt ?? performance.now();
   const timings = opts?.report ? (opts.report.timings ??= {}) : undefined;
   resetTransientBuildTimings(timings);
@@ -2541,6 +2583,9 @@ export async function buildProjectIndexFromFiles(
   inputFiles: string[],
   rawOpts?: BuildOptions,
 ): Promise<ProjectIndex> {
+  if (!repositoryAnchorMemoActive()) {
+    return runWithRepositoryAnchorMemo(() => buildProjectIndexFromFiles(projectRoot, inputFiles, rawOpts));
+  }
   assertNativeRequiredAvailable();
   // Discovery, manifest loading, and cache checks all precede file processing, so stamp the
   // operation origin here and let the completion event report the caller's whole wait.
@@ -2607,6 +2652,9 @@ export function buildProjectIndexIncremental(
   projectRoot: string,
   rawOpts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  if (!repositoryAnchorMemoActive()) {
+    return runWithRepositoryAnchorMemo(() => buildProjectIndexIncremental(projectRoot, rawOpts));
+  }
   return runWithProbeCache(() => buildProjectIndexIncrementalInProbeCache(projectRoot, rawOpts));
 }
 
@@ -3802,6 +3850,9 @@ async function buildProjectIndexIncrementalInProbeCache(
 }
 
 export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBuildOptions): Promise<GraphDeltaReport> {
+  if (!repositoryAnchorMemoActive()) {
+    return runWithRepositoryAnchorMemo(() => buildGraphDelta(projectRoot, opts));
+  }
   assertNativeRequiredAvailable();
   const manifest = await loadManifest(projectRoot, opts);
   const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
@@ -3824,7 +3875,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   let gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
   const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot, discoveryContext.git);
-  const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
+  const currentHead = gitAvailable ? await getGitHead(projectRoot, discoveryContext.git) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
   const manifestCommitMismatch =
     !hasExplicitGitRange && !!manifest?.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;

@@ -9,8 +9,10 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { ByteToStringIndexMap } from "../native/byte-index.js";
 import {
   ensureParsedContext,
+  isSyntaxProjectionLimitError,
   parseNavigationContext,
   SyntaxTreeUnavailableError,
+  syntaxProjectionLimitDetail,
   type ParsedFileContext,
 } from "./parse-context.js";
 import type { BuildOptions, ProjectIndex } from "./types.js";
@@ -93,6 +95,8 @@ type CachedParsedContext = {
   signatureBytes: number;
   compact?: CompactSyntaxContext;
   parsed?: ParsedFileContext | undefined;
+  unavailableReason?: string;
+  unavailableFingerprint?: string;
   compactBytes: number;
   liveBytes: number;
 };
@@ -106,6 +110,7 @@ type QuerySourceIdentity = {
   signature: string | undefined;
   fingerprint: string;
   stale: boolean;
+  verifiedStat?: string;
 };
 
 type QuerySyntaxCache = {
@@ -149,6 +154,47 @@ function indexFileSignature(index: ProjectIndex, fileKey: string): string | unde
   const entry = index.manifestEntries?.get(file);
   if (!entry) return undefined;
   return `${entry.sig}\0${entry.cacheSig ?? ""}\0${entry.gitSig ?? ""}`;
+}
+
+/**
+ * When an indexed oversized file's stat changes, compare its content with the indexed fingerprint once.
+ * A deleted file is stale, as on the read path. If no stat signature is recorded or the stat fails for another
+ * reason, the indexed fact stands without a source read.
+ */
+export function assertIndexedOversizedSourceCurrent(index: ProjectIndex, file: string): void {
+  const fileKey = fileIdentityKey(file);
+  const indexed = index.byFile.get(fileKey);
+  if (!indexed?.syntaxTreeUnavailableFingerprint) return;
+  const fingerprint = indexed.syntaxTreeUnavailableFingerprint;
+  const recorded = index.manifestEntries?.get(indexed.file)?.sig;
+  if (!recorded) return;
+  // Confined reads use a size:content-hash signature rather than a filesystem stat signature.
+  // It cannot be compared with a stat without reading the source again.
+  if (!/^\d+(?:\.\d+)?:\d+(?::[0-9a-f]+)?$/.test(recorded)) return;
+  let cache = querySyntaxCaches.get(index);
+  const identity = cache?.sourceIdentities.get(fileKey);
+  if (identity?.stale && cache) markQuerySourceStale(index, cache, fileKey, file);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+  } catch (error) {
+    if (isMissingPathError(error)) markQuerySourceStale(index, cache ?? querySyntaxCacheFor(index), fileKey, file);
+    return;
+  }
+  const prefix = `${stat.mtimeMs}:${stat.size}`;
+  if (recorded === prefix || recorded.startsWith(`${prefix}:`) || identity?.verifiedStat === prefix) return;
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error)) markQuerySourceStale(index, cache ?? querySyntaxCacheFor(index), fileKey, file);
+    throw error;
+  }
+  cache ??= querySyntaxCacheFor(index);
+  const currentFingerprint = recordQuerySource(index, cache, fileKey, file, indexFileSignature(index, fileKey), source);
+  if (currentFingerprint !== fingerprint) markQuerySourceStale(index, cache, fileKey, file);
+  const currentIdentity = cache.sourceIdentities.get(fileKey);
+  if (currentIdentity) currentIdentity.verifiedStat = prefix;
 }
 
 /** A previously queried file no longer belongs to this index snapshot. */
@@ -213,7 +259,7 @@ function recordQuerySource(
   file: string,
   signature: string | undefined,
   source: string,
-): void {
+): string {
   assertQuerySourceCurrent(index, cache, fileKey, file, signature);
   if (indexFileSignature(index, fileKey) !== signature) markQuerySourceStale(index, cache, fileKey, file);
   const fingerprint = createHash("sha256").update(source).digest("hex");
@@ -222,6 +268,7 @@ function recordQuerySource(
   if (!identity && index.byFile.has(fileKey)) {
     cache.sourceIdentities.set(fileKey, { signature, fingerprint, stale: false });
   }
+  return fingerprint;
 }
 
 /** Read and validate a source needed by a synchronous query consumer. */
@@ -243,6 +290,47 @@ export function readQuerySourceForIndexSync(index: ProjectIndex, file: string): 
   return source;
 }
 
+function syntaxProjectionUnavailableReason(
+  index: ProjectIndex,
+  cache: QuerySyntaxCache,
+  fileKey: string,
+  signature: string | undefined,
+  fingerprint: string,
+): string | undefined {
+  const recorded = index.byFile.get(fileKey);
+  if (recorded?.syntaxTreeUnavailableReason && recorded.syntaxTreeUnavailableFingerprint === fingerprint) {
+    return recorded.syntaxTreeUnavailableReason;
+  }
+  const entry = cache.entries.get(fileKey);
+  if (!entry || entry.signature !== signature || entry.unavailableFingerprint !== fingerprint) return undefined;
+  return entry.unavailableReason;
+}
+
+function rememberSyntaxProjectionLimit(
+  cache: QuerySyntaxCache,
+  fileKey: string,
+  signature: string | undefined,
+  fingerprint: string,
+  reason: string,
+): void {
+  const existing = cache.entries.get(fileKey);
+  if (existing) {
+    existing.signature = signature;
+    existing.signatureBytes = retainedSignatureBytes(signature);
+    existing.unavailableReason = reason;
+    existing.unavailableFingerprint = fingerprint;
+    return;
+  }
+  cache.entries.set(fileKey, {
+    signature,
+    signatureBytes: retainedSignatureBytes(signature),
+    compactBytes: 0,
+    liveBytes: 0,
+    unavailableReason: reason,
+    unavailableFingerprint: fingerprint,
+  });
+}
+
 async function parseQuerySource(
   index: ProjectIndex,
   cache: QuerySyntaxCache,
@@ -259,11 +347,22 @@ async function parseQuerySource(
     }
     throw error;
   }
-  recordQuerySource(index, cache, fileKey, file, signature, source);
-  const parsed = await parseNavigationContext(file, index.languageExtensions, source);
-  assertQuerySourceCurrent(index, cache, fileKey, file, signature);
-  if (indexFileSignature(index, fileKey) !== signature) markQuerySourceStale(index, cache, fileKey, file);
-  return parsed;
+  const fingerprint = recordQuerySource(index, cache, fileKey, file, signature, source);
+  const unavailable = syntaxProjectionUnavailableReason(index, cache, fileKey, signature, fingerprint);
+  if (unavailable) {
+    throw new SyntaxTreeUnavailableError(file, unavailable, syntaxProjectionLimitDetail(unavailable));
+  }
+  try {
+    const parsed = await parseNavigationContext(file, index.languageExtensions, source);
+    assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+    if (indexFileSignature(index, fileKey) !== signature) markQuerySourceStale(index, cache, fileKey, file);
+    return parsed;
+  } catch (error) {
+    if (isSyntaxProjectionLimitError(error)) {
+      rememberSyntaxProjectionLimit(cache, fileKey, signature, fingerprint, error.projectionLimit);
+    }
+    throw error;
+  }
 }
 
 function stringBytes(value: string): number {
@@ -633,6 +732,13 @@ export function ensureParsedContextForIndex(index: ProjectIndex, file: string): 
   const cache = querySyntaxCacheFor(index);
   const signature = indexFileSignature(index, fileKey);
   assertQuerySourceCurrent(index, cache, fileKey, file, signature);
+  const indexed = index.byFile.get(fileKey);
+  if (indexed?.syntaxTreeUnavailableReason && indexed.syntaxTreeUnavailableFingerprint) {
+    assertIndexedOversizedSourceCurrent(index, file);
+    return Promise.reject(
+      new SyntaxTreeUnavailableError(file, indexed.syntaxTreeUnavailableReason, indexed.syntaxTreeUnavailableReason),
+    );
+  }
   const entry = cacheEntryFor(index, cache, fileKey, signature);
   if (entry?.parsed) {
     touchEntry(cache, fileKey, entry);
@@ -744,7 +850,8 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   }
   for (const [fileKey, identity] of cache.sourceIdentities) {
     sourceIdentityMetadataBytes += stringBytes(fileKey) + stringBytes(identity.fingerprint);
-    sourceIdentityMetadataBytes += retainedSignatureBytes(identity.signature) + 96;
+    sourceIdentityMetadataBytes +=
+      retainedSignatureBytes(identity.signature) + retainedSignatureBytes(identity.verifiedStat) + 96;
   }
   return {
     compactBytes: cache.compactBytes,

@@ -45,6 +45,7 @@ import {
 } from "../src/index.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { clearMemoryCache } from "../src/indexer/build-cache.js";
+import { isOptionalSyntaxProjectionLimit } from "../src/indexer/build-cache/module-cache.js";
 import { resolveExport } from "../src/indexer/navigation-resolve.js";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
 import { cachedParsedContextForIndexSync, ensureParsedContextForIndex } from "../src/indexer/parsed-cache.js";
@@ -417,6 +418,143 @@ describe("Find References", () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
       await expectMemberSelectorReferences(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
     });
+  });
+
+  it("accepts only a native projection-limit reason with a content fingerprint", () => {
+    const reason = "syntax tree projection exceeded max node limit (250000)";
+    const depth = "syntax tree projection exceeded max depth limit (512)";
+    const fingerprint = "a".repeat(64);
+    expect(isOptionalSyntaxProjectionLimit(undefined, undefined)).toBe(true);
+    expect(isOptionalSyntaxProjectionLimit(reason, fingerprint)).toBe(true);
+    expect(isOptionalSyntaxProjectionLimit(depth, fingerprint)).toBe(true);
+    expect(isOptionalSyntaxProjectionLimit("boom <script>", fingerprint)).toBe(false);
+    expect(isOptionalSyntaxProjectionLimit(`other native failure: ${reason}`, fingerprint)).toBe(false);
+    expect(isOptionalSyntaxProjectionLimit(`Syntax tree unavailable: ${reason}`, fingerprint)).toBe(false);
+    expect(isOptionalSyntaxProjectionLimit(reason, "zz".repeat(32))).toBe(false);
+    expect(isOptionalSyntaxProjectionLimit(reason, undefined)).toBe(false);
+  });
+
+  it("keeps possible aliased imports partial but rules out a file with no relevant Bloom tokens", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-family-projection-"));
+    // Repeated statements still clear the node limit, and they share one identifier so a Bloom
+    // miss on `target` or `unrelated` is definite rather than a rare false positive.
+    const filler = Array.from({ length: 80000 }, () => "const pad = 1;").join("\n");
+    const lib = "export function target(): number { return 1; }\n";
+    const unrelatedSource = "export function unrelated(): number { return 2; }\n";
+    try {
+      await fsp.writeFile(path.join(root, "lib.ts"), lib);
+      await fsp.writeFile(path.join(root, "barrel.ts"), 'export { target as renamed } from "./lib";\n');
+      await fsp.writeFile(path.join(root, "unrelated.ts"), unrelatedSource);
+      await fsp.writeFile(path.join(root, "loud.tsx"), `import { renamed } from "./barrel";\nrenamed();\n${filler}\n`);
+      await fsp.writeFile(path.join(root, "quiet.js"), `const quiet = 1;\n${filler}\n`);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      const loud = [...index.byFile.values()].find((mod) => path.basename(mod.file) === "loud.tsx");
+      const quiet = [...index.byFile.values()].find((mod) => path.basename(mod.file) === "quiet.js");
+      expect(loud?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      expect(quiet?.syntaxTreeUnavailableReason).toContain("syntax tree projection exceeded max");
+      const targetRefs = await findReferences(index, {
+        file: path.join(root, "lib.ts"),
+        line: 1,
+        column: lib.indexOf("target") + 1,
+      });
+      expect(targetRefs.status).toBe("ok");
+      if (targetRefs.status !== "ok") throw new Error("Expected references of target");
+      expect(targetRefs.referenceCoverage?.state).toBe("partial");
+      expect(targetRefs.referenceCoverage?.reasons).toContain("parser_degraded");
+      const targetAffected = (targetRefs.referenceCoverage?.affectedFiles ?? []).map((file) => path.basename(file));
+      expect(targetAffected).toContain("loud.tsx");
+      expect(targetAffected).not.toContain("quiet.js");
+      const unrelatedRefs = await findReferences(index, {
+        file: path.join(root, "unrelated.ts"),
+        line: 1,
+        column: unrelatedSource.indexOf("unrelated") + 1,
+      });
+      expect(unrelatedRefs.status).toBe("ok");
+      if (unrelatedRefs.status !== "ok") throw new Error("Expected references of unrelated");
+      expect(unrelatedRefs.referenceCoverage?.state).toBe("partial");
+      const unrelatedAffected = (unrelatedRefs.referenceCoverage?.affectedFiles ?? []).map((file) =>
+        path.basename(file),
+      );
+      expect(unrelatedAffected).toContain("loud.tsx");
+      expect(unrelatedAffected).not.toContain("quiet.js");
+
+      const quietIndex = await createTestIndexFromFiles(root, [
+        path.join(root, "unrelated.ts"),
+        path.join(root, "quiet.js"),
+      ]);
+      const quietRefs = await findReferences(quietIndex, {
+        file: path.join(root, "unrelated.ts"),
+        line: 1,
+        column: unrelatedSource.indexOf("unrelated") + 1,
+      });
+      expect(quietRefs.status).toBe("ok");
+      if (quietRefs.status !== "ok") throw new Error("Expected references of unrelated");
+      expect(quietRefs.referenceCoverage.state).toBe("complete");
+      expect(
+        quietIndex.byFile.get(fileIdentityKey(path.join(root, "quiet.js")))?.syntaxTreeUnavailableReason,
+      ).toBeDefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "default import",
+      extension: "ts",
+      definition: "export default function target() { return 1; }\n",
+      consumer: 'import alias from "./lib";\nalias();\n',
+    },
+    {
+      name: "TypeScript export assignment",
+      extension: "ts",
+      definition: "function target() { return 1; }\nexport = target;\n",
+      consumer: 'import alias = require("./lib");\nalias();\n',
+    },
+    {
+      name: "CommonJS module value",
+      extension: "js",
+      definition: "function target() { return 1; }\nmodule.exports = target;\n",
+      consumer: 'const alias = require("./lib");\nalias();\n',
+    },
+    {
+      name: "default re-export",
+      extension: "ts",
+      definition: "export default function target() { return 1; }\n",
+      consumer: 'export { default as alias } from "./lib";\n',
+    },
+    {
+      name: "wildcard re-export",
+      extension: "ts",
+      definition: "export function target() { return 1; }\n",
+      consumer: 'export * from "./lib";\n',
+    },
+  ])("reports partial coverage for an unprojectable $name alias", async ({ extension, definition, consumer }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-projection-alias-"));
+    const nested = `const nested = ${"[".repeat(600)}0${"]".repeat(600)};\n`;
+    try {
+      const lib = path.join(root, `lib.${extension}`);
+      const big = path.join(root, `big.${extension}`);
+      const quiet = path.join(root, `quiet.${extension}`);
+      await fsp.writeFile(lib, definition);
+      await fsp.writeFile(big, `${consumer}${nested}`);
+      await fsp.writeFile(quiet, nested);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect(index.byFile.get(fileIdentityKey(big))?.syntaxTreeUnavailableReason).toContain("projection exceeded");
+      expect(index.byFile.get(fileIdentityKey(quiet))?.syntaxTreeUnavailableReason).toContain("projection exceeded");
+      const filter = index.bloomFilters?.get(big);
+      expect(filter?.mightContain("target")).toBe(false);
+      const references = await findReferences(index, { file: lib, line: 1, column: definition.indexOf("target") + 1 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references of target");
+      expect(references.referenceCoverage.state).toBe("partial");
+      expect(references.referenceCoverage.reasons).toContain("parser_degraded");
+      const affected = references.referenceCoverage.affectedFiles?.map((file) => path.basename(file)) ?? [];
+      expect(affected).toContain(`big.${extension}`);
+      expect(affected).not.toContain(`quiet.${extension}`);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps qualified Rust item reads in complete reference lists", async () => {

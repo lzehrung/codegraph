@@ -52,6 +52,8 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 - The native addon is required; if it cannot load, codegraph errors, with no second parser or regex fallback.
 - Files over the native size limit are skipped (`sourceTooLarge`); query failures report `queryFailure`; an empty result is final.
+- When a syntax tree exceeds the native node limit (250000) or depth limit (512), go-to-definition returns `not_found` with the limit and does not project that content again. Find-references reports `parser_degraded` when an unprojectable file is a candidate or included in a receiver scan. Same-language files, and JavaScript, TypeScript, TSX, Vue, and Svelte files across that family, are added as candidates when their Bloom filters cannot rule out the name, an equivalent spelling, or an exported name; missing filters and unprobeable spellings remain candidates.
+- For exported JavaScript-family definitions, files containing `import`, `require`, or `export` tokens are also candidates because an unparsed import or re-export may use another name. Tree-based go-to-definition still throws for other native parse failures and files over the native byte limit. After a stat change, a query checks the source once: unchanged content retains the recorded failure, while changed content requires a rebuild. Rebuilding after a size or mtime change recomputes the failure; use `--cache-strict` to detect same-size edits whose mtime was restored. The limits are unchanged.
 
 ### Symbols and exports
 

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { BuildOptions } from "../types.js";
 import { fileIdentityKey, isForbiddenAnchor } from "../../util/paths.js";
@@ -23,8 +24,42 @@ function isWritableDirectory(candidate: string): boolean {
   }
 }
 
-function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
-  const start = path.resolve(projectRoot);
+type RepositoryAnchorStore = Map<string, CacheAnchorResolution> & { ended?: boolean };
+
+const repositoryAnchorMemo = new AsyncLocalStorage<RepositoryAnchorStore>();
+
+/** The walk memo for the build that is still running in this async context. An ended store is not one. */
+function activeRepositoryAnchorMemo(): RepositoryAnchorStore | undefined {
+  const store = repositoryAnchorMemo.getStore();
+  if (!store || store.ended) return undefined;
+  return store;
+}
+
+/** True while a build is reusing one repository-anchor walk. */
+export function repositoryAnchorMemoActive(): boolean {
+  return activeRepositoryAnchorMemo() !== undefined;
+}
+
+/**
+ * Reuse one anchor walk for every cache-path lookup in this build.
+ * The memo ends when the build's promise settles, including when a timer scheduled during the build
+ * fires later, so that later build walks again. A `.git` directory added or removed between builds is visible.
+ * A build started while this one is still running shares the walk. Callers outside a build always walk.
+ */
+export function runWithRepositoryAnchorMemo<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeRepositoryAnchorMemo()) return fn();
+  const memoStore: RepositoryAnchorStore = new Map();
+  return repositoryAnchorMemo.run(memoStore, async () => {
+    try {
+      return await fn();
+    } finally {
+      memoStore.ended = true;
+      memoStore.clear();
+    }
+  });
+}
+
+function walkRepositoryAnchor(start: string): CacheAnchorResolution {
   let current = start;
   while (true) {
     const manifest = path.join(current, ".codegraph", "manifest.json");
@@ -40,6 +75,16 @@ function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
     current = parent;
   }
   return { anchor: start, layer: "project" };
+}
+
+function findRepositoryAnchor(projectRoot: string): CacheAnchorResolution {
+  const start = path.resolve(projectRoot);
+  const memo = activeRepositoryAnchorMemo();
+  const cached = memo?.get(start);
+  if (cached) return cached;
+  const resolution = walkRepositoryAnchor(start);
+  memo?.set(start, resolution);
+  return resolution;
 }
 
 function resolveCodegraphUserCacheRoot(): string {

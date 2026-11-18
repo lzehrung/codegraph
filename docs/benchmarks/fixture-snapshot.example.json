@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-18T01:06:52.257Z",
+  "generatedAt": "2026-11-18T01:49:43.152Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.23.4",
-  "numTotalTests": 1546,
+  "numTotalTests": 1551,
   "numFailedTests": 0,
   "languages": [
     {
@@ -110,8 +110,8 @@
       "files": [
         "tests/languages/java.test.ts"
       ],
-      "tests": 76,
-      "passed": 76,
+      "tests": 77,
+      "passed": 77,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -132,8 +132,8 @@
       "files": [
         "tests/languages/kotlin.test.ts"
       ],
-      "tests": 83,
-      "passed": 83,
+      "tests": 84,
+      "passed": 84,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -242,8 +242,8 @@
       "files": [
         "tests/languages/sql.test.ts"
       ],
-      "tests": 88,
-      "passed": 88,
+      "tests": 89,
+      "passed": 89,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -253,8 +253,8 @@
       "files": [
         "tests/languages/svelte.test.ts"
       ],
-      "tests": 12,
-      "passed": 12,
+      "tests": 13,
+      "passed": 13,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -308,8 +308,8 @@
       "files": [
         "tests/languages/vue.test.ts"
       ],
-      "tests": 13,
-      "passed": 13,
+      "tests": 14,
+      "passed": 14,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

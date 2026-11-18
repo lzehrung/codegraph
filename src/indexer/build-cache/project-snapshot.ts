@@ -38,6 +38,7 @@ import {
   transformPersistedExportFromModule,
   type FileSignature,
   isOptionalNativeOutcome,
+  isOptionalSyntaxProjectionLimit,
   isOptionalRange,
   isParseErrorRange,
   isRange,
@@ -835,6 +836,12 @@ function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
     ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
     ...(mod.parserDegraded ? { parserDegraded: true } : {}),
     ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
+    ...(mod.syntaxTreeUnavailableReason && mod.syntaxTreeUnavailableFingerprint
+      ? {
+          syntaxTreeUnavailableReason: mod.syntaxTreeUnavailableReason,
+          syntaxTreeUnavailableFingerprint: mod.syntaxTreeUnavailableFingerprint,
+        }
+      : {}),
     ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
   };
 }
@@ -1290,6 +1297,10 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     isOptionalNativeOutcome(moduleIndex.nativeOutcome) &&
     isOptionalBoolean(moduleIndex.parserDegraded) &&
     isOptionalBoolean(moduleIndex.importLookupIncomplete) &&
+    isOptionalSyntaxProjectionLimit(
+      moduleIndex.syntaxTreeUnavailableReason,
+      moduleIndex.syntaxTreeUnavailableFingerprint,
+    ) &&
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&

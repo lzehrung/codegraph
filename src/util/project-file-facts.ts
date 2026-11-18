@@ -19,6 +19,16 @@ export function jvmPackageHead(source: string): string {
   return head.slice(0, head.lastIndexOf("\n") + 1);
 }
 
+/**
+ * The fact slot `collectProjectFileFacts` fills for this language.
+ * Callers prime that slot instead of branching on the language id themselves.
+ */
+export function projectFactsSlot(languageId: string | undefined): "csharp" | "jvm" | undefined {
+  if (languageId === "csharp") return "csharp";
+  if (isJvmLanguage(languageId)) return "jvm";
+  return undefined;
+}
+
 /** Reuses the extraction's tree. Only an unavailable JVM tree needs a bounded package-only parse. */
 export function collectProjectFileFacts(
   source: string,

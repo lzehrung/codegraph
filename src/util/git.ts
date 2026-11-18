@@ -35,6 +35,10 @@ export type GitChangedEntries = { files: string[]; gitlinks: string[] };
 /** Git facts shared only by callers in the same discovery operation. */
 export type GitDiscoveryCache = {
   repositories: Map<string, Promise<boolean>>;
+  /** Resolved work tree root for a directory already checked in this operation. */
+  repositoryRoots: Map<string, Promise<string | null>>;
+  /** `rev-parse HEAD` for a directory, reused when this operation asks twice. */
+  heads: Map<string, Promise<string | null>>;
   ignoredRoots: Map<string, Promise<boolean>>;
   excludeFiles: Map<string, Promise<GitExcludeFile[]>>;
   untrackedFiles: Map<string, Promise<GitWorktreeListing>>;
@@ -46,6 +50,8 @@ export function createGitDiscoveryCache(): GitDiscoveryCache {
   return {
     repositories: new Map(),
     ignoredRoots: new Map(),
+    repositoryRoots: new Map(),
+    heads: new Map(),
     excludeFiles: new Map(),
     untrackedFiles: new Map(),
     indexedBlobs: new Map(),
@@ -381,19 +387,62 @@ export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []
   return ["diff", ...diffSafetyArgs, ...renameArgs, ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
 
-export async function getGitHead(projectRoot: string): Promise<string | null> {
-  try {
-    const { stdout } = await runGit(projectRoot, ["rev-parse", "HEAD"]);
-    const hash = stdout.trim();
-    return hash || null;
-  } catch {
-    return null;
+type GitRepositoryFacts = { inside: boolean; root: string | null };
+
+function rememberGitRepositoryFacts(
+  cache: GitDiscoveryCache,
+  resolvedRoot: string,
+  facts: Promise<GitRepositoryFacts>,
+): void {
+  if (!cache.repositories.has(resolvedRoot)) {
+    cache.repositories.set(
+      resolvedRoot,
+      facts.then((entry) => entry.inside),
+    );
   }
+  if (!cache.repositoryRoots.has(resolvedRoot)) {
+    cache.repositoryRoots.set(
+      resolvedRoot,
+      facts.then((entry) => entry.root),
+    );
+  }
+}
+
+function readGitRepositoryFacts(resolvedRoot: string): Promise<GitRepositoryFacts> {
+  return (async () => {
+    try {
+      const { stdout } = await runGit(resolvedRoot, ["rev-parse", "--is-inside-work-tree", "--show-toplevel"]);
+      const lines = stdout.split(/\r?\n/);
+      const inside = lines[0]?.trim() === "true";
+      const rootText = lines[1]?.trim() ?? "";
+      const root = inside && rootText ? normalizePath(rootText) : null;
+      return { inside, root };
+    } catch {
+      return { inside: false, root: null };
+    }
+  })();
+}
+
+export async function getGitHead(projectRoot: string, cache?: GitDiscoveryCache): Promise<string | null> {
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = cache?.heads.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = (async () => {
+    try {
+      const { stdout } = await runGit(resolvedRoot, ["rev-parse", "HEAD"]);
+      const hash = stdout.trim();
+      return hash || null;
+    } catch {
+      return null;
+    }
+  })();
+  cache?.heads.set(resolvedRoot, check);
+  return await check;
 }
 
 /** Git's empty tree is the comparison base before the first commit, in the repository's object format. */
 export async function getGitHeadOrEmptyTree(projectRoot: string, cache?: GitDiscoveryCache): Promise<string | null> {
-  const head = await getGitHead(projectRoot);
+  const head = await getGitHead(projectRoot, cache);
   if (head) return head;
   if (!(await isGitRepo(projectRoot, cache))) return null;
   const { stdout } = await runGit(projectRoot, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
@@ -404,26 +453,35 @@ export async function isGitRepo(projectRoot: string, cache?: GitDiscoveryCache):
   const resolvedRoot = path.resolve(projectRoot);
   const cached = cache?.repositories.get(resolvedRoot);
   if (cached) return await cached;
-  const check = (async () => {
+  if (!cache) {
     try {
       const { stdout } = await runGit(resolvedRoot, ["rev-parse", "--is-inside-work-tree"]);
       return stdout.trim() === "true";
     } catch {
       return false;
     }
-  })();
-  cache?.repositories.set(resolvedRoot, check);
-  return await check;
+  }
+  const facts = readGitRepositoryFacts(resolvedRoot);
+  rememberGitRepositoryFacts(cache, resolvedRoot, facts);
+  return (await facts).inside;
 }
 
-export async function getGitRepositoryRoot(projectRoot: string): Promise<string | null> {
-  try {
-    const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
-    const root = normalizePath(stdout.trim());
-    return root || null;
-  } catch {
-    return null;
+export async function getGitRepositoryRoot(projectRoot: string, cache?: GitDiscoveryCache): Promise<string | null> {
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = cache?.repositoryRoots.get(resolvedRoot);
+  if (cached) return await cached;
+  if (!cache) {
+    try {
+      const { stdout } = await runGit(resolvedRoot, ["rev-parse", "--show-toplevel"]);
+      const root = normalizePath(stdout.trim());
+      return root || null;
+    } catch {
+      return null;
+    }
   }
+  const facts = readGitRepositoryFacts(resolvedRoot);
+  rememberGitRepositoryFacts(cache, resolvedRoot, facts);
+  return (await facts).root;
 }
 
 export async function isGitPathTracked(projectRoot: string, file: string): Promise<boolean> {
@@ -940,19 +998,13 @@ export async function listGitExcludeFiles(
   const resolvedRoot = path.resolve(projectRoot);
   const cached = opts?.discoveryCache?.excludeFiles.get(resolvedRoot);
   if (cached) return await cached;
-  const check = listGitExcludeFilesUncached(resolvedRoot);
+  const check = listGitExcludeFilesUncached(resolvedRoot, opts?.discoveryCache);
   opts?.discoveryCache?.excludeFiles.set(resolvedRoot, check);
   return await check;
 }
 
-async function listGitExcludeFilesUncached(projectRoot: string): Promise<GitExcludeFile[]> {
-  let baseDir: string;
-  try {
-    const { stdout } = await runGit(projectRoot, ["rev-parse", "--show-toplevel"]);
-    baseDir = normalizePath(stdout.trim());
-  } catch {
-    return [];
-  }
+async function listGitExcludeFilesUncached(projectRoot: string, cache?: GitDiscoveryCache): Promise<GitExcludeFile[]> {
+  const baseDir = await getGitRepositoryRoot(projectRoot, cache);
   if (!baseDir) return [];
   const candidates: Array<{ file: string; priority: number }> = [];
   try {

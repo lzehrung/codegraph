@@ -363,12 +363,15 @@ export type CoverageFacts = {
   readonly withoutParseInfo: readonly FlaggedModule[];
   /** Modules with an outermost `ERROR` or `MISSING` range, in table order. */
   readonly withParseErrors: readonly FlaggedModule[];
+  /** Modules whose syntax tree exceeded the projection limit, in table order. */
+  readonly unprojectable: readonly FlaggedModule[];
 };
 
 /** Per-file coverage facts every module contributes, so a lookup reads the few files it affects, not every module. */
 export const coverageFacts = perIndexCache((index): CoverageFacts => {
   const withoutParseInfo: FlaggedModule[] = [];
   const withParseErrors: FlaggedModule[] = [];
+  const unprojectable: FlaggedModule[] = [];
   const entries = referenceModuleTable(index).entries;
   for (let rank = 0; rank < entries.length; rank += 1) {
     const entry = entries[rank]!;
@@ -376,8 +379,9 @@ export const coverageFacts = perIndexCache((index): CoverageFacts => {
     if (!module) continue;
     if (module.parseErrorRanges === undefined) withoutParseInfo.push({ file: entry.file, key: entry.key, rank });
     else if (module.parseErrorRanges.length) withParseErrors.push({ file: entry.file, key: entry.key, rank });
+    if (module.syntaxTreeUnavailableReason) unprojectable.push({ file: entry.file, key: entry.key, rank });
   }
-  return { withoutParseInfo, withParseErrors };
+  return { withoutParseInfo, withParseErrors, unprojectable };
 });
 
 export type ParserReportFacts = {
