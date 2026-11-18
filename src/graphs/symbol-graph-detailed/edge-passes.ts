@@ -92,6 +92,7 @@ import {
   type ReceiverAncestorEmbed,
   type ReceiverAncestryRelation,
 } from "../../util/member-access-tables.js";
+import { resolveRustImportPath } from "../../util/resolution/rust.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
@@ -350,6 +351,38 @@ function recordRustMacroArgumentCalls(context: EdgePassContext, tokenTree: Synta
     if (rustTokenTreeNameFollowsSeparator(name)) continue;
     tryResolveNode(context, name, fromId, "calls");
   }
+}
+
+const rustCrateRoots = new WeakMap<EdgePassContext, Promise<string | null>>();
+
+/** A crate-qualified call can use this file's root function only when the crate owner and binding are proven. */
+function rustCrateRootCall(
+  context: EdgePassContext,
+  access: ReceiverCallAccess,
+  fromId: string,
+): false | (() => Promise<void>) {
+  if (access.accessNode.type !== "scoped_identifier" || access.receiver.type !== "crate") return false;
+  const projectRoot = context.index.projectRoot;
+  if (!projectRoot) return false;
+  const name = sliceText(access.property, context.source);
+  const binding = findClosestScopeBinding(context.scopeIndex, name, access.property, context.sup);
+  const declaration = binding?.node?.parent;
+  if (binding?.kind !== "function" || declaration?.parent?.id !== context.tree.rootNode.id) return false;
+  const target = context.resolveIdentifier(name, access.property);
+  if (!target || target.kind !== SymbolKind.Function || target.range.start.index !== binding.def?.start.index) {
+    return false;
+  }
+  return async () => {
+    let root = rustCrateRoots.get(context);
+    if (!root) {
+      root = resolveRustImportPath(projectRoot, context.moduleEntry.file, "crate");
+      rustCrateRoots.set(context, root);
+    }
+    const crateRoot = await root;
+    if (crateRoot && fileIdentityKey(crateRoot) === fileIdentityKey(context.moduleEntry.file)) {
+      recordDefEdge(context, fromId, target, "calls", access.property);
+    }
+  };
 }
 
 function getCallTarget(node: SyntaxNodeLike): SyntaxNodeLike | null {
@@ -1246,7 +1279,7 @@ type SpecializedEdgePassRow = {
     access: ReceiverCallAccess,
     fromId: string,
     hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
-  ) => boolean;
+  ) => boolean | (() => Promise<void>);
   onCall?: (
     context: EdgePassContext,
     node: SyntaxNodeLike,
@@ -1260,6 +1293,7 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
   python: { beforeModule: emitPythonDecoratorEdges },
   rust: {
     afterModule: emitRustImplEdges,
+    onReceiverCall: rustCrateRootCall,
     nodeVisitor(context, _fn, fromId) {
       return (node) => {
         if (node.type === "token_tree") recordRustMacroArgumentCalls(context, node, fromId);
@@ -1301,6 +1335,7 @@ export async function emitFunctionBodyEdges(
   functionNodes: DetailedFunctionNode[],
 ): Promise<void> {
   const specialized = SPECIALIZED_EDGE_PASSES[context.sup.id];
+  let deferredSpecializedCalls: Array<() => Promise<void>> | undefined;
   const qualifiedConstructionTargets: Array<{
     fromId: string;
     member: SyntaxNodeLike;
@@ -1818,7 +1853,11 @@ export async function emitFunctionBodyEdges(
         ) {
           return;
         }
-        if (specialized?.onReceiverCall?.(context, access, fromId, hasLexicalBinding)) return;
+        const specializedCall = specialized?.onReceiverCall?.(context, access, fromId, hasLexicalBinding);
+        if (specializedCall) {
+          if (typeof specializedCall !== "boolean") (deferredSpecializedCalls ??= []).push(specializedCall);
+          return;
+        }
         const javaConstructionType =
           context.sup.id === "java" && access.receiver.type === "object_creation_expression"
             ? constructionTypeName(access.receiver, context.source, context.sup)
@@ -1958,6 +1997,9 @@ export async function emitFunctionBodyEdges(
         recordReceiverCall(call.node, call.access, implicitThis ? "any" : "static");
       }
     }
+  }
+  if (deferredSpecializedCalls) {
+    for (const call of deferredSpecializedCalls) await call();
   }
   for (const { fromId, member, access } of pendingPrivateCalls) {
     if (isCallTarget(context, member)) recordDefEdge(context, fromId, member, "calls", access.property);

@@ -6,7 +6,13 @@ import {
   expectMemberSelectorReferences,
   withMemberSelectorFixture,
 } from "../helpers/member-selector-fixture.js";
-import { eachIndexMode, withBatch3Fixture } from "../helpers/csharp-java-batch3-fixture.js";
+import {
+  eachIndexMode,
+  expectGoto,
+  expectReferences,
+  withBatch3Fixture,
+} from "../helpers/csharp-java-batch3-fixture.js";
+import { execFileSync } from "node:child_process";
 import fsp, { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { describeTypeParameterReceiverRows } from "../helpers/type-parameter-receiver-fixture.js";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -25,7 +31,17 @@ import { isSymlinkUnavailable } from "../helpers/filesystem.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
 import { chunkFile } from "../../src/chunking/chunk-file.js";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
-import { buildProjectIndex, collectGraph, findReferences, goToDefinition, resolveExport } from "../../src/index.js";
+import { createAgentSession, type AgentSession } from "../../src/agent/session.js";
+import { previewRenameWithSession } from "../../src/agent/rename-preview.js";
+import { clearMemoryCache, closeDiskCacheDatabase } from "../../src/indexer/build-cache.js";
+import {
+  buildProjectIndex,
+  collectGraph,
+  findReferences,
+  goToDefinition,
+  resolveExport,
+  type ProjectIndex,
+} from "../../src/index.js";
 import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { exportedNameOf } from "../helpers/narrow.js";
@@ -2429,7 +2445,463 @@ describe("Rust nested grouped use and path attributes", () => {
   });
 });
 
+type RustToken = readonly [line: number, token: string, occurrence?: number];
+
+const RUST_NAMESPACE_LINES = [
+  "mod inner { pub const K: i32 = 1; }",
+  "fn inner() -> i32 { 0 }",
+  "fn use_inner() -> i32 {",
+  "    let called = inner();",
+  "    let value = inner;",
+  "    let qualified = inner::K;",
+  "    let crate_called = crate::inner();",
+  "    let crate_qualified = crate::inner::K;",
+  "    let _kept = value;",
+  "    called + qualified + crate_called + crate_qualified",
+  "}",
+  "fn before() -> i32 {",
+  "    let called = swapped();",
+  "    let qualified = swapped::K;",
+  "    let crate_called = crate::swapped();",
+  "    let crate_qualified = crate::swapped::K;",
+  "    called + qualified + crate_called + crate_qualified",
+  "}",
+  "fn swapped() -> i32 { 1 }",
+  "mod swapped { pub const K: i32 = 2; }",
+  "const shared: i32 = 5;",
+  "mod shared { pub const K: i32 = 6; }",
+  "fn use_item() -> i32 { shared + shared::K }",
+  "struct Record { field: i32 }",
+  "fn Record() -> i32 { 7 }",
+  "fn use_record() -> i32 {",
+  "    let _built = 1;",
+  "    Record()",
+  "}",
+  "struct Tuple(i32);",
+  "fn use_tuple() -> i32 {",
+  "    let Tuple(value) = Tuple(4);",
+  "    value",
+  "}",
+  "enum Choice { A }",
+  "fn Choice() -> i32 { 3 }",
+  "fn use_choice() -> i32 {",
+  "    let _variant = Choice::A;",
+  "    Choice()",
+  "}",
+  "trait Marker {}",
+  "fn Marker() -> i32 { 4 }",
+  "fn use_marker() -> i32 { Marker() }",
+  "type Alias = i32;",
+  "fn Alias() -> i32 { 8 }",
+  "fn use_alias() -> i32 {",
+  "    let _typed: Alias = 1;",
+  "    Alias()",
+  "}",
+  "fn decoy() -> i32 { 9 }",
+  "fn use_plain() -> i32 { decoy() }",
+  "fn use_local() -> i32 {",
+  "    let inner = 2;",
+  "    inner + crate::inner::K",
+  "}",
+  "use inner::K as INNER_K;",
+  "fn read_imported() -> i32 { INNER_K }",
+  "struct Owner;",
+  "impl Owner { fn decoy(&self) -> i32 { 11 } }",
+  "fn LaterAlias() -> i32 { 9 }",
+  "type LaterAlias = i32;",
+  "fn use_later_alias() -> i32 { let _x: LaterAlias = 1; LaterAlias() }",
+  "mod types { pub mod nested { pub struct Data; } }",
+  "fn accept(_: crate::types::nested::Data) {}",
+  "trait Capture {}",
+  "struct CaptureOwner;",
+  "impl Capture for CaptureOwner {}",
+  "trait HasCapture { type Capture; }",
+  "impl HasCapture for CaptureOwner { type Capture = i32; }",
+  "fn use_nested() -> i32 {",
+  "    fn same() -> i32 { 3 }",
+  "    mod same { pub const K: i32 = 4; }",
+  "    same() + same::K",
+  "}",
+];
+
+function rustNamespaceSite(file: string, [line, token, occurrence = 0]: RustToken) {
+  const text = RUST_NAMESPACE_LINES[line - 1] ?? "";
+  let offset = -1;
+  for (let count = 0; count <= occurrence; count += 1) offset = text.indexOf(token, offset + 1);
+  if (offset < 0) throw new Error(`missing ${token} #${occurrence} on line ${line}`);
+  return { file, line, column: offset + 1 };
+}
+
+function rustNamespacePositions(file: string, tokens: readonly RustToken[]) {
+  return tokens
+    .map((token) => {
+      const site = rustNamespaceSite(file, token);
+      return [site.line, site.column] as const;
+    })
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+}
+
+async function expectRustNamespaceGoto(index: ProjectIndex, file: string, token: RustToken, declaration: RustToken) {
+  const answer = await goToDefinition(index, rustNamespaceSite(file, token));
+  const label = `${token[0]}:${token[1]}#${token[2] ?? 0}`;
+  expect(answer.status, label).toBe("ok");
+  if (answer.status !== "ok") return;
+  const target = rustNamespaceSite(file, declaration);
+  expect([answer.definition.range.start.line, answer.definition.range.start.column], label).toEqual([
+    target.line,
+    target.column,
+  ]);
+}
+
+async function expectRustNamespaceReferences(
+  index: ProjectIndex,
+  file: string,
+  declaration: RustToken,
+  reads: readonly RustToken[],
+) {
+  const refs = await findReferences(index, rustNamespaceSite(file, declaration));
+  expect(refs.status, `${declaration[0]}:${declaration[1]}`).toBe("ok");
+  if (refs.status !== "ok") return;
+  expect(refs.referenceCoverage.state).toBe("complete");
+  expect(
+    refs.references
+      .map((ref) => [ref.range.start.line, ref.range.start.column] as const)
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+  ).toEqual(rustNamespacePositions(file, [declaration, ...reads]));
+}
+
+async function expectRustNamespaceRename(
+  session: AgentSession,
+  root: string,
+  file: string,
+  declaration: RustToken,
+  reads: readonly RustToken[],
+) {
+  const origin = rustNamespaceSite(file, declaration);
+  const preview = await previewRenameWithSession(session, {
+    root,
+    handle: `lib.rs:${origin.line}:${origin.column}`,
+    newName: "renamed",
+  });
+  expect(preview.safe, `${declaration[0]}:${declaration[1]}`).toBe(true);
+  expect(preview.unsafeSites).toEqual([]);
+  expect(
+    preview.edits
+      .map((edit) => [edit.range.start.line, edit.range.start.column] as const)
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+  ).toEqual(rustNamespacePositions(file, [declaration, ...reads]));
+}
+
+async function withRustReviewFixture(
+  lines: readonly string[],
+  run: (args: {
+    root: string;
+    file: string;
+    index: ProjectIndex;
+    session: AgentSession;
+    site: (token: RustToken) => { file: string; line: number; column: number };
+  }) => Promise<void>,
+): Promise<void> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-review-"));
+  const file = path.join(root, "lib.rs");
+  const source = `${lines.join("\n")}\n`;
+  const site = ([line, token, occurrence = 0]: RustToken) => {
+    const text = lines[line - 1] ?? "";
+    let offset = -1;
+    for (let count = 0; count <= occurrence; count += 1) offset = text.indexOf(token, offset + 1);
+    if (offset < 0) throw new Error(`missing ${token} #${occurrence} on line ${line}`);
+    return { file, line, column: offset + 1 };
+  };
+  try {
+    await writeFile(file, source);
+    const session = createAgentSession({ root, buildOptions: { cache: "off", threads: 1 } });
+    try {
+      const { index } = await session.loadProject();
+      expect(index.byFile.get(fileIdentityKey(file))?.nativeOutcome).toBe("used");
+      await run({ root, file, index, session, site });
+    } finally {
+      session.invalidate();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function expectRustReviewRenameCompiles(args: {
+  root: string;
+  file: string;
+  session: AgentSession;
+  declaration: { line: number; column: number };
+  expected: readonly { line: number; column: number }[];
+}): Promise<void> {
+  const { root, file, session, declaration, expected } = args;
+  const preview = await previewRenameWithSession(session, {
+    root,
+    handle: `lib.rs:${declaration.line}:${declaration.column}`,
+    newName: "Renamed",
+  });
+  expect(preview.safe).toBe(true);
+  expect(preview.unsafeSites).toEqual([]);
+  const positions = preview.edits
+    .map((edit) => [edit.range.start.line, edit.range.start.column] as const)
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  expect(positions).toEqual(
+    expected
+      .map((position) => [position.line, position.column] as const)
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+  );
+  let renamed = await readFile(file, "utf8");
+  for (const edit of [...preview.edits].sort((left, right) => right.range.start.index! - left.range.start.index!)) {
+    expect(fileIdentityKey(path.resolve(root, edit.file))).toBe(fileIdentityKey(file));
+    renamed = renamed.slice(0, edit.range.start.index) + edit.newText + renamed.slice(edit.range.end.index);
+  }
+  const oracle = await mkdtemp(path.join(os.tmpdir(), "cg-rust-rename-oracle-"));
+  try {
+    const sourceFile = path.join(oracle, "lib.rs");
+    await writeFile(sourceFile, renamed);
+    execFileSync(
+      "rustc",
+      [
+        "--edition=2021",
+        "--crate-type=lib",
+        "--emit=metadata",
+        "-A",
+        "warnings",
+        "-o",
+        path.join(oracle, "renamed.rmeta"),
+        sourceFile,
+      ],
+      { windowsHide: true },
+    );
+  } finally {
+    await rm(oracle, { recursive: true, force: true });
+  }
+}
+
 describe("Rust function-local items and re-export aliases", () => {
+  it("keeps a forward module qualifier in a type path", async () => {
+    const lines = [
+      "mod options { pub struct Options { pub subcommand: super::subcommands::SubCommand } }",
+      "mod subcommands { pub struct SubCommand; }",
+    ];
+    await withRustReviewFixture(lines, async ({ index, site }) => {
+      const answer = await goToDefinition(index, site([1, "subcommands"]));
+      expect(answer).toMatchObject({ status: "ok", definition: { range: { start: { line: 2 } } } });
+    });
+  });
+
+  it("keeps enum path qualifiers and tuple variants out of same-named references", async () => {
+    const sources = {
+      "Cargo.toml": '[package]\nname = "rust_witness"\nversion = "0.1.0"\nedition = "2021"\n[lib]\npath = "lib.rs"\n',
+      "lib.rs": "#![allow(dead_code, unused_variables)]\nmod hir;\nmod print;\n",
+      "hir.rs": [
+        "pub enum HirKind {",
+        "    Look(Look),",
+        "    Other,",
+        "}",
+        "pub enum Look { Start }",
+        "pub struct Numeric { pub value: u8 }",
+        "pub enum ParsedOffsetKind { Numeric(Numeric) }",
+        "pub fn numeric_pattern(kind: ParsedOffsetKind) -> u8 {",
+        "    let ParsedOffsetKind::Numeric(numeric) = &kind;",
+        "    numeric.value",
+        "}",
+      ].join("\n"),
+      "print.rs": [
+        "use crate::hir::{self, HirKind, Look};",
+        "pub fn show(hir: &Look, kind: &HirKind) -> u8 {",
+        "    let _ = hir::Look::Start;",
+        "    let _ = Look::Start;",
+        "    match kind { HirKind::Look(_) => 1, HirKind::Other => 2 }",
+        "}",
+      ].join("\n"),
+    };
+    await withBatch3Fixture("cg-rust-qualified-enum-", sources, async (fixture) => {
+      try {
+        for (const cache of ["off", "disk", "disk"] as const) {
+          clearMemoryCache();
+          closeDiskCacheDatabase(fixture.root);
+          const index = await buildProjectIndex(fixture.root, { cache, threads: 1 });
+          expect(index.byFile.get(fileIdentityKey(fixture.files["hir.rs"]!))?.nativeOutcome).toBe("used");
+          const lookVariant = { file: "hir.rs", token: "Look", line: 2 };
+          const variantUse = { file: "print.rs", token: "Look", line: 5 };
+          const numericType = { file: "hir.rs", token: "Numeric", line: 6 };
+          const numericVariant = { file: "hir.rs", token: "Numeric", line: 7 };
+          const numericPattern = { file: "hir.rs", token: "Numeric", line: 9 };
+          await expectGoto(fixture, index, variantUse, lookVariant);
+          await expectGoto(fixture, index, { file: "print.rs", token: "Look", line: 3 }, "not_found");
+          await expectGoto(fixture, index, { file: "print.rs", token: "Look", line: 4 }, "not_found");
+          await expectReferences(fixture, index, lookVariant, [lookVariant, variantUse], "partial");
+          await expectGoto(fixture, index, numericPattern, numericVariant);
+          await expectReferences(
+            fixture,
+            index,
+            numericType,
+            [numericType, { file: "hir.rs", token: "Numeric", line: 7, nth: 2 }],
+            "complete",
+          );
+          await expectReferences(fixture, index, numericVariant, [numericVariant, numericPattern], "complete");
+        }
+      } finally {
+        closeDiskCacheDatabase(fixture.root);
+      }
+    });
+  });
+
+  it("keeps qualified struct-variant patterns apart from same-named variants", async () => {
+    const sources = {
+      "Cargo.toml": '[package]\nname = "pattern_witness"\nversion = "0.1.0"\nedition = "2021"\n',
+      "src/lib.rs": [
+        "#![allow(dead_code)]",
+        "pub mod flags;",
+        "pub mod usage;",
+        "pub enum Mangling { Coff { tag: u8 }, Other }",
+      ].join("\n"),
+      "src/flags.rs": "pub enum SectionFlags { Coff { characteristics: u8 }, Other }\n",
+      "src/usage.rs": [
+        "use crate::flags::SectionFlags;",
+        "use crate::Mangling;",
+        "pub fn via_let(value: SectionFlags) -> u8 {",
+        "    let SectionFlags::Coff { characteristics } = value else { return 0; };",
+        "    characteristics",
+        "}",
+        "pub fn via_match(value: SectionFlags) -> u8 {",
+        "    match value { SectionFlags::Coff { characteristics } => characteristics, _ => 0 }",
+        "}",
+        "pub fn expression() -> Mangling { Mangling::Coff { tag: 1 } }",
+      ].join("\n"),
+    };
+    await withBatch3Fixture("cg-rust-struct-variant-", sources, async (fixture) => {
+      try {
+        for (const cache of ["off", "disk", "disk"] as const) {
+          clearMemoryCache();
+          closeDiskCacheDatabase(fixture.root);
+          const index = await buildProjectIndex(fixture.root, { cache, threads: 1 });
+          expect(index.byFile.get(fileIdentityKey(fixture.files["src/usage.rs"]!))?.nativeOutcome).toBe("used");
+          const letPattern = { file: "src/usage.rs", token: "Coff", line: 4 };
+          const matchPattern = { file: "src/usage.rs", token: "Coff", line: 8 };
+          const expression = { file: "src/usage.rs", token: "Coff", line: 10 };
+          const sectionVariant = { file: "src/flags.rs", token: "Coff", line: 1 };
+          const manglingVariant = { file: "src/lib.rs", token: "Coff", line: 4 };
+          await expectGoto(fixture, index, letPattern, letPattern);
+          await expectGoto(fixture, index, matchPattern, sectionVariant);
+          await expectGoto(fixture, index, expression, manglingVariant);
+          await expectReferences(fixture, index, sectionVariant, [sectionVariant, matchPattern], "complete");
+          await expectReferences(fixture, index, manglingVariant, [manglingVariant, expression], "complete");
+        }
+      } finally {
+        closeDiskCacheDatabase(fixture.root);
+      }
+    });
+  });
+
+  it("does not resolve primitive type qualifiers to same-named functions", async () => {
+    const lines = [
+      "#![allow(dead_code)]",
+      "fn usize(_: u8) -> u8 { 0 }",
+      "fn u64(_: u8) -> u8 { 0 }",
+      "fn f32(_: u8) -> u8 { 0 }",
+      "fn run() {",
+      "    let _ = usize::MAX;",
+      "    let _ = u64::MAX;",
+      "    let _ = f32::from_bits(0);",
+      "}",
+    ];
+    await withRustReviewFixture(lines, async ({ index, site }) => {
+      for (const [name, declarationLine, useLine] of [
+        ["usize", 2, 6],
+        ["u64", 3, 7],
+        ["f32", 4, 8],
+      ] as const) {
+        const answer = await goToDefinition(index, site([useLine, name]));
+        expect(answer.status, name).toBe("not_found");
+        const refs = await findReferences(index, site([declarationLine, name]));
+        expect(refs.status, name).toBe("ok");
+        if (refs.status !== "ok") continue;
+        expect(refs.referenceCoverage.state, name).toBe("complete");
+        expect(
+          refs.references.map((ref) => ref.range.start.line),
+          name,
+        ).toEqual([declarationLine]);
+      }
+    });
+  });
+
+  it("keeps an associated call out of a same-named free function's references", async () => {
+    const lines = [
+      "mod gitignore {}",
+      "struct Receiver;",
+      "impl Receiver { fn gitignore() -> u8 { 0 } }",
+      "fn run() -> u8 { Receiver::gitignore() }",
+      "fn gitignore() -> u8 { 1 }",
+    ];
+    await withRustReviewFixture(lines, async ({ root, file, index, session, site }) => {
+      const associated = await goToDefinition(index, site([4, "gitignore"]));
+      expect(associated).toMatchObject({ status: "ok", definition: { range: { start: { line: 3 } } } });
+      const declaration = site([5, "gitignore"]);
+      const refs = await findReferences(index, declaration);
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual([5]);
+      await expectRustReviewRenameCompiles({ root, file, session, declaration, expected: [declaration] });
+    });
+  });
+
+  it("keeps type uses in macro repetitions when a struct is renamed", async () => {
+    const lines = [
+      "#![allow(dead_code)]",
+      "struct Rec { value: u8 }",
+      "macro_rules! define {",
+      "    ($($name:ident),*) => { $(",
+      "        fn $name() -> Rec { Rec { value: 1 } }",
+      "    )* };",
+      "}",
+      "define!(first, second);",
+      "fn own(_: Rec) {}",
+    ];
+    await withRustReviewFixture(lines, async ({ root, file, index, session, site }) => {
+      const declaration = site([2, "Rec"]);
+      const uses = [site([5, "Rec"]), site([5, "Rec", 1]), site([9, "Rec"])];
+      for (const use of uses) {
+        const result = await goToDefinition(index, use);
+        expect(result).toMatchObject({ status: "ok", definition: { range: { start: { line: 2 } } } });
+      }
+      const refs = await findReferences(index, declaration);
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual([2, 5, 5, 9]);
+      await expectRustReviewRenameCompiles({ root, file, session, declaration, expected: [declaration, ...uses] });
+    });
+  });
+
+  it("keeps const references inside generic argument lists", async () => {
+    const lines = [
+      "#![allow(dead_code)]",
+      "const N: usize = 4;",
+      "struct Buf<const M: usize>([u8; M]);",
+      "fn make<const K: usize>() -> Buf<K> { Buf([0; K]) }",
+      "struct Wrap<T, const L: usize>(T);",
+      "fn first(_: Buf<N>) { let _ = make::<N>(); }",
+      "fn second(_: Wrap<u8, N>) {}",
+    ];
+    await withRustReviewFixture(lines, async ({ root, file, index, session, site }) => {
+      const declaration = site([2, "N"]);
+      const uses = [site([6, "N"]), site([6, "N", 1]), site([7, "N"])];
+      for (const use of uses) {
+        const result = await goToDefinition(index, use);
+        expect(result).toMatchObject({ status: "ok", definition: { range: { start: { line: 2 } } } });
+      }
+      const refs = await findReferences(index, declaration);
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") return;
+      expect(refs.referenceCoverage.state).toBe("complete");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual([2, 6, 6, 7]);
+      await expectRustReviewRenameCompiles({ root, file, session, declaration, expected: [declaration, ...uses] });
+    });
+  });
+
   it("preserves function, const, and static items throughout qualified value paths", async () => {
     await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file) => {
       await expectRustQualifiedItemGoto(index, file);
@@ -2522,6 +2994,143 @@ describe("Rust function-local items and re-export aliases", () => {
       expect(consumerImports).toEqual([expect.objectContaining({ imported: "Baz", from: "crate::barrel" })]);
       expect(fileIdentityKey(String(consumerImports[0]?.resolved))).toBe(fileIdentityKey(barrelFile));
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a value apart from a same-named module, enum, trait, or record struct", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-namespace-"));
+    const file = path.join(root, "lib.rs");
+    const innerReads: RustToken[] = [
+      [4, "inner"],
+      [5, "inner"],
+      [7, "inner"],
+    ];
+    const innerPaths: RustToken[] = [
+      [6, "inner"],
+      [8, "inner"],
+      [54, "inner", 1],
+      [56, "inner"],
+    ];
+    const swappedReads: RustToken[] = [
+      [13, "swapped"],
+      [15, "swapped"],
+    ];
+    try {
+      await writeFile(
+        path.join(root, "Cargo.toml"),
+        '[package]\nname = "namespace_probe"\nversion = "0.1.0"\n[lib]\npath = "lib.rs"\n',
+      );
+      await writeFile(file, `${RUST_NAMESPACE_LINES.join("\n")}\n`);
+      for (const cache of ["off", "disk", "disk"] as const) {
+        clearMemoryCache();
+        closeDiskCacheDatabase(root);
+        const session = createAgentSession({ root, buildOptions: { cache, threads: 1 } });
+        try {
+          const { index } = await session.loadProject();
+          expect(index.byFile.get(fileIdentityKey(file))?.nativeOutcome).toBe("used");
+
+          await expectRustNamespaceGoto(index, file, [4, "inner"], [2, "inner"]);
+          await expectRustNamespaceGoto(index, file, [5, "inner"], [2, "inner"]);
+          await expectRustNamespaceGoto(index, file, [7, "inner"], [2, "inner"]);
+          await expectRustNamespaceGoto(index, file, [6, "inner"], [1, "inner"]);
+          await expectRustNamespaceGoto(index, file, [8, "inner"], [1, "inner"]);
+          await expectRustNamespaceGoto(index, file, [1, "inner"], [1, "inner"]);
+          await expectRustNamespaceGoto(index, file, [2, "inner"], [2, "inner"]);
+          await expectRustNamespaceGoto(index, file, [13, "swapped"], [19, "swapped"]);
+          await expectRustNamespaceGoto(index, file, [15, "swapped"], [19, "swapped"]);
+          await expectRustNamespaceGoto(index, file, [14, "swapped"], [20, "swapped"]);
+          await expectRustNamespaceGoto(index, file, [16, "swapped"], [20, "swapped"]);
+          await expectRustNamespaceGoto(index, file, [23, "shared"], [21, "shared"]);
+          await expectRustNamespaceGoto(index, file, [23, "shared", 1], [22, "shared"]);
+          await expectRustNamespaceGoto(index, file, [28, "Record"], [25, "Record"]);
+          await expectRustNamespaceGoto(index, file, [32, "Tuple"], [30, "Tuple"]);
+          await expectRustNamespaceGoto(index, file, [32, "Tuple", 1], [30, "Tuple"]);
+          await expectRustNamespaceGoto(index, file, [38, "Choice"], [35, "Choice"]);
+          await expectRustNamespaceGoto(index, file, [39, "Choice"], [36, "Choice"]);
+          await expectRustNamespaceGoto(index, file, [43, "Marker"], [42, "Marker"]);
+          await expectRustNamespaceGoto(index, file, [51, "decoy"], [50, "decoy"]);
+          await expectRustNamespaceGoto(index, file, [54, "inner"], [53, "inner"]);
+          await expectRustNamespaceGoto(index, file, [54, "inner", 1], [1, "inner"]);
+          await expectRustNamespaceGoto(index, file, [56, "inner"], [1, "inner"]);
+          await expectRustNamespaceGoto(index, file, [73, "same"], [71, "same"]);
+          await expectRustNamespaceGoto(index, file, [73, "same", 1], [72, "same"]);
+
+          await expectRustNamespaceReferences(index, file, [2, "inner"], innerReads);
+          await expectRustNamespaceReferences(index, file, [1, "inner"], innerPaths);
+          await expectRustNamespaceReferences(index, file, [19, "swapped"], swappedReads);
+          await expectRustNamespaceReferences(index, file, [20, "swapped"], []);
+          await expectRustNamespaceReferences(index, file, [21, "shared"], [[23, "shared"]]);
+          await expectRustNamespaceReferences(index, file, [22, "shared"], [[23, "shared", 1]]);
+          await expectRustNamespaceReferences(index, file, [24, "Record"], []);
+          await expectRustNamespaceReferences(index, file, [25, "Record"], [[28, "Record"]]);
+          await expectRustNamespaceReferences(
+            index,
+            file,
+            [30, "Tuple"],
+            [
+              [32, "Tuple"],
+              [32, "Tuple", 1],
+            ],
+          );
+          await expectRustNamespaceReferences(index, file, [35, "Choice"], [[38, "Choice"]]);
+          await expectRustNamespaceReferences(index, file, [36, "Choice"], [[39, "Choice"]]);
+          await expectRustNamespaceReferences(index, file, [41, "Marker"], []);
+          await expectRustNamespaceReferences(index, file, [42, "Marker"], [[43, "Marker"]]);
+          await expectRustNamespaceReferences(index, file, [50, "decoy"], [[51, "decoy"]]);
+          await expectRustNamespaceReferences(index, file, [53, "inner"], [[54, "inner"]]);
+          await expectRustNamespaceReferences(index, file, [71, "same"], [[73, "same"]]);
+          await expectRustNamespaceReferences(index, file, [72, "same"], [[73, "same", 1]]);
+
+          const graph = await buildSymbolGraphDetailed(index);
+          const definitionLine = (nodeId: string | undefined): number | undefined => {
+            if (!nodeId) return undefined;
+            for (const module of index.byFile.values()) {
+              for (const local of module.locals) {
+                if (nodeId.endsWith(`::${local.localName}::${local.range.start.index ?? 0}`)) {
+                  return local.range.start.line;
+                }
+              }
+            }
+            return undefined;
+          };
+          const callTarget = (callerName: string, siteLine: number): number | undefined => {
+            const caller = [...graph.nodes.values()].find((node) => node.name === callerName);
+            const edge = graph.edges.find(
+              (item) => item.label === "calls" && item.from === caller?.id && item.site?.range.start.line === siteLine,
+            );
+            return definitionLine(edge ? graph.nodes.get(edge.to)?.id : undefined);
+          };
+          expect(callTarget("use_inner", 4)).toBe(2);
+          expect(callTarget("use_inner", 7)).toBe(2);
+          expect(callTarget("before", 13)).toBe(19);
+          expect(callTarget("before", 15)).toBe(19);
+          expect(callTarget("use_record", 28)).toBe(25);
+          expect(callTarget("use_choice", 39)).toBe(36);
+          expect(callTarget("use_marker", 43)).toBe(42);
+          expect(callTarget("use_plain", 51)).toBe(50);
+          expect(callTarget("use_tuple", 32)).toBe(30);
+          expect(callTarget("use_nested", 73)).toBe(71);
+          const callLines = new Set(
+            graph.edges.filter((edge) => edge.label === "calls").map((edge) => edge.site?.range.start.line),
+          );
+          for (const line of [6, 8, 14, 16, 27]) expect(callLines.has(line), `call on ${line}`).toBe(false);
+
+          await expectRustNamespaceRename(session, root, file, [2, "inner"], innerReads);
+          await expectRustNamespaceRename(session, root, file, [19, "swapped"], swappedReads);
+          await expectRustNamespaceRename(session, root, file, [71, "same"], [[73, "same"]]);
+          await expect(
+            previewRenameWithSession(session, { root, handle: "lib.rs:1:5", newName: "renamed" }),
+          ).rejects.toThrow('Symbol target "lib.rs:1:5" was not found');
+          await expectRustNamespaceRename(session, root, file, [53, "inner"], [[54, "inner"]]);
+          await expectRustNamespaceRename(session, root, file, [25, "Record"], [[28, "Record"]]);
+          await expectRustNamespaceRename(session, root, file, [24, "Record"], []);
+        } finally {
+          session.invalidate();
+        }
+      }
+    } finally {
+      closeDiskCacheDatabase(root);
       await rm(root, { recursive: true, force: true });
     }
   });

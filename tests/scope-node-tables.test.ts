@@ -141,6 +141,7 @@ const SCOPE_NODE_LIST_FIELDS = [
 
 /** Row fields that hold behavior or a call/declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
+  "destructuringTypeFieldBindingTypes",
   "outerEvaluatedFields",
   "memberSelectorFields",
   "memberSelectorReceiverFields",
@@ -152,6 +153,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "memberSelectorFields",
   "memberSelectorReceiverFields",
   "memberSelectorRejectsBinding",
+  "namespaceHidesBinding",
   "nonLexicalUse",
   "declarationPatternName",
   "patternBindingVisibleAt",
@@ -301,6 +303,13 @@ describe("scope node tables", () => {
             `${support.id}.${field} declares ${nodeType}, which its grammar does not have`,
           ).toBe(true);
         }
+      }
+      for (const [patternType, typeNode] of Object.entries(row.destructuringTypeFieldBindingTypes ?? {})) {
+        expect(row.destructuringTypeFieldTypes?.has(patternType), `${support.id}.${patternType}`).toBe(true);
+        expect(
+          grammarQueryCompiles(support, `(${patternType} type: (${typeNode})) @x`),
+          `${support.id}.${patternType}.type cannot contain ${typeNode}`,
+        ).toBe(true);
       }
     }
   });

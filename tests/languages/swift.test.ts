@@ -17,6 +17,14 @@ import {
   SWIFT_ACCURACY_SOURCES,
 } from "../helpers/swift-accuracy-fixture.js";
 import { SWIFT_QUOTED_SOURCES, swiftQuotedSite } from "../helpers/swift-quoted-fixture.js";
+import {
+  MEMBER_SELECTOR_FIXTURES,
+  expectMemberSelectorGoto,
+  expectMemberSelectorGraph,
+  expectMemberSelectorReferences,
+  expectMemberSelectorRename,
+  withMemberSelectorFixture,
+} from "../helpers/member-selector-fixture.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
@@ -1679,6 +1687,17 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
 describeTypeParameterReceiverRows("swift", "Swift type parameter beside a same-named class");
 
 describe("Swift contextual language consumers", () => {
+  it("keeps tuple labels out of local and parameter consumers", async () => {
+    const fixture = MEMBER_SELECTOR_FIXTURES.find((candidate) => candidate.language === "swift");
+    if (!fixture) throw new Error("Missing Swift selector fixture");
+    await withMemberSelectorFixture(fixture, async (index, file, session, root) => {
+      await expectMemberSelectorGoto(index, fixture, file);
+      await expectMemberSelectorReferences(index, fixture, file);
+      await expectMemberSelectorRename(session, fixture, root, file);
+      await expectMemberSelectorGraph(index, fixture, file);
+    });
+  });
+
   it("keeps declared enum cases and labeled overloads distinct", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cg-swift-accuracy-language-"));
     try {

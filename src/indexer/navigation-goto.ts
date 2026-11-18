@@ -240,6 +240,7 @@ export function supportsDeclaredFieldChains(languageId: string): boolean {
 function noLexicalBinding(): boolean {
   return false;
 }
+
 /** A Rust named `use crate::mod` binding names the indexed module, not a class export. */
 export function resolveRustModuleNamespace(index: ProjectIndex, binding: ImportBinding): string | null {
   if (binding.kind !== "named" || typeof binding.resolved !== "string") return null;
@@ -252,6 +253,7 @@ export function resolveRustModuleNamespace(index: ProjectIndex, binding: ImportB
   const resolved = modules[0]?.resolved;
   return typeof resolved === "string" ? resolved : null;
 }
+
 /**
  * One bound for every receiver-hierarchy walk in this module: keyword `super`/`parent` lookup,
  * Go struct embedding, and Python base classes. Each walk keeps its own visited set, so this is a

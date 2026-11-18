@@ -63,6 +63,22 @@ export const rustCells: MatrixCell[] = [
     },
   },
   {
+    id: "rust/bare-call-type-namespace-collision",
+    language: "rust",
+    callForm: "bare-call",
+    files: {
+      "Cargo.toml": ["[package]", 'name = "probe"', 'version = "0.1.0"', ""].join("\n"),
+      "src/lib.rs": ["struct item { value: i32 }", "fn item() -> i32 { 1 }", "fn call() -> i32 { item() }", ""].join(
+        "\n",
+      ),
+    },
+    use: { file: "src/lib.rs", line: 3, token: "item" },
+    expected: { file: "src/lib.rs", line: 2, token: "item" },
+    decoy: { file: "src/lib.rs", line: 1, token: "item" },
+    decoyKind: "type",
+    edge: { label: "calls", fromFile: "src/lib.rs", fromName: "call" },
+  },
+  {
     id: "rust/self-member-call",
     language: "rust",
     callForm: "self-member-call",

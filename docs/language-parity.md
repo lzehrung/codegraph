@@ -86,7 +86,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A member call on a local, parameter, field, or `this`/`self` never uses a free function, except in Kotlin and Go.
 - Ruby `object.name`/`self.name` and C member selectors (`value.name`, `pointer->name`) and designated-initializer field names (`.name = name`) do not read same-named local variables, parameters, or free functions. C member declarations retain their own field uses. Rust qualified item-name segments (`super::shared()`, `self::f()`, `crate::LIMIT`, `inner::K`, `Self::CONST`) retain function, const, and static item bindings; variable-like bindings stay excluded. Value bindings cannot act as Rust namespace qualifiers, including intermediate segments in longer paths. Receivers and initializer expressions still read their bindings. Ruby parameters and C pointer-declarator parameters remain unindexed rename targets.
 - Swift argument labels (`Foo(value: value)`, `f(title: title)`, including quoted labels) are not local uses in `goToDefinition`, `findReferences`, or `previewRename`; the expressions after the colon still are.
-- Swift tuple-expression labels (`let pair = (title: title)`) remain a limitation: local references and rename edits can include the label and break compilation. Excluding every repeated label requires a node field-name accessor.
+- Swift tuple-expression labels (`let pair = (title: title, name: name)`, including every label after the first) are not local uses in `goToDefinition`, `findReferences`, or `previewRename`; the expressions after the colons still are.
 
 #### Same-package peers
 
@@ -352,6 +352,12 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 
 ## Rust
 
+- Bare calls and value uses skip a same-named Rust module, enum, trait, or record struct to reach a function or constant; a namespace qualifier (`inner::K`) keeps the module. Tuple and unit structs stay in the value namespace, so they do not share a name with a function. A tuple-struct pattern names its type rather than declaring a local of that name.
+- A qualified struct pattern in a `let` declaration can resolve its path to itself rather than its type or enum variant, so that declaration's references can omit the pattern.
+- A same-named local or parameter can prevent an unqualified namespace-import receiver from resolving; explicit `crate::`, `self::`, and `super::` roots do not use that local value.
+- If a module's qualifier is used before its declaration, references may omit that qualifier while reporting complete coverage.
+- A record-struct literal may resolve to a same-named function and appear in that function's complete references and rename edits.
+- A direct `crate::function()` records a detailed call edge when its crate root and the root function in that file are proven. Rust module declarations are not indexed semantic symbols, so `previewRename` cannot target them.
 - `macro_rules!` definitions are function-kind symbols; macro invocations resolve to them.
 - A trait method and its impl are separate same-name symbols, so a name-only lookup can be ambiguous.
 - Visibility is per-file with no crate lattice, so a sibling can resolve a `pub(super)` item rustc would reject.
@@ -377,6 +383,7 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 - A Swift variadic parameter (`xs: Item...`) holds an array of its type, so a member after it (`xs.count`, `xs.reversed()`) names no member of `Item`, and the references of that member stay partial. A parameter written with the type alone still does.
 - A Swift protocol-typed receiver resolves a requirement only when its type is written as the protocol alone. A receiver typed `any Named`, `some Named`, `Named?`, or as a generic parameter constrained to `Named` names no member, and the requirement's references stay partial.
 - A Swift name after a dot selects a member of its receiver, and is never a use of a parameter, local variable, or function of the same spelling: `self.title = title` reads the parameter once, and renaming the parameter leaves `self.title` alone.
+- Tuple-expression and tuple-type labels are not references to same-named locals or parameters. Tuple-pattern and enum-payload pattern labels are not yet separated from lexical names.
 - A `private` member is accessible in its enclosing type and same-file extensions, while `fileprivate` is visible throughout its file. Neither is visible from another file.
 - An extension header names an existing type and is never a member or a declaration of it. A conformance, an inheritance clause, or an annotation that names a type with extensions resolves to the type itself, also for a `private` or `fileprivate` type in its own file, and stays unresolved in another file. Inside an extension of a type the project does not declare, that type's name stays unresolved rather than naming the extension header.
 - A `where` extension shares members only with extensions of the same type whose constraint identifier tokens match (plain or backtick-quoted); literal tokens keep their exact spelling. Logically equivalent constraints are not inferred.

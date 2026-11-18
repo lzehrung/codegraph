@@ -1,6 +1,7 @@
 import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
+  RUST_NAMESPACE_COLLISION_FIXTURE,
   expectMemberSelectorRename,
   withMemberSelectorFixture,
 } from "./helpers/member-selector-fixture.js";
@@ -165,6 +166,12 @@ async function typeErrorsAfter(root: string, edits: readonly RenameEdit[]): Prom
 }
 
 describe("rename preview", () => {
+  it("renames Rust values without editing same-named module paths", async () => {
+    await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (_index, file, session, root) => {
+      await expectMemberSelectorRename(session, RUST_NAMESPACE_COLLISION_FIXTURE, root, file);
+    });
+  });
+
   it("renames every qualified Rust item read but not namespace qualifier decoys", async () => {
     await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (_index, file, session, root) => {
       await expectMemberSelectorRename(session, RUST_QUALIFIED_ITEM_FIXTURE, root, file);

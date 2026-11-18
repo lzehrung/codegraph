@@ -711,15 +711,16 @@ export function buildScopeIndexFromSource(
         return;
       }
       const typeNode = pattern.childForFieldName("type");
+      const typeIsBinding = !!typeNode && typeNode.type === row.destructuringTypeFieldBindingTypes?.[pattern.type];
       const readsEagerDefault = kind === "param" && !!row.moduleBindingsAtFunctionRuntime;
       const valueNode = readsEagerDefault ? pattern.childForFieldName("value") : null;
       for (const child of pattern.namedChildren) {
-        if (typeNode && child.id === typeNode.id) continue;
+        if (typeNode && !typeIsBinding && child.id === typeNode.id) continue;
         if (valueNode && child.id === valueNode.id) continue;
         if (defaultNode && child.id === defaultNode.id) continue;
         addPatternDecls(child, kind, addBindingToScope);
       }
-      if (typeNode) walk(typeNode);
+      if (typeNode && !typeIsBinding) walk(typeNode);
       if (defaultNode && kind === "param") walk(defaultNode);
       if (valueNode) {
         // Python defaults execute in the enclosing scope, before the function is bound.
@@ -896,8 +897,12 @@ export function buildScopeIndexFromSource(
     const defaultNode = patternDefaultValue(pattern);
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const typeNode = pattern.childForFieldName("type");
+      const typeIsBinding = !!typeNode && typeNode.type === row.destructuringTypeFieldBindingTypes?.[pattern.type];
       for (const child of pattern.namedChildren) {
-        if (typeNode && child.startIndex === typeNode.startIndex && child.endIndex === typeNode.endIndex) continue;
+        if (typeNode && !typeIsBinding) {
+          const sameTypeField = child.startIndex === typeNode.startIndex && child.endIndex === typeNode.endIndex;
+          if (sameTypeField) continue;
+        }
         if (defaultNode && child.id === defaultNode.id) continue;
         rememberPatternNames(child, names);
       }

@@ -1,6 +1,7 @@
 import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
+  RUST_NAMESPACE_COLLISION_FIXTURE,
   expectRustQualifiedItemGoto,
   expectMemberSelectorRename,
   expectMemberSelectorGoto,
@@ -1051,6 +1052,16 @@ async function createCppCallableRedeclarationCase(): Promise<SemanticExpectation
 }
 
 nativeDescribe("native semantic coverage", () => {
+  it("keeps Rust namespace collisions consistent through native consumers and disk reloads", async () => {
+    await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file, session, root) => {
+      await expectMemberSelectorGoto(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+      await expectMemberSelectorReferences(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+      await expectMemberSelectorRename(session, RUST_NAMESPACE_COLLISION_FIXTURE, root, file);
+      await expectMemberSelectorGraph(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+    });
+    await expectMemberSelectorCacheTransitions(RUST_NAMESPACE_COLLISION_FIXTURE);
+  });
+
   it("preserves native qualified Rust item goto, references, and rename across cache reloads", async () => {
     await withMemberSelectorFixture(RUST_QUALIFIED_ITEM_FIXTURE, async (index, file, session, root) => {
       await expectRustQualifiedItemGoto(index, file);

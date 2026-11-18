@@ -119,6 +119,8 @@ export type ScopeNodeRow = {
   explicitMethodCallTypes?: ReadonlySet<string>;
   /** Pattern nodes whose type field, and parameter default-value field, contain reads rather than names. */
   destructuringTypeFieldTypes?: ReadonlySet<string>;
+  /** Type-field node type that retains its existing pattern binding instead of becoming a read. */
+  destructuringTypeFieldBindingTypes?: Readonly<Record<string, string>>;
   /** Node types that destructure a value reached through their `value` field. */
   destructuringPairPatternTypes?: ReadonlySet<string>;
   /** Node types that destructure an object through their named children. */
@@ -237,6 +239,15 @@ export type ScopeNodeRow = {
   memberSelectorReceiverFields?: Readonly<Record<string, string>>;
   /** Whether a selector rejects this lexical binding; member declarations can share a binding kind with locals. */
   memberSelectorRejectsBinding?: (binding: Pick<Binding, "kind" | "node">) => boolean;
+  /**
+   * Skip this same-scope binding because the use reads another namespace. Lookup then continues to
+   * the earlier binding of that name, and a use seen before the matching declaration stays queued.
+   */
+  namespaceHidesBinding?: (
+    row: ScopeNodeRow,
+    binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
+    use: SyntaxNodeLike,
+  ) => boolean;
   /** A syntactic member or argument designator cannot be an occurrence of a lexical binding. */
   nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
 };
@@ -254,6 +265,88 @@ const RUST_ITEM_DECLARATION_TYPES: ReadonlySet<string> = new Set([
   "type_item",
   "macro_definition",
 ]);
+const RUST_TYPE_NAMESPACE_DECLARATIONS: ReadonlySet<string> = new Set(["mod_item", "enum_item", "trait_item"]);
+
+/** These identifier parents do not denote bare value uses. */
+const RUST_NON_VALUE_IDENTIFIER_PARENTS: ReadonlySet<string> = new Set([
+  "scoped_identifier",
+  "scoped_type_identifier",
+  "scoped_use_list",
+  "use_declaration",
+  "use_as_clause",
+  "use_list",
+  "use_wildcard",
+  "visibility_modifier",
+  "macro_invocation",
+  "token_tree",
+  "token_repetition",
+  "token_tree_pattern",
+  "token_repetition_pattern",
+]);
+
+/** Paths under imports and macro token trees are not value uses. */
+const RUST_NON_VALUE_PATH_ANCESTORS: ReadonlySet<string> = new Set([
+  "use_declaration",
+  "visibility_modifier",
+  "scoped_type_identifier",
+  "macro_invocation",
+  "token_tree",
+  "token_repetition",
+  "token_tree_pattern",
+  "token_repetition_pattern",
+]);
+
+const RUST_VALUE_ROOTS: ReadonlySet<string> = new Set(["crate", "self", "super"]);
+
+function rustScopedValueName(use: SyntaxNodeLike): boolean {
+  const parent = use.parent;
+  if (!parent || parent.type !== "scoped_identifier") return false;
+  const qualifier = parent.childForFieldName("path");
+  if (!qualifier || !RUST_VALUE_ROOTS.has(qualifier.type)) return false;
+  const name = parent.childForFieldName("name");
+  if (!name || name.startIndex !== use.startIndex || name.endIndex !== use.endIndex) return false;
+  for (let current = parent.parent; current; current = current.parent) {
+    if (RUST_NON_VALUE_PATH_ANCESTORS.has(current.type)) return false;
+  }
+  return true;
+}
+
+/** Value names skip declarations that only occupy Rust's type namespace. */
+function rustNamespaceHidesBinding(
+  row: ScopeNodeRow,
+  binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
+  use: SyntaxNodeLike,
+): boolean {
+  if (use.type !== "identifier" || !use.parent) return false;
+  const ownDeclaration = binding.node?.startIndex === use.startIndex && binding.node.endIndex === use.endIndex;
+  if (ownDeclaration) return false;
+  if (RUST_ITEM_DECLARATION_TYPES.has(use.parent.type)) {
+    const name = use.parent.childForFieldName("name");
+    if (name && name.startIndex === use.startIndex && name.endIndex === use.endIndex) return true;
+  }
+  // A qualifier may skip a value item only when an earlier type or namespace is present. If
+  // none is known, retaining the value blocks fallback to an unrelated same-named function.
+  if (isValuePathQualifier(row, use)) {
+    if (!isValueNamespaceBinding(binding)) return false;
+    const declaration = binding.node?.parent;
+    const localValue = !declaration || !RUST_ITEM_DECLARATION_TYPES.has(declaration.type);
+    if (localValue && rustScopedValueName(use)) return true;
+    const earlier = binding.earlierSameScope;
+    return earlier?.kind === "class" || earlier?.kind === "type" || earlier?.kind === "namespace";
+  }
+  const parent = use.parent;
+  const qualifiedTuplePattern =
+    parent.type === "scoped_identifier" &&
+    parent.parent?.type === "tuple_struct_pattern" &&
+    parent.parent.childForFieldName("type")?.id === parent.id;
+  if (RUST_NON_VALUE_IDENTIFIER_PARENTS.has(parent.type) && !rustScopedValueName(use) && !qualifiedTuplePattern)
+    return false;
+  if (binding.kind === "namespace") return true;
+  const declaration = binding.node?.parent;
+  if (!declaration) return false;
+  if (RUST_TYPE_NAMESPACE_DECLARATIONS.has(declaration.type)) return true;
+  return declaration.type === "struct_item" && declaration.childForFieldName("body")?.type === "field_declaration_list";
+}
 
 const WHOLE_FILE_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["module"]);
 const CPP_MEMBER_SCOPE: ReadonlySet<Scope["kind"]> = new Set(["member"]);
@@ -363,7 +456,7 @@ function methodHiddenFrom(
  */
 export function bindingHiddenFromUse(
   row: ScopeNodeRow,
-  binding: Pick<Binding, "kind" | "node">,
+  binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
   use: SyntaxNodeLike | undefined,
   methodCall: boolean,
   typeOnly: boolean,
@@ -374,6 +467,7 @@ export function bindingHiddenFromUse(
   if (crossedGate && localHiddenByGate(row, binding)) return true;
   if (use && binding.node && row.patternBindingVisibleAt && !row.patternBindingVisibleAt(binding.node, use))
     return true;
+  if (use && row.namespaceHidesBinding?.(row, binding, use)) return true;
   if (binding.kind !== "type" || !use || !row.typeOnlyUseTypes) return false;
   // Type syntax reads a type parameter; every other use passes it by.
   if (row.typeOnlyUseTypes.has(use.type)) return false;
@@ -661,12 +755,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     variableDeclarationTypes: new Set(["field_declaration", "let_declaration", "const_item", "static_item"]),
     patternBindingTypes: new Set(["let_declaration", "const_item", "static_item"]),
     memberContainerTypes: new Set(["impl_item"]),
-    // A parameter's `type` field is a sibling of its `pattern`, not a nested pattern: without
-    // this, the generic recursive walk in `addPatternDecls` (scope.js) descends into the type
-    // position and registers the referenced type name (bare or `super::`/`crate::`-qualified)
-    // as a same-scope "param" binding at the reference site itself, which then shadows the
-    // real declaration and makes goto/references resolve the use to itself.
-    destructuringTypeFieldTypes: new Set(["parameter"]),
+    // A parameter's `type` field is a sibling of its `pattern`, not a nested pattern. A tuple or
+    // struct pattern's `type` likewise names the matched type (`let Tuple(value) = Tuple(1)`).
+    // Without this, the pattern walk registers that type name as a local at the pattern, and the
+    // constructor resolves to the pattern instead of the struct.
+    destructuringTypeFieldTypes: new Set(["parameter", "tuple_struct_pattern", "struct_pattern"]),
+    // Preserve the prior binding for qualified struct patterns until their variant owner is proven.
+    destructuringTypeFieldBindingTypes: { struct_pattern: "scoped_type_identifier" },
     childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
     memberSelectorFields: { scoped_identifier: "name" },
     memberSelectorParentTypes: new Set(["scoped_identifier"]),
@@ -675,6 +770,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
       const declaration = binding.node?.parent;
       return !declaration || !RUST_ITEM_DECLARATION_TYPES.has(declaration.type);
     },
+    namespaceHidesBinding: rustNamespaceHidesBinding,
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: RUST_ITEM_DECLARATION_TYPES,
   },
@@ -735,6 +831,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     wholeScopeKinds: WHOLE_FILE_SCOPE,
     wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
     memberSelectorParentTypes: new Set(["navigation_suffix", "value_argument_label"]),
+    memberSelectorFields: { tuple_expression: "name", tuple_type_item: "name" },
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),
@@ -894,8 +991,17 @@ export function isNonLexicalValueUse(row: ScopeNodeRow, useNode: SyntaxNodeLike)
   if (!field) return false;
   const receiverField = row.memberSelectorReceiverFields?.[parent.type];
   if (receiverField && !parent.childForFieldName(receiverField)) return false;
+  return fieldIncludesNode(parent, field, useNode);
+}
+
+/** True when `node` is any child stored under `field`, including a repeated field name. */
+function fieldIncludesNode(parent: SyntaxNodeLike, field: string, node: SyntaxNodeLike): boolean {
+  if (parent.childForFieldNameAt) {
+    const child = parent.childForFieldNameAt(field, node.startIndex);
+    return !!child && child.endIndex === node.endIndex;
+  }
   const selector = parent.childForFieldName(field);
-  return selector?.startIndex === useNode.startIndex && selector.endIndex === useNode.endIndex;
+  return !!selector && selector.startIndex === node.startIndex && selector.endIndex === node.endIndex;
 }
 
 /** Namespace qualifier fields apply to every nonterminal segment of a qualified path. */
@@ -906,9 +1012,11 @@ function isValuePathQualifier(row: ScopeNodeRow, useNode: SyntaxNodeLike): boole
   for (let path = segment.parent; path; path = path.parent) {
     if (!row.memberSelectorParentTypes?.has(path.type) || !qualifierFields[path.type]) return false;
     const nameField = row.memberSelectorFields?.[path.type];
-    const name = nameField ? path.childForFieldName(nameField) : null;
-    if (name?.startIndex !== segment.startIndex || name.endIndex !== segment.endIndex) return true;
-    segment = path;
+    if (nameField && fieldIncludesNode(path, nameField, segment)) {
+      segment = path;
+      continue;
+    }
+    return true;
   }
   return false;
 }

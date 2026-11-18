@@ -17,6 +17,11 @@ export interface SyntaxNodeLike {
   previousNamedSibling?: SyntaxNodeLike | null;
   child(index: number): SyntaxNodeLike | null;
   childForFieldName(fieldName: string): SyntaxNodeLike | null;
+  /**
+   * The child with this field name that starts at `startIndex`, or null.
+   * Uses the ordered child positions without allocating when no child matches.
+   */
+  childForFieldNameAt?(fieldName: string, startIndex: number): SyntaxNodeLike | null;
 }
 
 export interface SyntaxTreeLike {

@@ -183,8 +183,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 164 rebuilds selector references while retaining Rust qualified items and excluding C initializer field labels.
  * Epoch 165 rebuilds Java and C# selectors, Java annotation and pattern bindings, C# initializer and designator facts,
  * and C# Bloom filters that mark unprobeable identifier spellings.
+ * Epoch 167 rebuilds Rust namespace and tuple-pattern bindings and Swift tuple-label references and edges.
  */
-export const CORE_ALGORITHM_EPOCH = 165;
+export const CORE_ALGORITHM_EPOCH = 167;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -211,8 +212,9 @@ export const CORE_ALGORITHM_EPOCH = 165;
  * Epoch 24 distinguishes declared C fields and Rust items from lexical variable bindings at selectors.
  * Epoch 25 isolates C# initializer variables, marks unprobeable identifier spellings, and classifies Java pattern
  * and annotation declarations.
+ * Epoch 27 adds the Rust value and type namespace hook and the Swift tuple-label selector field.
  */
-export const LANGUAGE_BEHAVIOR_EPOCH = 25;
+export const LANGUAGE_BEHAVIOR_EPOCH = 27;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];

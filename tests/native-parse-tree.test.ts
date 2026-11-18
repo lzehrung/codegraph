@@ -31,6 +31,25 @@ nativeDescribe("native parse tree projection", () => {
     expect(bodyNode?.previousNamedSibling?.type).toBe("formal_parameters");
   });
 
+  it("finds every repeated field by UTF-16 start without selecting tuple values", () => {
+    const support = supportById("swift");
+    expect(support).toBeDefined();
+    const source = 'let emoji = "\u{1F980}"\nlet pair = (first: 1, second: 2, third: 3)\n';
+    const execution = getNativeSyntaxTreeExecution(source, support!);
+    expect(execution.tree).not.toBeNull();
+    const tree = new ProjectedSyntaxTree(source, execution.tree!);
+    const firstIndex = source.indexOf("first");
+    const first = tree.rootNode.descendantForIndex(firstIndex, firstIndex + "first".length);
+    const tuple = first.parent;
+    expect(tuple?.type).toBe("tuple_expression");
+    expect(tuple?.childForFieldName("name")).toBe(first);
+    expect(tuple?.childForFieldNameAt("name", firstIndex)).toBe(first);
+    expect(tuple?.childForFieldNameAt("name", source.indexOf("second"))?.text).toBe("second");
+    expect(tuple?.childForFieldNameAt("name", source.indexOf("third"))?.text).toBe("third");
+    expect(tuple?.childForFieldNameAt("name", source.indexOf("2"))).toBeNull();
+    expect(tuple?.childForFieldNameAt("missing", firstIndex)).toBeNull();
+  });
+
   it("supports descendant lookup by byte and point ranges", () => {
     const support = supportById("python");
     expect(support).toBeDefined();

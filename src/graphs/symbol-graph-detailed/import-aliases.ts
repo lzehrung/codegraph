@@ -8,8 +8,8 @@ import {
   memberContainerForDefinition,
   resolveImported,
 } from "../../indexer/navigation-resolve.js";
-import { languageHasDeclarationVisibility } from "../../indexer/declaration-visibility.js";
 import { resolveRustModuleNamespace } from "../../indexer/navigation-goto.js";
+import { languageHasDeclarationVisibility } from "../../indexer/declaration-visibility.js";
 import { resolvePhpExplicitImport } from "../../indexer/php-namespace-symbols.js";
 import {
   effectiveExplicitOrLocalBinding,

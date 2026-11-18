@@ -67,6 +67,7 @@ function createGraphOnlySyntaxTree(): SyntaxTreeLike {
     namedChildren: [],
     child: () => null,
     childForFieldName: () => null,
+    childForFieldNameAt: () => null,
     descendantForIndex: () => rootNode,
     descendantForPosition: () => rootNode,
   };
