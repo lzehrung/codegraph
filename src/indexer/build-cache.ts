@@ -51,6 +51,7 @@ export {
   tryLoadPersistedBloomFilters,
   tryLoadProjectSnapshotModules,
   tryLoadProjectIndexSnapshot,
+  tryLoadWorkspaceManifestEdgesFromSnapshot,
   writeProjectIndexSnapshot,
 } from "./build-cache/project-snapshot.js";
 export {

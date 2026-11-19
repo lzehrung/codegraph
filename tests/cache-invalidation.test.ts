@@ -740,6 +740,52 @@ describe("Cache invalidation and strict hashing", () => {
     expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
   });
 
+  it("rebuilds epoch 172 cached indexing to match a cold build", async () => {
+    const root = await mkTmpDir("dg-cache-core-epoch-");
+    const entryPath = path.join(root, "entry.ts");
+    const dataPath = path.join(root, "data.json");
+    await fsp.writeFile(entryPath, 'import data from "./data.json";\nexport const current = data;\n', "utf8");
+    await fsp.writeFile(dataPath, '{"value":1}\n', "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const stored = await readManifest(root);
+    // Keep signatures and the implementation fingerprint current, so the epoch is the only mismatch.
+    // Simulate an old snapshot that omitted a synthetic JSON module and retained a stale edge.
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
+      modules: Array<{ file: string }>;
+      graph: { edges: Array<{ from: string; to: { type: "file"; path: string }; raw: string }> };
+    };
+    expect(snapshot.modules.some((module) => module.file === "data.json")).toBe(true);
+    snapshot.modules = snapshot.modules.filter((module) => module.file !== "data.json");
+    snapshot.graph.edges.push({ from: "entry.ts", to: { type: "file", path: "stale.ts" }, raw: "./stale" });
+    await writeProjectSnapshot(snapshotPath, snapshot);
+    const stale = await buildCache.tryLoadProjectIndexSnapshot(
+      root,
+      { cache: "disk" },
+      new Map(Object.entries(stored.files)),
+    );
+    expect(stale).not.toBeNull();
+    expect(stale?.index.byFile.has(fileIdentityKey(dataPath))).toBe(false);
+    stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: 172 };
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report });
+
+    expect(report.manifest?.optionsMismatch).toContain("coreAlgorithm");
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    const cold = await buildProjectIndex(root, { threads: 2, cache: "off" });
+    expect([...rebuilt.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+    expect(rebuilt.byFile.has(fileIdentityKey(dataPath))).toBe(true);
+    expect(rebuilt.graph.edges).toEqual(cold.graph.edges);
+    const refreshed = await readManifest(root);
+    expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
+  });
+
   it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
     const root = await mkTmpDir("dg-fingerprint-build-shapes-");
     await fsp.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");
