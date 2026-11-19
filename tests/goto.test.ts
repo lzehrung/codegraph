@@ -2,6 +2,7 @@ import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
   RUST_NAMESPACE_COLLISION_FIXTURE,
+  RUST_RETURN_RECORD_FIXTURE,
   expectRustQualifiedItemGoto,
   expectMemberSelectorGoto,
   RUST_SELECTOR_NAMESPACE_SOURCES,
@@ -205,6 +206,12 @@ describe("Go to Definition", () => {
   it("selects Rust values and namespace qualifiers separately", async () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
       await expectMemberSelectorGoto(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+    });
+  });
+
+  it("resolves Rust bare return types and record literals separately from same-named functions", async () => {
+    await withMemberSelectorFixture(RUST_RETURN_RECORD_FIXTURE, async (index, file) => {
+      await expectMemberSelectorGoto(index, RUST_RETURN_RECORD_FIXTURE, file);
     });
   });
 

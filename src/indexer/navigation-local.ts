@@ -341,7 +341,15 @@ export function findClosestScopeBinding(
     let binding: Binding | undefined = currentScope.map.get(normalizedName);
     if (!pythonModuleLookupAtRuntime || currentScope.kind !== "module" || methodCall) {
       while (binding) {
-        const wrongNamespace = bindingHiddenFromUse(row, binding, currentNode, methodCall, typeOnly, crossedGate);
+        const wrongNamespace = bindingHiddenFromUse(
+          row,
+          binding,
+          currentNode,
+          methodCall,
+          typeOnly,
+          crossedGate,
+          support.normalizeIdentifier,
+        );
         const wrongCsharpArity = support.id === "csharp" && wrongCsharpTypeArity(binding, currentNode, csharpArity);
         if (!wrongNamespace && !wrongCsharpArity) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";

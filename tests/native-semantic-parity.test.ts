@@ -2,6 +2,7 @@ import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
   RUST_NAMESPACE_COLLISION_FIXTURE,
+  RUST_RETURN_RECORD_FIXTURE,
   expectRustQualifiedItemGoto,
   expectMemberSelectorRename,
   expectMemberSelectorGoto,
@@ -1065,6 +1066,16 @@ nativeDescribe("native semantic coverage", () => {
       await expectMemberSelectorGraph(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
     });
     await expectMemberSelectorCacheTransitions(RUST_NAMESPACE_COLLISION_FIXTURE);
+  });
+
+  it("keeps Rust return and record bindings through native consumers and disk reloads", async () => {
+    await withMemberSelectorFixture(RUST_RETURN_RECORD_FIXTURE, async (index, file, session, root) => {
+      await expectMemberSelectorGoto(index, RUST_RETURN_RECORD_FIXTURE, file);
+      await expectMemberSelectorReferences(index, RUST_RETURN_RECORD_FIXTURE, file);
+      await expectMemberSelectorRename(session, RUST_RETURN_RECORD_FIXTURE, root, file);
+      await expectMemberSelectorGraph(index, RUST_RETURN_RECORD_FIXTURE, file);
+    });
+    await expectMemberSelectorCacheTransitions(RUST_RETURN_RECORD_FIXTURE);
   });
 
   it.each([

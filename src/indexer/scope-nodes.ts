@@ -102,6 +102,8 @@ export type ScopeNodeRow = {
    * (TypeScript).
    */
   typeParameterListField?: string;
+  /** Declaration types whose generic type parameters can shadow a bare function return type. */
+  returnTypeParameterOwnerTypes?: ReadonlySet<string>;
   /**
    * Use-node types that occur only in type syntax (TypeScript `type_identifier`). Such a use skips value bindings, and
    * any other use skips type-parameter bindings, so a value `R` still reaches `import * as R` beside a generic `<R>`.
@@ -258,6 +260,7 @@ export type ScopeNodeRow = {
     row: ScopeNodeRow,
     binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
     use: SyntaxNodeLike,
+    normalizeIdentifier: (name: string) => string,
   ) => boolean;
   /** A syntactic member or argument designator cannot be an occurrence of a lexical binding. */
   nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
@@ -324,13 +327,49 @@ function rustScopedValueName(use: SyntaxNodeLike): boolean {
   return true;
 }
 
+/** A bare Rust return type can name a type parameter of its function or an enclosing generic owner. */
+export function rustGenericReturnTypeParameter(
+  row: ScopeNodeRow,
+  use: SyntaxNodeLike,
+  normalizeIdentifier: (name: string) => string,
+): boolean {
+  const functionNode = use.parent;
+  if (use.type !== "type_identifier" || functionNode?.type !== "function_item") return false;
+  if (!fieldIncludesNode(functionNode, "return_type", use)) return false;
+  const owners = row.returnTypeParameterOwnerTypes;
+  if (!owners) return false;
+  let name: string | undefined;
+  for (let owner: SyntaxNodeLike | null = functionNode; owner; owner = owner.parent) {
+    if (!owners.has(owner.type)) continue;
+    const parameters = owner.childForFieldName("type_parameters");
+    if (!parameters) continue;
+    name ??= normalizeIdentifier(use.text);
+    for (const parameter of parameters.namedChildren) {
+      if (parameter.type !== "type_parameter") continue;
+      const declared = parameter.childForFieldName("name");
+      if (declared && normalizeIdentifier(declared.text) === name) return true;
+    }
+  }
+  return false;
+}
+
 /** Value names skip declarations that only occupy Rust's type namespace. */
 function rustNamespaceHidesBinding(
   row: ScopeNodeRow,
   binding: Pick<Binding, "kind" | "node" | "earlierSameScope">,
   use: SyntaxNodeLike,
+  normalizeIdentifier: (name: string) => string,
 ): boolean {
-  if (use.type !== "identifier" || !use.parent) return false;
+  if (!use.parent) return false;
+  if (use.type === "type_identifier") {
+    const parent = use.parent;
+    const recordName = parent.type === "struct_expression" && fieldIncludesNode(parent, "name", use);
+    const bareReturn = parent.type === "function_item" && fieldIncludesNode(parent, "return_type", use);
+    if (bareReturn && rustGenericReturnTypeParameter(row, use, normalizeIdentifier)) return true;
+    if (recordName || bareReturn) return isValueNamespaceBinding(binding);
+    return false;
+  }
+  if (use.type !== "identifier") return false;
   const ownDeclaration = binding.node?.startIndex === use.startIndex && binding.node.endIndex === use.endIndex;
   if (ownDeclaration) return false;
   if (RUST_ITEM_DECLARATION_TYPES.has(use.parent.type)) {
@@ -475,6 +514,7 @@ export function bindingHiddenFromUse(
   methodCall: boolean,
   typeOnly: boolean,
   crossedGate: boolean,
+  normalizeIdentifier: (name: string) => string,
 ): boolean {
   if (methodCall && binding.kind === "local") return true;
   if (typeOnly && isValueNamespaceBinding(binding)) return true;
@@ -483,7 +523,7 @@ export function bindingHiddenFromUse(
     const needsCheck = !row.conditionalBindingParents || binding.conditionalVisibility;
     if (needsCheck && !row.patternBindingVisibleAt(binding.node, use)) return true;
   }
-  if (use && row.namespaceHidesBinding?.(row, binding, use)) return true;
+  if (use && row.namespaceHidesBinding?.(row, binding, use, normalizeIdentifier)) return true;
   if (binding.kind !== "type" || !use || !row.typeOnlyUseTypes) return false;
   // Type syntax reads a type parameter; every other use passes it by.
   if (row.typeOnlyUseTypes.has(use.type)) return false;
@@ -780,6 +820,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     functionNameTypes: new Set(["function_item"]),
     classNameTypes: new Set(["struct_item", "mod_item"]),
     typeNameTypes: new Set(["trait_item", "enum_item"]),
+    returnTypeParameterOwnerTypes: new Set(["function_item", "impl_item", "trait_item"]),
     enumMemberTypes: new Set(["enum_variant"]),
     variableDeclarationTypes: new Set(["field_declaration", "let_declaration", "const_item", "static_item"]),
     patternBindingTypes: new Set(["let_declaration", "const_item", "static_item"]),
@@ -791,7 +832,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     destructuringTypeFieldTypes: new Set(["parameter", "tuple_struct_pattern", "struct_pattern"]),
     // Preserve the prior binding for qualified struct patterns until their variant owner is proven.
     destructuringTypeFieldBindingTypes: { struct_pattern: "scoped_type_identifier" },
-    childSkipNameTypes: new Set(["identifier", "type_identifier", "parameters"]),
+    childSkipNameTypes: new Set(["identifier", "parameters"]),
     memberSelectorFields: { scoped_identifier: "name" },
     memberSelectorParentTypes: new Set(["scoped_identifier"]),
     memberSelectorReceiverFields: { scoped_identifier: "path" },
