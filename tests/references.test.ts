@@ -3,6 +3,7 @@ import {
   MEMBER_SELECTOR_CONTROLS,
   RUST_QUALIFIED_ITEM_FIXTURE,
   RUST_NAMESPACE_COLLISION_FIXTURE,
+  RUST_RETURN_RECORD_FIXTURE,
   expectMemberSelectorReferences,
   withMemberSelectorFixture,
 } from "./helpers/member-selector-fixture.js";
@@ -417,6 +418,12 @@ describe("Find References", () => {
   it("keeps Rust value and module reference lists complete and separate", async () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
       await expectMemberSelectorReferences(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);
+    });
+  });
+
+  it("keeps Rust return and record uses out of same-named function references", async () => {
+    await withMemberSelectorFixture(RUST_RETURN_RECORD_FIXTURE, async (index, file) => {
+      await expectMemberSelectorReferences(index, RUST_RETURN_RECORD_FIXTURE, file);
     });
   });
 

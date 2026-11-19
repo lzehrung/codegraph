@@ -1,6 +1,9 @@
 import {
   RUST_SELECTOR_NAMESPACE_SOURCES,
   RUST_QUALIFIED_ITEM_FIXTURE,
+  RUST_RETURN_RECORD_FIXTURE,
+  selectorSite,
+  expectMemberSelectorGoto,
   expectRustSelectorNamespace,
   expectRustQualifiedItemGoto,
   expectMemberSelectorReferences,
@@ -10,6 +13,7 @@ import {
   eachIndexMode,
   expectGoto,
   expectReferences,
+  placeOf,
   withBatch3Fixture,
 } from "../helpers/csharp-java-batch3-fixture.js";
 import { execFileSync } from "node:child_process";
@@ -2679,6 +2683,206 @@ async function expectRustReviewRenameCompiles(args: {
 }
 
 describe("Rust function-local items and re-export aliases", () => {
+  it("keeps return and record renames valid beside same-named functions", async () => {
+    await withMemberSelectorFixture(RUST_RETURN_RECORD_FIXTURE, async (index, file, session, root) => {
+      await expectMemberSelectorGoto(index, RUST_RETURN_RECORD_FIXTURE, file);
+      await expectMemberSelectorReferences(index, RUST_RETURN_RECORD_FIXTURE, file);
+      for (const target of RUST_RETURN_RECORD_FIXTURE.targets) {
+        const declaration = selectorSite(RUST_RETURN_RECORD_FIXTURE, file, target.declaration);
+        const reads = target.reads.map((token) => selectorSite(RUST_RETURN_RECORD_FIXTURE, file, token));
+        await expectRustReviewRenameCompiles({ root, file, session, declaration, expected: [declaration, ...reads] });
+      }
+    });
+  });
+
+  it("does not add generic return types to same-named outer type references", async () => {
+    const fixture = {
+      language: "rust",
+      file: "lib.rs",
+      lines: [
+        "#![allow(dead_code)]",
+        "struct T;",
+        "fn generic<T>(value: T) -> T { value }",
+        "fn concrete() -> T { T }",
+        "struct Wrap<T>(T);",
+        "impl<T> Wrap<T> { fn get(&self) -> T { panic!() } }",
+        "trait Factory<T> { fn get(&self) -> T { panic!() } }",
+        "struct Caf\u00e9;",
+        "fn unicode<Cafe\u0301>() -> Caf\u00e9 { panic!() }",
+        "fn concrete_unicode() -> Caf\u00e9 { Caf\u00e9 }",
+        "struct Widget;",
+        "fn other<U>(_: U) -> Widget { Widget }",
+      ],
+      targets: [],
+      members: [],
+    } as const;
+    await withMemberSelectorFixture(fixture, async (index, file, session, root) => {
+      const site = (token: RustToken) => selectorSite(fixture, file, token);
+      for (const token of [
+        [3, "T", 2],
+        [6, "T", 2],
+        [7, "T", 1],
+        [9, "Caf\u00e9"],
+      ] as const) {
+        const answer = await goToDefinition(index, site(token));
+        expect(answer.status, `${token[0]}:${token[1]}`).toBe("not_found");
+      }
+      for (const [declaration, excluded, included] of [
+        [
+          [2, "T"],
+          [
+            [3, "T", 2],
+            [6, "T", 2],
+            [7, "T", 1],
+          ],
+          [4, "T"],
+        ],
+        [[8, "Caf\u00e9"], [[9, "Caf\u00e9"]], [10, "Caf\u00e9"]],
+      ] as const) {
+        const refs = await findReferences(index, site(declaration));
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") continue;
+        const positions = refs.references.map((ref) => [ref.range.start.line, ref.range.start.column]);
+        for (const token of excluded) {
+          const at = site(token);
+          expect(positions).not.toContainEqual([at.line, at.column]);
+        }
+        const at = site(included);
+        expect(positions).toContainEqual([at.line, at.column]);
+      }
+      const declaration = site([11, "Widget"]);
+      const reads = [site([12, "Widget"]), site([12, "Widget", 1])];
+      await expectRustReviewRenameCompiles({ root, file, session, declaration, expected: [declaration, ...reads] });
+    });
+  });
+
+  it("keeps qualified types, associated types, and type parameters out of alias renames", async () => {
+    const lines = [
+      "#![allow(dead_code, unused_variables, non_camel_case_types)]",
+      "use std::{fmt, io};",
+      "type Result<T, E = io::Error> = std::result::Result<T, E>;",
+      "fn std_result() -> std::result::Result<(), io::Error> { Ok(()) }",
+      "fn io_result() -> io::Result<()> { Ok(()) }",
+      "fn fmt_result() -> fmt::Result { Ok(()) }",
+      "type Output = u8;",
+      "trait Shape { type Output; fn get(&self) -> Self::Output; }",
+      "struct Object;",
+      "impl Shape for Object { type Output = u16; fn get(&self) -> <Self as Shape>::Output { 1 } }",
+      "fn output<T: Shape>(value: T) -> T::Output { value.get() }",
+      "fn qualified<T: Shape>(value: T) -> <T as Shape>::Output { value.get() }",
+      "type T = u8;",
+      "fn generic<T>(value: T) -> T { value }",
+    ];
+    await withRustReviewFixture(lines, async ({ root, file, index, session, site }) => {
+      for (const [declaration, uses] of [
+        [
+          [3, "Result"],
+          [
+            [3, "Result", 1],
+            [4, "Result"],
+            [5, "Result"],
+            [6, "Result"],
+          ],
+        ],
+        [
+          [7, "Output"],
+          [
+            [8, "Output"],
+            [8, "Output", 1],
+            [10, "Output"],
+            [10, "Output", 1],
+            [11, "Output"],
+            [12, "Output"],
+          ],
+        ],
+        [
+          [13, "T"],
+          [
+            [14, "T"],
+            [14, "T", 1],
+            [14, "T", 2],
+          ],
+        ],
+      ] as const) {
+        const origin = site(declaration);
+        for (const token of uses) {
+          const answer = await goToDefinition(index, site(token));
+          if (answer.status === "ok") {
+            expect([answer.definition.range.start.line, answer.definition.range.start.column]).not.toEqual([
+              origin.line,
+              origin.column,
+            ]);
+          }
+        }
+        const refs = await findReferences(index, origin);
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") continue;
+        expect(refs.referenceCoverage.state).toBe("complete");
+        expect(refs.references.map((ref) => ref.range.start.line)).toEqual([origin.line]);
+        await expectRustReviewRenameCompiles({ root, file, session, declaration: origin, expected: [origin] });
+      }
+    });
+  });
+
+  it("keeps imported record return types and literals on their declaration across caches", async () => {
+    const sources = {
+      "Cargo.toml": '[package]\nname = "rust_return_witness"\nversion = "0.1.0"\nedition = "2021"\n',
+      "src/lib.rs": "#![allow(dead_code, non_snake_case)]\nmod api;\nmod caller;\nmod decoy;\n",
+      "src/api.rs": "pub struct Widget { pub value: u8 }\n",
+      "src/caller.rs": "use crate::api::Widget;\npub fn build() -> Widget { Widget { value: 1 } }\n",
+      "src/decoy.rs": "pub fn Widget() -> u8 { 2 }\n",
+    };
+    await withBatch3Fixture("cg-rust-return-import-", sources, async (fixture) => {
+      const declaration = { file: "src/api.rs", token: "Widget", line: 1 };
+      const uses = [
+        { file: "src/caller.rs", token: "Widget", line: 1 },
+        { file: "src/caller.rs", token: "Widget", line: 2, nth: 1 },
+        { file: "src/caller.rs", token: "Widget", line: 2, nth: 2 },
+      ];
+      try {
+        for (const cache of ["off", "disk", "disk"] as const) {
+          clearMemoryCache();
+          closeDiskCacheDatabase(fixture.root);
+          const session = createAgentSession({ root: fixture.root, buildOptions: { cache, threads: 1 } });
+          try {
+            const { index } = await session.loadProject();
+            expect(index.byFile.get(fileIdentityKey(fixture.files["src/caller.rs"]!))?.nativeOutcome).toBe("used");
+            for (const use of uses) await expectGoto(fixture, index, use, declaration);
+            await expectReferences(fixture, index, declaration, [declaration, ...uses], "complete");
+            const graph = await buildSymbolGraphDetailed(index);
+            const literal = placeOf(sources, uses[2]!);
+            const edge = graph.edges.find(
+              (item) =>
+                item.label === "instantiates" &&
+                item.site?.range.start.line === literal.line &&
+                item.site.range.start.column === literal.column,
+            );
+            expect(edge).toBeDefined();
+            expect(fileIdentityKey(graph.nodes.get(edge!.to)!.file)).toBe(
+              fileIdentityKey(fixture.files["src/api.rs"]!),
+            );
+            const preview = await previewRenameWithSession(session, {
+              root: fixture.root,
+              handle: "src/api.rs:1:12",
+              newName: "Renamed",
+            });
+            expect(preview.safe).toBe(true);
+            expect(preview.edits.map((edit) => [edit.file, edit.range.start.line, edit.range.start.column])).toEqual([
+              ["src/api.rs", 1, 12],
+              ["src/caller.rs", 1, 17],
+              ["src/caller.rs", 2, 19],
+              ["src/caller.rs", 2, 28],
+            ]);
+          } finally {
+            session.invalidate();
+          }
+        }
+      } finally {
+        closeDiskCacheDatabase(fixture.root);
+      }
+    });
+  });
+
   it("keeps a forward module qualifier in a type path", async () => {
     const lines = [
       "mod options { pub struct Options { pub subcommand: super::subcommands::SubCommand } }",

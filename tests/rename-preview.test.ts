@@ -2,6 +2,7 @@ import {
   MEMBER_SELECTOR_FIXTURES,
   RUST_QUALIFIED_ITEM_FIXTURE,
   RUST_NAMESPACE_COLLISION_FIXTURE,
+  RUST_RETURN_RECORD_FIXTURE,
   expectMemberSelectorRename,
   withMemberSelectorFixture,
 } from "./helpers/member-selector-fixture.js";
@@ -175,6 +176,12 @@ describe("rename preview", () => {
   it("renames Rust values without editing same-named module paths", async () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (_index, file, session, root) => {
       await expectMemberSelectorRename(session, RUST_NAMESPACE_COLLISION_FIXTURE, root, file);
+    });
+  });
+
+  it("renames Rust record types and same-named functions without crossing namespaces", async () => {
+    await withMemberSelectorFixture(RUST_RETURN_RECORD_FIXTURE, async (_index, file, session, root) => {
+      await expectMemberSelectorRename(session, RUST_RETURN_RECORD_FIXTURE, root, file);
     });
   });
 

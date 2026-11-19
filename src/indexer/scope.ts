@@ -578,7 +578,7 @@ export function buildScopeIndexFromSource(
         }
       }
       while (hit) {
-        if (!bindingHiddenFromUse(row, hit, node, methodCall, typeOnly, crossedGate)) break;
+        if (!bindingHiddenFromUse(row, hit, node, methodCall, typeOnly, crossedGate, normalizeIdentifier)) break;
         hit = hit.earlierSameScope;
       }
       if (hit) return hit;
@@ -599,7 +599,7 @@ export function buildScopeIndexFromSource(
       }
     }
     while (root) {
-      if (!bindingHiddenFromUse(row, root, node, methodCall, typeOnly, crossedGate)) break;
+      if (!bindingHiddenFromUse(row, root, node, methodCall, typeOnly, crossedGate, normalizeIdentifier)) break;
       root = root.earlierSameScope;
     }
     return root;
@@ -1118,7 +1118,7 @@ export function buildScopeIndexFromSource(
         const atModuleRuntime = scope.kind === "module" && moduleBindingAtFunctionRuntime(useNode);
         while (
           binding &&
-          (bindingHiddenFromUse(row, binding, useNode, methodCall, typeOnly, crossedGate) ||
+          (bindingHiddenFromUse(row, binding, useNode, methodCall, typeOnly, crossedGate, normalizeIdentifier) ||
             (!atModuleRuntime && !bindingCoversUse(row, scope.kind, binding, useStart, useNode, support)))
         ) {
           binding = binding.earlierSameScope;

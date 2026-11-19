@@ -357,10 +357,13 @@ See the generated [fixture test matrix](./benchmarks/fixture-snapshot.md) for pe
 ## Rust
 
 - Bare calls and value uses skip a same-named Rust module, enum, trait, or record struct to reach a function or constant; a namespace qualifier (`inner::K`) keeps the module. Tuple and unit structs stay in the value namespace, so they do not share a name with a function. A tuple-struct pattern names its type rather than declaring a local of that name.
+- A bare record-literal type name and a bare function return type skip same-named value bindings. References and rename previews include these type uses. A qualified literal such as `std::ops::Range { .. }` can still bind a same-named local function and appear in that function's complete references.
+- A bare return type that names a function or enclosing type parameter stays unresolved rather than binding a same-named outer type. Other type-parameter uses can still bind that outer type, including parameter annotations, so their references and rename previews can be incorrect.
+- Other type positions (parameter, field, `let` and closure annotations, and generic arguments) can still bind a same-named function, as before, and the generic-return guard covers only `function_item` returns, not trait-method signatures.
 - A qualified struct pattern in a `let` declaration can resolve its path to itself rather than its type or enum variant, so that declaration's references can omit the pattern.
 - A same-named local or parameter can prevent an unqualified namespace-import receiver from resolving; explicit `crate::`, `self::`, and `super::` roots do not use that local value.
 - If a module's qualifier is used before its declaration, references may omit that qualifier while reporting complete coverage.
-- A record-struct literal may resolve to a same-named function and appear in that function's complete references and rename edits.
+- A same-file bare type-alias use can remain unresolved, and references and rename previews can omit it. Rust type parameters do not have their own lexical scopes, and `type_identifier` also represents const-generic value arguments; alias bindings are not registered until those cases can be distinguished safely.
 - A direct `crate::function()` records a detailed call edge when its crate root and the root function in that file are proven. Rust module declarations are not indexed semantic symbols, so `previewRename` cannot target them.
 - `macro_rules!` definitions are function-kind symbols; macro invocations resolve to them.
 - A trait method and its impl are separate same-name symbols, so a name-only lookup can be ambiguous.

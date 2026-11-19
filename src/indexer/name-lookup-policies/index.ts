@@ -8,6 +8,7 @@ import { rustTokenTreeNameFollowsSeparator } from "../../util/member-access.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { resolveImported } from "../navigation-resolve.js";
+import { rustGenericReturnTypeParameter, scopeNodesFor } from "../scope-nodes.js";
 import { typescriptOverloadImplementationAcceptsCount } from "../ts-callables.js";
 import { type ModuleIndex, type SymbolDef, SymbolKind } from "../types.js";
 import type { NameLookupPolicy } from "../name-resolution-types.js";
@@ -78,6 +79,9 @@ const rustLookupPolicy: NameLookupPolicy = {
   // A name preceded by `.` or `::` there is a member or path receiver the raw tokens cannot
   // prove, so bare-name resolution would answer with an unrelated same-named free function.
   beforeLexical(use) {
+    if (rustGenericReturnTypeParameter(scopeNodesFor("rust"), use.node, use.parsed.sup.normalizeIdentifier)) {
+      return { status: "not_found", reason: "Rust return type names a generic parameter" };
+    }
     if (!rustTokenTreeNameFollowsSeparator(use.node)) return undefined;
     return { status: "not_found", reason: "No resolvable receiver inside a Rust macro token tree" };
   },

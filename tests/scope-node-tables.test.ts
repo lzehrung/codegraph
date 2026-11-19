@@ -126,6 +126,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "nonLexicalMemberPropertyTypes",
   "parameterParents",
   "patternBindingTypes",
+  "returnTypeParameterOwnerTypes",
   "shortVariableDeclarationTypes",
   "typeNameTypes",
   "typeOnlyUseTypes",

@@ -277,6 +277,99 @@ export const RUST_NAMESPACE_COLLISION_FIXTURE: MemberSelectorFixture = {
   members: [],
 };
 
+/** Bare return types and record literals stay in the type namespace beside same-named functions. */
+export const RUST_RETURN_RECORD_FIXTURE: MemberSelectorFixture = {
+  language: "rust",
+  file: "lib.rs",
+  lines: [
+    "#![allow(dead_code, non_snake_case)]",
+    "struct Before { value: u8 }",
+    "fn Before() -> u8 { 1 }",
+    "fn build_before() -> Before { Before { value: Before() } }",
+    "fn After() -> u8 { 2 }",
+    "struct After { value: u8 }",
+    "fn build_after() -> After { After { value: After() } }",
+    "enum Choice { One }",
+    "fn choose() -> Choice { Choice::One }",
+    "trait Marker {}",
+    "struct Implementor;",
+    "impl Marker for Implementor {}",
+    "fn marker() -> Box<dyn Marker> { Box::new(Implementor) }",
+    "enum Event { Variant { value: u8 } }",
+    "fn Named() -> u8 { 3 }",
+    "fn event() -> Event { Event::Variant { value: Named() } }",
+    "fn construct() -> Later { Later { value: Later() } }",
+    "fn Later() -> u8 { 4 }",
+    "struct Later { value: u8 }",
+    "use std::ops::Range;",
+    "fn Range() -> u8 { 5 }",
+    "fn external() { let _ = Range { start: Range(), end: 4 }; }",
+    "mod remote { pub struct Remote<T> { pub value: T } pub struct Plain<T> { pub value: T } }",
+    "fn RemoteValue() -> u8 { 6 }",
+    "fn qualified() { let _ = remote::Remote { value: RemoteValue() }; }",
+    "fn plain() { let _ = remote::Plain { value: 1u8 }; }",
+    "use std::io::Error;",
+    "fn Error() -> u8 { 7 }",
+    "fn external_return() -> Error { panic!() }",
+    "fn call_error() -> u8 { Error() }",
+  ],
+  targets: [
+    {
+      declaration: [2, "Before"],
+      reads: [
+        [4, "Before"],
+        [4, "Before", 1],
+      ],
+    },
+    { declaration: [3, "Before"], reads: [[4, "Before", 2]] },
+    { declaration: [5, "After"], reads: [[7, "After", 2]] },
+    {
+      declaration: [6, "After"],
+      reads: [
+        [7, "After"],
+        [7, "After", 1],
+      ],
+    },
+    {
+      declaration: [8, "Choice"],
+      reads: [
+        [9, "Choice"],
+        [9, "Choice", 1],
+      ],
+    },
+    {
+      declaration: [10, "Marker"],
+      reads: [
+        [12, "Marker"],
+        [13, "Marker"],
+      ],
+    },
+    {
+      declaration: [14, "Event"],
+      reads: [
+        [16, "Event"],
+        [16, "Event", 1],
+      ],
+    },
+    { declaration: [14, "Variant"], reads: [[16, "Variant"]] },
+    { declaration: [15, "Named"], reads: [[16, "Named"]] },
+    { declaration: [18, "Later"], reads: [[17, "Later", 2]] },
+    {
+      declaration: [19, "Later"],
+      reads: [
+        [17, "Later"],
+        [17, "Later", 1],
+      ],
+    },
+    { declaration: [21, "Range"], reads: [[22, "Range", 1]] },
+    { declaration: [23, "Remote"], reads: [[25, "Remote"]] },
+    { declaration: [24, "RemoteValue"], reads: [[25, "RemoteValue"]] },
+    { declaration: [23, "Plain"], reads: [[26, "Plain"]] },
+    { declaration: [28, "Error"], reads: [[30, "Error"]] },
+  ],
+  members: [{ use: [22, "Range"] }, { use: [29, "Error"] }],
+};
+
 /** Item names stay valid in qualified paths; same-named functions still cannot be namespace qualifiers. */
 export const RUST_QUALIFIED_ITEM_FIXTURE: MemberSelectorFixture = {
   language: "rust",
@@ -544,6 +637,30 @@ export async function expectMemberSelectorGraph(index: ProjectIndex, fixture: Me
     expect(calls).toEqual([
       ["invoke", "inner", 4],
       ["before", "swapped", 13],
+    ]);
+    return;
+  }
+  if (fixture === RUST_RETURN_RECORD_FIXTURE) {
+    const calls = graph.edges
+      .filter((edge) => edge.label === "calls" || edge.label === "instantiates")
+      .map((edge) => [
+        edge.label,
+        graph.nodes.get(edge.from)?.name,
+        graph.nodes.get(edge.to)?.kind,
+        edge.site?.range.start.line,
+        edge.site?.range.start.column,
+      ]);
+    expect(calls).toEqual([
+      ["instantiates", "build_before", "class", 4, selectorSite(fixture, file, [4, "Before", 1]).column],
+      ["calls", "build_before", "function", 4, selectorSite(fixture, file, [4, "Before", 2]).column],
+      ["instantiates", "build_after", "class", 7, selectorSite(fixture, file, [7, "After", 1]).column],
+      ["calls", "build_after", "function", 7, selectorSite(fixture, file, [7, "After", 2]).column],
+      ["calls", "event", "function", 16, selectorSite(fixture, file, [16, "Named"]).column],
+      ["instantiates", "construct", "class", 17, selectorSite(fixture, file, [17, "Later", 1]).column],
+      ["calls", "construct", "function", 17, selectorSite(fixture, file, [17, "Later", 2]).column],
+      ["calls", "external", "function", 22, selectorSite(fixture, file, [22, "Range", 1]).column],
+      ["calls", "qualified", "function", 25, selectorSite(fixture, file, [25, "RemoteValue"]).column],
+      ["calls", "call_error", "function", 30, selectorSite(fixture, file, [30, "Error"]).column],
     ]);
     return;
   }
