@@ -2,6 +2,7 @@
 import {
   csharpNamedArgumentCall,
   csharpUnprovenReferenceCandidate,
+  isCsharpExtendedPropertyPattern,
   isCsharpMemberDesignator,
 } from "../../util/csharp-designators.js";
 import {
@@ -13,9 +14,12 @@ import {
   AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
   UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON,
 } from "../ambiguous-resolution.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import { SymbolKind, type SymbolDef } from "../types.js";
 import type { MemberLookupPolicy } from "./types.js";
+import { csharpRecordProperty } from "./csharp-record-property.js";
+import { csharpInterfaceRenameCompanions } from "./csharp-rename.js";
 
 /** Method and local-function names bound call candidates; constructors can be written through type aliases. */
 function callableParameterName(definition: SymbolDef, context: ParsedFileContext): string | null {
@@ -60,9 +64,24 @@ function mayContainNamedArgument(source: string, rawName: string, callName?: str
   return complexName || hasUnprobeableIdentifierSpelling(source);
 }
 
+/** Unsupported member syntax and unproved positional properties must not make a rename look complete. */
+function unprovenMemberReference(
+  node: SyntaxNodeLike,
+  reason: string | undefined,
+  definitionName: SyntaxNodeLike,
+): boolean {
+  if (reason === AMBIGUOUS_CSHARP_ATTRIBUTE_REASON) return true;
+  if (node.parent?.type === "member_binding_expression" || isCsharpExtendedPropertyPattern(node)) return true;
+  const parameterList = definitionName.parent?.parent;
+  if (parameterList?.type !== "parameter_list" || parameterList.parent?.type !== "record_declaration") return false;
+  return node.parent?.type === "member_access_expression" || isCsharpMemberDesignator(node);
+}
+
 export const csharpMemberLookupPolicy: MemberLookupPolicy = {
   declaredReceiverUsesNameLookup: true,
   membersBeforeFileExports: true,
+  implicitMember: csharpRecordProperty,
+  renameCompanions: csharpInterfaceRenameCompanions,
   unprovenReferenceCandidate: csharpUnprovenReferenceCandidate,
   isStaticDeclaration: (node) =>
     node.type === "field_declaration" &&
@@ -74,7 +93,5 @@ export const csharpMemberLookupPolicy: MemberLookupPolicy = {
     unprobeableNameMarker: UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN,
     unproven: (node, reason) => reason === UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON && !!csharpNamedArgumentCall(node),
   },
-  // An attribute name that matches a class with and without the `Attribute` suffix is not a reference of either, but
-  // either may be the one the author meant, wherever the use sits.
-  unprovenReference: (_node, reason) => reason === AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
+  unprovenReference: unprovenMemberReference,
 };

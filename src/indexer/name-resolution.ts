@@ -68,8 +68,8 @@ import { createLoadingParsedFileProvider, ensureParsedContextForIndex, withParse
 
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
 import { rejectsLexicalBindingAtSelector, scopeNodesFor } from "./scope-nodes.js";
-import { csharpRecordProperty } from "./name-lookup-policies/csharp-header-parameters.js";
 import { resolveCsharpNamedArgument } from "./name-lookup-policies/csharp-named-arguments.js";
+import { settleJavaSwitchField } from "./name-lookup-policies/java-switch-cases.js";
 import type {
   BareNameUse,
   DeferredNameRequest,
@@ -513,6 +513,11 @@ export async function settleNameResolution(
         resolveJvmTypeName,
       );
       if (parameter) return okGoToResult(index, parameter, { resolution: "exact", confidence: "high" });
+    } else if (request.kind === "java-switch-field") {
+      const member = await settleJavaSwitchField(use, request.subject, resolveJvmTypeName, (typeUse) =>
+        settleNameResolution(typeUse, resolveBareName(typeUse, true), options),
+      );
+      if (member) return member;
     } else if (request.kind === "contextual-member") {
       const ownerUse = { ...use, node: request.owner, name: sliceText(request.owner, parsed.source) };
       const ownerResolution = resolveBareName(ownerUse, request.jvmTypeOnly);
@@ -531,10 +536,6 @@ export async function settleNameResolution(
             (await hasDeclarationType(index, result.member, request.memberDeclarationType)));
         if (memberMatches && result.status === "member") {
           return okGoToResult(index, result.member, { resolution: "member-access", confidence: "high" });
-        }
-        if (request.allowRecordProperty) {
-          const property = await csharpRecordProperty(index, owner.definition, name);
-          if (property) return okGoToResult(index, property, { resolution: "member-access", confidence: "high" });
         }
       }
     } else if (request.kind === "swift-enum-case") {

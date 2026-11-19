@@ -59,6 +59,7 @@ import {
   expectCsharpBatch5,
   expectJavaBatch5,
 } from "./helpers/csharp-java-batch5-fixture.js";
+import { BATCH6_CASES, expectBatch6CacheTransitions } from "./helpers/csharp-java-swift-batch6-fixture.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -203,6 +204,18 @@ import {
 } from "./helpers/kotlin-receiver-review-fixture.js";
 
 describe("Go to Definition", () => {
+  it.each(BATCH6_CASES)("resolves $language $name without same-name decoys", async ({ sources, check }) => {
+    await withBatch3Fixture("cg-batch6-goto-", sources, async (fixture) => {
+      await eachIndexMode(fixture, (index) => check(fixture, index));
+    });
+  });
+
+  it.each(BATCH6_CASES)("keeps $language $name current through cache transitions", async ({ sources, check }) => {
+    await withBatch3Fixture("cg-batch6-cache-transitions-", sources, (fixture) =>
+      expectBatch6CacheTransitions(fixture, check),
+    );
+  });
+
   it("selects Rust values and namespace qualifiers separately", async () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (index, file) => {
       await expectMemberSelectorGoto(index, RUST_NAMESPACE_COLLISION_FIXTURE, file);

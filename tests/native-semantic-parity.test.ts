@@ -1124,7 +1124,11 @@ nativeDescribe("native semantic coverage", () => {
     async ({ sources, check }) => {
       await withBatch3Fixture("cg-batch3-native-", sources, async (fixture) => {
         await eachIndexMode(fixture, async (index) => {
-          for (const module of index.byFile.values()) expect(module.nativeOutcome).toBe("used");
+          for (const module of index.byFile.values()) {
+            // Project manifests delimit compilation units; they are not C# source for the native parser.
+            if (module.file.endsWith(".csproj")) continue;
+            expect(module.nativeOutcome, module.file).toBe("used");
+          }
           await check(fixture, index);
         });
       });

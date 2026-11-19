@@ -586,7 +586,7 @@ export function buildScopeIndexFromSource(
         node &&
         !typeOnly &&
         row.moduleBindingsAtFunctionRuntime &&
-        laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, node)
+        laterLocalBlocksOuterUse(row, scope, canonicalName, node.startIndex, normalizeIdentifier, node)
       ) {
         return undefined;
       }
@@ -1033,7 +1033,7 @@ export function buildScopeIndexFromSource(
         if (
           !binding &&
           row.moduleBindingsAtFunctionRuntime &&
-          laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)
+          laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, normalizeIdentifier, useNode)
         ) {
           return undefined;
         }
@@ -1125,7 +1125,7 @@ export function buildScopeIndexFromSource(
         }
         if (binding) return binding;
       }
-      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, useNode)) return undefined;
+      if (laterLocalBlocksOuterUse(row, scope, canonical, useStart, normalizeIdentifier, useNode)) return undefined;
       if (scopeIsLocalGate(scope)) crossedGate = true;
       scope = scope.parent;
     }
@@ -1176,7 +1176,7 @@ export function buildScopeIndexFromSource(
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
       const binding = lookupCovering(scope, useNode, canonical, phpThis, gateCrossedUses.has(id));
       if (!binding) {
-        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, useNode)) continue;
+        if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, normalizeIdentifier, useNode)) continue;
         if (receiver) {
           if (skipsGate || scopeIsLocalGate(scope)) gateCrossedUses.add(id);
           queueUse(receiver, id);

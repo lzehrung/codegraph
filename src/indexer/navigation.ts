@@ -2681,6 +2681,12 @@ function isReceiverMemberDefinition(
   hasCppOutOfLineOwner: boolean,
 ): boolean {
   if (def.isMember || hasCppOutOfLineOwner) return true;
+  const headerPropertyTypes = scopeNodesFor(parsedContext.sup.id).headerParameters?.propertyDeclarationTypes;
+  if (def.kind === SymbolKind.Variable && headerPropertyTypes) {
+    const name = syntaxNodeForDefinition(parsedContext, def);
+    const headerOwner = name ? headerParameterOwner(parsedContext.sup.id, name) : null;
+    if (headerOwner && headerPropertyTypes[headerOwner.type]) return true;
+  }
   if (def.kind !== SymbolKind.Function) return false;
   let current: SyntaxNodeLike | null = syntaxNodeForDefinition(parsedContext, def);
   let sawCppFunction = false;

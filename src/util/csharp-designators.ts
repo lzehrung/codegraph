@@ -30,10 +30,19 @@ function followingTokenType(node: SyntaxNodeLike): string | undefined {
   }
 }
 
+/** Every segment before the colon in an extended property pattern designates a member, not a lexical value. */
+export function isCsharpExtendedPropertyPattern(node: SyntaxNodeLike): boolean {
+  let path = node;
+  while (path.parent?.type === "member_access_expression") path = path.parent;
+  if (path.type !== "member_access_expression" || path.parent?.type !== "subpattern") return false;
+  return followingTokenType(path) === ":";
+}
+
 /** A member, argument, or tuple label rather than a lexical name. */
 export function isCsharpMemberDesignator(node: SyntaxNodeLike): boolean {
   const parent = node.parent;
   if (!parent) return false;
+  if (parent.type === "member_access_expression") return isCsharpExtendedPropertyPattern(node);
   if (parent.type === "argument") return sameNode(parent.childForFieldName("name"), node);
   if (DESIGNATOR_PARENT_TYPES.has(parent.type)) {
     const following = followingTokenType(node);
@@ -66,6 +75,7 @@ export function csharpUnprovenReferenceCandidate(node: SyntaxNodeLike, definitio
     return false;
   }
   if (parameter && parent?.type === "member_binding_expression") return false;
+  if (parameter && isCsharpExtendedPropertyPattern(node)) return false;
   if (parent?.type === "anonymous_object_creation_expression") return !isCsharpMemberDesignator(node);
   if (parent?.type !== "argument") return true;
   if (parent.parent?.type !== "tuple_expression") return true;

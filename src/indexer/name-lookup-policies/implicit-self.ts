@@ -307,7 +307,6 @@ export const csharpLookupPolicy: NameLookupPolicy = {
         owner,
         expectedKind: SymbolKind.Variable,
         jvmTypeOnly: false,
-        allowRecordProperty: true,
       },
       fallback,
     };

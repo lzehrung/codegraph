@@ -25,6 +25,8 @@ export type DeferredNameRequest =
   | { kind: "csharp-alias-member"; lookupName: string }
   /** A C# named argument selects a parameter of its uniquely resolved callable. */
   | { kind: "csharp-named-argument"; call: SyntaxNodeLike }
+  /** A Java switch subject selects a field whose declared enum type owns its labels. */
+  | { kind: "java-switch-field"; subject: SyntaxNodeLike }
   /** A C# initializer/pattern or Java annotation element names a member of an explicit type. */
   | {
       kind: "contextual-member";
@@ -33,7 +35,6 @@ export type DeferredNameRequest =
       jvmTypeOnly: boolean;
       ownerDeclarationType?: string;
       memberDeclarationType?: string;
-      allowRecordProperty?: true;
     }
   /**
    * A C# header parameter (a record's positional parameter or a primary-constructor parameter) read in a member body

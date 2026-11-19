@@ -35,6 +35,7 @@ import {
   expectJavaBatch5,
   expectJavaBatch5Review,
 } from "./csharp-java-batch5-fixture.js";
+import { BATCH6_CASES } from "./csharp-java-swift-batch6-fixture.js";
 
 /**
  * One record per binder form: a nearer binder of `X`, or a binder the scope index does not model, beside the header
@@ -1069,7 +1070,7 @@ export async function expectCsharpNamedArgumentsThroughEdits(fixture: Batch3Fixt
 
 export type Batch3Case = {
   name: string;
-  language: "csharp" | "java";
+  language: "csharp" | "java" | "swift";
   /** Whether the check asserts `findReferences` results and coverage. */
   references: boolean;
   sources: Sources;
@@ -1078,6 +1079,7 @@ export type Batch3Case = {
 
 /** Every static-receiver, record-parameter, attribute, and binder fixture, with the assertions that go with it. */
 export const BATCH3_CASES: readonly Batch3Case[] = [
+  ...BATCH6_CASES,
   {
     name: "initializer members, record selectors, and query source variables",
     language: "csharp",

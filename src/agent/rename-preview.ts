@@ -11,7 +11,10 @@ import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.j
 import { memberLookupDeps } from "../indexer/navigation-goto.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "../indexer/member-selection.js";
-import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
+import {
+  findImplementations as queryImplementations,
+  findTypeHierarchy as queryTypeHierarchy,
+} from "../indexer/type-hierarchy.js";
 import {
   SymbolKind,
   type BuildOptions,
@@ -325,6 +328,27 @@ export async function previewRenameInSnapshot(
     index: snapshot.index,
     target: resolved.def,
     deps: memberLookupDeps,
+    relatedTypes(owner, direction) {
+      const depth = 10;
+      const result = queryTypeHierarchy(snapshot.symbolGraph, defNodeId(owner), direction, { depth, limit: 500 });
+      if (result.status !== "ok") return undefined;
+      const definitions: SymbolDef[] = [];
+      const lookup = buildSymbolLookup(snapshot);
+      let complete = !result.omitted;
+      let directCount = 0;
+      for (const relation of result.relations) {
+        if (relation.depth === depth) complete = false;
+        if (relation.depth === 1) directCount += 1;
+        const definition = lookup.defById.get(relation.targetId);
+        if (definition) definitions.push(definition);
+        else complete = false;
+      }
+      return { definitions, complete, directCount };
+    },
+    hasImplementers(owner) {
+      const result = queryImplementations(snapshot.index, snapshot.symbolGraph, defNodeId(owner), { limit: 1 });
+      return result.status === "ok" && !!(result.implementations.length || result.omitted);
+    },
     usesOf: async (def) => {
       try {
         const uses = await findRenameReferences(snapshot.index, def, { maxReferences: maxEdits + 1 });

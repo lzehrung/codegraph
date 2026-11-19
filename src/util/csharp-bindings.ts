@@ -4,6 +4,10 @@ function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike
   return !!left && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
 }
 
+function containsNode(outer: SyntaxNodeLike | null, inner: SyntaxNodeLike): boolean {
+  return !!outer && outer.startIndex <= inner.startIndex && inner.endIndex <= outer.endIndex;
+}
+
 /** Out and pattern variables in a field or property initializer belong only to that initializer. */
 export function isCsharpMemberInitializer(node: SyntaxNodeLike): boolean {
   const parent = node.parent;
@@ -111,6 +115,14 @@ export function isCsharpQueryVariable(node: SyntaxNodeLike): boolean {
  */
 export function csharpQueryBindingVisibleAt(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
   if (sameNode(declaration, use)) return true;
+  for (let loop = declaration.parent; loop; loop = loop.parent) {
+    if (loop.type !== "foreach_statement") continue;
+    if (!containsNode(loop.childForFieldName("right"), use)) break;
+    if (containsNode(loop.childForFieldName("left"), declaration)) return false;
+    const body = loop.childForFieldName("body");
+    if (body?.type !== "block" && containsNode(body, declaration)) return false;
+    break;
+  }
   if (!isCsharpQueryVariable(declaration)) return csharpQueryExpressionBindingVisibleAt(declaration, use);
   const clause = declaration.parent!;
   const join = clause.type === "join_into_clause" ? clause.parent : clause;

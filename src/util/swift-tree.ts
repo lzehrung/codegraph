@@ -2,6 +2,25 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import type { SwiftCallableParameter } from "../languages/callable-arity.js";
 import { normalizeSwiftIdentifier } from "./identifiers.js";
 
+/** Pattern labels are not bindings, including tuple labels flattened into conditional bindings. */
+export function isSwiftPatternLabel(node: SyntaxNodeLike): boolean {
+  if (node.type !== "simple_identifier") return false;
+  const parent = node.parent;
+  if (!parent) return false;
+  const tuplePattern = parent.type === "pattern";
+  const patternCondition =
+    parent.type === "if_statement" || parent.type === "guard_statement" || parent.type === "while_statement";
+  if (!tuplePattern && !patternCondition) return false;
+  let sawPattern = false;
+  for (let index = 0; ; index += 1) {
+    const child = parent.child(index);
+    if (!child) return false;
+    if (child.type === "case" || child.type === "value_binding_pattern") sawPattern = true;
+    if (child.startIndex !== node.startIndex || child.endIndex !== node.endIndex) continue;
+    return (tuplePattern || sawPattern) && parent.child(index + 1)?.type === ":";
+  }
+}
+
 /**
  * The `user_type` that names the type a Swift `extension` extends, given that node or its single
  * identifier (a native capture resolves to the identifier when the path has one segment).

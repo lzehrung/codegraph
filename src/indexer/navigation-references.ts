@@ -937,7 +937,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable && mayReferenceDefinition()) {
       if (
         candidateFilter?.unproven?.(node, resolved.reason) ||
-        policy.unprovenReference?.(node, resolved.reason) ||
+        policy.unprovenReference?.(node, resolved.reason, expectedNameNode) ||
         resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
         // Qualified C# bases are reachable without an import-closure edge.
         resolved.reason === AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON ||

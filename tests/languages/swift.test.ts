@@ -28,6 +28,8 @@ import {
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 import { expectUnicodeSymbolRangeIdentity } from "./unicode-symbol-range.js";
+import { eachIndexMode, withBatch3Fixture } from "../helpers/csharp-java-batch3-fixture.js";
+import { expectSwiftBatch6, SWIFT_BATCH6_SOURCES } from "../helpers/csharp-java-swift-batch6-fixture.js";
 
 const definition: LanguageTestDefinition = {
   id: "swift",
@@ -1687,6 +1689,12 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
 describeTypeParameterReceiverRows("swift", "Swift type parameter beside a same-named class");
 
 describe("Swift contextual language consumers", () => {
+  it("excludes tuple and enum payload pattern labels without excluding their values", async () => {
+    await withBatch3Fixture("cg-swift-pattern-labels-", SWIFT_BATCH6_SOURCES, async (fixture) => {
+      await eachIndexMode(fixture, (index) => expectSwiftBatch6(fixture, index));
+    });
+  });
+
   it("keeps tuple labels out of local and parameter consumers", async () => {
     const fixture = MEMBER_SELECTOR_FIXTURES.find((candidate) => candidate.language === "swift");
     if (!fixture) throw new Error("Missing Swift selector fixture");

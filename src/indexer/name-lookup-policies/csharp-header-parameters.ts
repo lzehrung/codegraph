@@ -12,13 +12,10 @@ import { nearestMemberContainer } from "../../graphs/symbol-graph-detailed/recei
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { isCsharpMemberDesignator } from "../../util/csharp-designators.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
-import { fileIdentityKey } from "../../util/paths.js";
 import { UNPROVEN_CSHARP_BINDER_REASON, UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } from "../ambiguous-resolution.js";
 import { csharpOwnerMayHaveOuterMembers } from "../navigation-goto.js";
 import { definitionForBinding } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
-import { ensureParsedContextForIndex } from "../parsed-cache.js";
-import type { ProjectIndex, SymbolDef } from "../types.js";
 import type { NameLookupState, NameResolution } from "../name-resolution-types.js";
 import { headerParameterOwner as headerParameterOwnerOf, scopeNodesFor } from "../scope-nodes.js";
 import type { Binding } from "../scope-types.js";
@@ -44,65 +41,6 @@ function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike
 /** The declaration whose header parameter list declares `binding`, or null for every other binding. */
 export function headerParameterOwner(binding: Binding | null | undefined): SyntaxNodeLike | null {
   return binding?.kind === "param" && binding.node ? headerParameterOwnerOf("csharp", binding.node) : null;
-}
-
-/** The generated property of a simple positional record, represented by its header parameter. */
-export async function csharpRecordProperty(
-  index: ProjectIndex,
-  owner: SymbolDef,
-  name: string,
-): Promise<SymbolDef | undefined> {
-  const start = owner.range.start.index;
-  const end = owner.range.end.index;
-  if (start === undefined || end === undefined) return undefined;
-  const parsed = await ensureParsedContextForIndex(index, owner.file);
-  const record = parsed.tree.rootNode.descendantForIndex(start, end).parent;
-  if (record?.type !== "record_declaration") return undefined;
-  if (
-    record.namedChildren.some(
-      (child) => child.type === "base_list" || (child.type === "modifier" && child.text === "partial"),
-    )
-  ) {
-    return undefined;
-  }
-  const body = record.childForFieldName("body");
-  if (!body) {
-    let terminated = false;
-    for (let index = 0; ; index += 1) {
-      const child = record.child(index);
-      if (!child) break;
-      if (child.type === ";") {
-        terminated = true;
-        break;
-      }
-    }
-    if (!terminated) return undefined;
-  }
-  const locals = index.byFile.get(fileIdentityKey(owner.file))?.locals;
-  if (!locals) return undefined;
-  const wanted = normalizeCsharpIdentifier(name);
-  const hasBodyName = body
-    ? locals.some(
-        (local) =>
-          local.isMember &&
-          local.range.start.index !== undefined &&
-          local.range.start.index >= body.startIndex &&
-          local.range.end.index !== undefined &&
-          local.range.end.index <= body.endIndex &&
-          normalizeCsharpIdentifier(local.localName) === wanted,
-      )
-    : false;
-  if (hasBodyName) return undefined;
-  const parameters = record.namedChildren.find((child) => child.type === "parameter_list");
-  const parameter = parameters?.namedChildren.find((child) => {
-    const token = child.childForFieldName("name");
-    return !!token && normalizeCsharpIdentifier(token.text) === wanted;
-  });
-  const token = parameter?.childForFieldName("name");
-  if (!token) return undefined;
-  return locals.find(
-    (local) => local.range.start.index === token.startIndex && local.range.end.index === token.endIndex,
-  );
 }
 
 /** The name node of the header parameter of `owner` that `name` spells. */

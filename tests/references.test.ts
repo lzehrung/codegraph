@@ -4738,6 +4738,12 @@ describe("Find References", () => {
   });
 
   describe("Swift", () => {
+    it.each(BATCH3_CASES.filter((fixture) => fixture.language === "swift"))("$name", async ({ sources, check }) => {
+      await withBatch3Fixture("cg-swift-batch6-references-", sources, async (fixture) => {
+        await eachIndexMode(fixture, (index) => check(fixture, index));
+      });
+    });
+
     it("keeps type uses out of the references of a Swift member that shares their spelling", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-swift-type-member-refs-"));
       try {
