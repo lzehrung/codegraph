@@ -2167,6 +2167,226 @@ describe("tracked file restoration matches cold builds", () => {
     expect(warmEdges.some((edge) => edge.includes(`|${normalizePath(decoy)}::value`))).toBe(false);
   }
 
+  const cacheModes = (["memory", "disk"] as const).flatMap((cache) =>
+    (["full", "incremental"] as const).map((api) => ({ cache, api })),
+  );
+
+  it.each(cacheModes)("retains JSON modules across cache lifecycles ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-module-lifecycle-");
+    const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const consumer = path.join(root, "main.js");
+    const data = path.join(root, "data.json");
+    const decoy = path.join(root, "other.json");
+    const source = (name: string): string =>
+      `import config from "./${name}.json";\nexport function read() { return config; }\nread();\n`;
+    const graphEdges = (index: ProjectIndex): string[] => index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+    const detailedEdges = async (index: ProjectIndex): Promise<string[]> =>
+      (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+    const check = async (target: string, exists: boolean): Promise<void> => {
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+      expect(warm.byFile.has(fileIdentityKey(target))).toBe(exists);
+      expect(graphEdges(warm)).toEqual(graphEdges(cold));
+      expect(await detailedEdges(warm)).toEqual(await detailedEdges(cold));
+      const request = { file: consumer, line: 2, column: columnOf(source("data").split("\n"), 2, "config") };
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      if (exists) {
+        expect(goto.status).toBe("ok");
+        if (goto.status !== "ok") throw new Error("Expected JSON import to resolve");
+        expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(target));
+      }
+      const definition = { file: consumer, line: 2, column: 17 };
+      const references = await findReferences(warm, definition);
+      expect(references).toEqual(await findReferences(cold, definition));
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references of read");
+      expect(references.referenceCoverage.state).toBe("complete");
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+    };
+    try {
+      await fsp.writeFile(consumer, source("data"));
+      await fsp.writeFile(data, '{"name":"primary"}\n');
+      await fsp.writeFile(decoy, '{"name":"decoy"}\n');
+      await check(data, true);
+      await check(data, true);
+      await fsp.utimes(data, 0, 0);
+      await check(data, true);
+      await fsp.appendFile(consumer, "// edit\n");
+      await check(data, true);
+      await fsp.writeFile(data, '{"name":"edited"}\n');
+      await check(data, true);
+      await fsp.writeFile(consumer, source("other"));
+      await check(decoy, true);
+      await fsp.writeFile(consumer, source("data"));
+      await check(data, true);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(cacheModes)("documents JSON target deletion freshness ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-target-freshness-");
+    const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const consumer = path.join(root, "main.js");
+    const data = path.join(root, "data.json");
+    const source = 'import config from "./data.json";\nexport function read() { return config; }\nread();\n';
+    const request = { file: consumer, line: 2, column: columnOf(source.split("\n"), 2, "config") };
+    const staleSnapshot = cache === "disk" && api === "incremental";
+    const hasJsonModule = (index: ProjectIndex): boolean => index.byFile.has(fileIdentityKey(data));
+    const hasJsonEdge = (index: ProjectIndex): boolean =>
+      index.graph.edges.some(
+        (edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(data),
+      );
+    const warmBuild = (): Promise<ProjectIndex> =>
+      api === "full" ? buildProjectIndex(root, options) : buildProjectIndexIncremental(root, options);
+    const clearDisk = (): void => {
+      if (cache !== "disk") return;
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+    };
+    try {
+      await fsp.writeFile(consumer, source);
+      await fsp.writeFile(data, "{}\n");
+      await warmBuild();
+      clearDisk();
+      await fsp.unlink(data);
+      const deleted = await warmBuild();
+      const deletedCold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(hasJsonModule(deleted)).toBe(staleSnapshot);
+      expect(hasJsonEdge(deleted)).toBe(staleSnapshot);
+      expect((await goToDefinition(deleted, request)).status).toBe(staleSnapshot ? "ok" : "not_found");
+      expect(hasJsonModule(deletedCold)).toBe(false);
+      expect(hasJsonEdge(deletedCold)).toBe(false);
+      expect((await goToDefinition(deletedCold, request)).status).toBe("not_found");
+      clearDisk();
+      await fsp.writeFile(data, "{}\n");
+      const restored = await warmBuild();
+      const restoredCold = await buildProjectIndex(root, { ...options, cache: "off" });
+      // JSON targets are not tracked as source files, so restoring one does not invalidate its importer.
+      expect(hasJsonModule(restored)).toBe(staleSnapshot);
+      expect(hasJsonEdge(restored)).toBe(cache === "memory" || staleSnapshot);
+      expect((await goToDefinition(restored, request)).status).toBe(staleSnapshot ? "ok" : "not_found");
+      expect(hasJsonModule(restoredCold)).toBe(true);
+      expect(hasJsonEdge(restoredCold)).toBe(true);
+      expect((await goToDefinition(restoredCold, request)).status).toBe("ok");
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const jvmCacheModes = (["java", "kotlin"] as const).flatMap((language) =>
+    cacheModes.map((mode) => ({ language, ...mode })),
+  );
+
+  it.each(jvmCacheModes)("retains $language facts ($cache, $api)", async ({ language, cache, api }) => {
+    const root = await mkTmpDir("cg-jvm-facts-lifecycle-");
+    const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const isJava = language === "java";
+    const ext = isJava ? "java" : "kt";
+    const lib = path.join(root, `lib/Lib.${ext}`);
+    const big = path.join(root, `big/Big.${ext}`);
+    const wild = path.join(root, `app/Wild.${ext}`);
+    const consumer = path.join(root, `app/Consumer.${ext}`);
+    const decoy = path.join(root, `other/Lib.${ext}`);
+    const libSource = isJava
+      ? "package lib;\npublic class Lib { public static int target() { return 1; } }\n"
+      : "package lib\nobject Lib { fun target(): Int = 1 }\n";
+    const consumerSource = isJava
+      ? "package app;\nimport lib.Lib;\npublic class Consumer { public int run() { return Lib.target(); } }\n"
+      : "package app\nimport lib.Lib\nclass Consumer { fun run(): Int = Lib.target() }\n";
+    const wildSource = isJava
+      ? "package app;\nimport big.*;\npublic class Wild { Thing value; }\n"
+      : "package app\nimport big.*\nclass Wild { val value: Thing? = null }\n";
+    const nested = `${"(".repeat(700)}1${")".repeat(700)}`;
+    const padding = "// package head padding\n".repeat(3000);
+    const small = isJava
+      ? "package big;\nimport lib.Lib;\npublic class Big { int run() { return Lib.target(); } }\n"
+      : "package big\nimport lib.Lib\nclass Big { fun run(): Int = Lib.target() }\n";
+    const huge = isJava
+      ? `package big;\n${padding}import lib.Lib;\npublic class Big { int run() { return Lib.target(); } int pad = ${nested}; }\n`
+      : `package big\n${padding}import lib.Lib\nclass Big { fun run(): Int = Lib.target()\nval pad = ${nested}\n}\n`;
+    const graphEdges = (index: ProjectIndex): string[] => index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+    const detailedEdges = async (index: ProjectIndex): Promise<string[]> =>
+      (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+    const check = async (exists: boolean, degraded: boolean): Promise<void> => {
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(graphEdges(warm)).toEqual(graphEdges(cold));
+      expect(await detailedEdges(warm)).toEqual(await detailedEdges(cold));
+      const warmBig = warm.byFile.get(fileIdentityKey(big));
+      const coldBig = cold.byFile.get(fileIdentityKey(big));
+      expect(!!warmBig).toBe(exists);
+      expect(warmBig?.jvmFacts).toEqual(coldBig?.jvmFacts);
+      if (degraded) expect(warmBig?.jvmFacts).toMatchObject({ packageName: "big", incomplete: true });
+      expect(edgeTargets(warm, wild)).toEqual(edgeTargets(cold, wild));
+      if (exists) expect(edgeTargets(warm, wild)).toContain(`file:${normalizePath(big)}`);
+      else expect(edgeTargets(warm, wild)).not.toContain(`file:${normalizePath(big)}`);
+      const request = { file: consumer, line: 3, column: columnOf(consumerSource.split("\n"), 3, "target") };
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected JVM target to resolve");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(lib));
+      const definition = { file: lib, line: 2, column: columnOf(libSource.split("\n"), 2, "target") };
+      const references = await findReferences(warm, definition);
+      expect(references).toEqual(await findReferences(cold, definition));
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected JVM target references");
+      expect(references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer))).toBe(true);
+      expect(references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(decoy))).toBe(false);
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+    };
+    try {
+      await writeFixtureFile(root, path.relative(root, lib), libSource);
+      await writeFixtureFile(root, path.relative(root, consumer), consumerSource);
+      await writeFixtureFile(root, path.relative(root, wild), wildSource);
+      await writeFixtureFile(
+        root,
+        `big/Thing.${ext}`,
+        isJava ? "package big;\npublic class Thing {}\n" : "package big\nclass Thing\n",
+      );
+      await writeFixtureFile(
+        root,
+        path.relative(root, decoy),
+        isJava
+          ? "package other;\npublic class Lib { public static int target() { return -1; } }\n"
+          : "package other\nobject Lib { fun target(): Int = -1 }\n",
+      );
+      await writeFixtureFile(root, path.relative(root, big), huge);
+      await check(true, true);
+      await fsp.utimes(big, 0, 0);
+      await check(true, true);
+      await fsp.appendFile(consumer, "// edited\n");
+      await check(true, true);
+      await fsp.writeFile(big, small);
+      await check(true, false);
+      await fsp.writeFile(big, huge);
+      await check(true, true);
+      await fsp.unlink(big);
+      await check(false, false);
+      await fsp.writeFile(big, huge);
+      await check(true, true);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   const projectionCases = [
     { kind: "js", scriptLanguage: "" },
     { kind: "vue", scriptLanguage: "" },

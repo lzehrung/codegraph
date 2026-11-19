@@ -123,6 +123,7 @@ import {
   tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
   tryLoadProjectSnapshotModules,
+  tryLoadWorkspaceManifestEdgesFromSnapshot,
   verifyManifestEntries,
   writeModulesToCache,
   writeProjectIndexSnapshot,
@@ -1990,6 +1991,7 @@ async function buildIndexFromFileListInProbeCache(
       readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id),
     );
     let projectFileExtractions = new Map<string, ProjectFileExtraction>();
+    const lateProjectFactMisses: string[] = [];
     let projectExtractionMs = 0;
     let projectExtractionStartedAt: number | undefined;
     if (hasProjectFactMisses) {
@@ -2071,7 +2073,12 @@ async function buildIndexFromFileListInProbeCache(
       );
       for (const file of staleCachedModules) {
         const probe = cacheProbes.get(file);
-        if (probe && !("error" in probe)) cacheProbes.set(file, { ...probe, mod: null });
+        if (probe && !("error" in probe)) {
+          if (probe.mod && readsSyntaxTree(supportForFileWithoutHeaderSample(file, opts?.languageExtensions)?.id)) {
+            lateProjectFactMisses.push(file);
+          }
+          cacheProbes.set(file, { ...probe, mod: null });
+        }
         cachedGraphEntries?.delete(file);
       }
     }
@@ -2082,6 +2089,24 @@ async function buildIndexFromFileListInProbeCache(
       workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions));
     }
     installProjectFileFactsReaders(workerSetup, report);
+    if (lateProjectFactMisses.length) {
+      const lateExtractionStart = performance.now();
+      if (projectExtractionStartedAt === undefined) {
+        projectExtractionStartedAt = lateExtractionStart;
+        emitIndexLifecycleProgress(opts, "start", "build", normalizedFiles.length);
+      }
+      const lateExtractions = await extractProjectFilesBeforeResolution({
+        files: lateProjectFactMisses,
+        opts,
+        report,
+        workerSetup,
+        concurrency: conc,
+        projectRoot,
+        ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
+      });
+      for (const [file, extraction] of lateExtractions) projectFileExtractions.set(file, extraction);
+      projectExtractionMs += performance.now() - lateExtractionStart;
+    }
     // A worker that builds a file's module record keeps the file's syntax tree. Count only misses that can retain a
     // parsed tree; unsupported and graph-only files cannot use the parsed-file cache.
     let parsedCacheMisses = 0;
@@ -2144,6 +2169,7 @@ async function buildIndexFromFileListInProbeCache(
           : undefined;
         let edges: Edge[] = [];
         if (mod && edgesCached) {
+          collectJsonDependencies(mod.imports, jsonDependencies);
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
@@ -3718,6 +3744,30 @@ async function buildProjectIndexIncrementalInProbeCache(
         edgeSources ??= new Map();
         edgeSources.set(key, unprojectableEdgeSource(support));
       }
+      const allFilesList = Array.from(allFiles);
+      const workspaceManifestFiles = allFilesList.filter((file) => path.basename(file) === "package.json");
+      const workspaceManifestsChanged = [...changedFiles, ...deletedTrackedFiles].some(
+        (file) => path.basename(file) === "package.json",
+      );
+      const previousWorkspaceEdges =
+        workspaceManifestFiles.length && snapshotModules && !workspaceManifestsChanged && !manifestRequiresSanitization
+          ? await tryLoadWorkspaceManifestEdgesFromSnapshot(
+              projectRoot,
+              opts,
+              new Map(Object.entries(manifest.files)),
+              report,
+            )
+          : null;
+      const workspaceManifestEdges =
+        previousWorkspaceEdges ??
+        (workspaceManifestFiles.length
+          ? await collectWorkspaceManifestDependencyEdges(
+              projectRoot,
+              workspaceManifestFiles,
+              opts?.discovery,
+              opts?.logLevel,
+            )
+          : []);
       const graphStart = performance.now();
       const graph = await collectGraph(projectRoot, filesList, {
         parsed: parsedMap,
@@ -3728,8 +3778,9 @@ async function buildProjectIndexIncrementalInProbeCache(
         threads: conc,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
         ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
-        allFiles: Array.from(allFiles),
+        allFiles: allFilesList,
         fileSignatures,
+        ...(workspaceManifestEdges.length ? { additionalEdges: workspaceManifestEdges } : {}),
         cachedFileEdges: cachedGraphEntries,
         ...(baseGraph ? { baseGraph } : {}),
         replaceFiles: new Set<string>(changedFiles),

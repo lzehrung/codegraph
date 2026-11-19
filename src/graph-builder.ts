@@ -48,6 +48,7 @@ export async function collectGraph(
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     report?: BuildReport;
     baseGraph?: Graph;
+    additionalEdges?: readonly Edge[];
     replaceFiles?: Set<string>;
     logLevel?: LogLevel;
     allFiles?: string[];
@@ -104,7 +105,7 @@ export async function collectGraph(
     }
   };
 
-  const mergeUniqueEdges = (...edgeGroups: Edge[][]): Edge[] => {
+  const mergeUniqueEdges = (...edgeGroups: Array<readonly Edge[]>): Edge[] => {
     const byKey = new Map<string, Edge>();
     for (const group of edgeGroups) {
       for (const edge of group) {
@@ -167,7 +168,9 @@ export async function collectGraph(
     opts?.angularJsModules,
   );
   addEdgeTargetsToGraph(angularJsEdges);
-  graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
+  graph.edges = opts?.additionalEdges?.length
+    ? mergeUniqueEdges(graph.edges, newEdges, angularJsEdges, opts.additionalEdges)
+    : mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
   graph.nodes = new Set(normalizedAllFiles);
   addEdgeTargetsToGraph(graph.edges);
   return graph;

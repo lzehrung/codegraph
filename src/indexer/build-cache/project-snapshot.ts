@@ -516,6 +516,22 @@ function projectIndexManifestEntries(
   );
 }
 
+function snapshotIdentityMatches(payload: Partial<ProjectIndexSnapshotPayload>, filesSignature: string): boolean {
+  return (
+    payload.filesSignature === filesSignature &&
+    payload.nativeRuntimeFingerprint === getNativeRuntimeFingerprint() &&
+    payload.implementationFingerprint === getImplementationFingerprint()
+  );
+}
+
+function hasSnapshotGraphStructure(value: unknown): value is { nodes: string[]; edges: unknown[] } {
+  if (!value || typeof value !== "object") return false;
+  const graph = value as { nodes?: unknown[]; edges?: unknown[] };
+  return (
+    Array.isArray(graph.nodes) && graph.nodes.every((node) => typeof node === "string") && Array.isArray(graph.edges)
+  );
+}
+
 export async function tryLoadProjectIndexSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
@@ -533,8 +549,6 @@ export async function tryLoadProjectIndexSnapshot(
       parsedSnapshot.payload,
       projectRoot,
     );
-    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint();
-    const implementationFingerprint = getImplementationFingerprint();
     if (!isProjectIndexSnapshotPayload(payload)) {
       recordCacheCorruption(
         report,
@@ -544,11 +558,7 @@ export async function tryLoadProjectIndexSnapshot(
       );
       return null;
     }
-    if (
-      payload.filesSignature !== filesSignature ||
-      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
-      payload.implementationFingerprint !== implementationFingerprint
-    ) {
+    if (!snapshotIdentityMatches(payload, filesSignature)) {
       recordSnapshotInvalidation(
         projectSnapshotPath(projectRoot, opts),
         "project snapshot identity mismatch",
@@ -615,6 +625,45 @@ export async function tryLoadProjectIndexSnapshot(
     if (!isMissingArtifactError(error)) {
       recordCacheCorruption(report, projectSnapshotPath(projectRoot, opts), String(error), opts?.logLevel);
     }
+    return null;
+  }
+}
+
+/** Reuse project-level package-manifest edges without hydrating the whole previous graph. */
+export async function tryLoadWorkspaceManifestEdgesFromSnapshot(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  manifestEntries: ReadonlyMap<string, ManifestFileEntry>,
+  report?: BuildReport,
+): Promise<Edge[] | null> {
+  if ((opts?.cache ?? "off") !== "disk") return null;
+  const snapshotPath = projectSnapshotPath(projectRoot, opts);
+  try {
+    const parsed = await readParsedSnapshot(snapshotPath);
+    const migrated = migrateProjectSnapshotPayload(parsed.payload, projectRoot);
+    if (!migrated || typeof migrated !== "object" || Array.isArray(migrated)) return null;
+    const payload = migrated as Partial<ProjectIndexSnapshotPayload>;
+    if (
+      !isSupportedProjectSnapshotVersion(payload.version) ||
+      !snapshotIdentityMatches(payload, projectSnapshotFilesSignature(manifestEntries, projectRoot)) ||
+      !hasSnapshotGraphStructure(payload.graph)
+    ) {
+      return null;
+    }
+    const result: Edge[] = [];
+    for (const edge of payload.graph.edges) {
+      if (!isGraphEdge(edge)) return null;
+      if (path.basename(edge.from) !== "package.json" || edge.to.type !== "file") continue;
+      if (path.basename(edge.to.path) !== "package.json") continue;
+      result.push({
+        ...edge,
+        from: transformPath(projectRoot, edge.from, false),
+        to: { ...edge.to, path: transformPath(projectRoot, edge.to.path, false) },
+      });
+    }
+    return result;
+  } catch (error) {
+    if (!isMissingArtifactError(error)) recordCacheCorruption(report, snapshotPath, String(error), opts?.logLevel);
     return null;
   }
 }
@@ -1096,10 +1145,7 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     typeof payload.nativeRuntimeFingerprint === "string" &&
     typeof payload.implementationFingerprint === "string" &&
     /^[a-f0-9]{64}$/.test(payload.implementationFingerprint) &&
-    !!payload.graph &&
-    Array.isArray(payload.graph.nodes) &&
-    payload.graph.nodes.every((node) => typeof node === "string") &&
-    Array.isArray(payload.graph.edges) &&
+    hasSnapshotGraphStructure(payload.graph) &&
     payload.graph.edges.every(isGraphEdge) &&
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex) &&

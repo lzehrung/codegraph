@@ -50,13 +50,14 @@ export async function collectWorkspaceManifestDependencyEdges(
   discovery?: ProjectFileDiscoveryOptions,
   logLevel?: LogLevel,
 ): Promise<Edge[]> {
-  const manifestPaths =
-    manifestFiles ??
-    (await listProjectFiles(projectRoot, ["**/package.json"], {
-      ...discovery,
-      ...(logLevel ? { logLevel } : {}),
-    }));
+  const manifestPaths = manifestFiles
+    ? [...manifestFiles]
+    : await listProjectFiles(projectRoot, ["**/package.json"], {
+        ...discovery,
+        ...(logLevel ? { logLevel } : {}),
+      });
   if (!manifestPaths.length) return [];
+  manifestPaths.sort();
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
 
