@@ -9,7 +9,7 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN, normalizeKotlinIdentifier } from "../util/identifiers.js";
-import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "./member-selection.js";
+import { resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import type { ParameterReferenceScanFilter } from "./member-lookup-policies/types.js";
@@ -25,6 +25,8 @@ import {
   assertIndexedOversizedSourceCurrent,
   readQuerySourceForIndexSync,
   rethrowStaleQuerySource,
+  identifierSpellingsForIndex,
+  retainIdentifierSpellingsForIndex,
 } from "./parsed-cache.js";
 import { definitionIdentityKey, sameDef } from "./reference-context.js";
 import { toTreeSitterPosition } from "./shared.js";
@@ -44,7 +46,6 @@ import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member
 import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
 import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
 import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
-import { scopeNodesFor } from "./scope-nodes.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import {
   coverageFacts,
@@ -92,7 +93,7 @@ import {
 } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "./python-dotted-imports.js";
-import { ECMASCRIPT_IDENTIFIER_SOURCE, foldPhpIdentifierCase } from "../util/identifiers.js";
+import { ECMASCRIPT_IDENTIFIER_SOURCE, ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
@@ -492,6 +493,76 @@ function matchesPhpFallbackDefinition(
   return false;
 }
 
+const NO_IDENTIFIER_NODES: readonly SyntaxNodeLike[] = [];
+
+/** Build a repeated lookup's table during its candidate walk, without another pass over the requested bucket. */
+function visitNamedNodeSpellings(
+  index: ProjectIndex,
+  file: string,
+  parsed: ParsedFileContext,
+  probeName: string,
+  alternateNames: ReadonlySet<string> | undefined,
+  visit: (node: SyntaxNodeLike) => void,
+): void {
+  const cached = identifierSpellingsForIndex(index, file, parsed);
+  if (cached && cached !== "estimate") {
+    let candidates = cached.get(probeName) ?? NO_IDENTIFIER_NODES;
+    if (alternateNames) {
+      let combined: SyntaxNodeLike[] | undefined;
+      for (const name of alternateNames) {
+        if (name === probeName) continue;
+        const alternate = cached.get(name);
+        if (!alternate?.length) continue;
+        combined ??= [...candidates];
+        combined.push(...alternate);
+      }
+      // Multiple use-site spellings still follow the source walk's order.
+      if (combined) candidates = combined.sort((left, right) => left.startIndex - right.startIndex);
+    }
+    for (const node of candidates) visit(node);
+    return;
+  }
+  const { sup, tree, source } = parsed;
+  const identifierTypes = new Set<string>([
+    ...sup.nodeTypes.identifier,
+    ...(sup.nodeTypes.propertyIdentifier ?? []),
+    ...(sup.nodeTypes.shorthandPropertyIdentifier ?? []),
+    "constant",
+    "type_identifier",
+    "field_identifier",
+  ]);
+  const names = cached === undefined ? new Map<string, SyntaxNodeLike[]>() : undefined;
+  const estimateTable = cached === "estimate";
+  // Table/LRU metadata, occurrence-array growth slack, and each name's Map/string/array headers.
+  let bytes = 192;
+  const walk = (node: SyntaxNodeLike): void => {
+    if (identifierTypes.has(node.type) && !sup.isDeclarationSpelling?.(node)) {
+      const normalizedName = sup.normalizeIdentifier(sliceText(node, source));
+      const name = sup.referenceSpelling
+        ? sup.referenceSpelling(normalizedName, node, identifierTypes)
+        : normalizedName;
+      if (name !== null) {
+        if (names) {
+          bytes += 24;
+          const nodes = names.get(name);
+          if (nodes) nodes.push(node);
+          else {
+            names.set(name, [node]);
+            bytes += 120 + name.length * 2;
+          }
+        } else if (estimateTable) {
+          // An allocation-free upper bound: every occurrence could introduce a distinct spelling.
+          bytes += 144 + name.length * 2;
+        }
+        if (name === probeName || alternateNames?.has(name)) visit(node);
+      }
+    }
+    for (const child of node.namedChildren) walk(child);
+  };
+  walk(tree.rootNode);
+  if (names || estimateTable) retainIdentifierSpellingsForIndex(index, file, parsed, names, bytes);
+}
+
 async function collectNamedNodeReferences(
   index: ProjectIndex,
   fileId: string,
@@ -527,15 +598,6 @@ async function collectNamedNodeReferences(
       if (source !== null && !filter.mayContain(source, symbolName, candidateCallName)) return null;
     }
     const parsed = await ensureParsedContextForIndex(index, fileId);
-    const identifierTypes = new Set<string>([
-      ...parsed.sup.nodeTypes.identifier,
-      ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
-      // `{ name }` reads the binding `name`; navigation proves which one before the site counts.
-      ...(parsed.sup.nodeTypes.shorthandPropertyIdentifier ?? []),
-      "constant",
-      "type_identifier",
-      "field_identifier",
-    ]);
     const privateName = isJsTsLanguage(parsed.sup.id) && symbolName.startsWith("#");
     let canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
     if (privateName) canonicalSymbolName = ecmaPrivateNameKey(symbolName);
@@ -545,53 +607,33 @@ async function collectNamedNodeReferences(
       canonicalSymbolName = parsed.sup.useSiteMemberName(canonicalSymbolName);
     }
     const isPhp = parsed.sup.id === "php";
-    // Another spelling a use can name the declaration by (a C# attribute class is written without its suffix).
-    const alternateNames = new Set(
-      (parsed.sup.alternateUseNames?.(symbolName) ?? []).map((name) => parsed.sup.normalizeIdentifier(name)),
-    );
+    const probeName = parsed.sup.referenceSpelling?.(canonicalSymbolName) ?? canonicalSymbolName;
+    const alternateNames =
+      !isPhp && parsed.sup.alternateUseNames
+        ? new Set(parsed.sup.alternateUseNames(symbolName).map((name) => parsed.sup.normalizeIdentifier(name)))
+        : undefined;
     const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
     let nameEquivalenceUnavailable = false;
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
-    const row = scopeNodesFor(parsed.sup.id);
-    const walk = (node: SyntaxNodeLike): void => {
-      if (identifierTypes.has(node.type)) {
-        let text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
-        if (privateName && node.type === "private_property_identifier") text = ecmaPrivateNameKey(text);
-        let isMatch: boolean;
-        // A token that only spells a declaration of another name (`name` in `def name=(value)`) is no use.
-        const spellsDeclaration = parsed.sup.isDeclarationSpelling?.(node) ?? false;
-        if (spellsDeclaration) {
-          isMatch = false;
-        } else if (!isPhp) {
-          isMatch = text === canonicalSymbolName || alternateNames.has(text);
-        } else if (
-          (node.type === "name" || node.type === "namespace_name") &&
-          (isPhpQualifiedReferenceNode(node.parent) ||
-            (node.parent && identifierTypes.has(node.parent.type) && row.childSkipNameTypes?.has(node.type)))
-        ) {
-          isMatch = false;
-        } else {
-          const comparisonText =
-            node.type === "qualified_name" || node.type === "relative_name" ? phpLastIdentifierSegment(text) : text;
-          const comparison = comparePhpReferenceNames(comparisonText, phpLastIdentifierSegment(canonicalSymbolName), {
-            caseSensitiveForm: node.type === "variable_name" || node.type === "constant",
-            ...(symbolKind ? { symbolKind } : {}),
-          });
-          if (comparison === "unverified") nameEquivalenceUnavailable = true;
-          isMatch = comparison === "equivalent";
-        }
-        if (isMatch && (!filter || filter.includes(node))) {
-          const range = toRange(node);
-          if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
-            matched.push({ range, node });
-          }
-        }
+    const visit = (node: SyntaxNodeLike): void => {
+      if (isPhp) {
+        const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
+        const comparisonText =
+          node.type === "qualified_name" || node.type === "relative_name" ? phpLastIdentifierSegment(text) : text;
+        const comparison = comparePhpReferenceNames(comparisonText, phpLastIdentifierSegment(canonicalSymbolName), {
+          caseSensitiveForm: node.type === "variable_name" || node.type === "constant",
+          ...(symbolKind ? { symbolKind } : {}),
+        });
+        if (comparison === "unverified") nameEquivalenceUnavailable = true;
+        if (comparison !== "equivalent") return;
       }
-      for (const child of node.namedChildren) {
-        walk(child);
+      if (filter && !filter.includes(node)) return;
+      const range = toRange(node);
+      if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
+        matched.push({ range, node });
       }
     };
-    walk(parsed.tree.rootNode);
+    visitNamedNodeSpellings(index, fileId, parsed, probeName, alternateNames, visit);
     return { matched, parsed, nameEquivalenceUnavailable };
   } catch (error) {
     rethrowStaleQuerySource(error);

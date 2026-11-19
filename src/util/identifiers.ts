@@ -123,3 +123,17 @@ export function foldPhpIdentifierCase(value: string): string {
   }
   return folded;
 }
+
+/** Decode escapes within an already parsed ECMAScript private identifier token. */
+export function ecmaPrivateNameKey(name: string): string {
+  if (!name.includes("\\")) return name;
+  return name.replace(
+    /\\u(?:\{([0-9a-fA-F]{1,6})\}|([0-9a-fA-F]{4}))/gu,
+    (escape: string, braced?: string, fixed?: string) => {
+      const hex = braced ?? fixed;
+      if (!hex) return escape;
+      const codePoint = Number.parseInt(hex, 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : escape;
+    },
+  );
+}

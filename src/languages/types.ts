@@ -194,6 +194,16 @@ export interface LanguageDefinition {
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
 
   /**
+   * Reference candidate key after identifier normalization, or null for a nested spelling already covered by its
+   * parent. Without a node this keys the queried name; `identifierTypes` is the walk's complete identifier vocabulary.
+   */
+  referenceSpelling?: (
+    normalizedName: string,
+    node?: SyntaxNodeLike,
+    identifierTypes?: ReadonlySet<string>,
+  ) => string | null;
+
+  /**
    * The identifier token a Bloom filter holds for a method name that is not one itself: Ruby `empty?` is stored as
    * `empty`, because `?` is no identifier character.
    */

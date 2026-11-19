@@ -29,7 +29,12 @@ import {
   type CsharpNamespaceRegion,
 } from "../util/csharp-tree.js";
 import { callableFactsDiffer } from "./callable-identity.js";
-import { memberLookupPolicyFor, type MemberLookupDeps, type MemberUse } from "./member-lookup-policies/index.js";
+import {
+  memberLookupPolicyFor,
+  memberNameKeyFor,
+  type MemberLookupDeps,
+  type MemberUse,
+} from "./member-lookup-policies/index.js";
 import { fileIdentityKey } from "../util/paths.js";
 import {
   collectMemberAccessChain,
@@ -5826,6 +5831,44 @@ const NESTED_MEMBER_DECLARATION_PARENTS: ReadonlySet<string> = new Set([
   "query_expression",
 ]);
 
+type MemberLocalNames = {
+  size: number;
+  normalize: LanguageSupport["normalizeIdentifier"];
+  key: ((normalizedName: string) => string) | undefined;
+  names: ReadonlyMap<string, readonly SymbolDef[]>;
+};
+
+// The key is the module's immutable locals list. Replacing a module/list starts fresh; no owner or cross-file fact is held.
+const memberLocalNames = new WeakMap<readonly SymbolDef[], MemberLocalNames>();
+const NO_MEMBER_LOCALS: readonly SymbolDef[] = [];
+
+/** Narrow repeated owner lookups without caching their container, visibility, or receiver proof. */
+function memberLocalsNamed(
+  locals: readonly SymbolDef[],
+  normalizedMember: string,
+  context: ParsedFileContext,
+  normalize: LanguageSupport["normalizeIdentifier"],
+): readonly SymbolDef[] {
+  // A caller-specific comparison can carry more than the language's identifier equality.
+  if (normalize !== context.sup.normalizeIdentifier) return locals;
+  const keyForName = memberNameKeyFor(context.sup);
+  let cached = memberLocalNames.get(locals);
+  if (cached?.size !== locals.length || cached.normalize !== normalize || cached.key !== keyForName) {
+    const names = new Map<string, SymbolDef[]>();
+    for (const local of locals) {
+      const name = normalize(local.localName);
+      const key = keyForName ? keyForName(name) : name;
+      const entries = names.get(key);
+      if (entries) entries.push(local);
+      else names.set(key, [local]);
+    }
+    cached = { size: locals.length, normalize, key: keyForName, names };
+    memberLocalNames.set(locals, cached);
+  }
+  const key = keyForName ? keyForName(normalizedMember) : normalizedMember;
+  return cached.names.get(key) ?? NO_MEMBER_LOCALS;
+}
+
 function matchesReceiverMemberName(
   local: SymbolDef,
   normalizedMember: string,
@@ -5849,7 +5892,7 @@ function findDirectLocalsWithinNode(
 ): SymbolDef[] {
   const normalizedMember = normalizeIdentifier(member);
   return directLocalsWithinNode(
-    locals,
+    memberLocalsNamed(locals, normalizedMember, targetContext, normalizeIdentifier),
     container,
     targetContext,
     (local) => matchesReceiverMemberName(local, normalizedMember, targetContext, normalizeIdentifier),
@@ -5937,7 +5980,7 @@ function appendDirectKeywordMembers(
     ? container.childForFieldName("name")
     : null;
   const normalizedMember = normalizeIdentifier(member);
-  for (const local of locals) {
+  for (const local of memberLocalsNamed(locals, normalizedMember, targetContext, normalizeIdentifier)) {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     if (

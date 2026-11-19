@@ -10,7 +10,8 @@ import { resolveExport } from "../indexer/navigation-resolve.js";
 import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
 import { memberLookupDeps } from "../indexer/navigation-goto.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
-import { ecmaPrivateNameKey, resolveEcmaPrivateName } from "../indexer/member-selection.js";
+import { resolveEcmaPrivateName } from "../indexer/member-selection.js";
+import { ecmaPrivateNameKey } from "../util/identifiers.js";
 import {
   findImplementations as queryImplementations,
   findTypeHierarchy as queryTypeHierarchy,

@@ -340,6 +340,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   invokedMemberName: true,
   useSiteMemberName: true,
   isDeclarationSpelling: true,
+  referenceSpelling: true, // Query-only reference candidates; no extracted, Bloom, or persisted detailed-graph data.
   bloomProbeName: true,
   bloomUnprobeableIdentifiers: true,
   alternateUseNames: true,

@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent } from "./shared.js";
+import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 
 // Include/require arguments are string | encapsed_string | binary_expression |
 // variable_name | other expressions; no closed node-type list, so keep `(_)`.
@@ -126,6 +127,21 @@ export const PHP_DEF: LanguageDefinition = {
     const_declaration: "constant",
   }),
   normalizeIdentifier: (name) => name.replace(/^\$/, ""),
+  referenceSpelling: (name, node, identifierTypes) => {
+    if (node?.type === "name" || node?.type === "namespace_name") {
+      const parent = node.parent;
+      const parentType = parent?.type;
+      if (parentType === "qualified_name" || parentType === "relative_name") return null;
+      const nestedName = node.type === "name" && parentType && identifierTypes?.has(parentType);
+      if (nestedName) return null;
+    }
+    const qualifiedName = !node || node.type === "qualified_name" || node.type === "relative_name";
+    if (qualifiedName) {
+      const trimmed = name.trim();
+      name = trimmed.slice(trimmed.lastIndexOf("\\") + 1);
+    }
+    return foldPhpIdentifierCase(name);
+  },
   isDeclarationName: (node) =>
     isNameFieldOnParent(node, [
       "namespace_definition",

@@ -1,6 +1,12 @@
 import type { BlockDefinition, SyntaxNodeLike } from "../types.js";
 import { stripJsLikeComments } from "../../util/comments.js";
 import { isNameFieldOnParent, isNameOrPropertyFieldOnParent } from "./shared.js";
+import { ecmaPrivateNameKey } from "../../util/identifiers.js";
+
+/** Private identifier escapes share one reference key without changing public identifier spelling. */
+export function ecmaReferenceSpelling(name: string, node?: SyntaxNodeLike): string {
+  return node?.type === "private_property_identifier" ? ecmaPrivateNameKey(name) : name;
+}
 
 function isStatementLevelTypeKeywordClause(clause: string): boolean {
   const trimmed = clause.trim();
