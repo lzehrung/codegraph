@@ -8,6 +8,7 @@ import {
   ECMASCRIPT_DECLARATION_NAME_PARENTS,
   ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  ecmaReferenceSpelling,
   isEcmaScriptTypeOnlyStatement,
 } from "./js-family.js";
 
@@ -233,6 +234,7 @@ const BASE_HELPERS = {
   // A generator function expression has its own body scope: without this, its own name
   // (registered above) and its parameters would land in the enclosing scope.
   createsFunctionScope: nodeTypeIn([...ECMASCRIPT_FUNCTION_SCOPE_TYPES, "generator_function"]),
+  referenceSpelling: ecmaReferenceSpelling,
   supportsCrossModuleSymbols: true,
 };
 

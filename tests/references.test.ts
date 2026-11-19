@@ -36,7 +36,8 @@ import {
   getCachedReferenceCandidateFiles,
   REFERENCE_COVERAGE_REASON_ORDER,
 } from "../src/indexer/navigation-references.js";
-import { findUsageReferences } from "../src/indexer/navigation.js";
+import { findRenameReferences, findUsageReferences } from "../src/indexer/navigation.js";
+import { memberLookupDeps } from "../src/indexer/navigation-goto.js";
 import {
   buildProjectIndex,
   findReferences,
@@ -648,6 +649,121 @@ describe("Find References", () => {
       } finally {
         __resetNativeTreeSitterBindingForTests();
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes spellings once per tree across member reference and rename lookups", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-spellings-"));
+    const source = "export class Box {\n  first() { return 1; }\n  second() { return 2; }\n}\n";
+    const consumer = [
+      'import { Box } from "./source";',
+      "const box = new Box();",
+      "export function invoke() { box.first(); box.second(); }",
+      "function unrelated() { const noise = 1; return noise; }",
+      "",
+    ].join("\n");
+    try {
+      const files = await writeFixtureFiles(root, { "source.ts": source, "consumer.ts": consumer });
+      const index = await buildProjectIndex(root, { cache: "off" });
+      await buildSymbolGraphDetailed(index);
+      const parsed = await ensureParsedContextForIndex(index, files["consumer.ts"]!);
+      const start = consumer.indexOf("unrelated");
+      const unrelated = parsed.tree.rootNode.descendantForIndex(start, start).parent;
+      if (!unrelated || unrelated.type !== "function_declaration") throw new Error("Expected unrelated function");
+      const walk = vi.spyOn(unrelated, "namedChildren", "get");
+      try {
+        const first = await findReferences(index, { file: files["source.ts"]!, line: 2, column: 3 });
+        expect(first.status).toBe("ok");
+        if (first.status !== "ok") throw new Error("Expected first member references");
+        expect(first.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+          ["consumer.ts", 3],
+          ["source.ts", 2],
+        ]);
+        expect(first.referenceCoverage.state).toBe("complete");
+        expect(walk).toHaveBeenCalled();
+        walk.mockClear();
+
+        const second = await findReferences(index, { file: files["source.ts"]!, line: 3, column: 3 });
+        expect(second.status).toBe("ok");
+        if (second.status !== "ok") throw new Error("Expected second member references");
+        expect(second.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+          ["consumer.ts", 3],
+          ["source.ts", 3],
+        ]);
+        expect(second.referenceCoverage.state).toBe("complete");
+        expect(walk).toHaveBeenCalled();
+        walk.mockClear();
+        const def = index.byFile
+          .get(fileIdentityKey(files["source.ts"]!))
+          ?.locals.find((local) => local.localName === "second");
+        if (!def) throw new Error("Expected second member declaration");
+        const rename = await findRenameReferences(index, def);
+        expect(rename.status).toBe("ok");
+        if (rename.status !== "ok") throw new Error("Expected second member rename references");
+        expect(rename.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+          ["consumer.ts", 3],
+        ]);
+        expect(rename.referenceCoverage.state).toBe("complete");
+        expect(walk).not.toHaveBeenCalled();
+      } finally {
+        walk.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses member name facts without including same-named members of another owner", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-member-name-facts-"));
+    const source = [
+      "class Box { public int First() => 1; public int Second() => 2; }",
+      "class Decoy { public int Second() => 3; public int Different() => 4; }",
+      "class Caller { int Call(Box box) => box.Second(); }",
+      "",
+    ].join("\n");
+    try {
+      const files = await writeFixtureFiles(root, { "members.cs": source });
+      const file = files["members.cs"]!;
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const context = await ensureParsedContextForIndex(index, file);
+      const module = index.byFile.get(fileIdentityKey(file));
+      const start = source.indexOf("Box");
+      const owner = context.tree.rootNode.descendantForIndex(start, start).parent;
+      if (!module || !owner || owner.type !== "class_declaration") throw new Error("Expected Box owner");
+      const decoyStart = source.indexOf("Decoy");
+      const decoy = context.tree.rootNode.descendantForIndex(decoyStart, decoyStart).parent;
+      if (!decoy || decoy.type !== "class_declaration") throw new Error("Expected Decoy owner");
+      const normalize = vi.spyOn(context.sup, "normalizeIdentifier");
+      try {
+        const lookup = (name: string, container = owner) =>
+          memberLookupDeps.findDirectLocalsWithinNode(
+            module.locals,
+            name,
+            container,
+            context,
+            context.sup.normalizeIdentifier,
+          );
+        expect(lookup("First").map((def) => def.localName)).toEqual(["First"]);
+        expect(normalize.mock.calls.some(([name]) => name === "Different")).toBe(true);
+        normalize.mockClear();
+        expect(lookup("Second").map((def) => def.range.start.line)).toEqual([1]);
+        expect(lookup("Second", decoy).map((def) => def.range.start.line)).toEqual([2]);
+        expect(lookup("Missing")).toEqual([]);
+        expect(normalize.mock.calls.some(([name]) => name === "Different")).toBe(false);
+      } finally {
+        normalize.mockRestore();
+      }
+      const hit = await goToDefinition(index, { file, line: 3, column: source.split("\n")[2]!.indexOf("Second") + 1 });
+      expect(hit.status).toBe("ok");
+      if (hit.status !== "ok") throw new Error("Expected Box.Second target");
+      expect(hit.definition.range.start.line).toBe(1);
+      const refs = await findReferences(index, { def: hit.definition });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Expected Box.Second references");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual([1, 3]);
+      expect(refs.referenceCoverage.state).toBe("complete");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

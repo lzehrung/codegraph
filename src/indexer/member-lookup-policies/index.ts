@@ -38,3 +38,8 @@ const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
 export function memberLookupPolicyFor(languageId: string): MemberLookupPolicy {
   return POLICIES[languageId] ?? NO_POLICY;
 }
+
+/** The language policy's superset key for normalized member names. */
+export function memberNameKeyFor(support: { readonly id: string }): MemberLookupPolicy["memberNameKey"] {
+  return POLICIES[support.id]?.memberNameKey;
+}

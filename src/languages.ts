@@ -43,6 +43,7 @@ export type LanguageSupport = {
   invokedMemberName?: (property: SyntaxNodeLike) => string;
   useSiteMemberName?: (declared: string) => string;
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
+  referenceSpelling?: LanguageDefinition["referenceSpelling"];
   bloomProbeName?: (name: string) => string;
   bloomUnprobeableIdentifiers?: boolean;
   alternateUseNames?: (declared: string) => readonly string[];
@@ -79,6 +80,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     ...(def.invokedMemberName ? { invokedMemberName: def.invokedMemberName } : {}),
     ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),
     ...(def.isDeclarationSpelling ? { isDeclarationSpelling: def.isDeclarationSpelling } : {}),
+    ...(def.referenceSpelling ? { referenceSpelling: def.referenceSpelling } : {}),
     ...(def.bloomProbeName ? { bloomProbeName: def.bloomProbeName } : {}),
     ...(def.bloomUnprobeableIdentifiers ? { bloomUnprobeableIdentifiers: true } : {}),
     ...(def.alternateUseNames ? { alternateUseNames: def.alternateUseNames } : {}),

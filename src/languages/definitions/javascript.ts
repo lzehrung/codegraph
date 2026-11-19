@@ -8,6 +8,7 @@ import {
   ECMASCRIPT_DECLARATION_NAME_PARENTS,
   ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  ecmaReferenceSpelling,
   isEcmaScriptFieldDefinitionName,
   isEcmaScriptTypeOnlyStatement,
   isEcmaScriptVariableDeclaratorName,
@@ -156,6 +157,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     shorthandPropertyIdentifier: ["shorthand_property_identifier", "shorthand_property_identifier_pattern"],
     memberExpression: "member_expression",
   },
+  referenceSpelling: ecmaReferenceSpelling,
   classifyDefinition: classifyByParentType({
     function_declaration: "function",
     generator_function_declaration: "function",

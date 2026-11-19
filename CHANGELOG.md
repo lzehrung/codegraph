@@ -15,6 +15,7 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Fixed
 
+- Repeated reference and rename lookups reuse identifier spellings within the query-cache memory budget, dropping spelling tables before parsed views and avoiding table construction without enough headroom. Shared member lookups reuse each module's normalized declaration names without changing navigation, coverage, or detailed graph answers.
 - Rust references and rename previews retain bare struct and enum return types. Bare record literals and return types no longer bind a same-named function.
 - Java enum switch labels use declared enhanced-for and `instanceof` variables and enum-typed fields selected through `this` or a proven receiver. C# expression variables stay within their `foreach`, `while`, or switch-expression arm scopes; positional record properties reached through proven receivers are included in references and rename edits, with partial coverage for unproven reads. Swift tuple-pattern and enum-payload labels no longer become references or rename edits of same-named locals or parameters.
 - C# typed tuple `foreach` variables and unbraced-body declarations no longer hide fields in the collection expression. Base-list and nested record positional properties retain their proven references; partial records, conditional member reads, and extended property patterns keep rename coverage conservative.

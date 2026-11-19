@@ -7,6 +7,7 @@ import { detectSFCFramework } from "../languages/sfc.js";
 import type { NativeMatch, NativeSyntaxTree } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import type { ByteToStringIndexMap } from "../native/byte-index.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import {
   ensureParsedContext,
   isSyntaxProjectionLimitError,
@@ -90,11 +91,24 @@ type CompactSyntaxContext = {
   compactHeapBytes: number;
 };
 
+type CachedIdentifierSpellings = {
+  tree: SyntaxTreeLike;
+  support: ParsedFileContext["sup"];
+  normalize: ParsedFileContext["sup"]["normalizeIdentifier"];
+  spelling: ParsedFileContext["sup"]["referenceSpelling"];
+  names: ReadonlyMap<string, readonly SyntaxNodeLike[]>;
+  bytes: number;
+};
+
 type CachedParsedContext = {
   signature: string | undefined;
   signatureBytes: number;
   compact?: CompactSyntaxContext;
   parsed?: ParsedFileContext | undefined;
+  identifierSpellings?: CachedIdentifierSpellings | undefined;
+  identifierSpellingQueryTree?: SyntaxTreeLike | undefined;
+  // This source-only bound survives view eviction and is retried when the live budget has room.
+  identifierSpellingEstimateBytes?: number;
   unavailableReason?: string;
   unavailableFingerprint?: string;
   compactBytes: number;
@@ -116,6 +130,8 @@ type QuerySourceIdentity = {
 type QuerySyntaxCache = {
   entries: Map<string, CachedParsedContext>;
   liveEntries: Map<string, CachedParsedContext>;
+  spellingEntries: Map<string, CachedParsedContext>;
+  spellingAdmissionEnabled: boolean;
   inFlight: Map<string, PendingParsedContext>;
   sourceIdentities: Map<string, QuerySourceIdentity>;
   compactBytes: number;
@@ -134,6 +150,8 @@ function querySyntaxCacheFor(index: ProjectIndex): QuerySyntaxCache {
     cache = {
       entries: new Map(),
       liveEntries: new Map(),
+      spellingEntries: new Map(),
+      spellingAdmissionEnabled: true,
       inFlight: new Map(),
       sourceIdentities: new Map(),
       compactBytes: 0,
@@ -480,6 +498,20 @@ function touchEntry(cache: QuerySyntaxCache, fileKey: string, entry: CachedParse
     cache.liveEntries.delete(fileKey);
     cache.liveEntries.set(fileKey, entry);
   }
+  if (entry.identifierSpellings) {
+    cache.spellingEntries.delete(fileKey);
+    cache.spellingEntries.set(fileKey, entry);
+  }
+}
+
+/** Spelling tables are optional accelerators; release them before sacrificing a parsed tree or scope. */
+function evictIdentifierSpellings(cache: QuerySyntaxCache, fileKey: string, entry: CachedParsedContext): void {
+  cache.spellingEntries.delete(fileKey);
+  const table = entry.identifierSpellings;
+  if (!table) return;
+  entry.identifierSpellings = undefined;
+  entry.liveBytes -= table.bytes;
+  cache.liveBytes -= table.bytes;
 }
 
 function evictLiveView(
@@ -488,11 +520,13 @@ function evictLiveView(
   fileKey: string,
   entry: CachedParsedContext,
 ): void {
+  evictIdentifierSpellings(cache, fileKey, entry);
   cache.liveEntries.delete(fileKey);
   if (entry.liveBytes) {
     cache.liveBytes -= entry.liveBytes;
     entry.liveBytes = 0;
   }
+  entry.identifierSpellingQueryTree = undefined;
   entry.parsed = undefined;
   index.scopeCache.delete(fileKey);
   if (!entry.compact) cache.entries.delete(fileKey);
@@ -509,8 +543,14 @@ function evictEntry(index: ProjectIndex, cache: QuerySyntaxCache, fileKey: strin
 
 function trimQuerySyntaxCache(index: ProjectIndex, cache: QuerySyntaxCache): void {
   while (cache.liveBytes > cache.maxLiveBytes) {
+    const oldestTable = cache.spellingEntries.entries().next().value;
+    if (oldestTable) {
+      evictIdentifierSpellings(cache, oldestTable[0], oldestTable[1]);
+      continue;
+    }
     const oldest = cache.liveEntries.entries().next().value;
     if (!oldest) break;
+    cache.spellingAdmissionEnabled = false;
     evictLiveView(index, cache, oldest[0], oldest[1]);
   }
   while (cache.compactBytes > cache.maxCompactBytes || cache.compactEntries > cache.maxEntries) {
@@ -591,9 +631,11 @@ function retainParsedContext(
   }
   retainCompactContext(cache, entry, parsed);
   if (entry.parsed !== parsed) {
+    if (entry.identifierSpellings?.tree !== parsed.tree) evictIdentifierSpellings(cache, fileKey, entry);
     if (entry.liveBytes) cache.liveBytes -= entry.liveBytes;
     entry.parsed = parsed;
-    entry.liveBytes = projectedViewBytes(parsed);
+    if (entry.identifierSpellingQueryTree !== parsed.tree) entry.identifierSpellingQueryTree = undefined;
+    entry.liveBytes = projectedViewBytes(parsed) + (entry.identifierSpellings?.bytes ?? 0);
     cache.liveBytes += entry.liveBytes;
     index.scopeCache.delete(fileKey);
   }
@@ -630,8 +672,10 @@ function restoreParsedContext(
   const compact = entry.compact;
   if (!compact) throw new Error("Cannot restore a query syntax view without compact columns");
   const parsed = parsedContextFromCompact(compact);
+  evictIdentifierSpellings(cache, fileKey, entry);
   if (entry.liveBytes) cache.liveBytes -= entry.liveBytes;
   entry.parsed = parsed;
+  entry.identifierSpellingQueryTree = undefined;
   entry.liveBytes = projectedViewBytes(parsed);
   cache.liveBytes += entry.liveBytes;
   index.scopeCache.delete(fileKey);
@@ -709,13 +753,74 @@ export function retainScopeIndexForIndex(
     retainCompactContext(cache, entry, retainedParsed);
     entry.parsed = retainedIndexedParsed ? undefined : retainedParsed;
   }
+  if (entry.identifierSpellings?.tree !== retainedParsed.tree) evictIdentifierSpellings(cache, fileKey, entry);
   const previousLiveBytes = entry.liveBytes;
   if (previousLiveBytes) cache.liveBytes -= previousLiveBytes;
   const scopeBytes = scopeIndexBytes(scope);
-  entry.liveBytes = projectedViewBytes(retainedParsed) + scopeBytes;
+  if (entry.identifierSpellingQueryTree !== retainedParsed.tree) entry.identifierSpellingQueryTree = undefined;
+  entry.liveBytes = projectedViewBytes(retainedParsed) + scopeBytes + (entry.identifierSpellings?.bytes ?? 0);
   cache.liveBytes += entry.liveBytes;
   index.scopeCache.set(fileKey, scope);
   touchEntry(cache, fileKey, entry);
+  trimQuerySyntaxCache(index, cache);
+}
+
+/**
+ * Reuse a table, request a first-walk size estimate with `"estimate"`, or build one with `undefined`.
+ * `false` keeps an unretained or unaffordable lookup targeted. The caller has already validated `parsed`.
+ */
+export function identifierSpellingsForIndex(
+  index: ProjectIndex,
+  file: string,
+  parsed: ParsedFileContext,
+): ReadonlyMap<string, readonly SyntaxNodeLike[]> | "estimate" | false | undefined {
+  const cache = querySyntaxCaches.get(index);
+  const entry = cache?.entries.get(fileIdentityKey(file));
+  if (!cache || !entry || entry.parsed?.tree !== parsed.tree) return false;
+  const cached = entry.identifierSpellings;
+  const sameSpellingRules =
+    cached?.support === parsed.sup &&
+    cached.normalize === parsed.sup.normalizeIdentifier &&
+    cached.spelling === parsed.sup.referenceSpelling;
+  if (cached?.tree === parsed.tree && sameSpellingRules) return cached.names;
+  if (!cache.spellingAdmissionEnabled) return false;
+  if (entry.identifierSpellingQueryTree !== parsed.tree) {
+    entry.identifierSpellingQueryTree = parsed.tree;
+    return entry.identifierSpellingEstimateBytes === undefined ? "estimate" : false;
+  }
+  const estimate = entry.identifierSpellingEstimateBytes;
+  if (estimate === undefined || cache.liveBytes + estimate > cache.maxLiveBytes) return false;
+  return undefined;
+}
+
+/** Keep a source-only size hint, and charge an admitted table to its validated tree's live-view budget. */
+export function retainIdentifierSpellingsForIndex(
+  index: ProjectIndex,
+  file: string,
+  parsed: ParsedFileContext,
+  names: ReadonlyMap<string, readonly SyntaxNodeLike[]> | undefined,
+  bytes: number,
+): void {
+  const fileKey = fileIdentityKey(file);
+  const cache = querySyntaxCaches.get(index);
+  const entry = cache?.entries.get(fileKey);
+  // A zero or exhausted live budget can evict the tree before its caller builds this table.
+  if (!cache || !entry || entry.parsed?.tree !== parsed.tree) return;
+  entry.identifierSpellingEstimateBytes = Math.max(entry.identifierSpellingEstimateBytes ?? 0, bytes);
+  if (!names) return;
+  const addedBytes = bytes - (entry.identifierSpellings?.bytes ?? 0);
+  entry.identifierSpellings = {
+    tree: parsed.tree,
+    support: parsed.sup,
+    normalize: parsed.sup.normalizeIdentifier,
+    spelling: parsed.sup.referenceSpelling,
+    names,
+    bytes,
+  };
+  entry.liveBytes += addedBytes;
+  cache.liveBytes += addedBytes;
+  cache.spellingEntries.delete(fileKey);
+  cache.spellingEntries.set(fileKey, entry);
   trimQuerySyntaxCache(index, cache);
 }
 
@@ -786,7 +891,11 @@ export function __setQuerySyntaxCacheLimitsForTests(
 ): void {
   const cache = querySyntaxCacheFor(index);
   if (limits.compactBytes !== undefined) cache.maxCompactBytes = Math.max(0, limits.compactBytes);
-  if (limits.liveBytes !== undefined) cache.maxLiveBytes = Math.max(0, limits.liveBytes);
+  if (limits.liveBytes !== undefined) {
+    const liveBytes = Math.max(0, limits.liveBytes);
+    if (liveBytes > cache.maxLiveBytes) cache.spellingAdmissionEnabled = true;
+    cache.maxLiveBytes = liveBytes;
+  }
   if (limits.entries !== undefined) cache.maxEntries = Math.max(0, limits.entries);
   trimQuerySyntaxCache(index, cache);
 }
@@ -807,6 +916,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   liveViewOverheadBytes: number;
   projectedNodeBytes: number;
   scopeBytes: number;
+  identifierSpellingBytes: number;
   signatureBytes: number;
   entryMetadataBytes: number;
   inFlightMetadataBytes: number;
@@ -820,6 +930,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
   let positionMapBytes = 0;
   let projectedNodeBytes = 0;
   let scopeBytes = 0;
+  let identifierSpellingBytes = 0;
   let signatureBytes = 0;
   let entryMetadataBytes = 0;
   let inFlightMetadataBytes = 0;
@@ -830,7 +941,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
       entryMetadataBytes += 64;
     }
     signatureBytes += entry.signatureBytes;
-    entryMetadataBytes += stringBytes(fileKey) + entry.signatureBytes + 128;
+    entryMetadataBytes += stringBytes(fileKey) + entry.signatureBytes + 136;
     if (entry.compact) {
       nativeBufferBytes += entry.compact.nativeBufferBytes;
       sourceBytes += entry.compact.sourceBytes;
@@ -844,6 +955,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
     }
     const scope = index.scopeCache.get(fileKey);
     if (scope) scopeBytes += scopeIndexBytes(scope);
+    identifierSpellingBytes += entry.identifierSpellings?.bytes ?? 0;
   }
   for (const [fileKey, pending] of cache.inFlight) {
     inFlightMetadataBytes += stringBytes(fileKey) + retainedSignatureBytes(pending.signature) + 96;
@@ -868,6 +980,7 @@ export function __querySyntaxCacheStatsForTests(index: ProjectIndex): {
     liveViewOverheadBytes: cache.liveBytes - scopeBytes,
     projectedNodeBytes,
     scopeBytes,
+    identifierSpellingBytes,
     signatureBytes,
     entryMetadataBytes,
     inFlightMetadataBytes,

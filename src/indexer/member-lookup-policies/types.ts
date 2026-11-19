@@ -141,6 +141,8 @@ export type MemberLookupPolicy = {
    * sets this where member names fold case, so a method called `deep` would otherwise match `class Deep`.
    */
   excludesContainerNameFromMembers?: boolean;
+  /** Superset key for normalized member names; final selection still checks symbol-specific name equality. */
+  memberNameKey?: (normalizedName: string) => string;
   /** Resolve a declared receiver type through positioned source-unit lookup; a value itself cannot own members. */
   declaredReceiverUsesNameLookup?: boolean;
   /** A nominal receiver's members are resolved on that receiver, not through its source file's exports. */

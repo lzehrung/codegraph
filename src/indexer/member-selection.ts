@@ -2,22 +2,9 @@ import type { CallableArity, CallableIdentity } from "../languages/callable-arit
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { SymbolDef } from "./types.js";
 import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
-import { foldPhpIdentifierCase } from "../util/identifiers.js";
+import { ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
 
 export type MemberScope = "any" | "static" | "instance";
-/** Decode escapes within an already parsed ECMAScript private identifier token. */
-export function ecmaPrivateNameKey(name: string): string {
-  if (!name.includes("\\")) return name;
-  return name.replace(
-    /\\u(?:\{([0-9a-fA-F]{1,6})\}|([0-9a-fA-F]{4}))/gu,
-    (escape: string, braced?: string, fixed?: string) => {
-      const hex = braced ?? fixed;
-      if (!hex) return escape;
-      const codePoint = Number.parseInt(hex, 16);
-      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : escape;
-    },
-  );
-}
 
 type PrivateNameResolution =
   | { status: "resolved"; definitions: SymbolDef[]; target: SymbolDef | null; owner: SyntaxNodeLike }

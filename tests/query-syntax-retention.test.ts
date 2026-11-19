@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -16,7 +16,7 @@ import {
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
-import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
+import { ProjectedSyntaxNode, ProjectedSyntaxTree } from "../src/native/projected-tree.js";
 
 function normalizedGraph(graph: DetailedSymbolGraph) {
   return {
@@ -82,6 +82,7 @@ describe("bounded query syntax retention", () => {
         expect(beforeReferences.status).toBe("ok");
         if (beforeReferences.status !== "ok") throw new Error("Expected greet references");
         expect(beforeReferences.references.map((reference) => reference.file)).toContain(mainFile);
+        expect(await findReferences(index, declaration)).toEqual(beforeReferences);
         const beforeGraph = normalizedGraph(await buildSymbolGraphDetailed(index));
         const beforeContext = await ensureParsedContextForIndex(index, libFile);
         const parsesBeforeEviction = parses;
@@ -93,6 +94,8 @@ describe("bounded query syntax retention", () => {
         expect(beforeStats.positionMapBytes).toBeGreaterThan(0);
         expect(beforeStats.scopeBytes).toBeGreaterThan(0);
         expect(beforeStats.signatureBytes).toBeGreaterThan(0);
+        expect(beforeStats.identifierSpellingBytes).toBeGreaterThan(0);
+        expect(beforeStats.liveViewOverheadBytes).toBeGreaterThan(beforeStats.identifierSpellingBytes);
         expect(beforeStats.sourceIdentityEntries).toBe(2);
         expect(beforeStats.sourceIdentityMetadataBytes).toBeGreaterThan(0);
         expect(index.scopeCache.size).toBeGreaterThan(0);
@@ -103,6 +106,7 @@ describe("bounded query syntax retention", () => {
         expect(afterEviction.liveEntries).toBe(0);
         expect(afterEviction.scopeBytes).toBe(0);
         expect(afterEviction.projectedNodeBytes).toBe(0);
+        expect(afterEviction.identifierSpellingBytes).toBe(0);
         expect(afterEviction.compactEntries).toBeGreaterThan(0);
         expect(afterEviction.nativeBufferBytes).toBe(beforeStats.nativeBufferBytes);
         expect(afterEviction.sourceBytes).toBe(beforeStats.sourceBytes);
@@ -122,6 +126,7 @@ describe("bounded query syntax retention", () => {
 
         __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: 1024 * 1024 });
         const afterReferences = await findReferences(index, declaration);
+        expect(await findReferences(index, declaration)).toEqual(afterReferences);
         const afterGoto = await goToDefinition(index, usage);
         const afterGraph = normalizedGraph(await buildSymbolGraphDetailed(index));
         expect(afterReferences).toEqual(beforeReferences);
@@ -129,6 +134,7 @@ describe("bounded query syntax retention", () => {
         expect(afterGraph).toEqual(beforeGraph);
         expect(index.scopeCache.size).toBeGreaterThan(0);
         expect(__querySyntaxCacheStatsForTests(index).scopeBytes).toBeGreaterThan(0);
+        expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBeGreaterThan(0);
         expect(parses).toBe(parsesBeforeEviction);
 
         __setQuerySyntaxCacheLimitsForTests(index, { compactBytes: 0, liveBytes: 0 });
@@ -136,6 +142,7 @@ describe("bounded query syntax retention", () => {
           compactBytes: 0,
           liveBytes: 0,
           entries: 0,
+          identifierSpellingBytes: 0,
         });
         expect(__querySyntaxCacheStatsForTests(index).sourceIdentityEntries).toBe(2);
         expect(await findReferences(index, declaration)).toEqual(beforeReferences);
@@ -145,6 +152,153 @@ describe("bounded query syntax retention", () => {
       } finally {
         __resetNativeTreeSitterBindingForTests();
       }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips unaffordable spelling tables and evicts affordable tables before parsed views", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-query-spelling-budget-"));
+    const libFile = path.join(root, "lib.ts").replace(/\\/g, "/");
+    const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(libFile, "export function greet(name: string) { return name; }\n");
+      await fsp.writeFile(
+        mainFile,
+        [
+          'import { greet } from "./lib";',
+          'export const call = () => greet("ok");',
+          "function unrelated() { const noise = 1; return noise; }",
+        ].join("\n"),
+      );
+      const index = await makeIndex(root, path.join(root, "cache"));
+      await buildSymbolGraphDetailed(index);
+      const context = await ensureParsedContextForIndex(index, mainFile);
+      const unrelated = context.tree.rootNode.namedChildren.find((node) => node.type === "function_declaration");
+      if (!unrelated) throw new Error("Expected an unrelated function to count targeted walks");
+      const before = __querySyntaxCacheStatsForTests(index);
+      expect(before.liveEntries).toBe(2);
+      expect(before.identifierSpellingBytes).toBe(0);
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: before.liveBytes });
+      const result = await findReferences(index, { file: libFile, line: 1, column: 17 });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected greet references");
+      expect(result.references.map((ref) => [path.basename(ref.file), ref.range.start.line])).toEqual([
+        ["lib.ts", 1],
+        ["main.ts", 1],
+        ["main.ts", 2],
+      ]);
+      expect(result.referenceCoverage.state).toBe("complete");
+      expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBe(0);
+      const walk = vi.spyOn(unrelated, "namedChildren", "get");
+      const mapWrites = vi.spyOn(Map.prototype, "set");
+      try {
+        for (let lookup = 0; lookup < 3; lookup += 1) {
+          walk.mockClear();
+          expect(await findReferences(index, { file: libFile, line: 1, column: 17 })).toEqual(result);
+          expect(walk).toHaveBeenCalledTimes(1);
+        }
+        const builtSpellingBucket = mapWrites.mock.calls.some(([, value]) => {
+          if (!Array.isArray(value)) return false;
+          return value[0] instanceof ProjectedSyntaxNode;
+        });
+        expect(builtSpellingBucket).toBe(false);
+      } finally {
+        mapWrites.mockRestore();
+        walk.mockRestore();
+      }
+      const after = __querySyntaxCacheStatsForTests(index);
+      expect(after.liveBytes).toBeLessThanOrEqual(before.liveBytes);
+      expect(after.liveEntries).toBe(before.liveEntries);
+      expect(after.identifierSpellingBytes).toBe(0);
+      expect(after.compactEntries).toBe(before.compactEntries);
+      expect(after.nativeBufferBytes).toBe(before.nativeBufferBytes);
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: before.liveBytes + 1024 * 1024 });
+      expect(await findReferences(index, { file: libFile, line: 1, column: 17 })).toEqual(result);
+      const withTables = __querySyntaxCacheStatsForTests(index);
+      expect(withTables.identifierSpellingBytes).toBeGreaterThan(0);
+      expect(withTables.liveEntries).toBe(before.liveEntries);
+      __setQuerySyntaxCacheLimitsForTests(index, {
+        liveBytes: withTables.liveBytes - withTables.identifierSpellingBytes,
+      });
+      const tablesEvicted = __querySyntaxCacheStatsForTests(index);
+      expect(tablesEvicted.identifierSpellingBytes).toBe(0);
+      expect(tablesEvicted.liveEntries).toBe(before.liveEntries);
+      expect(tablesEvicted.scopeBytes).toBe(withTables.scopeBytes);
+      expect(tablesEvicted.nativeBufferBytes).toBe(before.nativeBufferBytes);
+      expect(await findReferences(index, { file: libFile, line: 1, column: 17 })).toEqual(result);
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: 0 });
+      expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBe(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes spelling admission only for a larger budget or a new index after view pressure", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-query-spelling-pressure-"));
+    const cacheDir = path.join(root, "cache");
+    const libFile = path.join(root, "lib.ts").replace(/\\/g, "/");
+    const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+    const paddingFile = path.join(root, "padding.ts").replace(/\\/g, "/");
+    try {
+      await fsp.writeFile(libFile, "export function greet(name: string) { return name; }\n");
+      await fsp.writeFile(mainFile, 'import { greet } from "./lib";\nexport const call = () => greet("ok");\n');
+      await fsp.writeFile(
+        paddingFile,
+        Array.from(
+          { length: 64 },
+          (_, index) => `export function padding${index}(value: number) { return value; }`,
+        ).join("\n"),
+      );
+      const index = await makeIndex(root, cacheDir);
+      await buildSymbolGraphDetailed(index);
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: 0 });
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: 64 * 1024 * 1024 });
+      const declaration = { file: libFile, line: 1, column: 17 };
+      const result = await findReferences(index, declaration);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Expected greet references");
+      expect(result.referenceCoverage.state).toBe("complete");
+      expect(await findReferences(index, declaration)).toEqual(result);
+      const active = __querySyntaxCacheStatsForTests(index);
+      expect(active.liveEntries).toBe(2);
+      expect(active.identifierSpellingBytes).toBeGreaterThan(0);
+      const activeViewBytes = active.liveBytes - active.identifierSpellingBytes;
+      await ensureParsedContextForIndex(index, paddingFile);
+      await ensureParsedContextForIndex(index, libFile);
+      await ensureParsedContextForIndex(index, mainFile);
+      expect(__querySyntaxCacheStatsForTests(index).liveEntries).toBe(3);
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: activeViewBytes + 16 * 1024 });
+      const pressured = __querySyntaxCacheStatsForTests(index);
+      expect(pressured.liveEntries).toBe(2);
+      expect(pressured.identifierSpellingBytes).toBe(0);
+      expect(pressured.liveBytes).toBe(activeViewBytes);
+
+      const mapWrites = vi.spyOn(Map.prototype, "set");
+      try {
+        for (let lookup = 0; lookup < 3; lookup += 1) {
+          expect(await findReferences(index, declaration)).toEqual(result);
+        }
+        const builtSpellingBucket = mapWrites.mock.calls.some(([, value]) => {
+          if (!Array.isArray(value)) return false;
+          return value[0] instanceof ProjectedSyntaxNode;
+        });
+        expect(builtSpellingBucket).toBe(false);
+      } finally {
+        mapWrites.mockRestore();
+      }
+      expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBe(0);
+
+      const fresh = await makeIndex(root, cacheDir);
+      expect(await findReferences(fresh, declaration)).toEqual(result);
+      expect(await findReferences(fresh, declaration)).toEqual(result);
+      expect(__querySyntaxCacheStatsForTests(fresh).identifierSpellingBytes).toBeGreaterThan(0);
+      expect(await findReferences(index, declaration)).toEqual(result);
+      expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBe(0);
+
+      __setQuerySyntaxCacheLimitsForTests(index, { liveBytes: activeViewBytes + 1024 * 1024 });
+      expect(await findReferences(index, declaration)).toEqual(result);
+      expect(__querySyntaxCacheStatsForTests(index).identifierSpellingBytes).toBeGreaterThan(0);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

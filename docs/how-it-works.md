@@ -93,7 +93,8 @@ References choose the files they verify from the importers of each file, which e
 Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
-- Projected tree views and their scope indexes share a 2 GiB estimated budget. Eviction drops both together; retained compact data can reconstruct the view without another native parse.
+- Projected tree views, scope indexes, and identifier-spelling tables share a 2 GiB estimated budget. Eviction drops spelling tables first, then tree views with their scope indexes; retained compact data can reconstruct a view without another native parse.
+  After a budget-pressure view eviction, the index admits no new spelling tables (a new index resets this), and it also skips a table when the first walk's size bound exceeds the remaining budget.
 - At most 32,768 syntax entries are retained. Concurrent requests share an in-flight parse; an incremental index starts with fresh query caches.
 - A small source fingerprint per queried indexed file survives syntax eviction. If a later read finds different source or a missing file, the query fails and requires an index rebuild instead of mixing snapshots. The fingerprint cannot prove that source was unchanged before its first query.
 - These are retention estimates, not process RSS limits. Source fingerprints, active requests, graph data, build-time `keepParsed` retention, and allocator overhead are separate.
