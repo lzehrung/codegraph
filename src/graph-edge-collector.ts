@@ -75,8 +75,9 @@ export function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
 }
 
 /**
- * What a file's edges are collected from: the file's parse, or the specifiers its module record (`module-record.ts`)
- * already collected from that parse, dynamic import heuristics included.
+ * What a file's edges are collected from: its parse, its module record's specifiers (dynamic import heuristics
+ * included), or a failed native extraction. The `nativeQueries: null` failure shape prepares the source without
+ * retrying native imports, so independently prepared embedded blocks remain available.
  */
 export type FileEdgeSource =
   | {
@@ -87,7 +88,15 @@ export type FileEdgeSource =
       embeddedBlocks?: PreparedSFCEmbeddedBlock[];
       specifiers?: undefined;
     }
-  | { sup: LanguageSupport; specifiers: readonly ModuleSpecifier[] };
+  | { sup: LanguageSupport; specifiers: readonly ModuleSpecifier[] }
+  | {
+      sup: LanguageSupport;
+      nativeQueries: null;
+      source?: undefined;
+      tree?: undefined;
+      embeddedBlocks?: undefined;
+      specifiers?: undefined;
+    };
 
 type CollectEdgesOptions = {
   parsed?: FileEdgeSource;

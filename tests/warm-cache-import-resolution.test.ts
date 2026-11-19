@@ -2167,6 +2167,298 @@ describe("tracked file restoration matches cold builds", () => {
     expect(warmEdges.some((edge) => edge.includes(`|${normalizePath(decoy)}::value`))).toBe(false);
   }
 
+  const projectionCases = [
+    { kind: "js", scriptLanguage: "" },
+    { kind: "vue", scriptLanguage: "" },
+    { kind: "vue", scriptLanguage: "ts" },
+    { kind: "svelte", scriptLanguage: "" },
+    { kind: "svelte", scriptLanguage: "ts" },
+  ] as const;
+  const projectionModes = [
+    ...projectionCases.flatMap((fixture) =>
+      (["memory", "disk"] as const).flatMap((cache) =>
+        (["full", "incremental"] as const).map((api) => ({ ...fixture, cache, api, workers: false, nodeLimit: false })),
+      ),
+    ),
+    { kind: "js", scriptLanguage: "", cache: "disk", api: "incremental", workers: true, nodeLimit: true } as const,
+  ];
+
+  it.each(projectionModes)(
+    "matches cold edges and navigation across projection failures ($kind $scriptLanguage, $cache, $api, worker=$workers, nodeLimit=$nodeLimit)",
+    async ({ kind, scriptLanguage, cache, api, workers, nodeLimit }) => {
+      const root = await mkTmpDir("cg-projection-edge-lifecycle-");
+      const options = { cache, threads: 1, nativeThreads: 1, useNativeWorkers: workers, logLevel: "silent" as const };
+      const originalFile = path.join(root, `Big.${kind}`);
+      const renamedFile = path.join(root, `Renamed.${kind}`);
+      let file = originalFile;
+      const lib = path.join(root, "lib.js");
+      const consumer = path.join(root, "consumer.js");
+      const decoy = path.join(root, "decoy.js");
+      const style = path.join(root, "x.css");
+      const editedStyle = path.join(root, "y.css");
+      const consumerSource = 'import { target } from "./lib.js";\nexport function use() { return target(); }\n';
+      const scriptPrefix = 'import { target } from "./lib.js";\ntarget();\n';
+      const nested = nodeLimit
+        ? "var pad = 1;\n".repeat(45000)
+        : `const nested = ${"[".repeat(700)}0${"]".repeat(700)};\n`;
+      const wrap = (script: string): string => {
+        if (kind === "js") return script;
+        const lang = scriptLanguage ? ` lang="${scriptLanguage}"` : "";
+        return `<script${lang}>\n${script}</script>\n<style>\n@import "./x.css";\n</style>\n`;
+      };
+      const huge = wrap(`${scriptPrefix}${nested}`);
+      const small = wrap(`${scriptPrefix}export function run() { return target(); }\n`);
+      const editedHuge =
+        kind === "js" ? wrap(`${scriptPrefix}const changed = 1;\n${nested}`) : huge.replace("./x.css", "./y.css");
+      const steps = [
+        { name: "huge", content: huge, degraded: true },
+        { name: "unchanged", content: undefined, degraded: true },
+        { name: "touch", content: undefined, degraded: true },
+        { name: "small", content: small, degraded: false },
+        { name: "huge again", content: huge, degraded: true },
+        { name: "edited huge", content: editedHuge, degraded: true },
+        { name: "deleted", content: null, degraded: false },
+        { name: "restored", content: huge, degraded: true },
+        { name: "renamed", content: undefined, degraded: true },
+        { name: "renamed back", content: undefined, degraded: true },
+        { name: "small again", content: small, degraded: false },
+      ] as const;
+      const dependencyEdges = (index: ProjectIndex): string[] =>
+        index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+      const detailedEdges = async (index: ProjectIndex): Promise<string[]> => {
+        const graph = await buildSymbolGraphDetailed(index);
+        return graph.edges
+          .map((edge) => {
+            const from = graph.nodes.get(edge.from)!;
+            const to = graph.nodes.get(edge.to)!;
+            return `${from.file}::${from.name}|${edge.label}|${to.file}::${to.name}`;
+          })
+          .sort();
+      };
+      try {
+        await writeFixtureFile(root, "lib.js", "export function target() { return 1; }\n");
+        await writeFixtureFile(root, "consumer.js", consumerSource);
+        await writeFixtureFile(root, "decoy.js", "export function target() { return -1; }\ntarget();\n");
+        await writeFixtureFile(root, "x.css", "body { color: red; }\n");
+        await writeFixtureFile(root, "y.css", "body { color: blue; }\n");
+        for (const step of steps) {
+          if (step.name === "renamed") {
+            await fsp.rename(file, renamedFile);
+            file = renamedFile;
+          } else if (step.name === "renamed back") {
+            await fsp.rename(file, originalFile);
+            file = originalFile;
+          } else if (step.content === null) await fsp.unlink(file);
+          else if (step.content !== undefined) await fsp.writeFile(file, step.content);
+          else if (step.name === "touch") await fsp.utimes(file, 0, 0);
+
+          const warm =
+            api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+          const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+          const context = `${kind}/${scriptLanguage}/${cache}/${api}/${step.name}`;
+          expect(dependencyEdges(warm), context).toEqual(dependencyEdges(cold));
+          const warmDetailedEdges = await detailedEdges(warm);
+          expect(warmDetailedEdges, context).toEqual(await detailedEdges(cold));
+          expect(warmDetailedEdges, context).toContain(
+            `${normalizePath(consumer)}::use|calls|${normalizePath(lib)}::target`,
+          );
+          expect(warmDetailedEdges, context).not.toContain(
+            `${normalizePath(consumer)}::use|calls|${normalizePath(decoy)}::target`,
+          );
+          expect(warm.byFile.has(fileIdentityKey(file)), context).toBe(step.content !== null);
+          if (step.name === "renamed") expect(warm.byFile.has(fileIdentityKey(originalFile)), context).toBe(false);
+          if (step.name === "renamed back") expect(warm.byFile.has(fileIdentityKey(renamedFile)), context).toBe(false);
+          const failure = warm.byFile.get(fileIdentityKey(file))?.syntaxTreeUnavailableReason;
+          if (step.degraded) expect(failure, context).toContain("syntax tree projection exceeded max");
+          else expect(failure, context).toBeUndefined();
+          const targets = edgeTargets(warm, file);
+          const expectedTargets: string[] = [];
+          if (step.content !== null && !step.degraded) expectedTargets.push(`file:${normalizePath(lib)}`);
+          if (step.content !== null && kind !== "js") {
+            const currentStyle = step.name === "edited huge" ? editedStyle : style;
+            expectedTargets.push(`file:${normalizePath(currentStyle)}`);
+          }
+          expect(targets, context).toEqual(expectedTargets.sort());
+          expect(targets, context).not.toContain(`file:${normalizePath(decoy)}`);
+
+          const request = {
+            file: consumer,
+            line: 2,
+            column: columnOf(consumerSource.split("\n"), 2, "target"),
+          };
+          const goto = await goToDefinition(warm, request);
+          expect(goto, context).toEqual(await goToDefinition(cold, request));
+          expect(goto.status, context).toBe("ok");
+          if (goto.status !== "ok") throw new Error("Expected consumer target to resolve");
+          expect(normalizePath(goto.definition.file), context).toBe(normalizePath(lib));
+          if (step.content !== null) {
+            const bigRequest = { file, line: kind === "js" ? 2 : 3, column: 1 };
+            const bigGoto = await goToDefinition(warm, bigRequest);
+            expect(bigGoto, context).toEqual(await goToDefinition(cold, bigRequest));
+            expect(bigGoto.status, context).toBe(step.degraded ? "not_found" : "ok");
+          }
+
+          const definition = { file: lib, line: 1, column: 17 };
+          const references = await findReferences(warm, definition);
+          expect(references, context).toEqual(await findReferences(cold, definition));
+          expect(references.status, context).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected target references");
+          expect(references.referenceCoverage.state, context).toBe(step.degraded ? "partial" : "complete");
+          expect(
+            references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer)),
+            context,
+          ).toBe(true);
+          expect(
+            references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(decoy)),
+            context,
+          ).toBe(false);
+
+          if (cache === "disk") {
+            closeDiskCacheDatabase(root, options);
+            clearMemoryCache();
+          }
+        }
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["java", "sql"] as const)(
+    "keeps %s projection-limited edges and navigation equal to cold across a lifecycle",
+    async (kind) => {
+      const root = await mkTmpDir("cg-projection-other-lifecycle-");
+      const options = { cache: "disk" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const isJava = kind === "java";
+      const libSource = isJava
+        ? "package lib; public class Lib { public static int target() { return 1; } }\n"
+        : "CREATE TABLE target (id INT);\n";
+      const consumerSource = isJava
+        ? "package app;\nimport lib.Lib;\npublic class Consumer { public int run() { return Lib.target(); } }\n"
+        : "CREATE VIEW v_consumer AS SELECT id FROM target;\n";
+      const decoySource = isJava
+        ? "package other; public class Lib { public static int target() { return -1; } }\n"
+        : "CREATE TABLE other (id INT);\n";
+      const lib = path.join(root, isJava ? "lib/Lib.java" : "lib.sql");
+      const consumer = path.join(root, isJava ? "app/Consumer.java" : "consumer.sql");
+      const decoy = path.join(root, isJava ? "other/Lib.java" : "decoy.sql");
+      const originalFile = path.join(root, isJava ? "big/Big.java" : "Big.sql");
+      const renamedFile = path.join(root, isJava ? "big/Renamed.java" : "Renamed.sql");
+      let file = originalFile;
+      const nested = `${"(".repeat(700)}1${")".repeat(700)}`;
+      const small = isJava
+        ? "package big;\nimport lib.Lib;\nclass Big { int run() { return Lib.target(); } }\n"
+        : "CREATE VIEW v_big AS SELECT id FROM target;\n";
+      const huge = isJava
+        ? `package big;\nimport lib.Lib;\nclass Big { int run() { return Lib.target(); } int pad = ${nested}; }\n`
+        : `CREATE VIEW v_big AS SELECT id FROM target;\nALTER TABLE target ADD COLUMN extra INT;\nSELECT ${nested};\n`;
+      const editedHuge = isJava
+        ? huge.replace("int pad", "int changed = 1; int pad")
+        : huge.replace("extra INT", "extra2 INT");
+      const steps = [
+        { name: "huge", content: huge, degraded: true },
+        { name: "unchanged", content: undefined, degraded: true },
+        { name: "touch", content: undefined, degraded: true },
+        { name: "small", content: small, degraded: false },
+        { name: "huge again", content: huge, degraded: true },
+        { name: "edited huge", content: editedHuge, degraded: true },
+        { name: "deleted", content: null, degraded: false },
+        { name: "restored", content: huge, degraded: true },
+        { name: "renamed", content: undefined, degraded: true },
+        { name: "renamed back", content: undefined, degraded: true },
+      ] as const;
+      const graphEdges = (index: ProjectIndex): string[] =>
+        index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+      const detailedEdges = async (index: ProjectIndex): Promise<string[]> =>
+        (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+      try {
+        await writeFixtureFile(root, path.relative(root, lib), libSource);
+        await writeFixtureFile(root, path.relative(root, consumer), consumerSource);
+        await writeFixtureFile(root, path.relative(root, decoy), decoySource);
+        await fsp.mkdir(path.dirname(originalFile), { recursive: true });
+        for (const step of steps) {
+          if (step.name === "renamed") {
+            await fsp.rename(file, renamedFile);
+            file = renamedFile;
+          } else if (step.name === "renamed back") {
+            await fsp.rename(file, originalFile);
+            file = originalFile;
+          } else if (step.content === null) await fsp.unlink(file);
+          else if (step.content !== undefined) await fsp.writeFile(file, step.content);
+          else if (step.name === "touch") await fsp.utimes(file, 0, 0);
+
+          const warm = await buildProjectIndexIncremental(root, options);
+          const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+          const context = `${kind}/${step.name}`;
+          expect(graphEdges(warm), context).toEqual(graphEdges(cold));
+          expect(await detailedEdges(warm), context).toEqual(await detailedEdges(cold));
+          const mod = warm.byFile.get(fileIdentityKey(file));
+          if (step.degraded)
+            expect(mod?.syntaxTreeUnavailableReason, context).toContain("syntax tree projection exceeded max");
+          else expect(mod?.syntaxTreeUnavailableReason, context).toBeUndefined();
+          expect(!!mod, context).toBe(step.content !== null);
+          if (step.name === "renamed") expect(warm.byFile.has(fileIdentityKey(originalFile)), context).toBe(false);
+          if (step.name === "renamed back") expect(warm.byFile.has(fileIdentityKey(renamedFile)), context).toBe(false);
+          const ownEdges = warm.graph.edges.filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file));
+          expect(
+            ownEdges.some(
+              (edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(decoy),
+            ),
+            context,
+          ).toBe(false);
+          if (step.content !== null && (!isJava || !step.degraded)) {
+            expect(
+              ownEdges.some(
+                (edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(lib),
+              ),
+              context,
+            ).toBe(true);
+          } else {
+            expect(ownEdges, context).toEqual([]);
+          }
+          if (!isJava && step.degraded) {
+            expect(
+              ownEdges.some((edge) => edge.raw === "sql:reads_from:target"),
+              context,
+            ).toBe(true);
+            expect(
+              ownEdges.some((edge) => edge.raw === "sql:alters_table:target"),
+              context,
+            ).toBe(true);
+          }
+          const line = isJava ? 3 : 1;
+          const request = { file: consumer, line, column: columnOf(consumerSource.split("\n"), line, "target") };
+          const goto = await goToDefinition(warm, request);
+          expect(goto, context).toEqual(await goToDefinition(cold, request));
+          expect(goto.status, context).toBe("ok");
+          if (goto.status !== "ok") throw new Error("Expected target to resolve");
+          expect(fileIdentityKey(goto.definition.file), context).toBe(fileIdentityKey(lib));
+          const definition = { file: lib, line: 1, column: columnOf(libSource.split("\n"), 1, "target") };
+          const references = await findReferences(warm, definition);
+          expect(references, context).toEqual(await findReferences(cold, definition));
+          expect(references.status, context).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected target references");
+          expect(
+            references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer)),
+            context,
+          ).toBe(true);
+          expect(
+            references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(decoy)),
+            context,
+          ).toBe(false);
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+        }
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([
     { session: false, allMisses: true },
     { session: true, allMisses: false },
