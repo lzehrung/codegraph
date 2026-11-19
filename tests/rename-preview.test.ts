@@ -45,6 +45,7 @@ import {
   JAVA_BATCH5_REVIEW_SOURCES,
   JAVA_BATCH5_SOURCES,
 } from "./helpers/csharp-java-batch5-fixture.js";
+import { BATCH6_RENAME_ROWS, CSHARP_RENAME_BOUNDARY_SOURCES } from "./helpers/csharp-java-swift-batch6-fixture.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -103,7 +104,7 @@ async function tryCreateFileSymlink(target: string, linkPath: string): Promise<b
 
 async function renameInFixture(
   sources: Readonly<Record<string, string>>,
-  target: { file: string; name: string; line?: number },
+  target: { file: string; name: string; line?: number; column?: number },
   newName: string,
 ) {
   const root = await mkTmpDir("cg-rename-header-parameter-");
@@ -115,12 +116,11 @@ async function renameInFixture(
   });
   try {
     const symbols = await workspaceSymbolsWithSession(session, { root, query: target.name });
-    const symbol = symbols.symbols.find(
-      (item) =>
-        item.name === target.name &&
-        item.location.file === target.file &&
-        (target.line === undefined || item.location.range.start.line === target.line),
-    );
+    const symbol = symbols.symbols.find((item) => {
+      if (item.name !== target.name || item.location.file !== target.file) return false;
+      if (target.line !== undefined && item.location.range.start.line !== target.line) return false;
+      return target.column === undefined || item.location.range.start.column === target.column;
+    });
     expect(symbol, `${target.file}::${target.name}`).toBeDefined();
     return await previewRenameWithSession(session, { root, handle: symbol!.handle, newName });
   } finally {
@@ -173,6 +173,89 @@ async function typeErrorsAfter(root: string, edits: readonly RenameEdit[]): Prom
 }
 
 describe("rename preview", () => {
+  it.each(BATCH6_RENAME_ROWS)(
+    "renames batch six $declaration.file:$declaration.line:$declaration.token",
+    async ({ sources, declaration, references, renameReferences, coverage, unsafe }) => {
+      const result = await renameInFixture(
+        sources,
+        { file: declaration.file, ...placeOf(sources, declaration), name: declaration.token },
+        "renamed",
+      );
+      expect(result.safe).toBe(!coverage && !unsafe);
+      expect(editSites(result).sort()).toEqual(
+        (renameReferences ?? references)
+          .map((use) => {
+            const position = placeOf(sources, use);
+            return [use.file, position.line, position.column];
+          })
+          .sort(),
+      );
+    },
+  );
+
+  it.each([
+    [3, "Helper", true],
+    [4, "Secret", true],
+    [5, "Hidden", true],
+    [6, "S", true],
+    [7, "Mid", false],
+    [8, "Guard", false],
+    [9, "Restricted", false],
+    [10, "Plain", false],
+    [11, "Fire", true],
+    [12, "Dispose", false],
+    [13, "Use", false],
+    [17, "Get", false],
+    [22, "Make", false],
+    [23, "Other", true],
+    [25, "Name", false],
+    [26, "Name", false],
+    [27, "Work", false],
+    [28, "Work", false],
+    [29, "Work", true],
+    [30, "Work", true],
+    [31, "Run", false],
+    [32, "Run", false],
+    [46, "ToString", false],
+    [47, "Equals", false],
+    [48, "GetHashCode", false],
+    [49, "Plain", true],
+    [51, "ToString", false],
+    [52, "ToString", false],
+  ] as const)("keeps C# rename boundaries at line %s for %s", async (line, name, safe) => {
+    const result = await renameInFixture(
+      CSHARP_RENAME_BOUNDARY_SOURCES,
+      { file: "Boundaries.cs", line, name },
+      "renamed",
+    );
+    expect(result.safe).toBe(safe);
+    if (!safe) expect(result.unsafeSites.length).not.toBe(0);
+    if (safe && line <= 6) expect(result.edits.map((edit) => edit.range.start.line).sort()).toEqual([line, 13].sort());
+    if (line === 49) expect(result.edits.map((edit) => edit.range.start.line).sort()).toEqual([49, 57]);
+  });
+
+  it("keeps an explicit override unsafe and its record constructor edits separate", async () => {
+    const source = CSHARP_RENAME_BOUNDARY_SOURCES;
+    const property = await renameInFixture(
+      source,
+      {
+        file: "Boundaries.cs",
+        ...placeOf(source, { file: "Boundaries.cs", line: 33, token: "Name", nth: 2 }),
+        name: "Name",
+      },
+      "renamed",
+    );
+    expect(property.safe).toBe(false);
+    const parameter = await renameInFixture(
+      source,
+      { file: "Boundaries.cs", ...placeOf(source, { file: "Boundaries.cs", line: 33, token: "Name" }), name: "Name" },
+      "renamed",
+    );
+    // The constructor parameter already has partial coverage on main; no property token becomes its edit.
+    expect(parameter.safe).toBe(false);
+    expect(parameter.edits.map((edit) => edit.range.start.line)).toEqual([33, 33]);
+  });
+
   it("renames Rust values without editing same-named module paths", async () => {
     await withMemberSelectorFixture(RUST_NAMESPACE_COLLISION_FIXTURE, async (_index, file, session, root) => {
       await expectMemberSelectorRename(session, RUST_NAMESPACE_COLLISION_FIXTURE, root, file);

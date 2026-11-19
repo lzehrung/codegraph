@@ -149,6 +149,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "destructuringTypeFieldBindingTypes",
   "outerEvaluatedFields",
   "memberSelectorFields",
+  "memberSelectorAt",
   "memberSelectorReceiverFields",
   "memberSelectorRejectsBinding",
   "requireCall",

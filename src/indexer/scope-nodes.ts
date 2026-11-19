@@ -17,7 +17,7 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
-import { isSwiftExtensionTypeName } from "../util/swift-tree.js";
+import { isSwiftExtensionTypeName, isSwiftPatternLabel } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
 import {
@@ -69,6 +69,8 @@ export type ScopeNodeRow = {
   headerParameters?: {
     declarationTypes: ReadonlySet<string>;
     listTypes: ReadonlySet<string>;
+    /** Header parameters whose generated properties are also receiver-reference candidates. */
+    propertyDeclarationTypes?: Readonly<Record<string, true>>;
     /**
      * A parameter named like its own type (C# `Widget Widget`, Color Color; Java `Money Money`) stays unbound: a receiver
      * spelled that way may name the type for its static and nested members, which only the type lookup answers, and a
@@ -248,6 +250,8 @@ export type ScopeNodeRow = {
    * reads. An explicit method call without a receiver still reads its method binding.
    */
   memberSelectorFields?: Readonly<Record<string, string>>;
+  /** Labels that the grammar leaves unfielded or mixes with expression children (Swift patterns). */
+  memberSelectorAt?: (node: SyntaxNodeLike) => boolean;
   /** Receiver fields distinguish receiverless calls and type/namespace segments of a qualified value path. */
   memberSelectorReceiverFields?: Readonly<Record<string, string>>;
   /** Whether a selector rejects this lexical binding; member declarations can share a binding kind with locals. */
@@ -776,6 +780,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
       declarationTypes: new Set(["record_declaration", "class_declaration", "struct_declaration"]),
       listTypes: new Set(["parameter_list"]),
       leavesTypeNamedUnbound: true,
+      propertyDeclarationTypes: { record_declaration: true },
     },
     typeParameterTypes: new Set(["type_parameter"]),
     enumMemberTypes: new Set(["enum_member_declaration"]),
@@ -783,6 +788,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     conditionalBindingParents: new Set([
       "declaration_expression",
       "declaration_pattern",
+      "foreach_statement",
+      "tuple_pattern",
       "from_clause",
       "join_clause",
       "join_into_clause",
@@ -902,6 +909,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     wholeScopeDeclarationTypes: new Set(["function_declaration", "class_declaration"]),
     memberSelectorParentTypes: new Set(["navigation_suffix", "value_argument_label"]),
     memberSelectorFields: { tuple_expression: "name", tuple_type_item: "name" },
+    memberSelectorAt: isSwiftPatternLabel,
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),
@@ -1053,6 +1061,7 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
 
 /** Identify selector positions before applying their binding and namespace policy. */
 export function isNonLexicalValueUse(row: ScopeNodeRow, useNode: SyntaxNodeLike): boolean {
+  if (row.memberSelectorAt?.(useNode)) return true;
   if (!row.memberSelectorParentTypes && !row.memberSelectorFields) return false;
   const parent = useNode.parent;
   if (!parent) return false;
@@ -1112,11 +1121,6 @@ export function scopeAllowsUse(row: ScopeNodeRow, scope: Scope, use: SyntaxNodeL
   if (outerExpression && use.startIndex >= outerExpression.startIndex && use.endIndex <= outerExpression.endIndex) {
     return false;
   }
-  // A C# foreach variable belongs to the loop body, not its collection expression.
-  if (scopeType === "foreach_statement") {
-    const iterable = scope.node.childForFieldName("right");
-    if (iterable && use.startIndex >= iterable.startIndex && use.endIndex <= iterable.endIndex) return false;
-  }
   // A C# lambda's parameter defaults and types are evaluated outside its parameter bindings.
   if (scopeType === "lambda_expression") {
     const parameters = scope.node.childForFieldName("parameters");
@@ -1170,6 +1174,7 @@ export function laterLocalBlocksOuterUse(
   scope: Scope,
   canonicalName: string,
   useStartIndex: number,
+  normalizeIdentifier: (name: string) => string,
   useNode?: SyntaxNodeLike,
 ): boolean {
   const pythonFunctionScope =
@@ -1193,8 +1198,10 @@ export function laterLocalBlocksOuterUse(
       !binding.coversEnclosingScope &&
       declarationIndex !== undefined &&
       declarationIndex > useStartIndex
-    )
+    ) {
+      if (useNode && bindingHiddenFromUse(row, binding, useNode, false, false, false, normalizeIdentifier)) continue;
       return true;
+    }
   }
   return false;
 }

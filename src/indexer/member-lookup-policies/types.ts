@@ -43,6 +43,13 @@ export type MemberLookupDeps = {
   keywordClassRefFromNode(index: ProjectIndex, mod: ModuleIndex, node: SyntaxNodeLike): Promise<MemberOwnerRef | null>;
   /** The types `owner` inherits from or conforms to that the project declares. */
   baseOwnersOf(index: ProjectIndex, owner: MemberOwnerRef): Promise<MemberOwnerRef[]>;
+  /** Whether another part or a base may provide a header parameter's property instead of synthesizing it here. */
+  headerParameterMayBeInherited(index: ProjectIndex, owner: MemberOwnerRef, name: string): Promise<boolean>;
+  /** Existing C# partial-type lookup, including whether every source part can be inspected. */
+  sharedOwnerParts(
+    index: ProjectIndex,
+    owner: MemberOwnerRef,
+  ): Promise<{ parts: readonly MemberOwnerRef[]; complete: boolean }>;
   resolveSharedOwnerContainers(params: {
     index: ProjectIndex;
     ownerFile: string;
@@ -138,6 +145,13 @@ export type MemberLookupPolicy = {
   declaredReceiverUsesNameLookup?: boolean;
   /** A nominal receiver's members are resolved on that receiver, not through its source file's exports. */
   membersBeforeFileExports?: boolean;
+  /** A source-declared stand-in for a generated instance property, after explicit members have been checked. */
+  implicitMember?(
+    index: ProjectIndex,
+    owner: MemberOwnerRef,
+    name: string,
+    deps: MemberLookupDeps,
+  ): Promise<SymbolDef | undefined>;
   /**
    * The edge a resolved dotted member call records, or `null` when its target cannot be the callee. Without this
    * hook, a target that accepts the call's argument count records `calls`.
@@ -170,7 +184,7 @@ export type MemberLookupPolicy = {
     definitionVisible: () => boolean,
   ): boolean;
   /** Whether the lookup's `reason` for an unplaced `node` leaves a reference possible. */
-  unprovenReference?(node: SyntaxNodeLike, reason: string | undefined): boolean;
+  unprovenReference?(node: SyntaxNodeLike, reason: string | undefined, definitionName: SyntaxNodeLike): boolean;
   /** Whether an unplaced use's syntax can name the target at all, using the query's owned declaration token. */
   unprovenReferenceCandidate?(node: SyntaxNodeLike, definitionName: SyntaxNodeLike): boolean;
   /** The enum case or static member a leading-dot use selects in the type `target` names (or in the type around a node). */
@@ -202,6 +216,13 @@ export type MemberLookupPolicy = {
     index: ProjectIndex;
     target: SymbolDef;
     deps: MemberLookupDeps;
+    /** Existing project type-hierarchy lookup; incomplete ancestry or descendants cannot prove a rename independent. */
+    relatedTypes(
+      owner: SymbolDef,
+      direction: "super" | "sub",
+    ): { definitions: readonly SymbolDef[]; complete: boolean; directCount: number } | undefined;
+    /** Whether the existing implementation lookup finds project implementers of a type. */
+    hasImplementers(owner: SymbolDef): boolean;
     /** Every use of `def` that rename collection proves, or null when that collection is incomplete or failed. */
     usesOf(def: SymbolDef): Promise<readonly Reference[] | null>;
   }): Promise<RenameCompanions | undefined>;

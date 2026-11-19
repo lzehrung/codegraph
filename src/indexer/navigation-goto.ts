@@ -145,6 +145,7 @@ import {
   UNRESOLVED_QUALIFIED_TYPE_REASON,
 } from "./ambiguous-resolution.js";
 import { fileBindingIsUnshadowed, type Binding, type ScopeIndex } from "./scope.js";
+import { scopeNodesFor } from "./scope-nodes.js";
 import { resolveCppQualifiedMemberContainer, cppFunctionHasImplicitThis } from "./navigation-cpp.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import {
@@ -504,6 +505,9 @@ export const memberLookupDeps: MemberLookupDeps = {
       false,
       owner.context.tree,
     ),
+  headerParameterMayBeInherited: async (index, owner, name) =>
+    (await csharpHeaderParameterOverride(index, owner.module, owner.container, name, true)).status !== "none",
+  sharedOwnerParts: (index, owner) => csharpTypeParts(index, owner),
   resolveSharedOwnerContainers: (params) => resolveSharedOwnerContainers(params),
   findDirectLocalsWithinNode: (locals, name, container, context, normalize) =>
     findDirectLocalsWithinNode(locals, name, container, context, normalize),
@@ -1719,6 +1723,8 @@ export async function resolveMemberAccessDefinition(params: {
     memberNode = parent.parent;
   }
   if (!memberNode) return null;
+  // Designators have their own contextual lookup; a dotted pattern path is not a lexical receiver chain.
+  if (scopeNodesFor(sup.id).nonLexicalUse?.(node)) return null;
   const csharpLead = sup.id === "csharp" ? csharpChainQualifier(memberNode, source) : null;
   if (csharpLead) {
     const reason = csharpAliasUnprovenReason(index, mod, csharpLead.qualifier, source);
@@ -3573,6 +3579,13 @@ async function resolveKeywordReceiverMember(
             }
           }
         }
+        if (!classLevel && !matches.length) {
+          const policy = memberLookupPolicyFor(ref.context.sup.id);
+          if (policy.implicitMember) {
+            const property = await policy.implicitMember(index, ref, member, memberLookupDeps);
+            if (property) matches.push(property);
+          }
+        }
       }
       membersByKey.set(key, matches);
       for (const hit of matches) {
@@ -4283,6 +4296,7 @@ async function csharpDeclaredBaseRef(
 async function csharpBaseClassRef(
   index: ProjectIndex,
   parts: readonly KeywordClassRef[],
+  requireKnownBases = false,
 ): Promise<KeywordClassRef | null | "unproven"> {
   let baseClass: KeywordClassRef | null = null;
   for (const part of parts) {
@@ -4297,7 +4311,10 @@ async function csharpBaseClassRef(
     const baseNode = baseList.namedChildren[0]!;
     const base = await csharpDeclaredBaseRef(index, part, baseNode);
     if (base === "unproven") return "unproven";
-    if (!base) continue;
+    if (!base) {
+      if (requireKnownBases) return "unproven";
+      continue;
+    }
     if (base.container.type === "interface_declaration") continue;
     if (baseClass) {
       const sameClass =
@@ -4344,6 +4361,7 @@ async function csharpTypeChainMembersNamed(
   typeOnly: boolean,
   call: boolean,
   inheritedFromStart = false,
+  requireKnownBases = false,
 ): Promise<SymbolDef[] | "unproven"> {
   const seen = new Set<string>();
   let nearest: SymbolDef[] = [];
@@ -4360,7 +4378,7 @@ async function csharpTypeChainMembersNamed(
       if (!nearest.length) nearest = members;
     }
     if (!complete) return "unproven";
-    const baseClass = await csharpBaseClassRef(index, parts);
+    const baseClass = await csharpBaseClassRef(index, parts, requireKnownBases);
     if (baseClass === "unproven") return "unproven";
     current = baseClass;
   }
@@ -4372,12 +4390,14 @@ async function csharpTypeChainMembersNamed(
  * part declares, then a non-private member its project base classes declare (a derived record that repeats a base
  * record's parameter reads the inherited property). `none` leaves the parameter as the answer; `unproven` means a
  * part or base cannot be inspected. A member this part declares is already the closer lexical binding.
+ * Property synthesis requires every possible base class to be known; ordinary lexical lookup may ignore external bases.
  */
 export async function csharpHeaderParameterOverride(
   index: ProjectIndex,
   mod: ModuleIndex,
   owner: SyntaxNodeLike,
   name: string,
+  requireKnownBases = false,
 ): Promise<CsharpAliasMemberLookup> {
   const context = await ensureParsedContextForIndex(index, mod.file);
   let container: SyntaxNodeLike | null = context.tree.rootNode.descendantForIndex(owner.startIndex, owner.endIndex);
@@ -4397,10 +4417,10 @@ export async function csharpHeaderParameterOverride(
   const otherParts = csharpPartMembersNamed(parts.slice(1), name, false, false);
   if (otherParts.length) return found(otherParts);
   if (!complete) return { status: "unproven" };
-  const base = await csharpBaseClassRef(index, parts);
+  const base = await csharpBaseClassRef(index, parts, requireKnownBases);
   if (base === "unproven") return { status: "unproven" };
   if (!base) return { status: "none" };
-  const inherited = await csharpTypeChainMembersNamed(index, base, name, false, false, true);
+  const inherited = await csharpTypeChainMembersNamed(index, base, name, false, false, true, requireKnownBases);
   if (inherited === "unproven") return { status: "unproven" };
   return inherited.length ? found(inherited) : { status: "none" };
 }

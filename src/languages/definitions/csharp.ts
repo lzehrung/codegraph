@@ -44,6 +44,8 @@ const createsCsharpBlockScope = nodeTypeIn([
   "foreach_statement",
   "catch_clause",
   "for_statement",
+  "while_statement",
+  "switch_expression_arm",
   "query_expression",
 ]);
 

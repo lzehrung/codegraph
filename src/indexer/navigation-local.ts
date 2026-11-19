@@ -371,7 +371,15 @@ export function findClosestScopeBinding(
     }
     if (binding) return binding;
     const blockedByLaterValue =
-      !typeOnly && laterLocalBlocksOuterUse(row, currentScope, normalizedName, currentNode.startIndex, currentNode);
+      !typeOnly &&
+      laterLocalBlocksOuterUse(
+        row,
+        currentScope,
+        normalizedName,
+        currentNode.startIndex,
+        support.normalizeIdentifier,
+        currentNode,
+      );
     if (blockedByLaterValue) return null;
     if (scopeIsLocalGate(currentScope)) crossedGate = true;
     currentScope = currentScope.parent;
@@ -399,7 +407,17 @@ export function laterLocalShadowsUse(
       scope = scope.parent;
       continue;
     }
-    if (laterLocalBlocksOuterUse(row, scope, canonicalName, currentNode.startIndex, currentNode)) return true;
+    if (
+      laterLocalBlocksOuterUse(
+        row,
+        scope,
+        canonicalName,
+        currentNode.startIndex,
+        support.normalizeIdentifier,
+        currentNode,
+      )
+    )
+      return true;
     let binding = scope.map.get(canonicalName);
     while (binding && !bindingCoversUse(row, scope.kind, binding, currentNode.startIndex, currentNode, support)) {
       binding = binding.earlierSameScope;
