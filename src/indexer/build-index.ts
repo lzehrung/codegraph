@@ -677,6 +677,11 @@ async function finishModuleRecordForBuild(
   };
 }
 
+/** Reuse the failed extraction for graph edges without losing independently parsed embedded blocks. */
+function unprojectableEdgeSource(sup: LanguageSupport): FileEdgeSource {
+  return readsSyntaxTree(sup.id) ? { sup, specifiers: [] } : { sup, nativeQueries: null };
+}
+
 async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<IndexedFileModuleResult> {
   const recordTask: ModuleRecordTask | undefined =
     args.moduleRecords && isModuleRecordLanguage(args.support.id)
@@ -932,7 +937,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     module: mod,
     ...(cacheWrite !== undefined ? { cacheWrite } : {}),
     graphContext: projectionAlreadyFailed
-      ? { sup, specifiers: [] }
+      ? unprojectableEdgeSource(sup)
       : {
           source,
           sup,
@@ -2204,11 +2209,8 @@ async function buildIndexFromFileListInProbeCache(
           cacheWrite = built.cacheWrite;
         } else {
           collectJsonDependencies(mod.imports, jsonDependencies);
-          // The module was reused, so this build has no parse to hand to edge collection. A file whose tree
-          // cannot be projected has no directives to recover; collecting edges must not project it again.
-          if (mod.syntaxTreeUnavailableReason && readsSyntaxTree(support.id)) {
-            graphContext = { sup: support, specifiers: [] };
-          }
+          // Reuse the failed extraction even if the cached edge entry has to be recomputed.
+          if (mod.syntaxTreeUnavailableReason) graphContext = unprojectableEdgeSource(support);
         }
         edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
           ...(graphContext ? { parsed: graphContext } : {}),
@@ -3707,9 +3709,19 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
       }
       const filesList = Array.from(changedFiles);
+      let edgeSources: Map<string, FileEdgeSource> | undefined;
+      for (const file of filesList) {
+        const key = fileIdentityKey(file);
+        if (!modules.get(key)?.syntaxTreeUnavailableReason) continue;
+        const support = supportForFile(file, opts?.languageExtensions);
+        if (!support) continue;
+        edgeSources ??= new Map();
+        edgeSources.set(key, unprojectableEdgeSource(support));
+      }
       const graphStart = performance.now();
       const graph = await collectGraph(projectRoot, filesList, {
         parsed: parsedMap,
+        ...(edgeSources ? { edgeSources } : {}),
         resolveNodeModules: !!graphOptions.resolveNodeModules,
         dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
         ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),

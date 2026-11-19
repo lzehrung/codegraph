@@ -12,7 +12,7 @@ import type { GraphCacheEntry } from "./graphs/types.js";
 import type { LanguageExtensionMap } from "./languages.js";
 import type { BuildReport, ModuleIndex } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
-import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
+import { collectEdgesForFile, hasBetterProvenance, type FileEdgeSource } from "./graph-edge-collector.js";
 import { edgeKey } from "./util/graph-edges.js";
 import { isSqlFilePath } from "./sql/classify-sql-file.js";
 import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
@@ -38,6 +38,7 @@ export async function collectGraph(
   files: string[],
   opts?: {
     parsed?: Map<string, ParsedFileContext>;
+    edgeSources?: ReadonlyMap<string, FileEdgeSource>;
     threads?: number;
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
@@ -127,7 +128,8 @@ export async function collectGraph(
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
       const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
       const cachedFileEdges = !shouldReplace ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
-      const parsedEntry = opts?.parsed?.get(fileIdentityKey(file));
+      const key = fileIdentityKey(file);
+      const parsedEntry = opts?.edgeSources?.get(key) ?? opts?.parsed?.get(key);
       const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
         ...(parsedEntry ? { parsed: parsedEntry } : {}),
         ...(opts?.parsed ? { parsedFiles: opts.parsed } : {}),
