@@ -291,6 +291,37 @@ verdicts were inconclusive on the shared machine:
 | refs           |            488.5 |            503.3 |              3.8 |                4/6 |
 | goto           |            105.5 |            106.3 |              1.7 |                4/6 |
 
+## Cache freshness costs
+
+- Relative JSON freshness checks add one `stat` per recorded candidate and one `realpath` per existing
+  candidate, plus one root `realpath` per update. A directory-index import can record a missing
+  `dir.json` even when it resolves to `dir/index.ts`, because the resolver checks `dir.json` first.
+  For no-change incremental updates, measured total stat calls were:
+
+  | Project                       | Candidates | Before | After |
+  | ----------------------------- | ---------: | -----: | ----: |
+  | Hono                          |         59 |    639 |   698 |
+  | JSON-heavy fixture            |        175 |    173 |   348 |
+  | Directory-index-heavy fixture |        400 |  1,223 | 1,623 |
+
+- Warm full builds now reuse JSON candidates for unchanged importers. In single Hono no-change
+  profiles on a shared machine, sampled inclusive candidate-update CPU fell from 50.31 ms to 2.28 ms
+  for disk cache and from 74.13 ms to 6.02 ms for memory cache. These are CPU samples, not paired
+  wall-clock timings; freshness stat and realpath checks are unchanged.
+
+- Vue and Svelte stylesheet edges can coincide with script side-effect edges, so their JSON candidate
+  signatures use the observed state. A JSON change may re-extract a style-only component once.
+
+- A no-change memory build with 500 importers of one JSON file made 143,791 file-identity calls;
+  indexing candidate membership reduced this to 19,041. With 2,000 importers the same counts fell
+  from 2,075,041 to 76,041. On Hono, which has fewer shared candidates, calls rose from 42,644 to
+  42,851; filesystem probe counts were unchanged.
+
+- Full disk builds reuse prior candidate rows; a damaged but valid row is not repaired until its
+  importer changes or the cache is cleared. This has not been observed in normal operation.
+- Candidate reuse state has a 128-project limit but no byte cap and is freed by `clearMemoryCache()`.
+  A 100,000-file measurement used about 360 bytes per file for the recorded file scopes.
+
 ## Opportunities
 
 Each item comes from a cost found and fixed in one language during the accuracy batches. The same

@@ -13,6 +13,8 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import { createAgentSession } from "../src/agent/session.js";
+import * as jsonCandidateCache from "../src/indexer/build-cache/json-candidates.js";
+import * as filePrep from "../src/languages/file-prep.js";
 import {
   cacheDatabasePath,
   cacheRelativePath,
@@ -25,7 +27,7 @@ import {
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { columnOf, writeFixtureFiles } from "./languages/callable-consumer-fixtures.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { isSymlinkUnavailable, mkTmpDir, tryCreateFileSymlink } from "./helpers/filesystem.js";
 import { csharpInheritedAliasCase } from "./helpers/csharp-inherited-alias-fixture.js";
 import { runGit as git } from "./helpers/git.js";
 import {
@@ -45,7 +47,7 @@ import {
   phpPathFallbackFixture,
   PHP_INCOMPLETE_DECLARATION_SOURCES,
 } from "./helpers/php-path-fallback-fixture.js";
-import { clearMemoryCache } from "../src/indexer/build-cache.js";
+import { clearMemoryCache, loadManifest } from "../src/indexer/build-cache.js";
 import { PHP_INCOMPLETE_DECLARATION_IDENTITY } from "../src/indexer/php-namespace-symbols.js";
 const DISK_BUILD = { cache: "disk" as const };
 
@@ -2232,57 +2234,849 @@ describe("tracked file restoration matches cold builds", () => {
     }
   });
 
-  it.each(cacheModes)("documents JSON target deletion freshness ($cache, $api)", async ({ cache, api }) => {
-    const root = await mkTmpDir("cg-json-target-freshness-");
+  const missingJsonRecordModes = cacheModes.flatMap((mode) => {
+    const states = mode.cache === "disk" ? (["missing", "invalid"] as const) : (["missing"] as const);
+    return states.flatMap((state) =>
+      (["add", "delete"] as const).flatMap((change) =>
+        (["", ".json"] as const).map((extension) => ({ ...mode, state, change, extension })),
+      ),
+    );
+  });
+
+  it.each(missingJsonRecordModes)(
+    "recovers $state JSON candidate records without extracting cached modules ($cache, $api, $change, $extension)",
+    async ({ cache, api, state, change, extension }) => {
+      const root = await mkTmpDir("cg-json-missing-record-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const main = path.join(root, "main.ts");
+      const barrel = path.join(root, "barrel.ts");
+      const client = path.join(root, "client.ts");
+      const side = path.join(root, "side.js");
+      const unrelated = path.join(root, "unrelated.ts");
+      const data = path.join(root, "data.json");
+      const watched = path.join(root, "watched.json");
+      const mainSource = `import data from "./data${extension}";\nexport function read() { return data; }\n`;
+      const clientSource = 'import { cfg, read } from "./barrel";\nexport const value = [cfg, read()];\n';
+      const request = { file: main, line: 2, column: columnOf(mainSource.split("\n"), 2, "data") };
+      const exported = { file: client, line: 2, column: columnOf(clientSource.split("\n"), 2, "cfg") };
+      const definition = { file: main, line: 2, column: columnOf(mainSource.split("\n"), 2, "read") };
+      const files = [main, barrel, client, side, unrelated];
+      const graphEdges = (index: ProjectIndex): string[] =>
+        index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+      const detailedEdges = async (index: ProjectIndex): Promise<string[]> =>
+        (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+      try {
+        await fsp.writeFile(main, mainSource);
+        await fsp.writeFile(
+          barrel,
+          `export { default as cfg } from "./data${extension}";\nexport { read } from "./main";\n`,
+        );
+        await fsp.writeFile(client, clientSource);
+        await fsp.writeFile(side, 'import "./watched.json";\n');
+        await fsp.writeFile(unrelated, "export const unrelated = 1;\n");
+        if (change === "delete") {
+          await fsp.writeFile(data, "{}\n");
+          await fsp.writeFile(watched, "{}\n");
+        }
+        const initial = await buildProjectIndex(root, options);
+        const initialBinding = initial.byFile
+          .get(fileIdentityKey(main))
+          ?.imports.find((binding) => binding.from.startsWith("./data"));
+        const oldTarget = initialBinding?.resolved;
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+          const directory = path.join(root, ".codegraph", "cache", "index-v1");
+          const manifest = path.join(directory, "manifest.json");
+          if (state === "missing") {
+            await fsp.rm(manifest);
+            await fsp.rm(path.join(directory, "project-index-snapshot.json"));
+          } else {
+            const stored = JSON.parse(await fsp.readFile(manifest, "utf8")) as { jsonCandidates: unknown };
+            stored.jsonCandidates = [{ file: "../outside.json", signature: null, importers: ["main.ts"] }];
+            await fsp.writeFile(manifest, JSON.stringify(stored));
+          }
+        } else {
+          jsonCandidateCache.clearMemoryJsonCandidates();
+        }
+        if (change === "add") {
+          await fsp.writeFile(data, "{}\n");
+          await fsp.writeFile(watched, "{}\n");
+        } else {
+          await fsp.unlink(data);
+          await fsp.unlink(watched);
+        }
+        const report: BuildReport = { timings: {} };
+        const prep = vi.spyOn(filePrep, "prepareSourceInput");
+        const warm =
+          api === "full"
+            ? await buildProjectIndex(root, { ...options, report })
+            : await buildProjectIndexIncremental(root, { ...options, report });
+        const preparedFiles = prep.mock.calls.map(([file]) => fileIdentityKey(file));
+        prep.mockRestore();
+        expect(report.cache?.hits).toBe(files.length);
+        expect(report.backend?.native.filesUsed).toBe(0);
+        for (const file of files) {
+          const graphCacheRetained = cache === "disk" && api === "full" && state === "invalid" && file === unrelated;
+          expect(preparedFiles.filter((prepared) => prepared === fileIdentityKey(file))).toHaveLength(
+            graphCacheRetained ? 0 : 1,
+          );
+        }
+        expect(initialBinding?.resolved).toEqual(oldTarget);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        expect(graphEdges(warm)).toEqual(graphEdges(cold));
+        expect(await detailedEdges(warm)).toEqual(await detailedEdges(cold));
+        const goto = await goToDefinition(warm, request);
+        expect(goto).toEqual(await goToDefinition(cold, request));
+        expect(goto.status).toBe(change === "add" ? "ok" : "not_found");
+        expect(await goToDefinition(warm, exported)).toEqual(await goToDefinition(cold, exported));
+        expect(await findReferences(warm, definition)).toEqual(await findReferences(cold, definition));
+        const sideTargets = edgeTargets(warm, side);
+        expect(sideTargets).toContain(change === "add" ? `file:${normalizePath(watched)}` : "external:./watched.json");
+        const next =
+          api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+        expect(graphEdges(next)).toEqual(graphEdges(cold));
+        expect(await goToDefinition(next, request)).toEqual(goto);
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+          const directory = path.join(root, ".codegraph", "cache", "index-v1");
+          await fsp.rm(path.join(directory, "manifest.json"));
+          await fsp.rm(path.join(directory, "project-index-snapshot.json"));
+        } else {
+          jsonCandidateCache.clearMemoryJsonCandidates();
+        }
+        const persistedReport: BuildReport = { timings: {} };
+        const persisted =
+          api === "full"
+            ? await buildProjectIndex(root, { ...options, report: persistedReport })
+            : await buildProjectIndexIncremental(root, { ...options, report: persistedReport });
+        expect(persistedReport.cache?.hits).toBe(files.length);
+        expect(persistedReport.backend?.native.filesUsed).toBe(0);
+        expect(graphEdges(persisted)).toEqual(graphEdges(cold));
+        expect(await goToDefinition(persisted, request)).toEqual(goto);
+        expect(await goToDefinition(persisted, exported)).toEqual(await goToDefinition(cold, exported));
+      } finally {
+        vi.restoreAllMocks();
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  const componentJsonRecoveryModes = (["vue", "svelte"] as const).flatMap((framework) =>
+    cacheModes.map((mode) => ({ framework, ...mode })),
+  );
+  it.each(componentJsonRecoveryModes)(
+    "recovers $framework JSON imports without changing embedded stylesheet resolution ($cache, $api)",
+    async ({ framework, cache, api }) => {
+      const root = await mkTmpDir("cg-json-component-recovery-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const component = path.join(root, `component.${framework}`);
+      const style = path.join(root, "data.css");
+      const data = path.join(root, "data.json");
+      const source = [
+        '<script lang="ts">',
+        'import config from "./data";',
+        "export function read() { return config; }",
+        "</script>",
+        "<style>",
+        '@import "./data";',
+        "</style>",
+        "",
+      ].join("\n");
+      const request = { file: component, line: 3, column: columnOf(source.split("\n"), 3, "config") };
+      const definition = { file: component, line: 3, column: columnOf(source.split("\n"), 3, "read") };
+      const edges = (index: ProjectIndex): string[] => index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+      try {
+        await fsp.writeFile(component, source);
+        await fsp.writeFile(style, ".theme { color: red; }\n");
+        await buildProjectIndex(root, options);
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+          const directory = path.join(root, ".codegraph", "cache", "index-v1");
+          await fsp.rm(path.join(directory, "manifest.json"));
+          await fsp.rm(path.join(directory, "project-index-snapshot.json"));
+        } else {
+          jsonCandidateCache.clearMemoryJsonCandidates();
+        }
+        await fsp.writeFile(data, "{}\n");
+        const report: BuildReport = { timings: {} };
+        const warm =
+          api === "full"
+            ? await buildProjectIndex(root, { ...options, report })
+            : await buildProjectIndexIncremental(root, { ...options, report });
+        expect(report.backend?.native.filesUsed).toBe(0);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(warm.byFile.get(fileIdentityKey(component))?.imports).toEqual(
+          cold.byFile.get(fileIdentityKey(component))?.imports,
+        );
+        expect(edges(warm)).toEqual(edges(cold));
+        expect(edgeTargets(warm, component)).toContain(`file:${normalizePath(style)}`);
+        expect(edgeTargets(warm, component)).toContain(`file:${normalizePath(data)}`);
+        const goto = await goToDefinition(warm, request);
+        expect(goto).toEqual(await goToDefinition(cold, request));
+        expect(goto.status).toBe("ok");
+        expect(await findReferences(warm, definition)).toEqual(await findReferences(cold, definition));
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  const componentResolverRecoveryModes = [
+    ...cacheModes.flatMap((mode) => {
+      const triggers = mode.cache === "disk" ? (["missing", "no-field", "invalid"] as const) : (["memory"] as const);
+      return triggers.map((trigger) => ({ ...mode, trigger }));
+    }),
+    ...(["memory", "disk"] as const).map((cache) => ({ cache, api: "scoped" as const, trigger: "scoped" as const })),
+  ];
+  it.each(componentResolverRecoveryModes)(
+    "preserves component stylesheet binding kinds after $trigger recovery ($cache, $api)",
+    async ({ cache, api, trigger }) => {
+      const root = await mkTmpDir("cg-component-style-recovery-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const shadowed = path.join(root, "shadowed.ts");
+      const stylesheet = path.join(root, "shadowed.css");
+      const componentFiles: string[] = [];
+      const shadowedSource = "export const color = 1;\n";
+      const definition = { file: shadowed, line: 1, column: columnOf(shadowedSource.split("\n"), 1, "color") };
+      try {
+        await fsp.writeFile(shadowed, shadowedSource);
+        await fsp.writeFile(stylesheet, ".a { color: red; }\n");
+        await fsp.writeFile(path.join(root, "t-json.json"), "{}\n");
+        for (const framework of ["vue", "svelte"] as const) {
+          for (const language of ["css", "scss", "less"] as const) {
+            const file = path.join(root, `${framework}-${language}.${framework}`);
+            const script =
+              framework === "vue" ? "export default { data() { return { c: color }; } };" : "export const c = color;";
+            const styleTag = language === "css" ? "<style>" : `<style lang="${language}">`;
+            const source = [
+              "<script>",
+              script,
+              "</script>",
+              styleTag,
+              '@import "./shadowed";',
+              '@import "./t-json";',
+              "</style>",
+              "",
+            ].join("\n");
+            await fsp.writeFile(file, source);
+            componentFiles.push(file);
+          }
+        }
+        await buildProjectIndex(root, options);
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+          const directory = path.join(root, ".codegraph", "cache", "index-v1");
+          const manifest = path.join(directory, "manifest.json");
+          if (trigger === "missing" || trigger === "scoped") {
+            await fsp.rm(manifest);
+            await fsp.rm(path.join(directory, "project-index-snapshot.json"));
+          } else {
+            const stored = JSON.parse(await fsp.readFile(manifest, "utf8")) as { jsonCandidates?: unknown };
+            if (trigger === "no-field") delete stored.jsonCandidates;
+            else stored.jsonCandidates = [{ file: "../outside.json", signature: null, importers: ["shadowed.ts"] }];
+            await fsp.writeFile(manifest, JSON.stringify(stored));
+          }
+        } else {
+          jsonCandidateCache.clearMemoryJsonCandidates();
+        }
+        const scope = [shadowed, stylesheet, ...componentFiles];
+        if (trigger === "scoped") await buildProjectIndexFromFiles(root, [shadowed], options);
+        const report: BuildReport = { timings: {} };
+        let warm: ProjectIndex;
+        let cold: ProjectIndex;
+        if (api === "scoped") {
+          warm = await buildProjectIndexFromFiles(root, scope, { ...options, report });
+          cold = await buildProjectIndexFromFiles(root, scope, { ...options, cache: "off" });
+        } else {
+          warm =
+            api === "full"
+              ? await buildProjectIndex(root, { ...options, report })
+              : await buildProjectIndexIncremental(root, { ...options, report });
+          cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        }
+        if (api === "scoped") {
+          // Explicit-file builds use separate module rows from full-project builds.
+          expect(report.cache?.hits).toBe(1);
+          expect(report.cache?.misses).toBe(scope.length - 1);
+          expect(report.backend?.native.filesUsed).toBe(scope.length - 1);
+        } else {
+          expect(report.backend?.native.filesUsed).toBe(0);
+        }
+        for (const file of componentFiles) {
+          const imports = warm.byFile.get(fileIdentityKey(file))?.imports;
+          expect(imports).toEqual(cold.byFile.get(fileIdentityKey(file))?.imports);
+          expect(imports?.find((binding) => binding.from === "./shadowed")?.resolved).toBe(normalizePath(stylesheet));
+          expect(imports?.find((binding) => binding.from === "./t-json")?.resolved).toEqual({ external: "./t-json" });
+        }
+        const warmGraph = await buildSymbolGraphDetailed(warm);
+        const coldGraph = await buildSymbolGraphDetailed(cold);
+        const edges = (graph: typeof warmGraph): string[] => graph.edges.map((edge) => JSON.stringify(edge)).sort();
+        expect(edges(warmGraph)).toEqual(edges(coldGraph));
+        const componentKeys = new Set(componentFiles.map(fileIdentityKey));
+        const falseEdges = warmGraph.edges.filter((edge) => {
+          const from = warmGraph.nodes.get(edge.from);
+          const to = warmGraph.nodes.get(edge.to);
+          if (!from || !to) return false;
+          return (
+            componentKeys.has(fileIdentityKey(from.file)) && fileIdentityKey(to.file) === fileIdentityKey(shadowed)
+          );
+        });
+        expect(falseEdges).toEqual([]);
+        const references = await findReferences(warm, definition);
+        expect(references).toEqual(await findReferences(cold, definition));
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected color references");
+        expect(references.references.some((reference) => componentKeys.has(fileIdentityKey(reference.file)))).toBe(
+          false,
+        );
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["memory", "disk"] as const)("reuses unchanged JSON candidates (%s)", async (cache) => {
+    const root = await mkTmpDir("cg-json-candidate-reuse-");
     const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
-    const consumer = path.join(root, "main.js");
-    const data = path.join(root, "data.json");
-    const source = 'import config from "./data.json";\nexport function read() { return config; }\nread();\n';
-    const request = { file: consumer, line: 2, column: columnOf(source.split("\n"), 2, "config") };
-    const staleSnapshot = cache === "disk" && api === "incremental";
-    const hasJsonModule = (index: ProjectIndex): boolean => index.byFile.has(fileIdentityKey(data));
-    const hasJsonEdge = (index: ProjectIndex): boolean =>
-      index.graph.edges.some(
-        (edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(data),
+    const first = path.join(root, "first.ts");
+    const second = path.join(root, "second.ts");
+    const barrel = path.join(root, "barrel.ts");
+    const side = path.join(root, "side.js");
+    const watch = path.join(root, "watch.json");
+    const tsconfig = path.join(root, "tsconfig.json");
+    const firstSource = (name: string): string =>
+      `import data from "./${name}.json";\nexport function readFirst() { return data; }\n`;
+    const secondSource = [
+      'import data from "./second.json";',
+      'import { chosen } from "@lib/value";',
+      "export function readSecond() { return [data, chosen]; }",
+      "export type Config = { value: number };",
+      "",
+    ].join("\n");
+    let aliasDirectory = "one";
+    const candidateUpdate = vi.spyOn(jsonCandidateCache, "updateJsonCandidates");
+    const graphEdges = (index: ProjectIndex): string[] => index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+    const check = async (
+      changed: readonly string[],
+      reused: readonly string[],
+      firstExists: boolean,
+      secondPresent = true,
+    ): Promise<void> => {
+      candidateUpdate.mockClear();
+      const warm = await buildProjectIndex(root, options);
+      expect(candidateUpdate).toHaveBeenCalledTimes(1);
+      const candidateFiles = candidateUpdate.mock.calls[0]![0].files.map((entry) => fileIdentityKey(entry.file));
+      for (const file of changed) expect(candidateFiles).toContain(fileIdentityKey(file));
+      for (const file of reused) expect(candidateFiles).not.toContain(fileIdentityKey(file));
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+      expect(graphEdges(warm)).toEqual(graphEdges(cold));
+      const detailed = async (index: ProjectIndex): Promise<string[]> =>
+        (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+      expect(await detailed(warm)).toEqual(await detailed(cold));
+      const sideEdge = warm.graph.edges.some((edge) => {
+        if (fileIdentityKey(edge.from) !== fileIdentityKey(side)) return false;
+        if (edge.to.type !== "file") return false;
+        return fileIdentityKey(edge.to.path) === fileIdentityKey(watch);
+      });
+      expect(sideEdge).toBe(secondPresent);
+      for (const file of firstExists ? [first, second] : [second]) {
+        const line = file === second ? 3 : 2;
+        const request = {
+          file,
+          line,
+          column: columnOf((await fsp.readFile(file, "utf8")).split("\n"), line, "data"),
+        };
+        const goto = await goToDefinition(warm, request);
+        expect(goto).toEqual(await goToDefinition(cold, request));
+        expect(goto.status).toBe(file === second && !secondPresent ? "not_found" : "ok");
+      }
+      const alias = { file: second, line: 3, column: columnOf(secondSource.split("\n"), 3, "chosen") };
+      const aliasGoto = await goToDefinition(warm, alias);
+      expect(aliasGoto).toEqual(await goToDefinition(cold, alias));
+      expect(aliasGoto.status).toBe("ok");
+      if (aliasGoto.status !== "ok") throw new Error("Expected the configured alias to resolve");
+      expect(fileIdentityKey(aliasGoto.definition.file)).toBe(
+        fileIdentityKey(path.join(root, aliasDirectory, "value.ts")),
       );
-    const warmBuild = (): Promise<ProjectIndex> =>
-      api === "full" ? buildProjectIndex(root, options) : buildProjectIndexIncremental(root, options);
-    const clearDisk = (): void => {
-      if (cache !== "disk") return;
-      closeDiskCacheDatabase(root, options);
-      clearMemoryCache();
+      const definition = { file: second, line: 3, column: columnOf(secondSource.split("\n"), 3, "readSecond") };
+      expect(await findReferences(warm, definition)).toEqual(await findReferences(cold, definition));
     };
     try {
-      await fsp.writeFile(consumer, source);
+      await fsp.mkdir(path.join(root, "one"));
+      await fsp.mkdir(path.join(root, "two"));
+      await fsp.writeFile(path.join(root, "one", "value.ts"), "export const chosen = 1;\n");
+      await fsp.writeFile(path.join(root, "two", "value.ts"), "export const chosen = 2;\n");
+      await fsp.writeFile(first, firstSource("second"));
+      await fsp.writeFile(second, secondSource);
+      await fsp.writeFile(barrel, 'export { readSecond } from "./second";\nexport type { Config } from "./second";\n');
+      await fsp.writeFile(side, 'import "./watch.json";\n');
+      await fsp.writeFile(watch, "{}\n");
+      await fsp.writeFile(
+        tsconfig,
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["one/*"] } } }),
+      );
+      await fsp.writeFile(path.join(root, "second.json"), "{}\n");
+      await buildProjectIndex(root, options);
+      await check([], [first, second, side, barrel], true);
+      await fsp.writeFile(path.join(root, "third.json"), "{}\n");
+      await fsp.writeFile(first, firstSource("third"));
+      await check([first], [second, side], true);
+      await fsp.unlink(path.join(root, "second.json"));
+      await fsp.unlink(watch);
+      await check([second, side], [first], true, false);
+      await check([], [first, second, side], true, false);
+      await fsp.writeFile(path.join(root, "second.json"), "{}\n");
+      await fsp.writeFile(watch, "{}\n");
+      await check([second, side], [first], true);
+      await fsp.writeFile(
+        tsconfig,
+        JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["two/*"] } } }),
+      );
+      aliasDirectory = "two";
+      await check([first, second, side], [], true);
+      await check([], [first, second, side], true);
+      await fsp.unlink(first);
+      if (cache === "disk") await check([], [second, side], false);
+      else await check([second, side], [], false);
+      if (cache === "disk") {
+        const manifest = await loadManifest(root, options);
+        expect(manifest?.jsonCandidates?.some((record) => record.importers.includes("first.ts"))).toBe(false);
+      }
+    } finally {
+      candidateUpdate.mockRestore();
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shared JSON candidate lookup linear in the number of importers", async () => {
+    const root = await mkTmpDir("cg-json-candidate-many-importers-");
+    const sourceDir = path.join(root, "src");
+    const data = path.join(root, "shared.json");
+    const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const addImporters = async (start: number, end: number): Promise<void> => {
+      for (let first = start; first < end; first += 100) {
+        const count = Math.min(100, end - first);
+        await Promise.all(
+          Array.from({ length: count }, (_, offset) => {
+            const index = first + offset;
+            return fsp.writeFile(
+              path.join(sourceDir, `f${index}.ts`),
+              `import data from "../shared.json";\nexport const value${index} = data;\n`,
+            );
+          }),
+        );
+      }
+    };
+    const countWarmResolutions = async (expected: number): Promise<number> => {
+      const originalResolve = path.resolve;
+      const normalizedRoot = normalizePath(originalResolve(root));
+      let matchingCalls = 0;
+      let recordedCalls = 0;
+      const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((...parts) => {
+        if (parts.length === 2 && (parts[0] === root || parts[0] === normalizedRoot)) {
+          if (/^src[\\/]f\d+\.ts$/.test(parts[1]!)) matchingCalls += 1;
+        }
+        recordedCalls += 1;
+        if (recordedCalls === 4096) {
+          resolveSpy.mockClear();
+          recordedCalls = 0;
+        }
+        return originalResolve(...parts);
+      });
+      try {
+        const warm = await buildProjectIndex(root, options);
+        expect(
+          warm.graph.edges.filter((edge) => edge.to.type === "file" && edge.to.path === normalizePath(data)),
+        ).toHaveLength(expected);
+        return matchingCalls;
+      } finally {
+        resolveSpy.mockRestore();
+      }
+    };
+    try {
+      await fsp.mkdir(sourceDir);
       await fsp.writeFile(data, "{}\n");
-      await warmBuild();
-      clearDisk();
+      await addImporters(0, 500);
+      await buildProjectIndex(root, options);
+      const small = await countWarmResolutions(500);
+      await addImporters(500, 2000);
+      await buildProjectIndex(root, options);
+      const large = await countWarmResolutions(2000);
+      expect(small).toBeGreaterThanOrEqual(500);
+      expect(large).toBeGreaterThanOrEqual(2000);
+      expect(large).toBeLessThan(small * 6);
+    } finally {
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks JSON candidates when an ignored source shadows the target", async () => {
+    const root = await mkTmpDir("cg-json-ignored-shadow-");
+    const entry = path.join(root, "entry.ts");
+    const other = path.join(root, "other.ts");
+    const data = path.join(root, "ignored-gen.json");
+    const shadow = path.join(root, "ignored-gen.ts");
+    const options = {
+      cache: "memory" as const,
+      threads: 1,
+      useNativeWorkers: false,
+      logLevel: "silent" as const,
+      discovery: { ignoreGlobs: ["**/ignored-*.ts"] },
+    };
+    const candidateUpdate = vi.spyOn(jsonCandidateCache, "updateJsonCandidates");
+    try {
+      await fsp.writeFile(entry, 'import data from "./ignored-gen";\nexport const value = data;\n');
+      await fsp.writeFile(other, 'import data from "./other.json";\nexport const other = data;\n');
+      await fsp.writeFile(data, "{}\n");
+      await fsp.writeFile(path.join(root, "other.json"), "{}\n");
+      await buildProjectIndex(root, options);
       await fsp.unlink(data);
-      const deleted = await warmBuild();
-      const deletedCold = await buildProjectIndex(root, { ...options, cache: "off" });
-      expect(hasJsonModule(deleted)).toBe(staleSnapshot);
-      expect(hasJsonEdge(deleted)).toBe(staleSnapshot);
-      expect((await goToDefinition(deleted, request)).status).toBe(staleSnapshot ? "ok" : "not_found");
-      expect(hasJsonModule(deletedCold)).toBe(false);
-      expect(hasJsonEdge(deletedCold)).toBe(false);
-      expect((await goToDefinition(deletedCold, request)).status).toBe("not_found");
-      clearDisk();
-      await fsp.writeFile(data, "{}\n");
-      const restored = await warmBuild();
-      const restoredCold = await buildProjectIndex(root, { ...options, cache: "off" });
-      // JSON targets are not tracked as source files, so restoring one does not invalidate its importer.
-      expect(hasJsonModule(restored)).toBe(staleSnapshot);
-      expect(hasJsonEdge(restored)).toBe(cache === "memory" || staleSnapshot);
-      expect((await goToDefinition(restored, request)).status).toBe(staleSnapshot ? "ok" : "not_found");
-      expect(hasJsonModule(restoredCold)).toBe(true);
-      expect(hasJsonEdge(restoredCold)).toBe(true);
-      expect((await goToDefinition(restoredCold, request)).status).toBe("ok");
+      await buildProjectIndex(root, options);
+      await fsp.writeFile(shadow, "export default 1;\n");
+      candidateUpdate.mockClear();
+      const warm = await buildProjectIndex(root, options);
+      const candidateFiles = candidateUpdate.mock.calls[0]![0].files.map((item) => fileIdentityKey(item.file));
+      expect(candidateFiles).toContain(fileIdentityKey(entry));
+      expect(candidateFiles).not.toContain(fileIdentityKey(other));
+      expect(warm.byFile.has(fileIdentityKey(shadow))).toBe(false);
+      expect(edgeTargets(warm, entry)).toContain(`file:${normalizePath(shadow)}`);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      const request = { file: entry, line: 2, column: 22 };
+      expect(await goToDefinition(warm, request)).toEqual(await goToDefinition(cold, request));
+      expect(await findReferences(warm, request)).toEqual(await findReferences(cold, request));
+    } finally {
+      candidateUpdate.mockRestore();
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.for([false, true] as const)("tracks JSON after a source symlink disappears (%s)", async (exists, context) => {
+    const root = await mkTmpDir("cg-json-source-shadow-");
+    const options = { cache: "memory" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const entry = path.join(root, "entry.ts");
+    const other = path.join(root, "other.ts");
+    const barrel = path.join(root, "barrel.ts");
+    const source = path.join(root, "inside.ts");
+    const link = path.join(root, "shadow.ts");
+    const data = path.join(root, "shadow.json");
+    const candidateUpdate = vi.spyOn(jsonCandidateCache, "updateJsonCandidates");
+    try {
+      await fsp.writeFile(source, "export default 1;\n");
+      if (!(await tryCreateFileSymlink(source, link))) return context.skip();
+      if (exists) await fsp.writeFile(data, "{}\n");
+      await fsp.writeFile(path.join(root, "other.json"), "{}\n");
+      await fsp.writeFile(entry, 'import data from "./shadow";\nexport const value = data;\n');
+      await fsp.writeFile(other, 'import data from "./other.json";\nexport const other = data;\n');
+      await fsp.writeFile(barrel, 'export * from "./shadow";\n');
+      await buildProjectIndex(root, options);
+      await fsp.unlink(link);
+      candidateUpdate.mockClear();
+      const warm = await buildProjectIndex(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      const candidateFiles = candidateUpdate.mock.calls[0]![0].files.map((item) => fileIdentityKey(item.file));
+      expect(candidateFiles).toContain(fileIdentityKey(entry));
+      expect(candidateFiles).toContain(fileIdentityKey(barrel));
+      expect(candidateFiles).not.toContain(fileIdentityKey(other));
+      await fsp.writeFile(data, '{"value":1}\n');
+      const updated = await buildProjectIndex(root, options);
+      const updatedCold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(updated.graph.edges).toEqual(updatedCold.graph.edges);
+      const request = { file: entry, line: 2, column: 22 };
+      const goto = await goToDefinition(updated, request);
+      expect(goto).toEqual(await goToDefinition(updatedCold, request));
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the JSON target to resolve");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(data));
+    } finally {
+      candidateUpdate.mockRestore();
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const jsonCandidateModes = ([".json", ""] as const).flatMap((extension) =>
+    cacheModes.flatMap((mode) => [false, true].map((repository) => ({ extension, repository, ...mode }))),
+  );
+  it.each(jsonCandidateModes)(
+    "refreshes relative JSON candidates ($extension, $cache, $api, git=$repository)",
+    async ({ extension, repository, cache, api }) => {
+      const root = await mkTmpDir("cg-json-target-freshness-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const importer = path.join(root, "main.js");
+      const caller = path.join(root, "caller.js");
+      const data = path.join(root, "data.json");
+      const renamed = path.join(root, "renamed.json");
+      const source = `import config from "./data${extension}";\nexport function read() { return config; }\n`;
+      const request = { file: importer, line: 2, column: columnOf(source.split("\n"), 2, "config") };
+      const definition = { file: importer, line: 2, column: columnOf(source.split("\n"), 2, "read") };
+      const graphEdges = (index: ProjectIndex): string[] =>
+        index.graph.edges.map((edge) => JSON.stringify(edge)).sort();
+      const detailedEdges = async (index: ProjectIndex): Promise<string[]> =>
+        (await buildSymbolGraphDetailed(index)).edges.map((edge) => JSON.stringify(edge)).sort();
+      const check = async (label: string, exists: boolean): Promise<void> => {
+        const warm =
+          api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect([...warm.byFile.keys()].sort(), label).toEqual([...cold.byFile.keys()].sort());
+        expect(graphEdges(warm), label).toEqual(graphEdges(cold));
+        expect(await detailedEdges(warm), label).toEqual(await detailedEdges(cold));
+        expect(warm.byFile.has(fileIdentityKey(data)), label).toBe(exists);
+        const goto = await goToDefinition(warm, request);
+        expect(goto, label).toEqual(await goToDefinition(cold, request));
+        expect(goto.status, label).toBe(exists ? "ok" : "not_found");
+        if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file), label).toBe(fileIdentityKey(data));
+        const references = await findReferences(warm, definition);
+        expect(references, label).toEqual(await findReferences(cold, definition));
+        expect(references.status, label).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected references of read");
+        expect(references.referenceCoverage.state, label).toBe("complete");
+        expect(
+          references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(caller)),
+          label,
+        ).toBe(true);
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+        }
+      };
+      try {
+        await fsp.writeFile(importer, source);
+        await fsp.writeFile(caller, 'import { read } from "./main.js";\nread();\n');
+        if (repository) {
+          await fsp.writeFile(path.join(root, ".gitignore"), ".codegraph/\n");
+          git(root, ["init", "-q"]);
+          git(root, ["add", "-A"]);
+          git(root, ["commit", "-qm", "initial"]);
+        }
+        await check("missing", false);
+        await check("unchanged missing", false);
+        await fsp.writeFile(data, '{"value":1}\n');
+        await check("added", true);
+        if (repository) {
+          git(root, ["add", "data.json"]);
+          git(root, ["commit", "-qm", "add JSON"]);
+        }
+        await fsp.writeFile(data, '{"value":2}\n');
+        await check("edited", true);
+        await fsp.utimes(data, 0, 0);
+        await check("touched", true);
+        await fsp.rename(data, renamed);
+        await check("renamed away", false);
+        await fsp.rename(renamed, data);
+        await check("renamed back", true);
+        await fsp.unlink(data);
+        await check("deleted", false);
+        await fsp.writeFile(data, '{"value":3}\n');
+        await check("restored", true);
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(cacheModes)("tracks JSON candidate priority and side effects ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-candidate-priority-");
+    const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const importer = path.join(root, "main.js");
+    const direct = path.join(root, "asset.json");
+    const indexFile = path.join(root, "asset", "index.json");
+    const sideEffect = path.join(root, "watch.json");
+    const source = 'import config from "./asset";\nimport "./watch.json";\nexport function read() { return config; }\n';
+    const request = { file: importer, line: 3, column: columnOf(source.split("\n"), 3, "config") };
+    const check = async (expected: string, watchExists: boolean): Promise<void> => {
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(warm.graph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(
+        cold.graph.edges.map((edge) => JSON.stringify(edge)).sort(),
+      );
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the JSON import to resolve");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(expected));
+      expect(
+        warm.graph.edges.some(
+          (edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(sideEffect),
+        ),
+      ).toBe(watchExists);
+      const definition = { file: importer, line: 3, column: columnOf(source.split("\n"), 3, "read") };
+      expect(await findReferences(warm, definition)).toEqual(await findReferences(cold, definition));
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+    };
+    try {
+      await fsp.mkdir(path.dirname(indexFile), { recursive: true });
+      await fsp.writeFile(importer, source);
+      await fsp.writeFile(indexFile, "{}\n");
+      await check(indexFile, false);
+      await fsp.writeFile(direct, "{}\n");
+      await check(direct, false);
+      await fsp.writeFile(sideEffect, "{}\n");
+      await check(direct, true);
+      await fsp.unlink(direct);
+      await check(indexFile, true);
+      await fsp.unlink(sideEffect);
+      await check(indexFile, false);
     } finally {
       closeDiskCacheDatabase(root, options);
       clearMemoryCache();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps scoped JSON candidates separate for distinct disk caches", async () => {
+    const root = await mkTmpDir("cg-json-candidate-roots-");
+    const cacheA = await mkTmpDir("cg-json-candidate-a-");
+    const cacheB = await mkTmpDir("cg-json-candidate-b-");
+    const optionsA = { cache: "disk" as const, cacheDir: cacheA, threads: 1, useNativeWorkers: false };
+    const optionsB = { ...optionsA, cacheDir: cacheB };
+    const entry = path.join(root, "entry.js");
+    const data = path.join(root, "data.json");
+    const source = 'import data from "./data.json";\nexport function read() { return data; }\n';
+    const request = { file: entry, line: 2, column: columnOf(source.split("\n"), 2, "data") };
+    const check = async (options: typeof optionsA, expected: "ok" | "not_found"): Promise<void> => {
+      const warm = await buildProjectIndexFromFiles(root, [entry], options);
+      const cold = await buildProjectIndexFromFiles(root, [entry], { ...options, cache: "off" });
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe(expected);
+    };
+    try {
+      await fsp.writeFile(entry, source);
+      await check(optionsA, "not_found");
+      await fsp.writeFile(data, "{}\n");
+      await check(optionsB, "ok");
+      await check(optionsA, "ok");
+      await fsp.unlink(data);
+      await check(optionsA, "not_found");
+      await check(optionsB, "not_found");
+    } finally {
+      closeDiskCacheDatabase(root, optionsA);
+      closeDiskCacheDatabase(root, optionsB);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(cacheA, { recursive: true, force: true });
+      await fsp.rm(cacheB, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks scoped disk rows that predate in-memory JSON candidate tracking", async () => {
+    const root = await mkTmpDir("cg-json-candidate-scopes-");
+    const options = { cache: "disk" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const first = path.join(root, "first.js");
+    const second = path.join(root, "second.js");
+    const source = (name: string): string =>
+      `import data from "./${name}.json";\nexport function read() { return data; }\n`;
+    const check = async (file: string, name: string): Promise<void> => {
+      const warm = await buildProjectIndexFromFiles(root, [file], options);
+      const cold = await buildProjectIndexFromFiles(root, [file], { ...options, cache: "off" });
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      const request = { file, line: 2, column: columnOf(source(name).split("\n"), 2, "data") };
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe("ok");
+    };
+    try {
+      await fsp.writeFile(first, source("first"));
+      await fsp.writeFile(second, source("second"));
+      await buildProjectIndexFromFiles(root, [first, second], options);
+      clearMemoryCache();
+      await fsp.writeFile(path.join(root, "first.json"), "{}\n");
+      await fsp.writeFile(path.join(root, "second.json"), "{}\n");
+      await check(first, "first");
+      await check(second, "second");
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.for(cacheModes)(
+    "confines retargeted JSON symlinks with identical file stats ($cache, $api)",
+    async ({ cache, api }, context) => {
+      const parent = await mkTmpDir("cg-json-symlink-candidate-");
+      const root = path.join(parent, "project");
+      const inside = path.join(root, "inside.json");
+      const outside = path.join(parent, "outside.json");
+      const data = path.join(root, "data.json");
+      const entry = path.join(root, "entry.js");
+      const source = 'import data from "./data.json";\nexport function read() { return data; }\n';
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const request = { file: entry, line: 2, column: columnOf(source.split("\n"), 2, "data") };
+      const definition = { file: entry, line: 2, column: columnOf(source.split("\n"), 2, "read") };
+      const check = async (expected: "ok" | "not_found"): Promise<void> => {
+        const warm =
+          api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(warm.graph.edges).toEqual(cold.graph.edges);
+        expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+        const goto = await goToDefinition(warm, request);
+        expect(goto).toEqual(await goToDefinition(cold, request));
+        expect(goto.status).toBe(expected);
+        expect(await findReferences(warm, definition)).toEqual(await findReferences(cold, definition));
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+        }
+      };
+      try {
+        await fsp.mkdir(root);
+        await fsp.writeFile(inside, "{}\n");
+        try {
+          await fsp.link(inside, outside);
+        } catch (error) {
+          if (isSymlinkUnavailable(error)) return context.skip();
+          throw error;
+        }
+        if (!(await tryCreateFileSymlink(inside, data))) return context.skip();
+        await fsp.writeFile(entry, source);
+        await check("ok");
+        const before = await fsp.stat(data);
+        await fsp.unlink(data);
+        expect(await tryCreateFileSymlink(outside, data)).toBe(true);
+        const after = await fsp.stat(data);
+        expect([after.ino, after.size, after.mtimeMs, after.ctimeMs]).toEqual([
+          before.ino,
+          before.size,
+          before.mtimeMs,
+          before.ctimeMs,
+        ]);
+        await check("not_found");
+        await fsp.unlink(data);
+        expect(await tryCreateFileSymlink(inside, data)).toBe(true);
+        await check("ok");
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
 
   const jvmCacheModes = (["java", "kotlin"] as const).flatMap((language) =>
     cacheModes.map((mode) => ({ language, ...mode })),
@@ -2386,6 +3180,169 @@ describe("tracked file restoration matches cold builds", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  const bloomModes = (["csharp", "java", "kotlin"] as const).flatMap((language) =>
+    cacheModes.map((mode) => ({ language, ...mode })),
+  );
+  it.each(bloomModes)(
+    "retains $language Bloom coverage when reusing modules ($cache, $api)",
+    async ({ language, cache, api }) => {
+      const root = await mkTmpDir("cg-reused-bloom-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const isCsharp = language === "csharp";
+      const isJava = language === "java";
+      let extension = "kt";
+      if (isCsharp) extension = "cs";
+      else if (isJava) extension = "java";
+      const lib = path.join(root, `UniqueTarget.${extension}`);
+      const consumer = path.join(root, `Consumer.${extension}`);
+      const big = path.join(root, `Big.${extension}`);
+      const nested = `${"(".repeat(700)}1${")".repeat(700)}`;
+      let libSource = "package p\nclass UniqueTarget\n";
+      let consumerSource = "package p\nclass Consumer { val field: UniqueTarget? = null }\n";
+      let bigSource = `package q\nclass Big { val pad = ${nested} }\n`;
+      if (isCsharp) {
+        libSource = "namespace P { public class UniqueTarget {} }\n";
+        consumerSource = "namespace P { class Consumer { UniqueTarget field; } }\n";
+        bigSource = `namespace Q { class Big { int pad = ${nested}; } }\n`;
+      } else if (isJava) {
+        libSource = "package p; public class UniqueTarget {}\n";
+        consumerSource = "package p; public class Consumer { UniqueTarget field; }\n";
+        bigSource = `package q; class Big { int pad = ${nested}; }\n`;
+      }
+      const definitionLine = isCsharp || isJava ? 1 : 2;
+      const definition = {
+        file: lib,
+        line: definitionLine,
+        column: columnOf(libSource.split("\n"), definitionLine, "UniqueTarget"),
+      };
+      const request = {
+        file: consumer,
+        line: isCsharp || isJava ? 1 : 2,
+        column: columnOf(consumerSource.split("\n"), isCsharp || isJava ? 1 : 2, "UniqueTarget"),
+      };
+      const check = async (label: string): Promise<void> => {
+        const warm =
+          api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(warm.byFile.get(fileIdentityKey(big))?.syntaxTreeUnavailableReason, label).toContain(
+          "syntax tree projection exceeded max",
+        );
+        const bloom = warm.bloomFilters?.get(fileIdentityKey(big));
+        const coldBloom = cold.bloomFilters?.get(fileIdentityKey(big));
+        expect(bloom, label).toBeDefined();
+        expect(bloom?.toBuffer(), label).toEqual(coldBloom?.toBuffer());
+        expect(bloom?.getMetadata(), label).toEqual(coldBloom?.getMetadata());
+        expect(bloom?.getItemCount(), label).toEqual(coldBloom?.getItemCount());
+        if (label === "edited") expect(bloom?.mightContain("FreshBloomToken"), label).toBe(true);
+        expect(bloom?.mightContain("UniqueTarget"), label).toBe(false);
+        expect(await goToDefinition(warm, request), label).toEqual(await goToDefinition(cold, request));
+        const references = await findReferences(warm, definition);
+        expect(references, label).toEqual(await findReferences(cold, definition));
+        expect(references.status, label).toBe("ok");
+        if (references.status !== "ok") throw new Error("Expected references of UniqueTarget");
+        expect(references.referenceCoverage.reasons ?? [], label).not.toContain("parser_degraded");
+        expect(
+          references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(consumer)),
+          label,
+        ).toBe(true);
+        if (label === "initial" && cache === "memory") bloom?.add("InjectedBloomToken");
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+        }
+      };
+      try {
+        await fsp.writeFile(lib, libSource);
+        await fsp.writeFile(consumer, consumerSource);
+        await fsp.writeFile(big, bigSource);
+        await check("initial");
+        await check("unchanged");
+        await fsp.utimes(big, 0, 0);
+        await check("touched");
+        await fsp.appendFile(big, "\n// FreshBloomToken\n");
+        await check("edited");
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  const scopedProjectionModes = (["js", "ts"] as const).flatMap((extension) =>
+    (["memory", "disk"] as const).map((cache) => ({ extension, cache })),
+  );
+  it.each(scopedProjectionModes)(
+    "rechecks scoped imports when a $extension projection-limited target becomes readable ($cache)",
+    async ({ extension, cache }) => {
+      const root = await mkTmpDir("cg-scoped-projection-");
+      const options = { cache, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const big = path.join(root, `big.${extension}`);
+      const moved = path.join(root, `moved.${extension}`);
+      const importer = path.join(root, `importer.${extension}`);
+      const barrel = path.join(root, `barrel.${extension}`);
+      const barrelUser = path.join(root, `barrel-user.${extension}`);
+      const suffix = extension === "js" ? ".js" : "";
+      const importerSource = `import { chosen } from "./big${suffix}";\nexport function callIt() { return chosen(); }\n`;
+      const barrelUserSource = `import { chosen } from "./barrel${suffix}";\nexport function viaBarrel() { return chosen(); }\n`;
+      const small = "export function chosen() { return 1; }\n";
+      const huge = `${small}const pad = ${"[".repeat(700)}0${"]".repeat(700)};\n`;
+      const requests = [
+        { file: importer, line: 2, column: columnOf(importerSource.split("\n"), 2, "chosen") },
+        { file: barrelUser, line: 2, column: columnOf(barrelUserSource.split("\n"), 2, "chosen") },
+      ];
+      const files = (target: string): string[] => [target, importer, barrel, barrelUser];
+      const check = async (target: string, readable: boolean, expectCached = false): Promise<void> => {
+        const report: BuildReport = { timings: {} };
+        const warm = await buildProjectIndexFromFiles(root, files(target), { ...options, report });
+        if (expectCached) expect(report.files?.cached).toBe(files(target).length);
+        const cold = await buildProjectIndexFromFiles(root, files(target), { ...options, cache: "off" });
+        expect(warm.graph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(
+          cold.graph.edges.map((edge) => JSON.stringify(edge)).sort(),
+        );
+        const warmGraph = await buildSymbolGraphDetailed(warm);
+        const coldGraph = await buildSymbolGraphDetailed(cold);
+        expect(warmGraph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(
+          coldGraph.edges.map((edge) => JSON.stringify(edge)).sort(),
+        );
+        for (const request of requests) {
+          const goto = await goToDefinition(warm, request);
+          expect(goto).toEqual(await goToDefinition(cold, request));
+          expect(goto.status).toBe(readable ? "ok" : "not_found");
+          if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(big));
+        }
+        if (readable) {
+          const definition = { file: big, line: 1, column: columnOf(small.split("\n"), 1, "chosen") };
+          const references = await findReferences(warm, definition);
+          expect(references).toEqual(await findReferences(cold, definition));
+          expect(references.status).toBe("ok");
+          if (references.status !== "ok") throw new Error("Expected references of chosen");
+          for (const file of [importer, barrelUser]) {
+            expect(references.references.some((ref) => fileIdentityKey(ref.file) === fileIdentityKey(file))).toBe(true);
+          }
+        }
+      };
+      try {
+        await fsp.writeFile(big, huge);
+        await fsp.writeFile(importer, importerSource);
+        await fsp.writeFile(barrel, `export * from "./big${suffix}";\n`);
+        await fsp.writeFile(barrelUser, barrelUserSource);
+        await check(big, false);
+        await check(big, false, true);
+        await fsp.rename(big, moved);
+        await check(moved, false);
+        await fsp.rename(moved, big);
+        await check(big, false);
+        await fsp.writeFile(big, small);
+        await check(big, true);
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   const projectionCases = [
     { kind: "js", scriptLanguage: "" },
