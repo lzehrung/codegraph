@@ -2,7 +2,7 @@ import type { Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_CACHE_RELATIVE_PATH } from "../indexer/build-cache/location.js";
-import { isGitPathIgnored, isGitPathTracked, isGitRepo } from "../util/git.js";
+import { areGitPathsIgnored, isGitPathTracked, isGitRepo } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 
@@ -72,9 +72,8 @@ export async function prepareCodegraphLifecycleGitignore(
   if (!(await isGitRepo(resolvedRoot))) return { status: "not-git", path: GITIGNORE_PATH };
   const manifestTracked = await isGitPathTracked(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
   if (manifestTracked) return { status: "tracked", path: GITIGNORE_PATH };
-  const manifestIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
-  const cacheIgnored = await isGitPathIgnored(resolvedRoot, LIFECYCLE_CACHE_PATH);
-  if (manifestIgnored && cacheIgnored) {
+  const pathsIgnored = await areGitPathsIgnored(resolvedRoot, [LIFECYCLE_MANIFEST_PATH, LIFECYCLE_CACHE_PATH]);
+  if (pathsIgnored) {
     return { status: "already-ignored", path: GITIGNORE_PATH, rules: [...CODEGRAPH_GITIGNORE_RULES] };
   }
   const missingRules = [LIFECYCLE_GITIGNORE_RULE];

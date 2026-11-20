@@ -1,8 +1,9 @@
+import { existsSync } from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD, shouldEnableNativeWorkers } from "../src/indexer/build-workers.js";
@@ -10,18 +11,20 @@ import { isNativeTreeSitterAvailable } from "../src/native/tree-sitter-native.js
 import {
   createNativeWorkerPool,
   defaultNativeWorkerThreadCount,
+  resolveNativeWorkerPath,
   resolveNativeWorkerThreadCount,
 } from "../src/worker/native-worker-pool.js";
 import type { BuildReport } from "../src/indexer/types.js";
 
-async function makeProject(fileCount: number, extension = ".ts"): Promise<string> {
+async function makeProject(fileCount: number, extension = ".ts", paddingBytes = 0): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-"));
+  const padding = paddingBytes ? `\n/*${"x".repeat(paddingBytes)}*/\n` : "";
   for (let index = 0; index < fileCount; index += 1) {
     const source =
       extension === ".vue"
         ? `<script lang="ts">export const value${index} = ${index};</script>\n`
         : `export const value${index} = ${index};\n`;
-    await fsp.writeFile(path.join(root, `file-${index}${extension}`), source, "utf8");
+    await fsp.writeFile(path.join(root, `file-${index}${extension}`), source + padding, "utf8");
   }
   return root;
 }
@@ -50,6 +53,12 @@ describe("native worker pool enablement", () => {
     expect(shouldEnableNativeWorkers({ useNativeWorkers: false }, 10_000)).toBe(false);
   });
 
+  it("uses the compiled worker from this checkout", () => {
+    const worker = resolveNativeWorkerPath();
+    expect(worker).toBe(path.resolve("dist", "worker", "native-extract-worker.js"));
+    expect(existsSync(worker)).toBe(true);
+  });
+
   it("clamps a positive fractional thread bound to one worker", async () => {
     const pool = createNativeWorkerPool({ maxThreads: 0.5 });
     try {
@@ -74,6 +83,148 @@ describe("native worker pool enablement", () => {
 });
 
 describe.runIf(isNativeTreeSitterAvailable())("native worker pool sizing", () => {
+  it.each([
+    [50, 2],
+    [150, 2],
+    [500, 2],
+  ])("sizes an automatic pool for %i parse misses", async (fileCount, workLimit) => {
+    const root = await makeProject(fileCount);
+    try {
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, filesIn(root, fileCount), { cache: "off", report });
+      expect(report.workerPool?.threads).toBe(Math.min(defaultNativeWorkerThreadCount(), workLimit));
+      expect(report.workerPool?.tasksSubmitted).toBe(fileCount);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["full", "incremental"] as const)("sizes the %s pool from parse-miss bytes", async (mode) => {
+    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    const root = await makeProject(100, ".ts", 16 * 1024);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-heavy-cache-"));
+    try {
+      const report: BuildReport = { timings: {} };
+      if (mode === "full") {
+        await buildProjectIndexFromFiles(root, filesIn(root, 100), { cache: "off", report });
+      } else {
+        await buildProjectIndexIncremental(root, { cache: "disk", cacheDir, report });
+      }
+      expect(report.workerPool?.threads).toBe(4);
+      expect(report.workerPool?.tasksSubmitted).toBe(100);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+    } finally {
+      parallelism.mockRestore();
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("sizes a warm incremental update from the bytes of changed files", async () => {
+    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    const root = await makeProject(100);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-incremental-cache-"));
+    try {
+      await buildProjectIndexIncremental(root, { cache: "disk", cacheDir });
+      const padding = `\n/*${"x".repeat(16 * 1024)}*/\n`;
+      await Promise.all(
+        filesIn(root, 100).map((file, index) =>
+          fsp.writeFile(file, `export const value${index} = ${index + 1000};\n${padding}`, "utf8"),
+        ),
+      );
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexIncremental(root, { cache: "disk", cacheDir, report });
+      expect(report.manifest?.reused).toBe(true);
+      expect(report.files?.changed).toBe(100);
+      expect(report.workerPool?.threads).toBe(4);
+      expect(report.workerPool?.tasksSubmitted).toBe(100);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+    } finally {
+      parallelism.mockRestore();
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it.each([
+    { name: "automatic", useNativeWorkers: undefined, nativeThreads: undefined },
+    { name: "forced", useNativeWorkers: true, nativeThreads: undefined },
+    { name: "two explicit workers", useNativeWorkers: true, nativeThreads: 2 },
+  ])("keeps the $name queue large enough for 16 build tasks", async ({ useNativeWorkers, nativeThreads }) => {
+    const root = await makeProject(150);
+    try {
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, filesIn(root, 150), {
+        cache: "off",
+        threads: 16,
+        ...(useNativeWorkers === undefined ? {} : { useNativeWorkers }),
+        ...(nativeThreads === undefined ? {} : { nativeThreads }),
+        report,
+      });
+      const expectedThreads = nativeThreads ?? Math.min(defaultNativeWorkerThreadCount(), 2);
+      expect(report.workerPool?.threads).toBe(expectedThreads);
+      expect(report.workerPool?.tasksSubmitted).toBe(150);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+      expect(report.workerPool?.errors ?? []).toEqual([]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["full", "incremental"] as const)("excludes cached source bytes when sizing a %s pool", async (mode) => {
+    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    const root = await makeProject(100, ".ts", 16 * 1024);
+    const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-partial-cache-"));
+    const files = filesIn(root, 100);
+    try {
+      if (mode === "full") {
+        await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir });
+      } else {
+        await buildProjectIndexIncremental(root, { cache: "disk", cacheDir });
+      }
+      await Promise.all(
+        files.slice(0, 32).map((file, index) => fsp.writeFile(file, `export const value${index} = ${index};\n`)),
+      );
+      const report: BuildReport = { timings: {} };
+      if (mode === "full") {
+        await buildProjectIndexFromFiles(root, files, { cache: "disk", cacheDir, report });
+      } else {
+        await buildProjectIndexIncremental(root, { cache: "disk", cacheDir, report });
+      }
+      expect(report.workerPool?.threads).toBe(2);
+      expect(report.workerPool?.tasksSubmitted).toBe(32);
+      expect(report.workerPool?.tasksFailed).toBe(0);
+    } finally {
+      parallelism.mockRestore();
+      await Promise.all([
+        fsp.rm(root, { recursive: true, force: true }),
+        fsp.rm(cacheDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("honors an explicit native thread count above the automatic work limit", async () => {
+    const root = await makeProject(3);
+    try {
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, filesIn(root, 3), {
+        cache: "off",
+        useNativeWorkers: true,
+        nativeThreads: 3,
+        report,
+      });
+      expect(report.workerPool?.threads).toBe(3);
+      expect(report.workerPool?.tasksSubmitted).toBe(3);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates no worker threads for a warm run with nothing changed", async () => {
     const root = await makeProject(NATIVE_WORKER_AUTO_FILE_THRESHOLD + 8);
     const cacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-pool-sizing-cache-"));

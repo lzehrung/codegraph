@@ -492,6 +492,20 @@ export async function isGitPathIgnored(projectRoot: string, file: string): Promi
   return await runGitPathPredicate(projectRoot, ["check-ignore", "--quiet", "--no-index", "--", normalizePath(file)]);
 }
 
+/** Check several paths in one Git process, retaining Git's full ignore and negation rules. */
+export async function areGitPathsIgnored(projectRoot: string, files: readonly string[]): Promise<boolean> {
+  if (!files.length) return true;
+  const normalized = files.map(normalizePath);
+  const args = ["check-ignore", "--no-index", "-z", "--stdin"];
+  try {
+    const { stdout } = await runGit(projectRoot, args, { input: `${normalized.join("\0")}\0` });
+    const ignored = new Set(stdout.split("\0"));
+    return normalized.every((file) => ignored.has(file));
+  } catch (error) {
+    return handleGitPathPredicateError(projectRoot, args, error);
+  }
+}
+
 /** Whether Git ignores the requested root in this discovery operation. */
 export async function isGitProjectRootIgnored(projectRoot: string, cache?: GitDiscoveryCache): Promise<boolean> {
   const resolvedRoot = path.resolve(projectRoot);
@@ -507,14 +521,18 @@ async function runGitPathPredicate(projectRoot: string, args: string[]): Promise
     await runGit(projectRoot, args);
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    // git ls-files --error-unmatch / check-ignore --quiet exit 1 for "no".
-    if (/\bfailed \(1\):/.test(message)) return false;
-    if (error instanceof Error && message.startsWith(`git ${args.join(" ")} failed in ${projectRoot}:`)) {
-      throw error;
-    }
-    throw createGitError(projectRoot, args, error);
+    return handleGitPathPredicateError(projectRoot, args, error);
   }
+}
+
+function handleGitPathPredicateError(projectRoot: string, args: string[], error: unknown): false {
+  const message = error instanceof Error ? error.message : String(error);
+  // Git uses exit code 1 when a path is not tracked or none of the requested paths is ignored.
+  if (/\bfailed \(1\):/.test(message)) return false;
+  if (error instanceof Error && message.startsWith(`git ${args.join(" ")} failed in ${projectRoot}:`)) {
+    throw error;
+  }
+  throw createGitError(projectRoot, args, error);
 }
 
 type IndexedBlob = {
@@ -548,13 +566,13 @@ async function listIndexedBlobs(
       .filter((rel) => rel && (!relFileSet || relFileSet.has(rel)))
       .map((rel) => ({ rel, blob: undefined }));
   }
-  const [staged, modified] = await Promise.all([
-    runGit(projectRoot, ["ls-files", "-v", "-s", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER }),
-    runGit(projectRoot, ["ls-files", "-m", "-z"], { maxBuffer: GIT_LISTING_MAX_BUFFER }),
-  ]);
-  const modifiedRel = new Set(modified.stdout.split("\0").filter(Boolean));
+  // With --stage and --modified together, Git emits a staged entry and a separate `C` entry
+  // for each modified path. Allow both full listings under the previous per-process buffer cap.
+  const { stdout } = await runGit(projectRoot, ["ls-files", "-v", "-s", "-m", "-z"], {
+    maxBuffer: 2 * GIT_LISTING_MAX_BUFFER,
+  });
   const entries = new Map<string, IndexedBlob>();
-  for (const record of staged.stdout.split("\0")) {
+  for (const record of stdout.split("\0")) {
     // `<tag> <mode> <blob> <stage>\t<path>`
     const tab = record.indexOf("\t");
     if (tab < 0) continue;
@@ -562,13 +580,13 @@ async function listIndexedBlobs(
     if (relFileSet && !relFileSet.has(rel)) continue;
     const previous = entries.get(rel);
     if (previous) {
-      // An unmerged path is listed once per stage.
+      // Modified paths and unmerged paths both have more than one entry.
       previous.blob = undefined;
       continue;
     }
     const [tag, mode, blob, stage] = record.slice(0, tab).split(" ");
     const regularFile = mode === "100644" || mode === "100755";
-    const reusable = tag === "H" && stage === "0" && regularFile && !modifiedRel.has(rel);
+    const reusable = tag === "H" && stage === "0" && regularFile;
     entries.set(rel, { rel, blob: reusable ? blob : undefined });
   }
   return [...entries.values()];

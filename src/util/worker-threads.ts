@@ -8,6 +8,10 @@ export type WorkerThreadCountOptions = {
   /** Positive integer upper bound. Defaults to 64; invalid values throw. */
   max?: number | undefined;
 };
+/** A finite, positive request overrides automatic thread sizing. */
+export function hasExplicitWorkerThreadCount(requested: number | undefined): requested is number {
+  return typeof requested === "number" && Number.isFinite(requested) && requested > 0;
+}
 
 /** Single worker-pool sizing policy: explicit request wins, else the configured default,
  * else availableParallelism() - 1; always clamped to [1, max]. */
@@ -17,7 +21,7 @@ export function resolveWorkerThreadCount(options?: WorkerThreadCountOptions): nu
     throw new RangeError("Worker thread maximum must be a positive integer.");
   }
   const requested = options?.requested;
-  if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
+  if (hasExplicitWorkerThreadCount(requested)) {
     return Math.min(Math.max(Math.floor(requested), 1), max);
   }
   const defaultCount = options?.defaultCount;

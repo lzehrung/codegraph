@@ -1458,7 +1458,10 @@ describe("file signatures of text that is not valid UTF-8", () => {
     expect(read.size).toBe(INVALID.length);
     expect(Buffer.byteLength(read.source, "utf8")).not.toBe(read.size);
     const fromStat = await fileSignature(file, false, blob);
-    expect(fileSignatureFromSource(read.source, read.size, blob).gitSig).toBe(fromStat.gitSig);
+    const fromSource = fileSignatureFromSource(read.source, read.size, blob);
+    expect(fromSource.size).toBe(INVALID.length);
+    expect(fromStat.size).toBe(INVALID.length);
+    expect(fromSource.gitSig).toBe(fromStat.gitSig);
     expect(fromStat.gitSig).toBe(`${blob}:${INVALID.length}`);
   });
 

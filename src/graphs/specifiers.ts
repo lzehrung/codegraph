@@ -187,8 +187,11 @@ function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
 }
 
+// A directive can start a line or follow ;, {, or }. Check that boundary at the directive
+// instead of retrying `\s*` from every line: masked SFC scripts can have thousands of blank lines.
+// The whitespace in the lookbehind excludes JavaScript's four multiline line terminators.
 const CSS_IMPORT_SPECIFIER_PATTERN =
-  /(?:^|[;{}])\s*@(import|use|forward)\s+(?:\([^)]*\)\s*)?(?:url\(\s*(?:"([^"]+)"|'([^']+)'|([^)\s]+))\s*\)|"([^"]+)"|'([^']+)')(?=\s*(?:[^;{}]*;|$))/gim;
+  /(?<![^\s;{}][^\S\r\n\u2028\u2029]*)@(import|use|forward)\s+(?:\([^)]*\)\s*)?(?:url\(\s*(?:"([^"]+)"|'([^']+)'|([^)\s]+))\s*\)|"([^"]+)"|'([^']+)')(?=\s*(?:[^;{}]*;|$))/gim;
 
 function extractCssImportSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
@@ -205,9 +208,9 @@ function extractCssModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const cleaned = stripCssComments(source);
   const patterns = [
-    /(?:^|[;{}])\s*composes\s*:\s*[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
-    /(?:^|[;{}])\s*@value\s+[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
-    /(?:^|[;{}])\s*@value\s+[A-Za-z_-][\w-]*\s*:\s*(?:"([^"]+)"|'([^']+)')/gim,
+    /(?<![^\s;{}][^\S\r\n\u2028\u2029]*)composes\s*:\s*[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
+    /(?<![^\s;{}][^\S\r\n\u2028\u2029]*)@value\s+[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
+    /(?<![^\s;{}][^\S\r\n\u2028\u2029]*)@value\s+[A-Za-z_-][\w-]*\s*:\s*(?:"([^"]+)"|'([^']+)')/gim,
   ];
   for (const pattern of patterns) {
     for (const match of cleaned.matchAll(pattern)) {

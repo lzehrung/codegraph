@@ -88,10 +88,24 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
-it("extracts media-qualified CSS imports", () => {
+it("extracts stylesheet dependencies only at statement boundaries", () => {
   const support = supportById("css")!;
   const specifiers = collectModuleSpecifiersFromSource(support, '@import "./print.css" screen;');
   expect(specifiers).toEqual([{ spec: "./print.css", resolutionKind: "stylesheet" }]);
+
+  const source = [
+    '@value primary from "./one.css";',
+    '.box { composes: base from "./two.css"; }',
+    'invalid composes: base from "./not-a-boundary.css";',
+    'invalid @value primary from "./not-a-value.css";',
+    'before\u2028@value accent from "./three.css";',
+    'before\u2029@value spacing: "./four.css";',
+  ].join("\n");
+  expect(
+    collectModuleSpecifiersFromSource(support, source)
+      .map((entry) => entry.spec)
+      .sort(),
+  ).toEqual(["./four.css", "./one.css", "./three.css", "./two.css"]);
 });
 
 it("resolves bare stylesheet imports relative to their importing file", async () => {
