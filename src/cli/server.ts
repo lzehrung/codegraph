@@ -1048,7 +1048,9 @@ async function assertRegularServerStateFile(filePath: string): Promise<void> {
 async function withServerLifecycleLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
   const lockPath = path.join(root, ".codegraph-server.lock");
   try {
-    return await withInstallerLeaseLock(lockPath, `MCP server lifecycle for ${normalizePath(root)}`, operation);
+    return await withInstallerLeaseLock(lockPath, `MCP server lifecycle for ${normalizePath(root)}`, operation, {
+      reclaimDeadLocalOwner: true,
+    });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Another Codegraph installer")) {
       throw new Error(`Another Codegraph server lifecycle command is in progress for ${normalizePath(root)}.`, {

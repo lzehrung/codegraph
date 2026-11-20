@@ -154,31 +154,41 @@ describe("MCP protocol v2 interoperability", () => {
       cwd: process.cwd(),
       stderr: "pipe",
     });
-    let childStarted = false;
+    const failures: unknown[] = [];
     const childClosed = new Promise<void>((resolve) => {
       transport.onclose = () => resolve();
     });
-    let cleanupError: Error | undefined;
     try {
       await withTimeout(client.connect(transport), OPERATION_TIMEOUT_MS, "MCP stdio client connect");
-      childStarted = true;
       expect(transport.pid).toBeTypeOf("number");
       await assertModernConversation(client);
+    } catch (error) {
+      failures.push(error);
     } finally {
+      const childRunning = transport.pid !== null;
       const cleanupPromises: Promise<void>[] = [
         withTimeout(client.close(), CLEANUP_TIMEOUT_MS, "MCP stdio client cleanup"),
       ];
-      if (childStarted) cleanupPromises.push(withTimeout(childClosed, CLEANUP_TIMEOUT_MS, "MCP stdio child cleanup"));
+      if (childRunning) {
+        cleanupPromises.push(withTimeout(childClosed, CLEANUP_TIMEOUT_MS, "MCP stdio child cleanup"));
+      }
       const cleanupResults = await Promise.allSettled(cleanupPromises);
-      await runCliOrThrow(["server", "stop", "--root", root]);
-      await withTimeout(fsp.rm(root, { recursive: true, force: true }), CLEANUP_TIMEOUT_MS, "stdio temp root cleanup");
-      const cleanupFailure = cleanupResults.find((result) => result.status === "rejected");
-      if (cleanupFailure?.status === "rejected") {
-        cleanupError =
-          cleanupFailure.reason instanceof Error ? cleanupFailure.reason : new Error(String(cleanupFailure.reason));
+      for (const result of cleanupResults) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
+      try {
+        await runCliOrThrow(["server", "stop", "--root", root]);
+        await withTimeout(
+          fsp.rm(root, { recursive: true, force: true }),
+          CLEANUP_TIMEOUT_MS,
+          "stdio temp root cleanup",
+        );
+      } catch (error) {
+        failures.push(error);
       }
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, "MCP stdio conversation and cleanup failed.");
     expect(transport.pid).toBeNull();
-    if (cleanupError) throw cleanupError;
   });
 });

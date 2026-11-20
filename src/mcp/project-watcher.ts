@@ -605,6 +605,8 @@ export type WatchControllerOptions = {
 export type WatchController = {
   /** Records a tool call: resets the idle timer, and after an idle pause reopens the watches. */
   noteActivity: () => void;
+  /** Keeps the watches open during startup work, then begins the full idle interval when it settles. */
+  deferIdleUntil: (activity: Promise<void>) => Promise<void>;
   /**
    * Closes every handle and cancels every timer. Safe to call twice. The promise settles once the background refresh
    * that was running and every read of the file list that had started have ended, and never rejects. A refresh that
@@ -640,6 +642,7 @@ export function assertMcpWatchMs(name: string, value: number | undefined): void 
  *   count over. A pause or `close` cancels a retry that has not started.
  * - After `idleMs` without `noteActivity` the watches close, and a refresh that waits for its turn gives it up. The
  *   next `noteActivity` reopens them and calls `markChanged`, so the pull check sees every edit made during the pause.
+ * - `deferIdleUntil` keeps the watches open during startup work and starts a full idle interval after it settles.
  * - `close` ends the watching for good. The refresh that is running finishes, and so does every read of the file list
  *   that has started. `close` returns a promise for them, so that the owner of the session can release the session
  *   after them. A read that still waits for its turn gives it up.
@@ -650,6 +653,7 @@ export function createWatchController(session: AgentSession, options: WatchContr
   const log = options.log ?? ((message: string): void => console.error(message));
   let watcher: ProjectWatcher | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
+  let idleDeferrals = 0;
   let refreshTimer: NodeJS.Timeout | undefined;
   let lastRefreshEndedAt: number | undefined;
   // The refresh that is running, if any. Only one runs at a time, and `close` waits for it.
@@ -813,7 +817,7 @@ export function createWatchController(session: AgentSession, options: WatchContr
   const armIdleTimer = (): void => {
     clearTimeout(idleTimer);
     idleTimer = undefined;
-    if (idleMs) idleTimer = startTimer(pause, idleMs);
+    if (idleMs && !idleDeferrals) idleTimer = startTimer(pause, idleMs);
   };
 
   // Reads the file list for the directory scans of one watcher, in a turn of `runExclusive`. The first read of a session
@@ -867,6 +871,18 @@ export function createWatchController(session: AgentSession, options: WatchContr
     session.markChanged?.();
   };
 
+  const deferIdleUntil = async (activity: Promise<void>): Promise<void> => {
+    idleDeferrals += 1;
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+    try {
+      await activity;
+    } finally {
+      idleDeferrals -= 1;
+      if (!closed && watcher) armIdleTimer();
+    }
+  };
+
   const close = async (): Promise<void> => {
     if (!closed) {
       closed = true;
@@ -878,5 +894,5 @@ export function createWatchController(session: AgentSession, options: WatchContr
   };
 
   if (!options.startPaused) open();
-  return { noteActivity, close };
+  return { noteActivity, deferIdleUntil, close };
 }

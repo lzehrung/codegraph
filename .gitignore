@@ -12,6 +12,7 @@ packages/codegraph-native/*.node
 packages/codegraph-native/npm/
 packages/codegraph-native/artifacts/
 .bench-baselines/
+paired-benchmark.json
 .accuracy/
 scripts/accuracy/oracles/csharp/bin/
 scripts/accuracy/oracles/csharp/obj/

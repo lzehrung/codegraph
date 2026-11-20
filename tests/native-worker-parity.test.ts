@@ -63,7 +63,11 @@ nativeDescribe("native worker parity", () => {
 
       const baseline = await buildProjectIndexFromFiles(dir, files, {
         report: reportBaseline,
+        useNativeWorkers: false,
+        nativeThreads: 1,
       });
+      expect(reportBaseline.workerPool?.enabled).toBe(false);
+      expect(reportBaseline.workerPool?.tasksSubmitted).toBe(0);
 
       const withWorkers = await buildProjectIndexFromFiles(dir, files, {
         useNativeWorkers: true,

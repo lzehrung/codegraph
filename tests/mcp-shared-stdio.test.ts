@@ -9,6 +9,7 @@ import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src
 import { qualifyWorkspaceValue } from "../src/mcp/workspace.js";
 import { mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 import { runCliOrThrow } from "./helpers/cli.js";
+import { startLifecycleLeaseHolder } from "./helpers/lifecycle-lease.js";
 
 const cli = path.resolve("dist/cli.js");
 
@@ -181,6 +182,101 @@ describe("shared stdio project ownership", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("reclaims a hard-killed local startup lease when a second client connects", { timeout: 60_000 }, async () => {
+    const root = await mkTmpDir("cg-shared-stdio-dead-lease-");
+    const holder = await startLifecycleLeaseHolder(root);
+    const { client, transport } = stdioClient(root);
+    try {
+      const lease: { leaseExpiresAt: string } = JSON.parse(
+        await fsp.readFile(path.join(root, ".codegraph-server.lock"), "utf8"),
+      );
+      await fsp.writeFile(path.join(root, "main.ts"), "export const sharedTargetRecovered = 1;\n");
+      await holder.kill();
+      await client.connect(transport);
+      expect(await names(client)).toContain("sharedTargetRecovered");
+      expect(Date.parse(lease.leaseExpiresAt)).toBeGreaterThan(Date.now());
+      await expect(fsp.access(path.join(root, ".codegraph-server.lock"))).rejects.toThrow();
+    } finally {
+      await holder.kill();
+      await client.close();
+      await runCliOrThrow(["server", "stop", "--root", root]);
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a probe killed during eager startup before an immediate stop and a second client", async () => {
+    const root = await mkTmpDir("cg-shared-stdio-killed-probe-");
+    const scratch = await mkTmpDir("cg-shared-stdio-probe-observer-");
+    const observer = path.join(scratch, "hold-owner-startup.mjs");
+    await fsp.writeFile(
+      observer,
+      [
+        'import fs from "node:fs/promises";',
+        'import path from "node:path";',
+        "const open = fs.open;",
+        "fs.open = async (file, ...args) => {",
+        '  if (process.argv.includes("--stdio") && path.basename(String(file)) === "server.log") {',
+        '    console.error("codegraph-test-startup-held");',
+        "    await new Promise(() => {});",
+        "  }",
+        "  return await open(file, ...args);",
+        "};",
+      ].join("\n"),
+    );
+    const probe = new StdioClientTransport({
+      command: process.execPath,
+      args: [cli, "mcp", "serve", "--stdio", "--root", root, "--no-warmup"],
+      env: { NODE_OPTIONS: `--import=${pathToFileURL(observer).href}` },
+      stderr: "pipe",
+    });
+    const held = Promise.withResolvers<void>();
+    const discovered = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    let stderr = "";
+    probe.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.includes("codegraph-test-startup-held")) held.resolve();
+    });
+    probe.onclose = closed.resolve;
+    probe.onerror = discovered.reject;
+    probe.onmessage = (message) => {
+      if ("id" in message && message.id === "startup-probe" && "result" in message) discovered.resolve();
+    };
+    const next = stdioClient(root);
+    try {
+      await fsp.writeFile(path.join(root, "main.ts"), "export const sharedTargetAfterProbe = 1;\n");
+      await probe.start();
+      await probe.send({
+        jsonrpc: "2.0",
+        id: "startup-probe",
+        method: "server/discover",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      });
+      await Promise.all([held.promise, discovered.promise]);
+      expect(probe.pid).toBeTypeOf("number");
+      if (!probe.pid) throw new Error("Expected the probe process.");
+      process.kill(probe.pid, "SIGKILL");
+      await closed.promise;
+
+      await runCliOrThrow(["server", "stop", "--root", root]);
+      await expect(fsp.access(path.join(root, ".codegraph-server.lock"))).rejects.toThrow();
+      await expect(fsp.access(path.join(root, ".codegraph/server.json"))).rejects.toThrow();
+      await next.client.connect(next.transport);
+      expect(await names(next.client)).toContain("sharedTargetAfterProbe");
+    } finally {
+      await probe.close();
+      await next.client.close();
+      await runCliOrThrow(["server", "stop", "--root", root]);
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(scratch, { recursive: true, force: true });
+    }
+  });
 
   it("preserves modern request logging and progress through the serving boundary", async () => {
     const root = await mkTmpDir("cg-shared-stdio-notify-");

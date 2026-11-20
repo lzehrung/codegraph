@@ -602,7 +602,11 @@ export function createCodegraphMcpResources(options: CodegraphMcpServerOptions):
     handlers: watcher ? withToolActivity(handlers, watcher.noteActivity) : handlers,
     session,
     closeWatcher: () => watcher?.close() ?? Promise.resolve(),
-    startWarmup: readiness.startWarmup,
+    startWarmup: () => {
+      readiness.startWarmup();
+      // A busy startup is not an idle session. Keep watching edits until all warmup loads have settled.
+      if (watcher && warmup !== "off") void watcher.deferIdleUntil(readiness.buildsSettled());
+    },
     buildsSettled: readiness.buildsSettled,
   };
 }
