@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync, readlinkSync } from "node:fs";
 import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,11 @@ type InstallerLeaseMetadata = {
   owner: string;
   pid: number;
   leaseExpiresAt: string;
+  /** Older leases lack the environment identity required for early dead-holder recovery. */
+  host?: string;
+  platform?: string;
+  pidNamespace?: string;
+  bootId?: string;
 };
 
 type InstallerLeaseLock = {
@@ -36,6 +42,29 @@ const INSTALLER_LOCK_RETRIES = 100;
 const INSTALLER_LOCK_RETRY_MS = 20;
 const INSTALLER_LOCK_LEASE_MS = 30_000;
 const INSTALLER_LOCK_ABANDONED_MS = INSTALLER_LOCK_LEASE_MS * 2;
+const LOCAL_HOST = os.hostname();
+const LOCAL_PID_NAMESPACE = readLocalPidNamespace();
+const LOCAL_BOOT_ID = readLocalBootId();
+
+function readLocalPidNamespace(): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    return readlinkSync("/proc/self/ns/pid");
+  } catch {
+    // An unavailable namespace cannot prove that a PID belongs to this environment.
+    return undefined;
+  }
+}
+
+function readLocalBootId(): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || undefined;
+  } catch {
+    // Namespace numbers repeat across kernels; an unavailable boot identity cannot prove locality.
+    return undefined;
+  }
+}
 
 export function opencodeConfigHome(settings: InstallerLockSettings): string {
   const configHome = settings.env.XDG_CONFIG_HOME?.trim();
@@ -87,8 +116,9 @@ export async function withInstallerLeaseLock<T>(
   lockPath: string,
   resourceName: string,
   operation: () => Promise<T>,
+  options?: { reclaimDeadLocalOwner?: boolean },
 ): Promise<T> {
-  const lock = await acquireInstallerLeaseLock(lockPath, resourceName);
+  const lock = await acquireInstallerLeaseLock(lockPath, resourceName, options?.reclaimDeadLocalOwner);
   try {
     return await operation();
   } finally {
@@ -96,7 +126,11 @@ export async function withInstallerLeaseLock<T>(
   }
 }
 
-async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
+async function acquireInstallerLeaseLock(
+  lockPath: string,
+  resourceName: string,
+  reclaimDeadLocalOwner = false,
+): Promise<InstallerLeaseLock> {
   let lastConflict: InstallerLeaseConflict = "live";
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
     const acquisitionPath = `${lockPath}.acquire-${randomUUID()}`;
@@ -126,7 +160,7 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       await fsp.rm(acquisitionPath, { force: true }).catch(() => undefined);
       if (published) await fsp.rm(lockPath, { force: true }).catch(() => undefined);
       if (!isInstallerLockPublishConflict(error, lockPath)) throw error;
-      const conflict = await resolveInstallerLeaseConflict(lockPath);
+      const conflict = await resolveInstallerLeaseConflict(lockPath, reclaimDeadLocalOwner);
       if (conflict === "absent" || conflict === "reclaimed") continue;
       lastConflict = conflict;
       await waitForInstallerLockRetry();
@@ -142,38 +176,53 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
   );
 }
 
-async function resolveInstallerLeaseConflict(lockPath: string): Promise<InstallerLeaseConflict> {
-  let observed: InstallerLeaseObservation;
-  try {
-    const stats = await fsp.lstat(lockPath);
-    // Legacy directory locks and other non-files cannot be verified, so they are never removed.
-    if (!stats.isFile()) return "blocked";
-    observed = { content: await fsp.readFile(lockPath, "utf8"), mtimeMs: stats.mtimeMs };
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "ENOENT")) return "absent";
-    return "blocked";
+async function resolveInstallerLeaseConflict(
+  lockPath: string,
+  reclaimDeadLocalOwner: boolean,
+): Promise<InstallerLeaseConflict> {
+  // A blocking claim gets one fresh, expiry-only observation. Never reuse the early-reclaim observation.
+  for (let allowEarlyReclaim = reclaimDeadLocalOwner; ; allowEarlyReclaim = false) {
+    let observed: InstallerLeaseObservation;
+    try {
+      const stats = await fsp.lstat(lockPath);
+      // Legacy directory locks and other non-files cannot be verified, so they are never removed.
+      if (!stats.isFile()) return "blocked";
+      observed = {
+        content: await fsp.readFile(lockPath, "utf8"),
+        mtimeMs: stats.mtimeMs,
+      };
+    } catch (error) {
+      if (isFileSystemErrorCode(error, "ENOENT")) return "absent";
+      return "blocked";
+    }
+    const metadata = parseInstallerLeaseMetadata(observed.content);
+    if (metadata) {
+      const leaseExpiresAt = Date.parse(metadata.leaseExpiresAt);
+      if (Number.isNaN(leaseExpiresAt)) return "blocked";
+      if (leaseExpiresAt <= Date.now()) {
+        return await reclaimAbandonedInstallerLease(lockPath, observed, reclaimDeadLocalOwner);
+      }
+      if (allowEarlyReclaim && isProvablyDeadLocalOwner(metadata)) {
+        const outcome = await reclaimDeadLocalLease(lockPath, observed);
+        if (outcome === "live") continue;
+        return outcome;
+      }
+      return "live";
+    }
+    // Corrupt metadata alone cannot authorize removal. A live holder renews every half lease.
+    if (Date.now() - observed.mtimeMs < INSTALLER_LOCK_ABANDONED_MS) return "blocked";
+    return await reclaimAbandonedInstallerLease(lockPath, observed, reclaimDeadLocalOwner);
   }
-  const metadata = parseInstallerLeaseMetadata(observed.content);
-  if (metadata) {
-    const leaseExpiresAt = Date.parse(metadata.leaseExpiresAt);
-    if (Number.isNaN(leaseExpiresAt)) return "blocked";
-    if (leaseExpiresAt > Date.now()) return "live";
-    return await reclaimAbandonedInstallerLease(lockPath, observed);
-  }
-  // Corrupt metadata never authorizes removal on its own. A live owner renews the lock every
-  // half lease, so only a lock untouched for two full lease intervals provably has no live
-  // renewer and is safe to reclaim.
-  if (Date.now() - observed.mtimeMs < INSTALLER_LOCK_ABANDONED_MS) return "blocked";
-  return await reclaimAbandonedInstallerLease(lockPath, observed);
 }
 
 async function reclaimAbandonedInstallerLease(
   lockPath: string,
   observed: InstallerLeaseObservation,
+  removeDeadClaim: boolean,
 ): Promise<InstallerLeaseConflict> {
-  // Detach the lock from its published name first. A fresh acquirer can only publish at
-  // lockPath after this rename, so whatever sits at reclaimPath afterwards is exactly the
-  // lease that was moved, and compare-before-delete below stays race-free for it.
+  // Reuse the existing expiry detach/verify/restore procedure for early recovery as well.
+  // It validates the detached file, not atomic acquisition: a late stale observer can still briefly
+  // detach a replacement between observation and verification, as in the pre-existing expiry path.
   const reclaimPath = `${lockPath}.reclaim-${process.pid}-${randomUUID()}`;
   try {
     await fsp.rename(lockPath, reclaimPath);
@@ -184,6 +233,7 @@ async function reclaimAbandonedInstallerLease(
   let verified = false;
   try {
     const stats = await fsp.lstat(reclaimPath);
+    // Verify the observed bytes and mtime; reported inode identity may change across rename.
     verified =
       stats.isFile() &&
       stats.mtimeMs === observed.mtimeMs &&
@@ -193,6 +243,7 @@ async function reclaimAbandonedInstallerLease(
   }
   if (verified) {
     await fsp.rm(reclaimPath, { force: true });
+    if (removeDeadClaim) await fsp.rm(deadLocalLeaseClaimPath(lockPath, observed), { force: true });
     return "reclaimed";
   }
   // The moved lock is not the abandoned lease that was vetted: another installer owns it.
@@ -204,6 +255,55 @@ async function reclaimAbandonedInstallerLease(
   }
   await fsp.rm(reclaimPath, { force: true });
   return "blocked";
+}
+
+function isProvablyDeadLocalOwner(metadata: InstallerLeaseMetadata): boolean {
+  if (!metadata.host || metadata.host !== LOCAL_HOST || metadata.pid <= 0) return false;
+  if (metadata.platform !== process.platform || metadata.pidNamespace !== LOCAL_PID_NAMESPACE) return false;
+  if (metadata.bootId !== LOCAL_BOOT_ID) return false;
+  if (process.platform === "linux" && (!LOCAL_PID_NAMESPACE || !LOCAL_BOOT_ID)) return false;
+  try {
+    process.kill(metadata.pid, 0);
+    return false;
+  } catch (error) {
+    return isFileSystemErrorCode(error, "ESRCH");
+  }
+}
+
+function deadLocalLeaseClaimPath(lockPath: string, observed: InstallerLeaseObservation): string {
+  const claimKey = createHash("sha256").update(observed.content).digest("hex");
+  return `${lockPath}.reclaim-dead-${claimKey}`;
+}
+
+/**
+ * Gate early reclaimers of one observed dead lease with a shared claim name.
+ * Expiry ignores claims after a fresh observation and retains the existing detach/verify window.
+ */
+async function reclaimDeadLocalLease(
+  lockPath: string,
+  observed: InstallerLeaseObservation,
+): Promise<InstallerLeaseConflict> {
+  const claimPath = deadLocalLeaseClaimPath(lockPath, observed);
+  let claimed = false;
+  try {
+    await fsp.link(lockPath, claimPath);
+    claimed = true;
+    const claim = await fsp.lstat(claimPath);
+    const published = await fsp.lstat(lockPath);
+    if (!claim.isFile() || !published.isFile()) return "blocked";
+    const hasFileIdentity = claim.ino !== 0 && published.ino !== 0;
+    const sameIdentity = !hasFileIdentity || (claim.dev === published.dev && claim.ino === published.ino);
+    const sameObservation = claim.mtimeMs === observed.mtimeMs && claim.size === published.size;
+    if (!sameIdentity || !sameObservation || published.mtimeMs !== observed.mtimeMs) return "blocked";
+    if ((await fsp.readFile(claimPath, "utf8")) !== observed.content) return "blocked";
+    return await reclaimAbandonedInstallerLease(lockPath, observed, false);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return "absent";
+    if (isInstallerLockPublishConflict(error, claimPath)) return "live";
+    return "blocked";
+  } finally {
+    if (claimed) await fsp.rm(claimPath, { force: true });
+  }
 }
 
 function isInstallerLockPublishConflict(error: unknown, lockPath: string): boolean {
@@ -224,6 +324,10 @@ async function writeInstallerLeaseMetadata(file: FileHandle, owner: string): Pro
   const metadata: InstallerLeaseMetadata = {
     owner,
     pid: process.pid,
+    host: LOCAL_HOST,
+    platform: process.platform,
+    ...(LOCAL_PID_NAMESPACE ? { pidNamespace: LOCAL_PID_NAMESPACE } : {}),
+    ...(LOCAL_BOOT_ID ? { bootId: LOCAL_BOOT_ID } : {}),
     leaseExpiresAt: new Date(Date.now() + INSTALLER_LOCK_LEASE_MS).toISOString(),
   };
   const content = `${JSON.stringify(metadata)}\n`;
@@ -245,6 +349,10 @@ function parseInstallerLeaseMetadata(content: string): InstallerLeaseMetadata | 
         owner: parsed.owner,
         pid: parsed.pid,
         leaseExpiresAt: parsed.leaseExpiresAt,
+        ...(typeof parsed.host === "string" ? { host: parsed.host } : {}),
+        ...(typeof parsed.platform === "string" ? { platform: parsed.platform } : {}),
+        ...(typeof parsed.pidNamespace === "string" ? { pidNamespace: parsed.pidNamespace } : {}),
+        ...(typeof parsed.bootId === "string" ? { bootId: parsed.bootId } : {}),
       };
     }
   } catch {

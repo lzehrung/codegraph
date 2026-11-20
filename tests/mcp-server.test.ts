@@ -4764,23 +4764,47 @@ describe("MCP file watcher", () => {
   it("pauses after the idle time and resumes on the next tool call, whichever tool it is", async () => {
     const root = await createProject("cg-mcp-watch-idle-");
     const { watchSpy, openHandles } = spyOnWatches();
-    const resources = await createWarmedCodegraphMcpResources({ root, watchIdleMs: 750 });
+    const buildStarted = Promise.withResolvers<void>();
+    const releaseBuild = Promise.withResolvers<void>();
+    const build = indexerBuild.buildProjectIndexIncremental;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementationOnce(async (...args) => {
+      buildStarted.resolve();
+      await releaseBuild.promise;
+      return await build(...args);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const resources = createCodegraphMcpResources({ root, watchIdleMs: 750 });
     const markChanged = vi.spyOn(resources.session, "markChanged");
+    resources.startWarmup();
     try {
+      await buildStarted.promise;
+      // A slow startup is busy, not idle: keep capturing edits even when it exceeds the idle interval.
+      await vi.advanceTimersByTimeAsync(1_500);
       expect(openHandles()).toBeGreaterThan(0);
-      await vi.waitFor(() => expect(openHandles()).toBe(0), { timeout: 10_000, interval: 25 });
-      expect(markChanged).not.toHaveBeenCalled();
+      releaseBuild.resolve();
+      await resources.buildsSettled();
+      const startupChanges = markChanged.mock.calls.length;
+      vi.advanceTimersByTime(749);
+      expect(openHandles()).toBeGreaterThan(0);
+      vi.advanceTimersByTime(1);
+      expect(openHandles()).toBe(0);
+      expect(markChanged).toHaveBeenCalledTimes(startupChanges);
       const opened = watchSpy.mock.calls.length;
 
       // get_file never reaches the MCP freshness helper, so this also shows that every tool call counts.
-      await resources.handlers.get_file({ file: "f0.ts" });
+      const read = resources.handlers.get_file({ file: "f0.ts" });
 
       expect(watchSpy.mock.calls.length).toBeGreaterThan(opened);
       expect(openHandles()).toBeGreaterThan(0);
-      expect(markChanged).toHaveBeenCalledTimes(1);
+      expect(markChanged).toHaveBeenCalledTimes(startupChanges + 1);
+      await read;
     } finally {
+      releaseBuild.resolve();
+      await resources.buildsSettled();
       await resources.closeWatcher();
       resources.session.invalidate();
+      buildSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

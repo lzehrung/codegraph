@@ -40,6 +40,10 @@ npm run bench:query -- --root . --cli-samples 5 --mcp-samples 10
 Pass `--include-baseline` to add same-machine cache-off rows. CLI timing includes process startup, project snapshot validation, search, and JSON serialization. MCP timing discards one warmup and reports the following calls.
 Results are not universal latency claims; compare the same root, revision, query, Node version, and machine state.
 
+## Paired source-family performance
+
+[`paired.md`](./paired.md) documents `npm run bench:paired`: eight operations in separate processes, alternating base/head order, pinned thread limits, and a noise-aware regression verdict. The pinned real-project manifest covers each source-language family and reuses the accuracy corpus pins where available.
+
 ## Fixture test matrix
 
 [`fixture-snapshot.md`](./fixture-snapshot.md) shows per-language status and test counts generated directly from `tests/languages/*.test.ts` runs. Regenerate with `npm run bench:fixtures`; verify it is current with `npm run bench:fixtures:check`. This, and the rest of the automated test suite, is also what release certification checks: there is no separate hand-authored golden corpus.

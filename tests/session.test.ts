@@ -1338,10 +1338,16 @@ describe("SessionManager", () => {
         }),
       ).rejects.toThrow("Session capacity reached (1)");
 
+      const pendingSessions = Reflect.get(limitedManager, "pendingSessions") as Map<
+        string,
+        { promise: Promise<CodeReviewSession> }
+      >;
+      const pending = pendingSessions.get("warm-a");
+      if (!pending) throw new Error("Expected the cancelled warmup initialization.");
+      const initialization = expect(pending.promise).rejects.toThrow("disposed during initialization");
       releaseBuild.resolve();
-      await vi.waitFor(() => {
-        expect(Reflect.get(limitedManager, "pendingSessions").size).toBe(0);
-      });
+      await initialization;
+      expect(pendingSessions.size).toBe(0);
       await expect(
         limitedManager.getOrCreateSession("after-failed-warmup", {
           root: sampleRoot,

@@ -1037,6 +1037,37 @@ describe("createWatchController", () => {
     expect(fake.openHandles()).toHaveLength(0);
   });
 
+  it("defers the full idle interval until overlapping startup work settles", async () => {
+    const { fake, controller } = startController({ idleMs: 1_000 });
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const activities = [controller.deferIdleUntil(first.promise), controller.deferIdleUntil(second.promise)];
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fake.openHandles()).toHaveLength(1);
+    first.resolve();
+    await activities[0];
+    controller.noteActivity();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fake.openHandles()).toHaveLength(1);
+    second.resolve();
+    await activities[1];
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fake.openHandles()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.openHandles()).toHaveLength(0);
+  });
+
+  it("does not rearm idle timers when held startup finishes after close", async () => {
+    const { fake, controller } = startController({ idleMs: 1_000 });
+    const held = Promise.withResolvers<void>();
+    const activity = controller.deferIdleUntil(held.promise);
+    await controller.close();
+    held.resolve();
+    await activity;
+    expect(fake.openHandles()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("cancels a refresh that waits for the minimum interval when it pauses", async () => {
     const { fake, checkStarts } = startController({ idleMs: 3_000 });
     const [handle] = fake.openHandles();

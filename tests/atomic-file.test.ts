@@ -243,11 +243,12 @@ describe("a file that codegraph owns (no userDestination)", () => {
 
       await write(entry, "next");
 
-      expect(renameSpy).toHaveBeenCalledTimes(1);
-      const [from] = renameSpy.mock.calls[0]!;
-      expect(path.basename(String(from))).toMatch(
-        /^\.state\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/,
-      );
+      expect(renameSpy).toHaveBeenCalled();
+      for (const [from] of renameSpy.mock.calls) {
+        expect(path.basename(String(from))).toMatch(
+          /^\.state\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/,
+        );
+      }
       await expect(fsp.readFile(entry, "utf8")).resolves.toBe("next");
     });
   });
@@ -377,21 +378,41 @@ describe("a symbolic link at a user destination", () => {
       const link = path.join(linkDir, "state.json");
       await fsp.writeFile(real, "previous", "utf8");
       if (!(await tryCreateFileSymlink(real, link))) return;
-      const renameSpy = vi.spyOn(fsp, "rename");
+      const renameSpy = vi.spyOn(fsp, "rename").mockRejectedValueOnce(fileError("EBUSY"));
 
       await write(link, "next", userDestination);
 
       expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
       await expect(fsp.readFile(link, "utf8")).resolves.toBe("next");
       await expect(fsp.readFile(real, "utf8")).resolves.toBe("next");
-      // One rename, of a temp file made where the replaced file lives, never in the directory of the link.
+      // Contention may require fresh temp files, but every attempt stays beside the real destination.
       const realDirectory = await fsp.realpath(realDir);
-      expect(renameSpy).toHaveBeenCalledTimes(1);
-      const [from, to] = renameSpy.mock.calls[0]!;
-      expect(path.dirname(String(from))).toBe(realDirectory);
-      expect(String(to)).toBe(path.join(realDirectory, "state.json"));
+      expect(renameSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      for (const [from, to] of renameSpy.mock.calls) {
+        expect(path.dirname(String(from))).toBe(realDirectory);
+        expect(String(to)).toBe(path.join(realDirectory, "state.json"));
+      }
       expect(await fsp.readdir(linkDir)).toEqual(["state.json"]);
       expect(await fsp.readdir(realDir)).toEqual(["state.json"]);
+    });
+
+    it("requests exactly one rename when the link-target replacement succeeds without contention", async () => {
+      const root = await roots.create("cg-atomic-link-uncontended-");
+      const real = path.join(root, "real.json");
+      const link = path.join(root, "link.json");
+      await fsp.writeFile(real, "previous", "utf8");
+      if (!(await tryCreateFileSymlink(real, link))) return;
+      // Control the rename outcome here; the contended case above verifies real publication and retry paths.
+      const rename = vi.spyOn(fsp, "rename").mockResolvedValue(undefined);
+
+      await write(link, "next", userDestination);
+
+      expect(rename).toHaveBeenCalledTimes(1);
+      const [from, to] = rename.mock.calls[0];
+      expect(String(to)).toBe(await fsp.realpath(real));
+      expect(path.dirname(String(from))).toBe(await fsp.realpath(root));
+      expect(await fsp.readFile(from, "utf8")).toBe("next");
+      expect((await fsp.lstat(link)).isSymbolicLink()).toBe(true);
     });
 
     it("follows a chain of links, relative ones included, and keeps every link", async () => {

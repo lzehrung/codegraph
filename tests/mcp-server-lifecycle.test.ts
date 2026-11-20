@@ -1,4 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlainRecord } from "../src/util/guards.js";
+import { withInstallerLeaseLock } from "../src/installer/locks.js";
+import { createExpiredLifecycleLease, startLifecycleLeaseHolder } from "./helpers/lifecycle-lease.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = path.join(repoRoot, "dist", "cli.js");
@@ -597,7 +602,12 @@ describe("shared MCP server lifecycle", () => {
     const root = await createTestRoot();
     await fs.writeFile(
       path.join(root, ".codegraph-server.lock"),
-      `${JSON.stringify({ owner: "test", pid: process.pid, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() })}\n`,
+      `${JSON.stringify({
+        owner: "test",
+        pid: process.pid,
+        host: os.hostname(),
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })}\n`,
       "utf8",
     );
 
@@ -606,6 +616,575 @@ describe("shared MCP server lifecycle", () => {
     expect(start.exitCode).toBe(1);
     expect(start.stderr).toContain("Another Codegraph server lifecycle command is in progress");
     await expect(fs.access(path.join(root, ".codegraph", "server.json"))).rejects.toThrow();
+  });
+
+  it("reclaims a hard-killed local lifecycle holder before its lease expires when stopping", async () => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    try {
+      const lockPath = path.join(root, ".codegraph-server.lock");
+      const lease = parseJsonObject(await fs.readFile(lockPath, "utf8"));
+      expect(lease).toMatchObject({ pid: holder.pid, host: os.hostname(), platform: process.platform });
+      if (process.platform === "linux") {
+        expect(lease.pidNamespace).toBe(await fs.readlink("/proc/self/ns/pid"));
+        expect(lease.bootId).toBe((await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim());
+      }
+      await holder.kill();
+
+      const stopped = await runCli(["server", "stop", "--root", root]);
+
+      expect(stopped.exitCode, stopped.stderr).toBe(0);
+      expect(stopped.stdout).toContain("No Codegraph server registry exists");
+      expect(Date.parse(String(lease.leaseExpiresAt))).toBeGreaterThan(Date.now());
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await holder.kill();
+    }
+  });
+
+  it.for([
+    { kind: "foreign host", key: "host", value: `${os.hostname()}-other` },
+    { kind: "legacy without host", key: "host", value: undefined },
+    { kind: "foreign platform", key: "platform", value: process.platform === "win32" ? "linux" : "win32" },
+    { kind: "legacy without platform", key: "platform", value: undefined },
+    { kind: "foreign PID namespace", key: "pidNamespace", value: "pid:[foreign]" },
+    { kind: "legacy without PID namespace", key: "pidNamespace", value: undefined },
+    { kind: "foreign Linux boot", key: "bootId", value: "foreign-boot" },
+    { kind: "legacy without Linux boot", key: "bootId", value: undefined },
+  ] as const)("retains an unexpired dead lease from a $kind", async ({ kind, key, value }, context) => {
+    const requiresLinux = kind === "legacy without PID namespace" || kind === "legacy without Linux boot";
+    if (requiresLinux && process.platform !== "linux") {
+      context.skip();
+      return;
+    }
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const lease = parseJsonObject(await fs.readFile(lockPath, "utf8"));
+    await holder.kill();
+    if (value === undefined) delete lease[key];
+    else lease[key] = value;
+    lease.leaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    const metadata = JSON.stringify(lease);
+    await fs.writeFile(lockPath, metadata);
+    try {
+      const stopped = await runCli(["server", "stop", "--root", root]);
+      expect(stopped.exitCode).toBe(1);
+      expect(stopped.stderr).toContain("Another Codegraph server lifecycle command is in progress");
+      expect(await fs.readFile(lockPath, "utf8")).toBe(metadata);
+    } finally {
+      await fs.rm(lockPath);
+    }
+  });
+
+  it.each(["expired", "unexpired"])("keeps a stale claim until its %s lease is eligible for expiry", async (kind) => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const lease = parseJsonObject(await fs.readFile(lockPath, "utf8"));
+    await holder.kill();
+    lease.leaseExpiresAt = new Date(Date.now() + (kind === "expired" ? -1 : 60_000)).toISOString();
+    const metadata = `${JSON.stringify(lease)}\n`;
+    await fs.writeFile(lockPath, metadata);
+    const oldMtime = new Date(Date.now() - 120_000);
+    await fs.utimes(lockPath, oldMtime, oldMtime);
+    const claimPath = `${lockPath}.reclaim-dead-${createHash("sha256").update(metadata).digest("hex")}`;
+    await fs.link(lockPath, claimPath);
+    const operation = vi.fn(async () => "acquired");
+    try {
+      const acquired = withInstallerLeaseLock(lockPath, "stale recovery claim", operation, {
+        reclaimDeadLocalOwner: true,
+      });
+      if (kind === "unexpired") {
+        await expect(acquired).rejects.toThrow("Another Codegraph installer");
+        expect(operation).not.toHaveBeenCalled();
+        expect(await fs.readFile(lockPath, "utf8")).toBe(metadata);
+        expect(await fs.readFile(claimPath, "utf8")).toBe(metadata);
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(String(lease.leaseExpiresAt)) + 1);
+        try {
+          await withInstallerLeaseLock(lockPath, "expiry after a blocking claim", operation, {
+            reclaimDeadLocalOwner: true,
+          });
+        } finally {
+          clock.mockRestore();
+        }
+      } else {
+        await expect(acquired).resolves.toBe("acquired");
+      }
+      expect(operation).toHaveBeenCalledOnce();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      await expect(fs.access(claimPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(lockPath, { force: true });
+      await fs.rm(claimPath, { force: true });
+    }
+  });
+
+  it("keeps expiry recovery compatible with inode identifiers that change across rename", async () => {
+    const root = await createTestRoot();
+    const { lockPath } = await createExpiredLifecycleLease(root);
+    const originalLstat = fs.lstat.bind(fs);
+    let detachedChecks = 0;
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stats = await originalLstat(candidate, options as { bigint: true });
+      if (String(candidate).startsWith(`${lockPath}.reclaim-`)) {
+        detachedChecks += 1;
+        const alternateInode = Number(stats.ino) === 1 ? 2 : 1;
+        Object.defineProperty(stats, "ino", { value: alternateInode });
+      }
+      return stats;
+    });
+    const operation = vi.fn(async () => "acquired");
+    try {
+      await expect(withInstallerLeaseLock(lockPath, "unstable inode expiry", operation)).resolves.toBe("acquired");
+      expect(detachedChecks).toBe(1);
+      expect(operation).toHaveBeenCalledOnce();
+      expect(await fs.readdir(root)).toEqual([]);
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it("keeps the expiry winner when claim cleanup races a live claimant", async () => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const originalMetadata = await fs.readFile(lockPath, "utf8");
+    const original = parseJsonObject(originalMetadata);
+    const claimPath = `${lockPath}.reclaim-dead-${createHash("sha256").update(originalMetadata).digest("hex")}`;
+    await holder.kill();
+    const contexts = new AsyncLocalStorage<string>();
+    const stalled = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const expiryEntered = Promise.withResolvers<void>();
+    const releaseExpiry = Promise.withResolvers<void>();
+    const claimCleanup = Promise.withResolvers<void>();
+    const resumeCleanup = Promise.withResolvers<void>();
+    let paused = false;
+    let entries = 0;
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (contexts.getStore() === "early" && String(source) === lockPath && !paused) {
+        paused = true;
+        stalled.resolve();
+        await resume.promise;
+      }
+      await originalRename(source, destination);
+    });
+    const originalUnlink = fs.unlink.bind(fs);
+    const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      // The old blind-unlink path must reach the same barrier in the counterfactual regression.
+      if (contexts.getStore() === "early" && String(candidate) === lockPath && !paused) {
+        paused = true;
+        stalled.resolve();
+        await resume.promise;
+      }
+      await originalUnlink(candidate);
+    });
+    const originalRm = fs.rm.bind(fs);
+    const rm = vi.spyOn(fs, "rm").mockImplementation(async (candidate, options) => {
+      if (contexts.getStore() === "expiry" && String(candidate) === claimPath) {
+        claimCleanup.resolve();
+        await resumeCleanup.promise;
+      }
+      await originalRm(candidate, options);
+    });
+    const clock = vi.spyOn(Date, "now");
+    const earlyOperation = vi.fn(async () => {
+      entries += 1;
+    });
+    const early = contexts.run("early", () =>
+      withInstallerLeaseLock(lockPath, "stalled claimed detach", earlyOperation, { reclaimDeadLocalOwner: true }),
+    );
+    const earlySettled = Promise.allSettled([early]);
+    let expiry: Promise<void> | undefined;
+    try {
+      await stalled.promise;
+      // Keep the exact bytes and claim hash while making this lease eligible for normal expiry.
+      clock.mockReturnValue(Date.parse(String(original.leaseExpiresAt)) + 1);
+      expiry = contexts.run("expiry", () =>
+        withInstallerLeaseLock(
+          lockPath,
+          "expiry contender",
+          async () => {
+            entries += 1;
+            expiryEntered.resolve();
+            await releaseExpiry.promise;
+          },
+          { reclaimDeadLocalOwner: true },
+        ),
+      );
+      const checkpoint = await Promise.race([
+        claimCleanup.promise.then(() => "cleanup"),
+        expiryEntered.promise.then(() => "entered"),
+      ]);
+      expect(checkpoint).toBe("cleanup");
+      expect(await fs.readFile(claimPath, "utf8")).toBe(originalMetadata);
+      resumeCleanup.resolve();
+      await expiryEntered.promise;
+      const ownedMetadata = await fs.readFile(lockPath, "utf8");
+      expect(parseJsonObject(ownedMetadata).owner).not.toBe(original.owner);
+      await expect(fs.access(claimPath)).rejects.toThrow();
+      resume.resolve();
+      expect((await earlySettled)[0].status).toBe("rejected");
+      const thirdOperation = vi.fn(async () => {
+        entries += 1;
+      });
+      await expect(
+        withInstallerLeaseLock(lockPath, "third contender", thirdOperation, { reclaimDeadLocalOwner: true }),
+      ).rejects.toThrow("Another Codegraph installer");
+      expect(entries).toBe(1);
+      expect(earlyOperation).not.toHaveBeenCalled();
+      expect(thirdOperation).not.toHaveBeenCalled();
+      expect(await fs.readFile(lockPath, "utf8")).toBe(ownedMetadata);
+    } finally {
+      resume.resolve();
+      resumeCleanup.resolve();
+      releaseExpiry.resolve();
+      await Promise.allSettled([early, ...(expiry ? [expiry] : [])]);
+      rename.mockRestore();
+      unlink.mockRestore();
+      rm.mockRestore();
+      clock.mockRestore();
+    }
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("does not delete a replacement claim when two stale-claim contenders cross", async () => {
+    const root = await createTestRoot();
+    const { lockPath, metadata } = await createExpiredLifecycleLease(root);
+    const claimPath = `${lockPath}.reclaim-dead-${createHash("sha256").update(metadata).digest("hex")}`;
+    const oldMtime = new Date(Date.now() - 120_000);
+    await fs.utimes(lockPath, oldMtime, oldMtime);
+    await fs.link(lockPath, claimPath);
+    const contexts = new AsyncLocalStorage<string>();
+    const secondPaused = Promise.withResolvers<void>();
+    const resumeSecond = Promise.withResolvers<void>();
+    const firstReady = Promise.withResolvers<void>();
+    const resumeFirst = Promise.withResolvers<void>();
+    const firstEntered = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const thirdEntered = Promise.withResolvers<void>();
+    const releaseThird = Promise.withResolvers<void>();
+    let paused = false;
+    let initialClaim = true;
+    let owners = 0;
+    let maxOwners = 0;
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stats = await originalLstat(candidate, options as { bigint: true });
+      if (String(candidate) === claimPath && initialClaim) {
+        // Age only the original claim in the retirement counterfactual; fresh claims keep their real ctime.
+        Object.defineProperty(stats, "ctimeMs", { value: Date.now() - 60_000 });
+      }
+      return stats;
+    });
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (contexts.getStore() === "second" && String(source) === lockPath && !paused) {
+        paused = true;
+        secondPaused.resolve();
+        await resumeSecond.promise;
+      }
+      await originalRename(source, destination);
+    });
+    const originalUnlink = fs.unlink.bind(fs);
+    const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      const actor = contexts.getStore();
+      if (actor === "second" && String(candidate) === claimPath && !paused) {
+        paused = true;
+        secondPaused.resolve();
+        await resumeSecond.promise;
+      }
+      if (actor === "first" && String(candidate) === claimPath) initialClaim = false;
+      if (actor === "first" && String(candidate) === lockPath) {
+        firstReady.resolve();
+        await resumeFirst.promise;
+      }
+      await originalUnlink(candidate);
+    });
+    const secondOperation = vi.fn(async () => undefined);
+    const second = contexts.run("second", () =>
+      withInstallerLeaseLock(lockPath, "second stale contender", secondOperation, { reclaimDeadLocalOwner: true }),
+    );
+    const secondSettled = Promise.allSettled([second]);
+    let first: Promise<void> | undefined;
+    let third: Promise<void> | undefined;
+    try {
+      await secondPaused.promise;
+      first = contexts.run("first", () =>
+        withInstallerLeaseLock(
+          lockPath,
+          "first stale contender",
+          async () => {
+            owners += 1;
+            maxOwners = Math.max(maxOwners, owners);
+            firstReady.resolve();
+            firstEntered.resolve();
+            try {
+              await releaseFirst.promise;
+            } finally {
+              owners -= 1;
+            }
+          },
+          { reclaimDeadLocalOwner: true },
+        ),
+      );
+      await firstReady.promise;
+      resumeSecond.resolve();
+      await secondSettled;
+      third = withInstallerLeaseLock(
+        lockPath,
+        "third stale contender",
+        async () => {
+          owners += 1;
+          maxOwners = Math.max(maxOwners, owners);
+          thirdEntered.resolve();
+          try {
+            await releaseThird.promise;
+          } finally {
+            owners -= 1;
+          }
+        },
+        { reclaimDeadLocalOwner: true },
+      );
+      const thirdSettled = Promise.allSettled([third]);
+      const transition = await Promise.race([
+        thirdEntered.promise.then(() => "entered"),
+        thirdSettled.then(() => "settled"),
+      ]);
+      resumeFirst.resolve();
+      await firstEntered.promise;
+      expect(transition).toBe("settled");
+      expect((await secondSettled)[0].status).toBe("rejected");
+      expect((await thirdSettled)[0].status).toBe("rejected");
+      expect(secondOperation).not.toHaveBeenCalled();
+      expect(maxOwners).toBe(1);
+      expect(parseJsonObject(await fs.readFile(lockPath, "utf8")).pid).toBe(process.pid);
+    } finally {
+      resumeSecond.resolve();
+      resumeFirst.resolve();
+      releaseFirst.resolve();
+      releaseThird.resolve();
+      await Promise.allSettled([second, ...(first ? [first] : []), ...(third ? [third] : [])]);
+      lstat.mockRestore();
+      rename.mockRestore();
+      unlink.mockRestore();
+    }
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("serializes a barrier of unexpired dead-holder claims", async () => {
+    const root = await createTestRoot();
+    const { lockPath, metadata: expiredMetadata } = await createExpiredLifecycleLease(root);
+    const lease = parseJsonObject(expiredMetadata);
+    lease.leaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    const metadata = `${JSON.stringify(lease)}\n`;
+    await fs.writeFile(lockPath, metadata);
+    const claimPath = `${lockPath}.reclaim-dead-${createHash("sha256").update(metadata).digest("hex")}`;
+    const contexts = new AsyncLocalStorage<number>();
+    const ready = new Set<number>();
+    const barrier = Promise.withResolvers<void>();
+    let activeOwners = 0;
+    let maxOwners = 0;
+    let entries = 0;
+    const originalLink = fs.link.bind(fs);
+    const link = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+      const contender = contexts.getStore();
+      if (contender !== undefined && String(destination) === claimPath && !ready.has(contender)) {
+        ready.add(contender);
+        if (ready.size === 8) barrier.resolve();
+        await barrier.promise;
+      }
+      await originalLink(source, destination);
+    });
+    const contenders = Array.from({ length: 8 }, (_, contender) =>
+      contexts.run(contender, () =>
+        withInstallerLeaseLock(
+          lockPath,
+          "expired barrier race",
+          async () => {
+            activeOwners += 1;
+            maxOwners = Math.max(maxOwners, activeOwners);
+            entries += 1;
+            try {
+              const owned = await fs.readFile(lockPath, "utf8");
+              await nextTurn();
+              expect(await fs.readFile(lockPath, "utf8")).toBe(owned);
+            } finally {
+              activeOwners -= 1;
+            }
+          },
+          { reclaimDeadLocalOwner: true },
+        ),
+      ),
+    );
+    try {
+      await Promise.all(contenders);
+      expect(ready.size).toBe(8);
+      expect(entries).toBe(8);
+      expect(maxOwners).toBe(1);
+      expect(await fs.readdir(root)).toEqual([]);
+    } finally {
+      barrier.resolve();
+      await Promise.allSettled(contenders);
+      link.mockRestore();
+    }
+  });
+
+  it("retains an unexpired lease when the PID probe is denied", async () => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const metadata = await fs.readFile(lockPath, "utf8");
+    await holder.kill();
+    const originalKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === holder.pid && signal === 0) {
+        throw Object.assign(new Error("PID probe denied"), { code: "EPERM" });
+      }
+      return originalKill(pid, signal);
+    });
+    const operation = vi.fn(async () => "acquired");
+    try {
+      await expect(
+        withInstallerLeaseLock(lockPath, "denied PID probe", operation, { reclaimDeadLocalOwner: true }),
+      ).rejects.toThrow("Another Codegraph installer");
+      expect(kill).toHaveBeenCalledWith(holder.pid, 0);
+      expect(operation).not.toHaveBeenCalled();
+      expect(await fs.readFile(lockPath, "utf8")).toBe(metadata);
+    } finally {
+      kill.mockRestore();
+      await fs.rm(lockPath);
+    }
+  });
+
+  it("retains a lease naming a live unrelated PID as a PID-reuse stand-in", async () => {
+    const holderRoot = await createTestRoot();
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(holderRoot);
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const lease = parseJsonObject(await fs.readFile(path.join(holderRoot, ".codegraph-server.lock"), "utf8"));
+    lease.owner = "previous-unrelated-owner";
+    lease.leaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    const metadata = JSON.stringify(lease);
+    await fs.writeFile(lockPath, metadata);
+    try {
+      const stopped = await runCli(["server", "stop", "--root", root]);
+      expect(stopped.exitCode).toBe(1);
+      expect(stopped.stderr).toContain("Another Codegraph server lifecycle command is in progress");
+      expect(process.kill(holder.pid, 0)).toBe(true);
+      expect(await fs.readFile(lockPath, "utf8")).toBe(metadata);
+    } finally {
+      await holder.kill();
+      await fs.rm(lockPath);
+    }
+  });
+
+  it("admits only one concurrent reclaimer while its replacement lifecycle lease is held", async () => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    await holder.kill();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let owners = 0;
+    const contend = () =>
+      withInstallerLeaseLock(
+        path.join(root, ".codegraph-server.lock"),
+        "concurrent lifecycle recovery",
+        async () => {
+          owners += 1;
+          entered.resolve();
+          await release.promise;
+          return "acquired";
+        },
+        { reclaimDeadLocalOwner: true },
+      ).catch((error: unknown) => String(error));
+    const contenders = [contend(), contend()];
+    try {
+      await entered.promise;
+      await expect(Promise.race(contenders)).resolves.toContain("Another Codegraph installer");
+      expect(owners).toBe(1);
+    } finally {
+      release.resolve();
+      await Promise.all(contenders);
+    }
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("uses stable nonzero hard-link identity while reclaiming a lifecycle lease", async () => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    await holder.kill();
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const identities: Array<{ claim: number; published: number; sameDevice: boolean }> = [];
+    const originalLink = fs.link.bind(fs);
+    const link = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+      await originalLink(source, destination);
+      if (!String(destination).includes(".reclaim-dead-")) return;
+      const claim = await fs.lstat(destination);
+      const published = await fs.lstat(lockPath);
+      identities.push({ claim: claim.ino, published: published.ino, sameDevice: claim.dev === published.dev });
+    });
+    try {
+      await expect(
+        withInstallerLeaseLock(lockPath, "nonzero file identity", async () => "acquired", {
+          reclaimDeadLocalOwner: true,
+        }),
+      ).resolves.toBe("acquired");
+      expect(identities).toHaveLength(1);
+      expect(identities[0].claim).not.toBe(0);
+      expect(identities[0].published).toBe(identities[0].claim);
+      expect(identities[0].sameDevice).toBe(true);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      link.mockRestore();
+    }
+  });
+
+  it.each(["unchanged", "changed content"])("verifies %s through the zero-inode fallback", async (kind) => {
+    const root = await createTestRoot();
+    const holder = await startLifecycleLeaseHolder(root);
+    await holder.kill();
+    const lockPath = path.join(root, ".codegraph-server.lock");
+    const metadata = await fs.readFile(lockPath, "utf8");
+    const observedMtime = (await fs.lstat(lockPath)).mtimeMs;
+    let zeroInodeReads = 0;
+    let changed = false;
+    const originalLstat = fs.lstat.bind(fs);
+    const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+      const stats = await originalLstat(candidate, options as { bigint: true });
+      const isClaim = String(candidate).startsWith(`${lockPath}.reclaim-dead-`);
+      if (String(candidate) !== lockPath && !isClaim) return stats;
+      zeroInodeReads += 1;
+      Object.defineProperty(stats, "ino", { value: 0 });
+      Object.defineProperty(stats, "mtimeMs", { value: observedMtime });
+      if (isClaim && kind === "changed content" && !changed) {
+        changed = true;
+        await fs.writeFile(candidate, metadata.replace('"owner":', '"OWNER":'));
+      }
+      return stats;
+    });
+    const operation = vi.fn(async () => "acquired");
+    try {
+      const acquired = withInstallerLeaseLock(lockPath, "zero file identity", operation, {
+        reclaimDeadLocalOwner: true,
+      });
+      if (kind === "unchanged") {
+        await expect(acquired).resolves.toBe("acquired");
+        expect(operation).toHaveBeenCalledOnce();
+        await expect(fs.access(lockPath)).rejects.toThrow();
+      } else {
+        await expect(acquired).rejects.toThrow("existing lock");
+        expect(operation).not.toHaveBeenCalled();
+        expect(await fs.readFile(lockPath, "utf8")).toBe(metadata.replace('"owner":', '"OWNER":'));
+      }
+      expect(zeroInodeReads).toBeGreaterThanOrEqual(2);
+      expect((await fs.readdir(root)).some((name) => name.includes(".reclaim-dead-"))).toBe(false);
+    } finally {
+      lstat.mockRestore();
+      await fs.rm(lockPath, { force: true });
+    }
   });
 
   it("rejects registry directories that resolve outside the project root", async (context) => {

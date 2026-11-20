@@ -1,0 +1,99 @@
+[
+  {
+    "family": "ecmascript",
+    "accuracyId": "hono",
+    "id": "hono",
+    "touchExtension": ".ts",
+    "comment": "//"
+  },
+  {
+    "family": "dotnet",
+    "accuracyId": "humanizer",
+    "id": "humanizer",
+    "touchExtension": ".cs",
+    "comment": "//"
+  },
+  {
+    "family": "jvm",
+    "id": "okio",
+    "url": "https://github.com/square/okio.git",
+    "commit": "1926f022425ccd85ee558c558f0a5b7b24826a57",
+    "include": ["okio/src/**/*.kt"],
+    "touchExtension": ".kt",
+    "comment": "//"
+  },
+  {
+    "family": "c-cpp",
+    "id": "cjson",
+    "url": "https://github.com/DaveGamble/cJSON.git",
+    "commit": "6d9f2443ab071f86e5d9b43025a40929ec41c46c",
+    "include": ["**/*.{c,h}"],
+    "touchExtension": ".c",
+    "comment": "//"
+  },
+  {
+    "family": "python",
+    "id": "flask",
+    "url": "https://github.com/pallets/flask.git",
+    "commit": "49943b5a94413a530761350f04e896f76e8d620e",
+    "include": ["src/**/*.py"],
+    "touchExtension": ".py",
+    "comment": "#"
+  },
+  {
+    "family": "ruby",
+    "id": "rubocop",
+    "url": "https://github.com/rubocop/rubocop.git",
+    "commit": "89b5a60b4378a7f3be5462111de281e59c21c62b",
+    "include": ["lib/**/*.rb"],
+    "touchExtension": ".rb",
+    "comment": "#"
+  },
+  {
+    "family": "php",
+    "id": "guzzle",
+    "url": "https://github.com/guzzle/guzzle.git",
+    "commit": "7d9b1f430bb65ac664e120af227bf9a795ad6333",
+    "include": ["src/**/*.php"],
+    "touchExtension": ".php",
+    "comment": "//"
+  },
+  {
+    "family": "go",
+    "id": "gin",
+    "url": "https://github.com/gin-gonic/gin.git",
+    "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+    "include": ["**/*.go"],
+    "exclude": ["**/*_test.go"],
+    "touchExtension": ".go",
+    "comment": "//"
+  },
+  {
+    "family": "rust",
+    "id": "ripgrep",
+    "url": "https://github.com/BurntSushi/ripgrep.git",
+    "commit": "178cc027e283fd965cb72d0a7395b219eada170c",
+    "include": ["crates/**/*.rs"],
+    "touchExtension": ".rs",
+    "comment": "//"
+  },
+  {
+    "family": "swift",
+    "id": "kingfisher",
+    "url": "https://github.com/onevcat/Kingfisher.git",
+    "commit": "8822a433872ed3ac7563556c417da66e73544514",
+    "directory": "Kingfisher",
+    "include": ["Sources/**/*.swift"],
+    "touchExtension": ".swift",
+    "comment": "//"
+  },
+  {
+    "family": "zig",
+    "id": "zls",
+    "url": "https://github.com/zigtools/zls.git",
+    "commit": "e0911cd1ca5a48060c209c242ea3775dcd2a74e2",
+    "include": ["src/**/*.zig"],
+    "touchExtension": ".zig",
+    "comment": "//"
+  }
+]
