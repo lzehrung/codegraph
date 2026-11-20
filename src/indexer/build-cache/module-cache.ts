@@ -20,7 +20,7 @@ import {
   markNodeSqliteUnavailable,
   nodeSqliteUnavailableError,
 } from "../../sqlite-driver.js";
-import { buildBloomFilterFromSource } from "../../util/bloom-filter.js";
+import { BloomFilter, buildBloomFilterFromSource, type BloomFilterCache } from "../../util/bloom-filter.js";
 import {
   createSqliteTableIfMissing,
   ensureSqliteVersionedTableSchema,
@@ -44,6 +44,7 @@ import {
 import { lruMapGet, lruMapSet } from "../../util/lru-map.js";
 import { initCacheReport } from "./reports.js";
 import { cacheRoot } from "./location.js";
+import { clearMemoryJsonCandidates } from "./json-candidates.js";
 
 import { getImplementationFingerprint } from "./options.js";
 
@@ -64,6 +65,7 @@ type ModuleCacheEntry = {
   version: number;
   sig: string;
   mod: ModuleIndex;
+  bloom?: { bits: Buffer; size: number; hashCount: number; itemCount: number };
   /** Normalized project root the entry belongs to. */
   root: string;
 };
@@ -123,6 +125,7 @@ function memoryCacheKey(projectRoot: string, file: string): string {
 export function clearMemoryCache(): void {
   memoryCache.clear();
   rootsWithEvictedPayloads.clear();
+  clearMemoryJsonCandidates();
 }
 
 function clearMemoryCacheForProject(projectRoot: string): void {
@@ -907,10 +910,34 @@ export type PendingModuleCacheWrite = {
   mod: ModuleIndex;
 };
 
+function snapshotBloom(filter: BloomFilter): NonNullable<ModuleCacheEntry["bloom"]> {
+  const { size, hashCount } = filter.getMetadata();
+  return { bits: filter.toBuffer(), size, hashCount, itemCount: filter.getItemCount() };
+}
+
+/** The caller already proved this is the row at the current module signature. */
+export function memoryCachedBloomFilter(projectRoot: string, file: string, mod: ModuleIndex): BloomFilter | undefined {
+  const entry = memoryCache.get(memoryCacheKey(projectRoot, file));
+  if (entry?.mod !== mod || !entry.bloom) return undefined;
+  const { bits, size, hashCount, itemCount } = entry.bloom;
+  return BloomFilter.fromBuffer(bits, size, hashCount, itemCount);
+}
+
+export function rememberMemoryBloomFilter(
+  projectRoot: string,
+  file: string,
+  mod: ModuleIndex,
+  filter: BloomFilter,
+): void {
+  const entry = memoryCache.get(memoryCacheKey(projectRoot, file));
+  if (entry?.mod === mod) entry.bloom = snapshotBloom(filter);
+}
+
 export function writeModulesToCache(
   projectRoot: string,
   writes: readonly PendingModuleCacheWrite[],
   opts?: BuildOptions,
+  bloomFilters?: BloomFilterCache,
 ): void {
   if (!writes.length) return;
   const mode = opts?.cache ?? "off";
@@ -922,10 +949,17 @@ export function writeModulesToCache(
         const oldest = memoryCache.values().next();
         if (!oldest.done) rootsWithEvictedPayloads.set(oldest.value.root, ++memoryEvictionSerial);
       }
+      const filter = bloomFilters?.get(write.file);
       lruMapSet(
         memoryCache,
         key,
-        { version: PARSED_CACHE_VERSION, sig: write.sig, mod: write.mod, root },
+        {
+          version: PARSED_CACHE_VERSION,
+          sig: write.sig,
+          mod: write.mod,
+          root,
+          ...(filter ? { bloom: snapshotBloom(filter) } : {}),
+        },
         MAX_MEMORY_CACHE_ENTRIES,
       );
     }

@@ -191,8 +191,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 171 rebuilds Java enum-subject labels, C# expression-variable scopes and record reads, and Swift pattern labels.
  * Epoch 172 rebuilds edges cached by incremental and warm full builds after native syntax projection failed.
  * Epoch 173 rebuilds workspace graphs, JSON modules, and JVM facts affected by warm-cache omissions.
+ * Epoch 174 records relative JSON resolution candidates and persists Bloom filter item counts.
  */
-export const CORE_ALGORITHM_EPOCH = 173;
+export const CORE_ALGORITHM_EPOCH = 174;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches

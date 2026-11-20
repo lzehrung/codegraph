@@ -21,7 +21,12 @@ import {
   type ProjectFileInfo,
 } from "../util/project-files.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFileEntries, listChangedFiles } from "../util/git.js";
-import { clearResolutionCaches, loadNearestTsconfigFor, type MatchPathFn } from "../util/resolution.js";
+import {
+  clearResolutionCaches,
+  loadNearestTsconfigFor,
+  resolveSpecifier,
+  type MatchPathFn,
+} from "../util/resolution.js";
 import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
 import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import { collectJvmFileFacts } from "../util/jvm-tree.js";
@@ -132,6 +137,18 @@ import {
   type ManifestFileEntry,
   type PendingModuleCacheWrite,
 } from "./build-cache.js";
+import {
+  inspectJsonCandidates,
+  memoryJsonCandidates,
+  canImportJson,
+  relativeSpecifierCanImportJson,
+  setMemoryJsonCandidates,
+  updateJsonCandidates,
+  validateJsonCandidates,
+  type JsonCandidateRecord,
+  type MemoryJsonCandidates,
+} from "./build-cache/json-candidates.js";
+import { memoryCachedBloomFilter, rememberMemoryBloomFilter } from "./build-cache/module-cache.js";
 import { computeResolverEnvironmentFingerprint } from "./build-cache/resolver-environment.js";
 import { cacheRoot, repositoryAnchorMemoActive, runWithRepositoryAnchorMemo } from "./build-cache/location.js";
 import {
@@ -1459,6 +1476,7 @@ async function collectStaleCachedModules(args: {
   loadMatchPathForFile: (file: string) => Promise<MatchPathFn | undefined>;
   concurrency: number;
   canRetireDeletedFiles: boolean;
+  recoverJsonFiles: ReadonlySet<string>;
   confinedRoot?: string | undefined;
   trustedSources?: ReadonlyMap<string, string> | undefined;
 }): Promise<{ stale: Set<string>; deletedFiles: string[] }> {
@@ -1475,7 +1493,7 @@ async function collectStaleCachedModules(args: {
       });
   const deletedFiles = deletedRows.map(({ file }) => file);
   if (!cachedModules.size) return { stale: new Set<string>(), deletedFiles };
-  const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency);
+  const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency, args.recoverJsonFiles);
   for (const [file, { mod }] of cachedModules) {
     if (mod.importLookupIncomplete) stale.add(file);
   }
@@ -1483,6 +1501,16 @@ async function collectStaleCachedModules(args: {
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
       supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "",
     );
+  // A scoped build can omit a file without retiring its cache row. Its return with
+  // different content can satisfy an unresolved import even when it is a cache miss.
+  const unknownPreviousFiles = args.previousUnavailable.length
+    ? new Set(args.previousUnavailable.map(fileIdentityKey))
+    : undefined;
+  const canRestoreResolution = (file: string): boolean => {
+    if (resolvesFromDeclarations(file)) return true;
+    if (args.previousModules.get(file)?.syntaxTreeUnavailableReason) return true;
+    return !!unknownPreviousFiles?.has(fileIdentityKey(file));
+  };
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
   if (manifestFiles) {
@@ -1540,7 +1568,7 @@ async function collectStaleCachedModules(args: {
     // A changed or deleted declaration-language file can change which files declare a namespace
     // or package that an importer names. A deleted duplicate can resolve an ambiguous import.
     // Treat these files like added files.
-    const resolutionInputs = [...added, ...[...changed, ...deleted].filter((file) => resolvesFromDeclarations(file))];
+    const resolutionInputs = [...added, ...[...changed, ...deleted].filter(canRestoreResolution)];
     if (resolutionInputs.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
       const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
@@ -1571,10 +1599,7 @@ async function collectStaleCachedModules(args: {
       for (const importer of collectPythonPackageImporters(manifestFiles, added)) stale.add(importer);
     }
   } else {
-    const added = [
-      ...args.cacheMisses.added,
-      ...args.cacheMisses.changed.filter((file) => resolvesFromDeclarations(file)),
-    ];
+    const added = [...args.cacheMisses.added, ...args.cacheMisses.changed.filter(canRestoreResolution)];
     if (added.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
       for (const [file, { mod }] of cachedModules) {
@@ -1728,10 +1753,15 @@ async function collectStaleCachedModules(args: {
 }
 
 /** Files a cached module depends on, including every JVM wildcard package file. */
-function cachedModuleTargets(mod: ModuleIndex): string[] {
+function cachedModuleTargets(mod: ModuleIndex, recoverRelativeJson = false): string[] {
   const targets: string[] = [];
   for (const binding of mod.imports) {
-    if (typeof binding.resolved === "string") targets.push(binding.resolved);
+    const recoverJsonTarget =
+      recoverRelativeJson &&
+      binding.from.startsWith(".") &&
+      typeof binding.resolved === "string" &&
+      binding.resolved.toLowerCase().endsWith(".json");
+    if (typeof binding.resolved === "string" && !recoverJsonTarget) targets.push(binding.resolved);
     if (binding.kind !== "star" || !binding.jvmPackageFiles) continue;
     for (const file of binding.jvmPackageFiles) {
       if (file !== binding.resolved) targets.push(file);
@@ -1739,7 +1769,9 @@ function cachedModuleTargets(mod: ModuleIndex): string[] {
   }
   for (const entry of mod.exports) {
     if (entry.type === "local" || !entry.moduleSpecifier || entry.fromModule === entry.moduleSpecifier) continue;
-    targets.push(entry.fromModule);
+    const recoverJsonTarget =
+      recoverRelativeJson && entry.moduleSpecifier.startsWith(".") && entry.fromModule.toLowerCase().endsWith(".json");
+    if (!recoverJsonTarget) targets.push(entry.fromModule);
   }
   return targets;
 }
@@ -1753,14 +1785,71 @@ function cachedModuleSpecifiers(mod: ModuleIndex): string[] {
   return specifiers;
 }
 
+/**
+ * Re-resolve only JSON-capable relative imports when their project candidate record is unavailable.
+ * Copy changed bindings and exports: a memory-cached module may also belong to an earlier index.
+ */
+async function refreshCachedJsonResolutions(
+  file: string,
+  mod: ModuleIndex,
+  projectRoot: string,
+  workspaceConfig: WorkspaceConfig | undefined,
+  graphOptions: GraphBuildOptions,
+): Promise<ModuleIndex> {
+  const resolutions = new Map<string, Promise<string | { external: string }>>();
+  const resolve = (specifier: string): Promise<string | { external: string }> => {
+    let result = resolutions.get(specifier);
+    if (!result) {
+      result = resolveSpecifier(file, specifier, projectRoot, undefined, workspaceConfig, {
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+      });
+      resolutions.set(specifier, result);
+    }
+    return result;
+  };
+  let imports: ImportBinding[] | undefined;
+  for (let index = 0; index < mod.imports.length; index++) {
+    const binding = mod.imports[index]!;
+    // Component style imports use stylesheet resolution and cannot resolve to JSON.
+    if (binding.kind === "star") continue;
+    if (!relativeSpecifierCanImportJson(file, binding.from)) continue;
+    const resolved = await resolve(binding.from);
+    const previous = binding.resolved;
+    const unchanged =
+      typeof resolved === "string"
+        ? previous === resolved
+        : typeof previous === "object" && previous.external === resolved.external;
+    if (unchanged) continue;
+    imports ??= mod.imports.slice();
+    imports[index] = { ...binding, resolved };
+  }
+  let exports: ModuleIndex["exports"] | undefined;
+  for (let index = 0; index < mod.exports.length; index++) {
+    const entry = mod.exports[index]!;
+    if (entry.type === "local") continue;
+    const specifier = entry.moduleSpecifier ?? entry.fromModule;
+    if (!relativeSpecifierCanImportJson(file, specifier)) continue;
+    const resolved = await resolve(specifier);
+    const fromModule =
+      typeof resolved === "string" && isFilePathWithinRoot(projectRoot, resolved) ? resolved : specifier;
+    if (entry.fromModule === fromModule && entry.moduleSpecifier === specifier) continue;
+    exports ??= mod.exports.slice();
+    exports[index] = { ...entry, fromModule, moduleSpecifier: specifier };
+  }
+  if (!imports && !exports) return mod;
+  return { ...mod, ...(imports ? { imports } : {}), ...(exports ? { exports } : {}) };
+}
+
 /** Cached modules with a resolved import or re-export target that no longer exists. */
 async function cachedModulesWithMissingTargets(
   cachedModules: ReadonlyMap<string, { mod: ModuleIndex }>,
   concurrency: number,
+  recoverJsonFiles: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const targetsByFile = new Map<string, string[]>();
   for (const [file, { mod }] of cachedModules) {
-    const targets = cachedModuleTargets(mod);
+    const targets = cachedModuleTargets(mod, recoverJsonFiles.has(file));
     if (targets.length) targetsByFile.set(file, targets);
   }
   const targetExistence = await probePathExistence([...new Set([...targetsByFile.values()].flat())], concurrency);
@@ -1890,7 +1979,90 @@ async function buildIndexFromFileListInProbeCache(
     : new Map<string, string>();
   const signatureStrict = needsPersistentSignatures ? opts?.cacheStrict : false;
   const conc = edgeProbeConcurrency;
+  let storedJsonCandidates: unknown;
+  let memoryJsonState: MemoryJsonCandidates | undefined;
+  if (manifest) storedJsonCandidates = manifest.jsonCandidates;
+  else if (cacheEnabled && (opts?.cache === "memory" || manifestMode !== "read-write")) {
+    memoryJsonState = memoryJsonCandidates(projectRoot, opts);
+    storedJsonCandidates = memoryJsonState?.records;
+  }
+  const previousJsonCandidates = cacheEnabled ? validateJsonCandidates(storedJsonCandidates) : undefined;
+  const jsonCandidateCheck = previousJsonCandidates
+    ? await inspectJsonCandidates(projectRoot, previousJsonCandidates, conc)
+    : { signatures: new Map<string, string | null>(), changedImporters: new Set<string>() };
+  const changedJsonCandidateFiles = new Set(
+    Array.from(jsonCandidateCheck.changedImporters, (file) => fileIdentityKey(file)),
+  );
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
+  const memoryResolutionKey =
+    opts?.cache === "memory" && resolverEnvironmentFingerprint !== null
+      ? JSON.stringify([resolverEnvironmentFingerprint, graphOptions, languageExtensions])
+      : undefined;
+  const previousMemoryScope = memoryJsonState?.scopeFiles;
+  const sameMemoryScope =
+    canRetireDeletedFiles &&
+    previousMemoryScope?.size === normalizedFiles.length &&
+    normalizedFiles.every((file) => previousMemoryScope.has(fileIdentityKey(file)));
+  const canReuseMemoryCandidates =
+    !!previousJsonCandidates &&
+    !!memoryResolutionKey &&
+    memoryJsonState?.resolutionKey === memoryResolutionKey &&
+    sameMemoryScope;
+  // A changed edge or a newly reached JSON target can expose candidates without a discovery change.
+  const previousMemoryJsonTargets = canReuseMemoryCandidates
+    ? new Map(
+        previousJsonCandidates.map((record) => [
+          fileIdentityKey(path.resolve(projectRoot, record.file)),
+          new Set(record.importers.map((importer) => fileIdentityKey(path.resolve(projectRoot, importer)))),
+        ]),
+      )
+    : undefined;
+  const memoryJsonEdgesAreTracked = (file: string, mod: ModuleIndex, edges: readonly Edge[]): boolean => {
+    if (!previousMemoryJsonTargets) return false;
+    const importerKey = fileIdentityKey(file);
+    const tracksCandidate = (target: string): boolean => {
+      return previousMemoryJsonTargets.get(fileIdentityKey(target))?.has(importerKey) ?? false;
+    };
+    const bindingTargets = new Map<string, string>();
+    for (const binding of mod.imports) {
+      if (!binding.from.startsWith(".")) continue;
+      let target = "";
+      if (typeof binding.resolved === "string") target = `file:${fileIdentityKey(binding.resolved)}`;
+      else if (binding.resolved) target = `external:${binding.resolved.external}`;
+      const previous = bindingTargets.get(binding.from);
+      if (previous !== undefined && previous !== target) return false;
+      bindingTargets.set(binding.from, target);
+    }
+    for (const entry of mod.exports) {
+      if (entry.type === "local") continue;
+      const specifier = entry.moduleSpecifier ?? entry.fromModule;
+      if (!specifier.startsWith(".")) continue;
+      const target = path.isAbsolute(entry.fromModule)
+        ? `file:${fileIdentityKey(entry.fromModule)}`
+        : `external:${entry.fromModule}`;
+      const previous = bindingTargets.get(specifier);
+      if (previous !== undefined && previous !== target) return false;
+      bindingTargets.set(specifier, target);
+    }
+    const matchedBindings = new Set<string>();
+    for (const edge of edges) {
+      if (!edge.raw.startsWith(".")) continue;
+      if (edge.to.type === "file" && edge.to.path.toLowerCase().endsWith(".json")) {
+        if (!tracksCandidate(edge.to.path)) return false;
+      }
+      const bindingTarget = bindingTargets.get(edge.raw);
+      if (bindingTarget !== undefined) {
+        const edgeTarget =
+          edge.to.type === "file" ? `file:${fileIdentityKey(edge.to.path)}` : `external:${edge.to.name}`;
+        if (bindingTarget !== edgeTarget) return false;
+        matchedBindings.add(edge.raw);
+        continue;
+      }
+      if (!edge.raw.toLowerCase().endsWith(".json")) return false;
+      if (!tracksCandidate(path.resolve(path.dirname(file), edge.raw))) return false;
+    }
+    return matchedBindings.size === bindingTargets.size;
+  };
   const sqlFiles = normalizedFiles
     .filter((file) => isSqlFilePath(file, languageExtensions))
     .sort((left, right) => left.localeCompare(right));
@@ -2026,6 +2198,7 @@ async function buildIndexFromFileListInProbeCache(
     // Set when a stale importer row could not be deleted. The build then keeps its previous disk
     // state (manifest, snapshot, deletion evidence), so the next build finds the same staleness.
     let staleRowRemovalFailed = false;
+    const recoveredJsonWrites = new Map<string, PendingModuleCacheWrite>();
     if (cacheEnabled) {
       const cachedModules = new Map<string, { sigInfo: FileSignature; mod: ModuleIndex }>();
       const cacheMissesByState = { changed: [] as string[], added: [] as string[] };
@@ -2041,6 +2214,20 @@ async function buildIndexFromFileListInProbeCache(
           if (probe.staleMod) previousModules.set(file, probe.staleMod);
           else previousUnavailable.push(file);
         } else cacheMissesByState.added.push(file);
+      }
+      const recoverJsonFiles = new Set<string>();
+      for (const [file, { mod }] of cachedModules) {
+        const coveredByManifest = !!manifest && Object.hasOwn(manifestFiles, file);
+        const coveredByMemory = !!memoryJsonState?.coveredFiles.has(fileIdentityKey(file));
+        if (previousJsonCandidates && (coveredByManifest || coveredByMemory)) continue;
+        if (!canImportJson(file, opts?.languageExtensions)) continue;
+        const moduleMayImportJson = cachedModuleSpecifiers(mod).some((specifier) =>
+          relativeSpecifierCanImportJson(file, specifier),
+        );
+        const edgesMayImportJson = cachedGraphEntries
+          ?.get(file)
+          ?.edges.some((edge) => relativeSpecifierCanImportJson(file, edge.raw));
+        if (moduleMayImportJson || edgesMayImportJson) recoverJsonFiles.add(file);
       }
       const { stale: staleCachedModules, deletedFiles: retiredDeletions } = await collectStaleCachedModules({
         files: normalizedFiles,
@@ -2062,14 +2249,38 @@ async function buildIndexFromFileListInProbeCache(
         loadMatchPathForFile,
         concurrency: conc,
         canRetireDeletedFiles,
+        recoverJsonFiles,
         ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
       });
+      if (previousJsonCandidates) {
+        for (const file of jsonCandidateCheck.changedImporters) {
+          if (cachedModules.has(file)) staleCachedModules.add(file);
+        }
+      }
       retiredDeletionFiles = retiredDeletions;
+      const recovered = await mapLimit(
+        [...recoverJsonFiles].filter((file) => !staleCachedModules.has(file)),
+        conc,
+        async (file) => {
+          const cached = cachedModules.get(file)!;
+          const mod = await refreshCachedJsonResolutions(file, cached.mod, projectRoot, workspaceConfig, graphOptions);
+          cachedGraphEntries?.delete(file);
+          if (mod === cached.mod) return undefined;
+          const sig = await moduleCacheSignatureForFile(file, cached.sigInfo, opts, resolverEnvironmentFingerprint);
+          return { file, sig, mod };
+        },
+      );
+      for (const entry of recovered) {
+        if (!entry) continue;
+        recoveredJsonWrites.set(entry.file, entry);
+        const probe = cacheProbes.get(entry.file);
+        if (probe && !("error" in probe)) cacheProbes.set(entry.file, { ...probe, mod: entry.mod });
+      }
       // A stale importer's row still matches its source signature.
       // If the rebuild or the cache write fails, a later build would reuse the row. Delete it now.
       staleRowRemovalFailed = !removeModulesFromCache(
         projectRoot,
-        [...staleCachedModules].filter((file) => cachedModules.has(file)),
+        [...[...staleCachedModules].filter((file) => cachedModules.has(file)), ...recoveredJsonWrites.keys()],
         opts,
       );
       for (const file of staleCachedModules) {
@@ -2135,6 +2346,20 @@ async function buildIndexFromFileListInProbeCache(
     const persistedBloomFilters = bloomFilterCache
       ? await tryLoadPersistedBloomFilters(projectRoot, opts, report)
       : null;
+    const restoreReusedBloomFilter = async (
+      file: string,
+      signature: FileSignature,
+      mod: ModuleIndex,
+    ): Promise<void> => {
+      if (!bloomFilterCache) return;
+      let filter = persistedBloomFilters?.get(file, signature);
+      if (!filter && opts?.cache === "memory") filter = memoryCachedBloomFilter(projectRoot, file, mod);
+      if (!filter) {
+        filter = (await buildBloomFilterForFile(file, opts)) ?? undefined;
+        if (filter && opts?.cache === "memory") rememberMemoryBloomFilter(projectRoot, file, mod, filter);
+      }
+      if (filter) bloomFilterCache.set(file, filter);
+    };
     const parsedMap = new Map<string, ParsedFileContext>();
     const parseStart = performance.now();
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
@@ -2154,6 +2379,9 @@ async function buildIndexFromFileListInProbeCache(
       emitIndexLifecycleProgress(opts, "start", "build", totalFiles);
     };
     if (cacheMisses.length) ensureBuildProgressStarted();
+    const reusableJsonCandidateFiles = new Set<string>();
+    const manifestRootMatchesProject =
+      !!manifest && fileIdentityKey(manifest.projectRoot) === fileIdentityKey(projectRoot);
     const fileResults = await mapLimit(normalizedFiles, parseConcurrency, async (file) => {
       try {
         const cacheProbe = cacheProbes.get(file);
@@ -2161,6 +2389,7 @@ async function buildIndexFromFileListInProbeCache(
         if ("error" in cacheProbe) throw cacheProbe.error;
         const { sigInfo } = cacheProbe;
         let mod = cacheProbe.mod;
+        const reusedModule = !!mod;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
         }
@@ -2190,23 +2419,24 @@ async function buildIndexFromFileListInProbeCache(
             parsedFiles: parsedMap,
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
-          if (bloomFilterCache) {
-            const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
-            if (persistedFilter) {
-              bloomFilterCache.set(file, persistedFilter);
-            } else {
-              const filter = await buildBloomFilterForFile(file, opts);
-              if (filter) bloomFilterCache.set(file, filter);
-            }
+          await restoreReusedBloomFilter(file, sigInfo, mod);
+          if (
+            previousJsonCandidates &&
+            manifestRootMatchesProject &&
+            Object.hasOwn(manifestFiles, file) &&
+            !changedJsonCandidateFiles.has(fileIdentityKey(file)) &&
+            canImportJson(file, opts?.languageExtensions)
+          ) {
+            reusableJsonCandidateFiles.add(fileIdentityKey(file));
           }
-          return [file, mod, edges, undefined] as const;
+          return [file, mod, edges, recoveredJsonWrites.get(file)] as const;
         }
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
         const support = supportForFile(file, opts?.languageExtensions);
         if (!support) return [file, unparsedModuleIndex(file), [], undefined] as const;
         ensureBuildProgressStarted();
         let graphContext: FileEdgeSource | undefined;
-        let cacheWrite: PendingModuleCacheWrite | undefined;
+        let cacheWrite = recoveredJsonWrites.get(file);
         const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
           const extraction = projectFileExtractions.get(file);
@@ -2240,6 +2470,7 @@ async function buildIndexFromFileListInProbeCache(
           cacheWrite = built.cacheWrite;
         } else {
           collectJsonDependencies(mod.imports, jsonDependencies);
+          await restoreReusedBloomFilter(file, sigInfo, mod);
           // Reuse the failed extraction even if the cached edge entry has to be recomputed.
           if (mod.syntaxTreeUnavailableReason) graphContext = unprojectableEdgeSource(support);
         }
@@ -2259,6 +2490,16 @@ async function buildIndexFromFileListInProbeCache(
           parsedFiles: parsedMap,
           ...(sqlFactCache ? { sqlFactCache } : {}),
         });
+        if (
+          canReuseMemoryCandidates &&
+          reusedModule &&
+          mod &&
+          memoryJsonState?.coveredFiles.has(fileIdentityKey(file)) &&
+          !changedJsonCandidateFiles.has(fileIdentityKey(file)) &&
+          memoryJsonEdgesAreTracked(file, mod, edges)
+        ) {
+          reusableJsonCandidateFiles.add(fileIdentityKey(file));
+        }
         return [file, mod ?? createEmptyModuleIndex(file), edges, cacheWrite] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
@@ -2302,6 +2543,30 @@ async function buildIndexFromFileListInProbeCache(
       appendUniqueGraphEdges(edges);
       if (cacheWrite) pendingCacheWrites.push(cacheWrite);
     }
+    let jsonCandidates: JsonCandidateRecord[] | undefined;
+    if (cacheEnabled && !staleRowRemovalFailed) {
+      const candidateInputs = fileResults
+        .filter(([file]) => !reusableJsonCandidateFiles.has(fileIdentityKey(file)))
+        .map(([file, module, edges]) => ({ file, module, edges }));
+      const replacedFiles = new Set(candidateInputs.map(({ file }) => file));
+      if (canRetireDeletedFiles) {
+        for (const record of previousJsonCandidates ?? []) {
+          for (const importer of record.importers) {
+            const file = path.resolve(projectRoot, importer);
+            if (!reusableJsonCandidateFiles.has(fileIdentityKey(file))) replacedFiles.add(file);
+          }
+        }
+      }
+      jsonCandidates = await updateJsonCandidates({
+        projectRoot,
+        previous: previousJsonCandidates ?? [],
+        signatures: jsonCandidateCheck.signatures,
+        replacedFiles,
+        files: candidateInputs,
+        languageExtensions: opts?.languageExtensions,
+        concurrency: conc,
+      });
+    }
     if (pendingCacheWrites.length) {
       if (opts?.cache === "disk") {
         await timeIndexBuildPhase({
@@ -2315,8 +2580,19 @@ async function buildIndexFromFileListInProbeCache(
           fn: () => writeModulesToCache(projectRoot, pendingCacheWrites, opts),
         });
       } else {
-        writeModulesToCache(projectRoot, pendingCacheWrites, opts);
+        writeModulesToCache(projectRoot, pendingCacheWrites, opts, bloomFilterCache);
       }
+    }
+    if (jsonCandidates && (opts?.cache === "memory" || !shouldWriteManifest)) {
+      setMemoryJsonCandidates(
+        projectRoot,
+        opts,
+        jsonCandidates,
+        memoryJsonState,
+        normalizedFiles,
+        canRetireDeletedFiles,
+        memoryResolutionKey,
+      );
     }
     // A full-discovery build re-resolved every importer and wrote its modules back.
     // Clear the eviction state, unless another payload was evicted during the build.
@@ -2388,6 +2664,7 @@ async function buildIndexFromFileListInProbeCache(
             timings,
             manifestReport: report?.manifest,
             declaredContainers: declaredContainerIndexFromModules(modules.values()),
+            ...(jsonCandidates ? { jsonCandidates } : {}),
             ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
             ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
             ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
@@ -2806,6 +3083,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         resolverEnvironmentFingerprint !== null &&
         manifest.resolverEnvironmentFingerprint === resolverEnvironmentFingerprint;
     }
+    const previousJsonCandidates = validateJsonCandidates(manifest?.jsonCandidates);
     const requiresFullRebuild = optionDiffs.some(
       (diff) =>
         diff === "discovery" ||
@@ -2817,6 +3095,7 @@ async function buildProjectIndexIncrementalInProbeCache(
     const graphOptionsChanged = !graphOptionsEqual(manifest?.graphOptions, graphOptions);
     if (
       !manifest ||
+      !previousJsonCandidates ||
       graphOptionsChanged ||
       configChanged ||
       requiresFullRebuild ||
@@ -2833,6 +3112,8 @@ async function buildProjectIndexIncrementalInProbeCache(
           reason = "configChanged";
         } else if (!graphOptionsChanged && !resolverEnvironmentMatchesManifest) {
           reason = "resolverEnvironmentChanged";
+        } else if (!graphOptionsChanged && !previousJsonCandidates) {
+          reason = "jsonCandidatesInvalid";
         }
         manifestReport.reason = reason;
         manifestReport.reused = false;
@@ -3139,6 +3420,7 @@ async function buildProjectIndexIncrementalInProbeCache(
             allowEmpty: true,
             transientFiles,
             declaredContainers: new Map(),
+            jsonCandidates: [],
             configHash: currentConfigHashResult,
             discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
@@ -3172,6 +3454,8 @@ async function buildProjectIndexIncrementalInProbeCache(
     const markAsChanged = (file: string): void => {
       if (allFiles.has(file)) changedFiles.add(file);
     };
+    const jsonCandidateCheck = await inspectJsonCandidates(projectRoot, previousJsonCandidates, buildConcurrency(opts));
+    for (const file of jsonCandidateCheck.changedImporters) markAsChanged(file);
     // Git working-tree diffs are change *candidates*, not proof the indexed bytes are
     // stale. `lastCommit...WORKTREE` stays dirty across warm runs after we index the
     // dirty tree, so force-marking these files caused perpetual "Updated N files"
@@ -3831,6 +4115,20 @@ async function buildProjectIndexIncrementalInProbeCache(
           ...(surface !== undefined ? { surface } : {}),
         });
       }
+      const jsonFiles: Array<{ file: string; module: ModuleIndex; edges: readonly Edge[] }> = [];
+      for (const file of filesList) {
+        const module = modules.get(fileIdentityKey(file));
+        if (module) jsonFiles.push({ file, module, edges: manifestEntries.get(file)?.edges ?? [] });
+      }
+      const jsonCandidates = await updateJsonCandidates({
+        projectRoot,
+        previous: previousJsonCandidates,
+        signatures: jsonCandidateCheck.signatures,
+        replacedFiles: new Set([...filesList, ...deletedTrackedFiles]),
+        files: jsonFiles,
+        languageExtensions: opts?.languageExtensions,
+        concurrency: conc,
+      });
       await timeIndexBuildPhase({
         opts,
         timings,
@@ -3851,6 +4149,7 @@ async function buildProjectIndexIncrementalInProbeCache(
             manifestReport,
             transientFiles,
             declaredContainers,
+            jsonCandidates,
             configHash: currentConfigHashResult,
             discoveryContext,
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),

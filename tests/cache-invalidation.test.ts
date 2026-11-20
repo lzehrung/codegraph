@@ -786,6 +786,48 @@ describe("Cache invalidation and strict hashing", () => {
     expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
   });
 
+  it.each(["older epoch", "missing candidates", "invalid candidates"] as const)(
+    "rebuilds %s JSON candidate records before reusing a snapshot",
+    async (state) => {
+      const root = await mkTmpDir("dg-json-candidate-upgrade-");
+      const entry = path.join(root, "entry.ts");
+      const data = path.join(root, "data.json");
+      const source = 'import data from "./data.json";\nexport const current = data;\n';
+      await fsp.writeFile(entry, source, "utf8");
+      await fsp.writeFile(data, "{}\n", "utf8");
+      const options = { threads: 1, cache: "disk" as const };
+      await buildProjectIndex(root, options);
+      const stored = await readManifest(root);
+      expect(stored.jsonCandidates?.some((candidate) => candidate.file === "data.json")).toBe(true);
+      if (state === "older epoch") {
+        stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: 173 };
+        delete stored.jsonCandidates;
+      } else if (state === "missing candidates") delete stored.jsonCandidates;
+      else stored.jsonCandidates = [{ file: "../outside.json", signature: null, importers: ["entry.ts"] }];
+      await fsp.writeFile(manifestPathFor(root), JSON.stringify(stored), "utf8");
+      await fsp.unlink(data);
+
+      const report: BuildReport = { timings: {} };
+      const rebuilt = await buildProjectIndexIncremental(root, { ...options, report });
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(report.manifest?.reused).toBe(false);
+      if (state === "older epoch") {
+        expect(report.manifest?.optionsMismatch).toContain("coreAlgorithm");
+        expect(report.manifest?.reason).toBe("buildOptionsMismatch");
+      } else {
+        expect(report.manifest?.reason).toBe("jsonCandidatesInvalid");
+      }
+      expect([...rebuilt.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+      expect(rebuilt.graph.edges).toEqual(cold.graph.edges);
+      const request = { file: entry, line: 2, column: source.split("\n")[1]!.indexOf("data") + 1 };
+      expect(await goToDefinition(rebuilt, request)).toEqual(await goToDefinition(cold, request));
+      expect((await goToDefinition(rebuilt, request)).status).toBe("not_found");
+      const refreshed = await readManifest(root);
+      expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
+      expect(refreshed.jsonCandidates?.some((candidate) => candidate.file === "data.json")).toBe(true);
+    },
+  );
+
   it("uses one implementation fingerprint from bundled and unbundled entrypoints", async () => {
     const root = await mkTmpDir("dg-fingerprint-build-shapes-");
     await fsp.writeFile(path.join(root, "entry.ts"), "export const value = 1;\n", "utf8");

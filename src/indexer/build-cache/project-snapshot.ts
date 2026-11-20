@@ -118,6 +118,7 @@ type HydratedSnapshotModulesCacheEntry = {
 type SerializedBloomFilter = {
   size: number;
   hashCount: number;
+  itemCount?: number;
   bitsBase64: string;
 };
 
@@ -1242,6 +1243,7 @@ function serializeBloomFilterCache(
     serialized[cacheRelativePath(projectRoot, file)] = {
       size: metadata.size,
       hashCount: metadata.hashCount,
+      itemCount: filter.getItemCount(),
       bitsBase64: filter.toBuffer().toString("base64"),
     };
   }
@@ -1291,7 +1293,7 @@ function deserializeBloomFilterCache(
     );
     cache.set(
       absoluteFile,
-      BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount),
+      BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount, filter.itemCount),
     );
   }
   return cache;
@@ -1319,6 +1321,8 @@ function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter
     !Number.isInteger(filter.hashCount) ||
     filter.hashCount < BLOOM_FILTER_MIN_HASH_COUNT ||
     filter.hashCount > BLOOM_FILTER_MAX_HASH_COUNT ||
+    (filter.itemCount !== undefined &&
+      (typeof filter.itemCount !== "number" || !Number.isSafeInteger(filter.itemCount) || filter.itemCount < 0)) ||
     typeof filter.bitsBase64 !== "string"
   ) {
     return false;

@@ -14,6 +14,7 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import { cacheRelativePath, pruneDiskModuleCache } from "./build-cache/module-cache.js";
+import type { JsonCandidateRecord } from "./build-cache/json-candidates.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import {
   createDiscoveredFileMatcher,
@@ -69,6 +70,7 @@ export async function writeIndexManifestSnapshot(args: {
   transientFiles?: string[];
   symlinkDirectories?: string[];
   declaredContainers?: Map<string, readonly string[]> | Record<string, readonly string[]>;
+  jsonCandidates?: JsonCandidateRecord[];
   resolverEnvironmentFingerprint?: string;
   /** When present, used verbatim instead of hashing config files again. */
   configHash?: { hash: string; error?: string };
@@ -157,6 +159,7 @@ export async function writeIndexManifestSnapshot(args: {
     ...(args.declaredContainers !== undefined
       ? { declaredContainers: serializeDeclaredContainers(args.projectRoot, args.declaredContainers) }
       : {}),
+    ...(args.jsonCandidates !== undefined ? { jsonCandidates: args.jsonCandidates } : {}),
     transientFiles: (args.transientFiles ?? []).map((file) =>
       path.relative(args.projectRoot, file).replace(/\\/g, "/"),
     ),

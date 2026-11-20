@@ -35,6 +35,7 @@ import { cacheRoot } from "./location.js";
 import { recordCacheCorruption } from "./reports.js";
 import type { BuildOptions, BuildReport } from "../types.js";
 import type { ManifestBuildOptions } from "./options.js";
+import type { JsonCandidateRecord } from "./json-candidates.js";
 
 type PackageJsonDependencyInfo = {
   name?: string;
@@ -142,6 +143,8 @@ export type IndexManifest = {
    * relocated project root does not spuriously invalidate.
    */
   declaredContainers?: Record<string, string[]>;
+  /** Relative JSON candidates and the importers that depend on their existence or metadata. */
+  jsonCandidates?: JsonCandidateRecord[];
   /**
    * Files added only for a caller-scoped build. Missing on older manifests and treated
    * as empty; incremental builds prune entries once callers stop supplying them.
