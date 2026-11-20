@@ -155,7 +155,7 @@ import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
   prepareFileContextForBuild,
-  countNativeWorkerEligibleFiles,
+  nativeWorkerWork,
   emptyWorkerPoolSetup,
   preparedNativeOutcome,
   setupWorkerPool,
@@ -1997,7 +1997,8 @@ async function buildIndexFromFileListInProbeCache(
     if (hasProjectFactMisses) {
       workerSetup = await setupWorkerPool(
         opts,
-        countNativeWorkerEligibleFiles(initialCacheMisses, opts?.languageExtensions),
+        nativeWorkerWork(initialCacheMisses, opts?.languageExtensions, fileSignatures),
+        conc,
       );
       installProjectFileFactsReaders(workerSetup, report);
       projectExtractionStartedAt = performance.now();
@@ -2086,7 +2087,11 @@ async function buildIndexFromFileListInProbeCache(
       !("error" in probe) && !probe.mod ? file : null,
     ).filter((file): file is string => file !== null);
     if (!workerSetup.pool) {
-      workerSetup = await setupWorkerPool(opts, countNativeWorkerEligibleFiles(cacheMisses, opts?.languageExtensions));
+      workerSetup = await setupWorkerPool(
+        opts,
+        nativeWorkerWork(cacheMisses, opts?.languageExtensions, fileSignatures),
+        conc,
+      );
     }
     installProjectFileFactsReaders(workerSetup, report);
     if (lateProjectFactMisses.length) {
@@ -3444,7 +3449,8 @@ async function buildProjectIndexIncrementalInProbeCache(
       ) {
         workerSetup = await setupWorkerPool(
           opts,
-          countNativeWorkerEligibleFiles(initialChangedFiles, opts?.languageExtensions),
+          nativeWorkerWork(initialChangedFiles, opts?.languageExtensions, fileSignatures),
+          conc,
         );
         installProjectFileFactsReaders(workerSetup, report);
         updateStartedAt = performance.now();
@@ -3557,7 +3563,8 @@ async function buildProjectIndexIncrementalInProbeCache(
       if (!workerSetup.pool) {
         workerSetup = await setupWorkerPool(
           opts,
-          countNativeWorkerEligibleFiles(changedList, opts?.languageExtensions),
+          nativeWorkerWork(changedList, opts?.languageExtensions, fileSignatures),
+          conc,
         );
       }
       installProjectFileFactsReaders(workerSetup, report);
@@ -3690,8 +3697,8 @@ async function buildProjectIndexIncrementalInProbeCache(
         plannedFiles += wave.length;
         if (fileReport) fileReport.changed = changedFiles.size;
         if (!workerSetup.pool) {
-          const eligibleFiles = countNativeWorkerEligibleFiles(wave, opts?.languageExtensions);
-          if (shouldEnableNativeWorkers(opts, eligibleFiles)) workerSetup = await setupWorkerPool(opts, eligibleFiles);
+          const work = nativeWorkerWork(wave, opts?.languageExtensions, fileSignatures);
+          if (shouldEnableNativeWorkers(opts, work.fileCount)) workerSetup = await setupWorkerPool(opts, work, conc);
         }
       }
       if (timings && changedList.length) timings.parseMs = Math.round(parseMs);

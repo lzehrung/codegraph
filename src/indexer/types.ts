@@ -292,7 +292,7 @@ export type BuildOptions = {
   keepParsed?: boolean;
   /** Force native worker pool on/off. When unset, workers auto-enable at NATIVE_WORKER_AUTO_FILE_THRESHOLD. */
   useNativeWorkers?: boolean;
-  /** Override native extraction worker count. Automatic sizing reserves capacity and caps at 8. */
+  /** Override native extraction worker count. Automatic sizing uses parse work and reserves CPU capacity. */
   nativeThreads?: number;
   discovery?: ProjectFileDiscoveryOptions;
   /**

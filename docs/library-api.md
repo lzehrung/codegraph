@@ -536,10 +536,11 @@ A host that learns of an edit sooner than the 5-second check interval, for examp
 
 If a session query reports `StaleQuerySourceError`, call `session.invalidate()` and retry so the next call builds a new snapshot.
 
-Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers use at most
-eight threads and reserve at least one quarter of available CPU capacity when more than one CPU
-is available; a single-CPU host uses one worker. Set `buildOptions.nativeThreads` to override
-automatic sizing deliberately. Use
+Set `buildOptions.useNativeWorkers` to `false` to opt out. Automatic native workers size the pool
+from the count and total source size of eligible files that need parsing, use at most eight threads,
+and reserve at least one quarter of available CPU capacity when more than one CPU is available; a
+single-CPU host uses one worker. Set `buildOptions.nativeThreads` to override automatic sizing
+deliberately; the pool remains bounded by the number of eligible files. Use
 `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph
 JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()`
 (from `@lzehrung/codegraph/mcp`) exposes the same primitives without starting stdio, which is useful

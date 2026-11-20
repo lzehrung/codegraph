@@ -365,6 +365,8 @@ async function fileStatSignature(
 
 export type FileSignature = {
   sig: string;
+  /** Raw bytes observed with this signature; used only for in-memory worker sizing. */
+  size: number;
   gitSig?: string;
   cacheSig: string;
   contentHash?: string;
@@ -399,9 +401,9 @@ export async function fileSignature(
   const { sig, size, contentHash } = await fileStatSignature(file, signatureStrict, statOpts);
   if (blobId) {
     const gitSig = qualifyGitSignature(blobId, size);
-    return { sig, gitSig, cacheSig: gitSig, ...(contentHash ? { contentHash } : {}) };
+    return { sig, size, gitSig, cacheSig: gitSig, ...(contentHash ? { contentHash } : {}) };
   }
-  return { sig, cacheSig: contentHash ?? sig, ...(contentHash ? { contentHash } : {}) };
+  return { sig, size, cacheSig: contentHash ?? sig, ...(contentHash ? { contentHash } : {}) };
 }
 
 /**
@@ -412,9 +414,9 @@ export async function fileSignature(
 export function fileSignatureFromSource(source: string, rawSize: number, blobId?: string): FileSignature {
   const contentHash = crypto.createHash("sha256").update(source, "utf8").digest("hex");
   const sig = `${rawSize}:${contentHash}`;
-  if (!blobId) return { sig, cacheSig: contentHash, contentHash };
+  if (!blobId) return { sig, size: rawSize, cacheSig: contentHash, contentHash };
   const gitSig = qualifyGitSignature(blobId, rawSize);
-  return { sig, cacheSig: gitSig, contentHash, gitSig };
+  return { sig, size: rawSize, cacheSig: gitSig, contentHash, gitSig };
 }
 
 export async function cacheSignatureForFile(file: string, sigInfo: FileSignature): Promise<string> {

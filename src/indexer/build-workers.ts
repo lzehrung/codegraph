@@ -8,6 +8,7 @@ import {
 } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
+import { hasExplicitWorkerThreadCount } from "../util/worker-threads.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import {
   getNativeWorkerBindingHandoff,
@@ -62,6 +63,15 @@ import type { BuildOptions, BuildReport, ModuleIndex, WorkerPoolReport } from ".
  */
 export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 32;
 
+// Median cold builds, three alternating rounds, explicit pool sizes on TypeScript fixtures:
+// | parse-miss source | 2 workers | best measured |
+// | 0.5 MiB           | 2-6 workers comparable |
+// | 1.5 MiB           | 1,094 ms  | 4: 879 ms     |
+// | 2.4 MiB           | 1,420 ms  | 6: 1,020 ms   |
+// | 2.9 MiB           | 1,638 ms  | 6: 1,094 ms   |
+// Aim for roughly half a MiB per worker, while keeping at least two for parallel extraction.
+const NATIVE_WORKER_BYTES_PER_THREAD = 500 * 1024;
+
 type NativeWorkerPool = {
   run(task: NativeExtractTask | { tasks: NativeExtractTask[] }): Promise<unknown>;
   destroy(): Promise<void>;
@@ -75,9 +85,7 @@ export type WorkerPoolSetupResult = {
 };
 
 export function shouldEnableNativeWorkers(opts: BuildOptions | undefined, fileCount?: number): boolean {
-  // No files to parse means no work to distribute. Piscina starts minThreads eagerly, so an
-  // explicit request would otherwise spawn a full pool for a warm no-change run and tear it
-  // down again without ever submitting a task.
+  // Piscina starts a worker eagerly, so even an explicit request needs no pool without work.
   if (fileCount === 0) return false;
   if (!isNativeTreeSitterAvailable()) return false;
   if (opts?.useNativeWorkers === false) return false;
@@ -108,15 +116,19 @@ export function isNativeWorkerEligibleFile(
  * Eligibility never separates C from C++, so this classifies by extension and skips the header
  * sample read that `supportForFile` would perform for every `.h` file in the project.
  */
-export function countNativeWorkerEligibleFiles(
+export function nativeWorkerWork(
   files: readonly string[],
   languageExtensions: LanguageExtensionMap | undefined,
-): number {
-  let count = 0;
+  signatures: ReadonlyMap<string, { size: number }>,
+): { fileCount: number; sourceBytes: number } {
+  let fileCount = 0;
+  let sourceBytes = 0;
   for (const file of files) {
-    if (isNativeWorkerEligibleFile(file, supportForFileWithoutHeaderSample(file, languageExtensions))) count++;
+    if (!isNativeWorkerEligibleFile(file, supportForFileWithoutHeaderSample(file, languageExtensions))) continue;
+    fileCount++;
+    sourceBytes += signatures.get(file)?.size ?? 0;
   }
-  return count;
+  return { fileCount, sourceBytes };
 }
 
 function buildWorkerTask(
@@ -183,9 +195,10 @@ function workerResultToPrepared(
 
 export async function setupWorkerPool(
   opts: BuildOptions | undefined,
-  fileCount?: number,
+  work: { fileCount: number; sourceBytes: number },
+  concurrency: number,
 ): Promise<WorkerPoolSetupResult> {
-  const shouldUseWorkers = shouldEnableNativeWorkers(opts, fileCount);
+  const shouldUseWorkers = shouldEnableNativeWorkers(opts, work.fileCount);
   const report: WorkerPoolReport | undefined =
     shouldUseWorkers || opts?.useNativeWorkers !== undefined
       ? {
@@ -198,15 +211,22 @@ export async function setupWorkerPool(
   let pool: import("piscina").Piscina | null = null;
   if (shouldUseWorkers) {
     try {
-      const { createNativeWorkerPool } = await import("../worker/native-worker-pool.js");
+      // Keep Piscina loading inside the startup error boundary so a failed pool can fall back.
+      const { createNativeWorkerPool, resolveNativeWorkerThreadCount } =
+        await import("../worker/native-worker-pool.js");
       // shouldEnableNativeWorkers has already resolved the binding on this thread, so the
       // handoff is available here and saves every worker from repeating that resolution.
       const handoff = getNativeWorkerBindingHandoff();
+      let maxThreads = work.fileCount;
+      if (!hasExplicitWorkerThreadCount(opts?.nativeThreads)) {
+        const workSizedThreads = Math.max(2, Math.ceil(work.sourceBytes / NATIVE_WORKER_BYTES_PER_THREAD));
+        maxThreads = Math.min(work.fileCount, workSizedThreads);
+      }
       const createdPool = createNativeWorkerPool({
         threads: opts?.nativeThreads,
-        // More threads than files means threads that bootstrap, idle, and exit having parsed
-        // nothing, which on a small incremental build is the whole cost of the pool.
-        ...(typeof fileCount === "number" && fileCount > 0 ? { maxThreads: fileCount } : {}),
+        maxThreads,
+        // Build concurrency is independent of native pool size, including for explicit overrides.
+        maxQueue: Math.max(concurrency, 2 * resolveNativeWorkerThreadCount(opts?.nativeThreads)),
         ...(handoff ? { workerData: { nativeBinding: handoff } } : {}),
       });
       pool = createdPool;

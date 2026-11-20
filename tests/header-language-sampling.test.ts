@@ -7,7 +7,7 @@ import { buildProjectIndex } from "../src/index.js";
 import { prepareQueryIndexFile, MAX_QUERY_INDEX_TEXT_BYTES } from "../src/agent/query-index/content.js";
 import { buildDuplicateUnitsForFile } from "../src/duplicates/units.js";
 import { buildBloomFilterForFile } from "../src/indexer/build-cache/module-cache.js";
-import { countNativeWorkerEligibleFiles } from "../src/indexer/build-workers.js";
+import { nativeWorkerWork } from "../src/indexer/build-workers.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import { supportForFile, supportForFileWithSource, supportForFileWithoutHeaderSample } from "../src/languages.js";
 import { normalizePath } from "../src/util/paths.js";
@@ -174,10 +174,11 @@ describe("header language classification", () => {
     tempRoots.push(root);
     const files = ["widget.h", "plain.h", "schema.sql", "notes.md", "data.json"].map((name) => `${root}/${name}`);
 
-    const counted = await withHeaderSampleReads(() => countNativeWorkerEligibleFiles(files, undefined));
+    const signatures = new Map(files.map((file, index) => [file, { size: index + 1 }]));
+    const counted = await withHeaderSampleReads(() => nativeWorkerWork(files, undefined, signatures));
 
     // Both headers plus the SQL file; Markdown is graph-only and JSON is unsupported.
-    expect(counted.value).toBe(3);
+    expect(counted.value).toEqual({ fileCount: 3, sourceBytes: 6 });
     expect(counted.reads).toBe(0);
   });
 

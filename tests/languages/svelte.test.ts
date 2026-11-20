@@ -113,6 +113,54 @@ describe("Svelte SFC chunking", () => {
       await fs.promises.rm(cacheDir, { recursive: true, force: true });
     }
   });
+  it("indexes a large masked Svelte script without losing script or style dependencies", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cg-svelte-large-script-"));
+    const file = path.join(root, "Large.svelte");
+    const library = path.join(root, "lib.js");
+    const call = "export const value = target();";
+    const source = [
+      "<script>",
+      'import { target } from "./lib.js";',
+      call,
+      "/*",
+      `${" ".repeat(80)}\n`.repeat(20_000),
+      "*/",
+      "</script>",
+      "<div />",
+      "<style>",
+      '@import "./theme.css";',
+      '.box { composes: base from "./composed.css"; }',
+      "</style>",
+    ].join("\n");
+    try {
+      await Promise.all([
+        fs.promises.writeFile(file, source),
+        fs.promises.writeFile(library, "export function target() { return 1; }\n"),
+        fs.promises.writeFile(path.join(root, "theme.css"), ".theme {}\n"),
+        fs.promises.writeFile(path.join(root, "composed.css"), ".base {}\n"),
+      ]);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      const targets = index.graph.edges
+        .filter((edge) => fileIdentityKey(edge.from) === fileIdentityKey(file))
+        .map((edge) => (edge.to.type === "file" ? path.basename(edge.to.path) : edge.to.name));
+      expect(targets).toEqual(expect.arrayContaining(["lib.js", "theme.css", "composed.css"]));
+      const definition = await goToDefinition(index, { file, line: 3, column: call.indexOf("target") + 1 });
+      expect(definition.status).toBe("ok");
+      if (definition.status !== "ok") throw new Error("Expected the imported target definition");
+      expect(fileIdentityKey(definition.definition.file)).toBe(fileIdentityKey(library));
+      const references = await findReferences(index, { file: library, line: 1, column: 17 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected target references");
+      expect(references.referenceCoverage.state).toBe("complete");
+      expect(
+        references.references.some(
+          (reference) => fileIdentityKey(reference.file) === fileIdentityKey(file) && reference.range.start.line === 3,
+        ),
+      ).toBe(true);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 it("keeps forward aliases after adjacent signatures in a Svelte TypeScript script", async () => {

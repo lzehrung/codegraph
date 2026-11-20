@@ -49,18 +49,46 @@ pattern likely exists elsewhere.
 - [x] **Index identifier spellings once per parsed tree.** Indexing Ruby send names once per tree
       cut `rubyMethodName` from 13.3 to 1.5 ms in reference queries. Share one name-to-nodes index
       per tree across references, rename preview, call hierarchy, and the detailed graph.
-- [ ] **Size the native worker pool by project size.** Cold builds start up to eight native
-      extraction workers regardless of file count. Measure worker startup against extraction work
-      for 100 to 500 file projects and for `codegraph init`, and choose the pool size from the
-      file count.
-- [ ] **Count Git processes per operation.** Incremental fixes in #523 and #529 showed per-update Git
-      listing and stat passes as visible costs (an end-of-line stat pass alone added 185 to 467 ms
-      per unchanged update on a 10,000-file repository before it was removed). Count spawned Git
-      processes for init, updates, and queries, then batch or reuse their results.
-- [ ] **Profile `codegraph init`.** A cold `init` on a 651-file project measured a 3,788 ms median on
-      3.2.0 versus 3,390 ms on 3.1.3 (three alternating runs, about 12% slower). The cause is
-      unconfirmed; candidates are lifecycle root discovery, incremental Git checks, and new
-      per-file facts.
+- [x] **Size the native worker pool by project size.** An initial file-count heuristic gave five-round
+      medians of 1,179 to 938 ms, 1,636 to 1,242 ms, and 2,307 to 2,328 ms on 50, 150, and
+      500 real files, but slowed small projects with large files. The corrected heuristic sizes from
+      parse-miss bytes. On three alternating builds of 150 x 20 KiB, 150 x 10 KiB, and 100 x 5 KiB,
+      median wall time was 1,334 to 1,286 ms, 1,095 to 964 ms, and 762 to 706 ms; pool sizes were
+      8 to 7, 8 to 4, and 8 to 2. Baseline spreads were 2.2%, 16.2%, and 2.9%, with head slower in
+      1, 0, and 0 rounds. For 100 x 150 KiB, both pools used 8 workers; median time was 3,763 to
+      4,093 ms, within the 16.8% baseline spread, with head slower in all three rounds.
+      Five further rounds measured 3,105 to 3,343 ms, with head slower in all five rounds.
+      The native binaries differed only in PE link timestamps and the PDB GUID; their `.text`
+      and `.data` sections were identical. Seven rotated A/B/A heavy-file runs measured 3,070,
+      3,190, and 2,937 ms, showing the earlier gap was run-to-run noise.
+      Wall times are provisional under shared load. At `threads: 16` and `nativeThreads: 2`, all 150 tasks
+      completed without queue failures; the baseline rejected 92 to 94 per run.
+      Three clean `init` runs on the 150 x 20 KiB fixture, with a cleared external cache anchor,
+      had median wall time 3,611 to 3,414 ms.
+- [x] **Count Git processes per operation.** On a 953-file Git project, process counts for
+      clean init fell from 15 to 13 and a one-file update from 13 to 12. References,
+      go-to-definition, and search after that edit fell from 11 to 10; cold builds stayed at 7
+      and no-change updates at 8. The staged and modified listings and the two lifecycle
+      ignore checks each share one child process.
+- [x] **Profile `codegraph init`.** The 953-file clean-init profile spent 21.9 s idle, 1.8 s in
+      SQLite execution, and 1.5 s in realpath on the main thread under shared-machine load.
+      Five alternating clean-init runs had median wall time 5,846 to 5,933 ms and process CPU
+      11,343 to 11,405 ms; head was slower in two rounds and baseline wall spread was 22%.
+      Removing two Git children reduces avoidable work; the earlier 3.2.0 versus 3.1.3
+      regression on the 651-file project remains unclassified.
+- [x] **Avoid quadratic stylesheet scans on masked SFC scripts.** Five alternating builds of
+      the 744 KB script fixture had median wall time 20,689 to 740 ms for Vue, 19,833 to
+      730 ms for Svelte, and 570 to 568 ms for plain JavaScript. Baseline wall spreads were
+      39.6%, 27.6%, and 3.0%, with head slower in 0, 0, and 2 rounds respectively. Median CPU for Vue
+      fell from 20,609 to 766 ms, and for Svelte from 19,391 to 734 ms. Three CSS-module
+      regexes accounted for 13.2 s of baseline profile self time and no longer backtrack
+      across the masked lines.
+- [x] **Measure graph-build retention.** Five alternating Humanizer and Spectre.Console runs had
+      median peak RSS of 723 to 776 MiB and 394 to 364 MiB; baseline spreads were 10.5% and
+      1.9%, with head higher in 3 and 0 rounds. Median post-GC build heap was 83 to 84 MiB and
+      32 to 32 MiB, and graph heap was 214 to 214 MiB and 88 to 88 MiB. The query caches held
+      765 and 468 parsed views while their indexes were live; after release, both indexes were
+      collected in every run and heap fell to 41 and 29 MiB.
 - [ ] **Bound graph-build cost per resolved edge.** After caching, the Ruby fixes still add about 8%
       correct edges on RuboCop (21,621 to 23,286); track graph-build time per edge so new
       resolution rules do not grow cost faster than the edges they add.
@@ -273,3 +301,28 @@ Default-budget Hono and Humanizer matched all six recorded work counters from `5
 exactly: tables built, targeted walks, reuses, build-node visits, targeted-node visits,
 and bucket inserts. Their first/repeated built-targeted-reused counts remained
 255-310-522 / 55-0-1032 for Hono and 503-1309-231 / 806-0-1237 for Humanizer.
+
+## Batch evidence
+
+The initial batch measurements compared against `49465a84` on Node 22.23.4 under shared Windows load.
+On a 957-module project, five alternating runs had median baseline to head times of 6,525 to
+8,650 ms for cold indexing, 704 to 707 ms for an unchanged update, 1,355 to 1,382 ms for a
+one-file update, and 6,024 to 6,123 ms for the detailed graph. The corresponding times were
+278 to 302 ms for references, 29.7 to 30.5 ms for go-to-definition, and 2,347 to 2,152 ms
+for search. Each median stayed within the baseline spread; search's first round built its sidecar.
+
+In that operation order, baseline wall spreads were 52.2%, 26.7%, 53.7%, 23.8%, 20.5%, 21.8%,
+and 709.9%; head was slower in 2, 3, 3, 4, 3, 5, and 3 of the five rounds respectively. The first search
+round accounts for most of its spread.
+
+After the worker-sizing correction, five alternating runs on the same project, pinned to one
+build and native thread, had median baseline to head times of 5,945 to 6,025 ms for cold indexing,
+672 to 695 ms for an unchanged update, 1,370 to 1,446 ms for a one-file update, and 5,523 to
+5,513 ms for the detailed graph. References, go-to-definition, and search were 269 to 266 ms,
+29.6 to 30.4 ms, and 2,059 to 2,110 ms. Baseline spreads were 47.8%, 44.9%, 27.4%, 23.6%,
+11.9%, 6.8%, and 59.3%; head was slower in 2, 4, 2, 2, 3, 3, and 2 rounds respectively.
+
+Across 76 sample and edge-corpus projects and five real projects, 21,540 file edges, 40,438
+detailed edges, and 2,886 go-to-definition and 2,886 reference answers, including coverage,
+matched the baseline. All extracted specifiers in 100 stylesheet and SFC files also matched.
+The detailed graph skipped one Humanizer file in both builds because its syntax tree was unavailable.

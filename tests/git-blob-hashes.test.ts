@@ -2,10 +2,18 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getGitBlobHashes, setGitExecutableForTests } from "../src/util/git.js";
-import { buildProjectIndex, buildProjectIndexIncremental, goToDefinition, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
+  findReferences,
+  goToDefinition,
+  type BuildReport,
+} from "../src/index.js";
 import { resolveIncrementalFilePlan } from "../src/indexer/incremental-plan.js";
 import { closeDiskCacheDatabase } from "../src/indexer/build-cache.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { initCodegraphLifecycle } from "../src/lifecycle/manifest.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 
@@ -106,7 +114,82 @@ describe("getGitBlobHashes", () => {
     const hashCalls = calls.filter((args) => args[0] === "hash-object");
     expect(hashCalls).toHaveLength(1);
     expect(hashCalls[0]!.filter((arg) => arg.endsWith(".ts")).map((arg) => path.basename(arg))).toEqual(["edited.ts"]);
-    expect(calls.filter((args) => args[0] === "ls-files")).toHaveLength(2);
+    expect(calls.filter((args) => args[0] === "ls-files")).toEqual([["ls-files", "-v", "-s", "-m", "-z"]]);
+  });
+
+  it("checks lifecycle manifest and cache ignore rules in one Git process", async () => {
+    const root = await repoWithFiles({
+      ".gitignore": ".codegraph/manifest.json\n",
+      "main.ts": "export const value = 1;\n",
+    });
+    const log = await recordGitCalls();
+    const initialized = await initCodegraphLifecycle(root);
+    expect(initialized.gitignore?.status).toBe("added");
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/manifest.json\n.codegraph/\n");
+    const ignoreChecks = (await gitCalls(log)).filter((args) => {
+      if (args[0] !== "check-ignore") return false;
+      const lifecyclePath = args.includes(".codegraph/manifest.json") || args.includes(".codegraph/cache/index-v1");
+      return args.includes("--stdin") || lifecyclePath;
+    });
+    expect(ignoreChecks).toEqual([["check-ignore", "--no-index", "-z", "--stdin"]]);
+  });
+
+  it.each([
+    { cache: "memory" as const, incremental: false },
+    { cache: "memory" as const, incremental: true },
+    { cache: "disk" as const, incremental: false },
+    { cache: "disk" as const, incremental: true },
+  ])("$cache Git updates match cold (incremental: $incremental)", async ({ cache, incremental }) => {
+    const original = "export function target() { return 1; }\n";
+    const changed = "export function target() { return 2; }\nexport const extra = 1;\n";
+    const call = "export function run() { return target(); }";
+    const root = await repoWithFiles({
+      "lib.ts": original,
+      "main.ts": `import { target } from "./lib";\n${call}\n`,
+    });
+    const cacheDir = await roots.create("dg-git-blob-cache-");
+    const options = { cache, cacheDir, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    const lib = path.join(root, "lib.ts");
+    const renamed = path.join(root, "renamed.ts");
+    const main = path.join(root, "main.ts");
+    const build = incremental ? buildProjectIndexIncremental : buildProjectIndex;
+    const check = async (targetExists: boolean): Promise<void> => {
+      const warm = await build(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+      expect(warm.byFile.get(fileIdentityKey(lib))?.exports).toEqual(cold.byFile.get(fileIdentityKey(lib))?.exports);
+      expect(warm.byFile.get(fileIdentityKey(main))?.imports).toEqual(cold.byFile.get(fileIdentityKey(main))?.imports);
+      expect(warm.graph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(
+        cold.graph.edges.map((edge) => JSON.stringify(edge)).sort(),
+      );
+      const warmGraph = await buildSymbolGraphDetailed(warm);
+      const coldGraph = await buildSymbolGraphDetailed(cold);
+      expect(warmGraph.edges.map((edge) => JSON.stringify(edge)).sort()).toEqual(
+        coldGraph.edges.map((edge) => JSON.stringify(edge)).sort(),
+      );
+      const callSite = { file: main, line: 2, column: call.indexOf("target") + 1 };
+      expect(await goToDefinition(warm, callSite)).toEqual(await goToDefinition(cold, callSite));
+      const referenceSite = targetExists ? { file: lib, line: 1, column: 17 } : { file: main, line: 2, column: 17 };
+      expect(await findReferences(warm, referenceSite)).toEqual(await findReferences(cold, referenceSite));
+    };
+    try {
+      await buildProjectIndex(root, options);
+      await check(true);
+      await fsp.writeFile(lib, changed);
+      await check(true);
+      await fsp.unlink(lib);
+      await check(false);
+      await fsp.writeFile(lib, changed);
+      await check(true);
+      await fsp.rename(lib, renamed);
+      await check(false);
+      await fsp.rename(renamed, lib);
+      await check(true);
+      await fsp.writeFile(lib, original);
+      await check(true);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+    }
   });
 
   it("retains deleted rename sources until a tracked file is restored", async () => {
