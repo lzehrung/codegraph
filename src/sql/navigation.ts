@@ -49,6 +49,7 @@ import {
 } from "./routine-mentions.js";
 import type { SqlChangedObject } from "./source-graph.js";
 import type { SqlStatementFact } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 type SqlStatementNavigationSlice = {
   text: string;
@@ -83,7 +84,7 @@ function sqlFiles(index: ProjectIndex): string[] {
   return Array.from(index.byFile.values())
     .map((module) => normalizePath(module.file))
     .filter((file) => isSqlFilePath(file, index.languageExtensions))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
 }
 function getSqlNavigationCache(index: ProjectIndex): NonNullable<ProjectIndex["sqlNavigation"]> {
   index.sqlNavigation ??= {
@@ -883,7 +884,7 @@ export async function findSqlReferences(
     }
   }
   references.sort((left, right) => {
-    const fileCompare = left.file.localeCompare(right.file);
+    const fileCompare = compareStrings(left.file, right.file);
     if (fileCompare !== 0) return fileCompare;
     return left.range.start.line - right.range.start.line || left.range.start.column - right.range.start.column;
   });

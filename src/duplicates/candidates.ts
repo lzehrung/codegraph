@@ -1,4 +1,5 @@
 import { appendToArrayMap } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { compareUnitRefs, isScorablePair } from "./scoring.js";
 import { normalizeDetectionFile } from "./units.js";
 import type {
@@ -989,7 +990,7 @@ function addAlignedSimilarityHintPairs(
   const seenPairs = new Set<number>();
   let addedPairs = 0;
   for (const [key, sortedLeftUnits] of Array.from(leftByKey.entries()).sort(([left], [right]) =>
-    left.localeCompare(right),
+    compareStrings(left, right),
   )) {
     const sortedRightUnits = rightByKey.get(key);
     if (!sortedRightUnits?.length) continue;

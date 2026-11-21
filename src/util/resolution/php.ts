@@ -26,6 +26,7 @@ import {
   type PhpModuleImportNames,
 } from "../../indexer/php-namespace-symbols.js";
 import { getNativeQueryExecution, isNativeRequiredUnavailableError } from "../../native/tree-sitter-native.js";
+import { compareStrings } from "../strings.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
 
@@ -362,7 +363,7 @@ function extractPhpTopLevelPackageEntries(source: string): PhpPackageSymbolIndex
     });
   }
 
-  return Array.from(packageEntries.values()).sort((left, right) => left.packageName.localeCompare(right.packageName));
+  return Array.from(packageEntries.values()).sort((left, right) => compareStrings(left.packageName, right.packageName));
 }
 
 function tokenizePhpSource(source: string): PhpScannerToken[] {

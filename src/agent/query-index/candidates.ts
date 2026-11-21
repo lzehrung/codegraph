@@ -1,5 +1,6 @@
 import { normalizeQuerySearchText } from "./content.js";
 import { QUERY_INDEX_CANDIDATE_ROW_LIMIT, type QueryIndexStore, type StoredQueryIndexChunk } from "./store.js";
+import { compareStrings } from "../../util/strings.js";
 
 export const QUERY_INDEX_CANDIDATE_VERSION = 7;
 
@@ -89,7 +90,7 @@ function compareCandidateChunks(left: QueryIndexCandidate, right: QueryIndexCand
     Number(right.score.exactPhrase) - Number(left.score.exactPhrase) ||
     Number(right.score.proximity) - Number(left.score.proximity) ||
     right.score.matchedTerms - left.score.matchedTerms ||
-    left.path.localeCompare(right.path) ||
+    compareStrings(left.path, right.path) ||
     left.ordinal - right.ordinal
   );
 }

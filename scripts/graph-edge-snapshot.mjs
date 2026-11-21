@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { absoluteSnapshotPathPatterns } from "./snapshot-paths-lib.mjs";
 
 const rootDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const SAMPLES_DIR = "tests/samples";
@@ -135,7 +136,7 @@ function projectRelativePath(bases, filePath) {
   for (const base of bases) {
     const relative = path.relative(base, filePath);
     const outsideBase = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-    if (relative && !outsideBase) return relative.split(path.sep).join("/");
+    if (relative && !outsideBase) return relative.split(path.sep).join("/").normalize("NFC");
   }
   throw new Error(`${filePath} is outside the project root ${bases[0]}.`);
 }
@@ -212,18 +213,15 @@ async function indexProjectRecords(codegraph, project, seenLanguages) {
 }
 
 // Neither the checkout location nor the machine may reach the snapshot, whichever separators or casing a path used.
-// The needles are escaped like the records, so a checkout path with non-ASCII characters is still found.
-function checkoutPathNeedles() {
-  const directories = new Set([rootDir, fs.realpathSync(rootDir)]);
-  const forms = [...directories].flatMap((directory) => [directory, directory.replaceAll("\\", "/")]);
-  return new Set(forms.map((form) => asciiText(form).toLowerCase()));
+// Match a whole absolute prefix, not a path segment inside a project-relative filename.
+function checkoutPathPatterns() {
+  return absoluteSnapshotPathPatterns([rootDir, fs.realpathSync(rootDir)]);
 }
 
-function assertNoCheckoutPaths(root, records, needles) {
+function assertNoCheckoutPaths(root, records, patterns) {
   for (const record of records) {
-    const lowered = record.toLowerCase();
-    for (const needle of needles) {
-      if (lowered.includes(needle)) throw new Error(`${root.name}: an edge record holds the checkout path: ${record}`);
+    for (const pattern of patterns) {
+      if (pattern.test(record)) throw new Error(`${root.name}: an edge record holds the checkout path: ${record}`);
     }
   }
 }
@@ -256,13 +254,13 @@ async function projectRecords(codegraph, project, seenLanguages) {
 async function generateSnapshots(codegraph, roots) {
   const snapshots = new Map();
   const seenLanguages = new Set();
-  const checkoutNeedles = checkoutPathNeedles();
+  const checkoutPatterns = checkoutPathPatterns();
   for (const root of roots) {
     let records = [];
     for (const project of root.projects) {
       records = records.concat(await projectRecords(codegraph, project, seenLanguages));
     }
-    assertNoCheckoutPaths(root, records, checkoutNeedles);
+    assertNoCheckoutPaths(root, records, checkoutPatterns);
     snapshots.set(`${root.name}${SNAPSHOT_EXTENSION}`, snapshotText(root, records));
   }
   const missing = codegraph.LANGUAGE_SUPPORTS.map((support) => support.id).filter((id) => !seenLanguages.has(id));

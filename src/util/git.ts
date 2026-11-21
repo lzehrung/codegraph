@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { stringifyUnknown } from "./ast.js";
+import { stringifyUnknown } from "./strings.js";
 import { createRootPathMapper, normalizePath } from "./paths.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 

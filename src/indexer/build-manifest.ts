@@ -24,6 +24,7 @@ import {
 import { createRootPathMapper } from "../util/paths.js";
 import { languageExtensionPatterns } from "../languages.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 export function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {
   if (!entry.sig) return undefined;
@@ -46,10 +47,10 @@ function serializeDeclaredContainers(
 ): Record<string, string[]> {
   const entries = index instanceof Map ? [...index] : Object.entries(index);
   const serialized: Record<string, string[]> = {};
-  for (const [name, files] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [name, files] of entries.sort(([left], [right]) => compareStrings(left, right))) {
     serialized[name] = files
       .map((file) => cacheRelativePath(projectRoot, file))
-      .sort((left, right) => left.localeCompare(right));
+      .sort((left, right) => compareStrings(left, right));
   }
   return serialized;
 }

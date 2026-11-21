@@ -52,26 +52,3 @@ export function toRange(node: NodeLike | null | undefined): Range {
     },
   };
 }
-
-export function stringifyUnknown(value: unknown): string {
-  if (value instanceof Error) return value.message;
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "[Object]";
-    }
-  }
-  if (typeof value === "symbol") return value.toString();
-  if (typeof value === "function") {
-    return `[Function: ${value.name || "anonymous"}]`;
-  }
-  return "unknown";
-}

@@ -22,6 +22,7 @@ import {
   terraformOutputSelectionReadsOutput,
   type TerraformReferenceTarget,
 } from "./syntax.js";
+import { compareStrings } from "../util/strings.js";
 
 /**
  * The one place that decides what a Terraform reference names. `goToDefinition`,
@@ -89,7 +90,7 @@ export function terraformFactsForFile(index: ProjectIndex, file: FileId): Promis
 export function terraformModuleFiles(index: ProjectIndex, file: FileId): FileId[] {
   return [...getCompilationUnitPeers(index, file).files]
     .filter((peer) => isTerraformFile(index, peer))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
 }
 
 type DirectoryLookup = { source: ProjectIndex["byFile"]; size: number; files: Map<string, FileId> };
@@ -117,7 +118,7 @@ export function indexedTerraformFiles(index: ProjectIndex): FileId[] {
   return [...index.byFile.values()]
     .map((module) => module.file)
     .filter((file) => isTerraformFile(index, file))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
 }
 
 function definitionForDeclaration(

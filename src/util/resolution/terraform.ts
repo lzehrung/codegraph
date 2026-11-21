@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
 import { confineResolvedPath, normalizePath } from "../paths.js";
+import { compareStrings } from "../strings.js";
 
 /**
  * The directory a Terraform module `source` names, or null when the source is not local.
@@ -46,7 +47,7 @@ export async function resolveTerraformModuleSourcePaths(
     .filter((entry) => entry.isFile() || entry.isSymbolicLink())
     .map((entry) => ({ file: normalizePath(path.join(directory, entry.name)), link: entry.isSymbolicLink() }))
     .filter(({ file }) => supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "terraform")
-    .sort((left, right) => left.file.localeCompare(right.file));
+    .sort((left, right) => compareStrings(left.file, right.file));
   const confined: string[] = [];
   for (const candidate of candidates) {
     if (candidate.link && !(await isRegularFileTarget(candidate.file))) continue;

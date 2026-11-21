@@ -1,3 +1,5 @@
+import { compareStrings } from "../util/strings.js";
+
 export type CliCommandFamily = "start" | "search" | "navigate" | "review" | "graph" | "manage";
 
 export type CliCommandMetadata = {
@@ -100,7 +102,7 @@ export function suggestCliCommands(input: string, limit: number = 3): string[] {
     distance: editDistance(normalized, command.name),
   }))
     .filter((candidate) => candidate.distance <= maximumDistance)
-    .sort((left, right) => left.distance - right.distance || left.name.localeCompare(right.name))
+    .sort((left, right) => left.distance - right.distance || compareStrings(left.name, right.name))
     .slice(0, limit)
     .map((candidate) => candidate.name);
 }

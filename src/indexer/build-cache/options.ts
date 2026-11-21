@@ -9,6 +9,7 @@ import { getCodegraphVersion } from "../../util/package-info.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/project-files.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import type { BuildOptions } from "../types.js";
+import { compareStrings } from "../../util/strings.js";
 export { normalizeLanguageExtensions } from "../../languages.js";
 
 /**
@@ -192,8 +193,9 @@ export { normalizeLanguageExtensions } from "../../languages.js";
  * Epoch 172 rebuilds edges cached by incremental and warm full builds after native syntax projection failed.
  * Epoch 173 rebuilds workspace graphs, JSON modules, and JVM facts affected by warm-cache omissions.
  * Epoch 174 records relative JSON resolution candidates and persists Bloom filter item counts.
+ * Epoch 175 makes selected representatives such as Go package entries use locale-independent ordering.
  */
-export const CORE_ALGORITHM_EPOCH = 174;
+export const CORE_ALGORITHM_EPOCH = 175;
 /**
  * Bump whenever a language behavior hook changes. Hook source text is deliberately
  * not fingerprinted because bundling rewrites it; this epoch invalidates caches
@@ -357,7 +359,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
 export function getImplementationFingerprintForEpoch(languageBehaviorEpoch: number): string {
   const definitions = getAllLanguages()
     .map(languageDefinitionFingerprintDescriptor)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort((left, right) => compareStrings(left.id, right.id));
   const hash = crypto.createHash("sha256");
   hash.update("codegraph-implementation-fingerprint-v3");
   hash.update("\0");

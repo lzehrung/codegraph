@@ -93,6 +93,9 @@ using syntax and facts proven from source. It must not emulate the full language
   `UPDATE_CALL_FORM_REPORT=1 npx vitest run tests/call-form-matrix.report.test.ts`.
 - When a change alters resolved edges, regenerate `tests/snapshots/graph-edges` with
   `npm run graph:snapshot` and review the diff. `npm run check` fails while the snapshot is stale.
+- Regenerate `tests/snapshots/answers` with `npm run answers:snapshot` when goto/reference answers
+  change. Classify every changed answer as fix, regression, conservative-loss, or unclear using
+  base/head evidence; never regenerate to bless an unintended change.
 
 - Required in every language that claims a capability:
   - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members

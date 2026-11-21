@@ -13,6 +13,7 @@ import {
 import type { ProgressUpdate } from "../types.js";
 import { exitWithError } from "./context.js";
 import { parseBoundedIntegerOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
+import { compareStrings } from "../util/strings.js";
 
 export type DuplicatesCommandContext = {
   projectRootFs: string;
@@ -282,7 +283,7 @@ function labelCounts(groups: readonly DuplicateGroup[]): Array<[DuplicateCleanup
   return Array.from(counts).sort(([leftLabel, leftCount], [rightLabel, rightCount]) => {
     const countDiff = rightCount - leftCount;
     if (countDiff) return countDiff;
-    return leftLabel.localeCompare(rightLabel);
+    return compareStrings(leftLabel, rightLabel);
   });
 }
 

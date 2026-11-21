@@ -23,6 +23,7 @@ import {
   terraformModuleUseTargetsDefinition,
   terraformModuleFiles,
 } from "./resolution.js";
+import { compareStrings } from "../util/strings.js";
 
 /**
  * Go-to-definition for a position in a Terraform file, or null for other languages. A position
@@ -131,7 +132,7 @@ export async function findTerraformReferences(
 
   references.sort(
     (left, right) =>
-      left.file.localeCompare(right.file) ||
+      compareStrings(left.file, right.file) ||
       left.range.start.line - right.range.start.line ||
       left.range.start.column - right.range.start.column,
   );

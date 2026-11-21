@@ -17,6 +17,7 @@ import { isDeclaredSymbol } from "./declarations.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links/language-ids.js";
 import { DOCSTRING_CAPTURE_LANGUAGES } from "./locals-and-exports.js";
+import { compareStrings } from "../util/strings.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -136,9 +137,9 @@ function resolutionForDefinitions(input: string, definitions: readonly SymbolDef
 
 function compareResolvedSymbolTargets(left: ResolvedSymbolTarget, right: ResolvedSymbolTarget): number {
   return (
-    left.definition.file.localeCompare(right.definition.file) ||
+    compareStrings(left.definition.file, right.definition.file) ||
     (left.definition.range.start.index ?? 0) - (right.definition.range.start.index ?? 0) ||
-    left.definition.localName.localeCompare(right.definition.localName)
+    compareStrings(left.definition.localName, right.definition.localName)
   );
 }
 

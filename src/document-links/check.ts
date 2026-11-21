@@ -5,6 +5,7 @@ import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { isMissingPathError } from "../util/errors.js";
+import { compareStrings } from "../util/strings.js";
 
 type MarkdownLinkCheckPosition = {
   line: number;
@@ -358,7 +359,7 @@ function toFailure(
 }
 
 function compareFailures(left: MarkdownLinkCheckFailure, right: MarkdownLinkCheckFailure): number {
-  const fileOrder = left.file.localeCompare(right.file);
+  const fileOrder = compareStrings(left.file, right.file);
   if (fileOrder) return fileOrder;
   const lineOrder = left.range.start.line - right.range.start.line;
   if (lineOrder) return lineOrder;

@@ -138,6 +138,10 @@ describe("CLI startup eager module loading", () => {
     // Doctor inspects the native addon, which legitimately registers the Windows teardown drain,
     // but not the document-link extractors.
     expect(doctor.count).toBeLessThan(33);
+    // Shared scalar string helpers must not pull AST or collection utilities into doctor startup.
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/util/strings.js"))).toBe(true);
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/util/ast.js"))).toBe(false);
+    expect(doctor.modules.some((url) => modulePathEndsWith(url, "/util/collections.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/document-links.js"))).toBe(false);
     // Doctor is expected to load its own command module; every other heavy command module must not.
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/doctor.js"))).toBe(true);

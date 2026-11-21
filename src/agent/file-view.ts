@@ -20,6 +20,7 @@ import {
   DEFAULT_FILE_VIEW_LINES,
   MAX_FILE_VIEW_LINES,
 } from "../query/limits.js";
+import { compareStrings } from "../util/strings.js";
 export {
   DEFAULT_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_BYTES,
@@ -252,7 +253,7 @@ export function buildFileGraphContext(snapshot: AgentProjectSnapshot, file: stri
   const symbols = moduleIndex.locals
     .filter(isDeclaredSymbol)
     .map((symbol) => ({ name: symbol.localName, kind: symbol.kind, line: symbol.range.start.line }))
-    .sort((left, right) => left.line - right.line || left.name.localeCompare(right.name))
+    .sort((left, right) => left.line - right.line || compareStrings(left.name, right.name))
     .slice(0, FILE_VIEW_GRAPH_CONTEXT_LIMIT);
 
   return { usedBy, imports, symbols };
@@ -603,7 +604,7 @@ function extractSensitiveKeys(text: string): string[] {
 }
 
 function uniqueSorted(values: Iterable<string>): string[] {
-  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+  return Array.from(new Set(values)).sort((left, right) => compareStrings(left, right));
 }
 
 function boundedPositiveInteger(value: number | undefined, fallback: number, max: number): number {

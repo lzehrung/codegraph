@@ -53,3 +53,22 @@ Local clones retain Git discovery and status behavior. An unchanged update uses 
 V8 profiles bracket only the named operation on the main isolate. They include native calls executed there but not native CPU running on extraction worker isolates; `(idle)` is waiting, not a JavaScript bottleneck. Peak RSS is process-wide (including setup and workers); `heapUsedAfterGc` and `rssAfterGc` are taken after an explicit GC at the end, not incremental allocation counts.
 
 Environment metadata records Node, npm, platform, CPU, memory, and both Codegraph revisions/versions. The manifest scopes are source-family representatives, not a performance claim for every language or graph-only format. A timing verdict is not semantic validation: optimization reviews still need detailed-graph, go-to-definition, and reference/coverage differentials over samples, edge corpora, and real projects.
+
+## Answer snapshots for reviews
+
+`npm run answers:snapshot:check` checks committed answers for every sample project and edge-corpus scenario, alongside `graph:snapshot:check` in `npm run check` and in CI. `npm run answers:snapshot` regenerates them; classify every changed answer against base/head evidence before committing. Each file records goto targets and public `via=`/`prov=` metadata, plus references for every indexed declaration and deduplicated goto target (including parameters, local/type parameters, aliases, and Rust modules); there is no sampling or result cap.
+
+Identifiers use each language's identifier/property/shorthand vocabulary plus constant/type/field forms and PHP `new` sites; nested nodes sharing a start position issue the same goto query once. SCSS member leaves parsed inside `ERROR` nodes, other punctuation/operator leaves, and keyword leaves are excluded even when an ancestor-based lookup could resolve them; examples include PHP `\`, C++ `::`/`<`/`>`, JS/TS `as`/`=`, and Terraform `.`/`[*]`. Graph-only formats have no syntax identifiers, and unsupported parsers (such as indexed JSON exports) are explicit outcomes, not successful empty answers.
+
+Reference `order=` ranks and `affectedFiles` arrays preserve the API's returned order; sorted records do not hide ordering changes that affect truncated consumers. `findReferences` and other locale-sensitive data-output sorts use fixed en-US collation rather than the process locale. Metadata keys are sorted, path fields are project-relative, and path spelling is normalized to NFC, while source identifier spelling is preserved. Rename previews are not recorded: they repeat reference collection, conflict scans, and source verification.
+
+For real projects, use the same clean checkouts and include/exclude scopes as the paired benchmark. Write the baseline to an external scratch directory, then compare head without committing either result:
+
+```bash
+node scripts/answer-snapshot-corpora.mjs --dist /checkouts/base/dist \
+  --corpus-dir /data/corpora --dir /data/review/answers
+node scripts/answer-snapshot-corpora.mjs --dist /checkouts/head/dist \
+  --corpus-dir /data/corpora --dir /data/review/answers --check
+```
+
+The runner verifies pinned commits and clean inputs, never clones or edits them, and rejects output overlapping a Codegraph checkout or indexed corpus. Explicit `--dir` paths resolve against the caller's working directory; write mode refuses directories containing unrelated `.txt` files. Optional `--families ecmascript,dotnet` selects benchmark families; use separate output directories for different selections. `--dist` also works with `scripts/answer-snapshot.mjs` to compare both builds on identical fixture bytes without rebuilding either checkout; a failed check prints a regeneration command retaining its runtime and family selection.

@@ -88,5 +88,6 @@ Checklist for landing a new first-class source language without drifting from re
 - Run the shared semantic suites.
 - Run the native parity and native-only ownership suites if the language uses the native runtime.
 - Run `npm run graph:snapshot` and review the `tests/snapshots/graph-edges` diff; every added, removed, or changed edge must be intended.
+- Run `npm run answers:snapshot` and classify every `tests/snapshots/answers` change against base/head evidence; verify with `npm run answers:snapshot:check`. Check goto targets and metadata, references and returned order, and coverage reasons as well as edges.
 - Run `npm run build` after grammar and runtime changes.
 - Do not claim support until the docs, fixtures, and verification output all agree.

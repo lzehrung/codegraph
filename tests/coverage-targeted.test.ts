@@ -7,7 +7,8 @@ import {
   type SymbolHash,
 } from "../src/util/symbol-hash.js";
 import { getIOSemaphore, mapLimitSemaphore, resetIOSemaphore, Semaphore } from "../src/util/concurrency.js";
-import { sliceText, stringifyUnknown, toRange, unquote } from "../src/util/ast.js";
+import { sliceText, toRange, unquote } from "../src/util/ast.js";
+import { stringifyUnknown } from "../src/util/strings.js";
 import { graphToTriples, type SymbolGraph, type SymbolNode } from "../src/index.js";
 import { SymbolKind, type ExportEntry, type SymbolDef } from "../src/indexer.js";
 import type { Graph } from "../src/types.js";

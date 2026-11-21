@@ -27,6 +27,7 @@ import { compactModuleLocals } from "./module-locals.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./project-file.js";
 import { writeCliOutput } from "./pretty.js";
 import { exitWithError } from "./context.js";
+import { compareStrings } from "../util/strings.js";
 
 export type NavigationCommandContext = {
   projectRootFs: string;
@@ -338,7 +339,7 @@ function sortDefinitions(definitions: readonly SymbolDef[]): SymbolDef[] {
     if (lineDelta) return lineDelta;
     const columnDelta = left.range.start.column - right.range.start.column;
     if (columnDelta) return columnDelta;
-    return left.localName.localeCompare(right.localName);
+    return compareStrings(left.localName, right.localName);
   });
 }
 

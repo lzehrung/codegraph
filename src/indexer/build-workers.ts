@@ -6,7 +6,7 @@ import {
   type LanguageExtensionMap,
   type LanguageSupport,
 } from "../languages.js";
-import { stringifyUnknown } from "../util/ast.js";
+import { stringifyUnknown } from "../util/strings.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
 import { hasExplicitWorkerThreadCount } from "../util/worker-threads.js";
 import { recordNativeExecutionOutcome, recordParserBackendDegradation } from "../native/native-backend-report.js";

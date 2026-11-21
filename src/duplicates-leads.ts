@@ -8,6 +8,7 @@ import {
   type DuplicateSimilarityHint,
 } from "./duplicates.js";
 import type { ProjectIndex } from "./indexer/types.js";
+import { compareStrings } from "./util/strings.js";
 
 export type DuplicateLeadScope = "off" | "changed" | "impacted" | "all";
 
@@ -46,7 +47,7 @@ function normalizeDuplicateScope(value: string | undefined, fallback: DuplicateL
 }
 
 function uniqueFiles(files: readonly string[]): string[] {
-  return Array.from(new Set(files.filter(Boolean))).sort((left, right) => left.localeCompare(right));
+  return Array.from(new Set(files.filter(Boolean))).sort((left, right) => compareStrings(left, right));
 }
 
 function leadFromGroup(group: DuplicateGroup): DuplicateLead {

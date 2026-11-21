@@ -14,6 +14,7 @@ import {
   type CliProgressDisplay,
   type CliProgressPolicy,
 } from "./progress.js";
+import { compareStrings } from "../util/strings.js";
 
 export function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -303,7 +304,7 @@ function formatNativeBackendFallbackSummary(report: BuildReport | undefined): st
   if (!native || native.filesFellBack === 0) return undefined;
   const parts = Object.entries(native.byLanguage)
     .filter(([, entry]) => entry.filesFellBack > 0)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareStrings(left, right))
     .map(([languageId, entry]) => {
       const reasonSummary = Object.entries(entry.fallbackReasons)
         .filter(([, count]) => count > 0)
@@ -319,7 +320,7 @@ function formatParserBackendSummary(report: BuildReport | undefined): string | u
   const parser = report?.backend?.parser;
   if (!parser || parser.total === 0) return undefined;
   const parts = Object.entries(parser.byLanguage)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareStrings(left, right))
     .map(([languageId, count]) => `${languageId}(${count})`);
   if (!parts.length) {
     return `Parser backend degradation: ${parser.total} file(s)`;

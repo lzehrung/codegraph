@@ -12,7 +12,7 @@ import type {
   NativeBackendLanguageReport,
   ParserBackendDegradationReport,
 } from "../indexer/types.js";
-import { stringifyUnknown } from "../util/ast.js";
+import { stringifyUnknown } from "../util/strings.js";
 import { fileIdentityKey } from "../util/paths.js";
 
 const parserDegradedFilesByReport = new WeakMap<BuildReport, Set<string>>();

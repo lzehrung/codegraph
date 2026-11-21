@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { stringifyUnknown } from "../util/ast.js";
+import { stringifyUnknown } from "../util/strings.js";
 import {
   currentNativeTargetSuffix,
   findLocalNativeBinary,

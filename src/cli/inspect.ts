@@ -22,6 +22,7 @@ import type { ProjectFileDiscoveryOptions } from "../util/project-files.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 import type { CommandReport } from "./context.js";
+import { compareStrings } from "../util/strings.js";
 
 type CacheMode = "off" | "memory" | "disk";
 const INSPECT_DUPLICATE_MIN_TOKENS = 60;
@@ -271,7 +272,7 @@ function buildRecommendedInspectCommands(
 }
 function formatInspectLanguageCounts(byLanguage: Record<string, number>): string {
   const entries = Object.entries(byLanguage).sort(
-    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    (left, right) => right[1] - left[1] || compareStrings(left[0], right[0]),
   );
   if (!entries.length) {
     return "(none)";

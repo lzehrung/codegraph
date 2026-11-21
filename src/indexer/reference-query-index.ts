@@ -12,6 +12,7 @@ import { csharpNamespaceAt, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.
 import { csharpNamespaceImportDirectories, resolveImported } from "./navigation-resolve.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 /**
  * Query-time reverse indexes for reference lookups.
@@ -83,7 +84,7 @@ export const referenceModuleTable = perIndexCache((index): ReferenceModuleTable 
       support: supportForFileWithoutHeaderSample(module.file, index.languageExtensions),
     }),
   );
-  entries.sort((left, right) => left.file.localeCompare(right.file));
+  entries.sort((left, right) => compareStrings(left.file, right.file));
   const rankByKey = new Map<string, number>();
   const phpFiles: FileId[] = [];
   for (let rank = 0; rank < entries.length; rank += 1) {

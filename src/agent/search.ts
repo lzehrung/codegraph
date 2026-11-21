@@ -18,6 +18,7 @@ import { mapLimit } from "../util/concurrency.js";
 import { errorMessage } from "../util/errors.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import { compareCodeUnits } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import {
   formatAgentChunkHandle,
   formatAgentFileHandle,
@@ -1422,17 +1423,17 @@ function insertTopResult(top: MutableSearchResult[], result: MutableSearchResult
 function finalizeResult(result: MutableSearchResult): AgentSearchResult {
   const rankReasons = [...result.rankReasons].sort();
   const evidence = result.evidence.sort((left, right) => {
-    const sourceDelta = left.source.localeCompare(right.source);
+    const sourceDelta = compareStrings(left.source, right.source);
     if (sourceDelta !== 0) return sourceDelta;
-    return left.label.localeCompare(right.label);
+    return compareStrings(left.label, right.label);
   });
   const neighbors = [...result.neighbors.values()].sort((left, right) => {
-    const relationDelta = left.relation.localeCompare(right.relation);
+    const relationDelta = compareStrings(left.relation, right.relation);
     if (relationDelta !== 0) return relationDelta;
-    return left.target.localeCompare(right.target);
+    return compareStrings(left.target, right.target);
   });
   const followUps = [...result.followUps.values()].sort((left, right) =>
-    formatAgentFollowUpAsCli(left).localeCompare(formatAgentFollowUpAsCli(right)),
+    compareStrings(formatAgentFollowUpAsCli(left), formatAgentFollowUpAsCli(right)),
   );
   const boundedRankReasons = boundAgentList(rankReasons, AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT);
   const boundedEvidence = boundAgentList(evidence, AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT);

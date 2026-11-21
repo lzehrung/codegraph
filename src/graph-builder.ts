@@ -16,6 +16,7 @@ import { collectEdgesForFile, hasBetterProvenance, type FileEdgeSource } from ".
 import { edgeKey } from "./util/graph-edges.js";
 import { isSqlFilePath } from "./sql/classify-sql-file.js";
 import { buildSqlFactCache, sqlCorpusSignature } from "./sql/source-graph.js";
+import { compareStrings } from "./util/strings.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
 
@@ -65,7 +66,7 @@ export async function collectGraph(
     ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
     : new Set<string>(normalizedFiles);
   const sqlFiles = Array.from(new Set(normalizedAllFiles.filter(isSqlFile))).sort((left, right) =>
-    left.localeCompare(right),
+    compareStrings(left, right),
   );
   const sqlFactsMayHaveChanged = normalizedFiles.some(isSqlFile) || Array.from(requestedReplaceSet).some(isSqlFile);
   const filesToCollect = sqlFactsMayHaveChanged

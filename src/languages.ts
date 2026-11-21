@@ -4,6 +4,7 @@ import type { GeneratedMember, LanguageDefinition, NativeCompatibility, SyntaxNo
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import { maskJsLikeCommentsAndStrings } from "./util/comments.js";
 import "./languages/all.js";
+import { compareStrings } from "./util/strings.js";
 
 export type IdentifierNodeType = string;
 
@@ -136,7 +137,7 @@ export function normalizeLanguageExtensions(
       ([extension, languageId]) =>
         isLiteralLanguageExtension(extension) && isRemappableLanguageExtension(extension) && !!supportById(languageId),
     )
-    .sort((left, right) => left[0].localeCompare(right[0]));
+    .sort((left, right) => compareStrings(left[0], right[0]));
   if (!entries.length) return undefined;
   return Object.fromEntries(entries);
 }
@@ -156,7 +157,7 @@ function mappedSupportForFile(
 ): LanguageSupport | undefined {
   if (!extensionMap) return undefined;
   const mappings = Object.entries(normalizeLanguageExtensions(extensionMap) ?? {}).sort(
-    (left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]),
+    (left, right) => right[0].length - left[0].length || compareStrings(left[0], right[0]),
   );
   const lowerFilename = filename.toLowerCase();
   for (const [extension, languageId] of mappings) {

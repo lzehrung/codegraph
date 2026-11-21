@@ -5,7 +5,7 @@ import { findSymbolicLinks, globPaths, type DirentReaddir } from "./glob.js";
 import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { stringifyUnknown } from "./ast.js";
+import { compareStrings, stringifyUnknown } from "./strings.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discovery-path.js";
 
@@ -1806,8 +1806,8 @@ async function discoverProjectFilesInternal(
       }
     }
     return Array.from(byKey.values()).sort((a, b) => {
-      if (a.path === b.path) return a.type.localeCompare(b.type);
-      return a.path.localeCompare(b.path);
+      if (a.path === b.path) return compareStrings(a.type, b.type);
+      return compareStrings(a.path, b.path);
     });
   } catch (error) {
     logWithLevel(options?.logLevel, "debug", `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);

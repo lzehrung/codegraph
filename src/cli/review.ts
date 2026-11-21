@@ -25,6 +25,7 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import type { CommandReport } from "./context.js";
 import { duplicateSimilarityHintsFromChanges } from "./duplicate-similarity.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
+import { compareStrings } from "../util/strings.js";
 
 export type ReviewCommandContext = {
   projectRootFs: string;
@@ -123,7 +124,7 @@ function collectChangedReviewFiles(report: ReviewReport): string[] {
       files.add(file.oldFile);
     }
   }
-  return Array.from(files).sort((left, right) => left.localeCompare(right));
+  return Array.from(files).sort((left, right) => compareStrings(left, right));
 }
 
 function collectImpactedReviewFiles(report: ReviewReport): string[] {
@@ -134,7 +135,7 @@ function collectImpactedReviewFiles(report: ReviewReport): string[] {
       files.add(edge.to.path);
     }
   }
-  return Array.from(files).sort((left, right) => left.localeCompare(right));
+  return Array.from(files).sort((left, right) => compareStrings(left, right));
 }
 
 function duplicateScopeFilesForReview(

@@ -35,6 +35,7 @@ export function uniqueByKey<T>(items: Iterable<T>, keyFor: (item: T) => string):
   }
   return unique;
 }
+
 export function compareCodeUnits(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;

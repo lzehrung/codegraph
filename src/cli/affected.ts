@@ -10,6 +10,7 @@ import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { pushAll } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { exitWithError } from "./context.js";
 import { getCliCommandUsage, parseNonNegativeIntegerOption } from "./options.js";
 
@@ -251,7 +252,7 @@ function buildAffectedReport(
 ): AffectedTestsReport {
   const affectedTests = Array.from(affected.values())
     .map((entry) => formatAffectedEntry(projectRoot, entry))
-    .sort((left, right) => left.file.localeCompare(right.file));
+    .sort((left, right) => compareStrings(left.file, right.file));
   return {
     schemaVersion: 1,
     root: normalizePath(projectRoot),

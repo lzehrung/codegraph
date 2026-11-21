@@ -61,6 +61,7 @@ import {
 import { createRequestSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { buildSymbolLookup, declaredSymbolDef, symbolDefsInFile, type SymbolLookup } from "./symbol-lookup.js";
 import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./follow-ups.js";
+import { compareStrings } from "../util/strings.js";
 
 export type AgentExplainTarget = {
   root: string;
@@ -501,17 +502,17 @@ function symbolTarget(
 }
 
 function compareSymbolDefs(left: SymbolDef, right: SymbolDef): number {
-  const fileDelta = left.file.localeCompare(right.file);
+  const fileDelta = compareStrings(left.file, right.file);
   if (fileDelta !== 0) return fileDelta;
   const lineDelta = left.range.start.line - right.range.start.line;
   if (lineDelta !== 0) return lineDelta;
-  return left.localName.localeCompare(right.localName);
+  return compareStrings(left.localName, right.localName);
 }
 
 function compareSymbolNodes(left: SymbolNode, right: SymbolNode): number {
-  const nameDelta = left.name.localeCompare(right.name);
+  const nameDelta = compareStrings(left.name, right.name);
   if (nameDelta !== 0) return nameDelta;
-  return left.file.localeCompare(right.file);
+  return compareStrings(left.file, right.file);
 }
 
 function basename(name: string): string {
@@ -717,7 +718,7 @@ function collectFileSymbols(
     .sort((left, right) => {
       const lineDelta = left.range.start.line - right.range.start.line;
       if (lineDelta !== 0) return lineDelta;
-      return left.name.localeCompare(right.name);
+      return compareStrings(left.name, right.name);
     });
 }
 
@@ -744,7 +745,7 @@ function collectDependencies(
 function compareDependencies(left: AgentExplanationDependency, right: AgentExplanationDependency): number {
   const depthDelta = left.depth - right.depth;
   if (depthDelta !== 0) return depthDelta;
-  return left.file.localeCompare(right.file);
+  return compareStrings(left.file, right.file);
 }
 
 async function collectDuplicateContext(
@@ -884,7 +885,7 @@ async function collectReferenceContext(
       ...(reference.via?.importBinding ? { importBinding: reference.via.importBinding } : {}),
     }))
     .sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
+      const fileDelta = compareStrings(left.file, right.file);
       if (fileDelta !== 0) return fileDelta;
       return left.range.start.line - right.range.start.line;
     });
@@ -894,7 +895,7 @@ async function collectReferenceContext(
   const snippets = referencesWithContext
     .map((reference) => snippetFromReference(snapshot, reference))
     .sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
+      const fileDelta = compareStrings(left.file, right.file);
       if (fileDelta !== 0) return fileDelta;
       return left.line - right.line;
     });
@@ -974,9 +975,9 @@ async function collectRelatedSqlObjects(
   const matches = [...related.values()].sort((left, right) => {
     const relationDelta = sqlRelationRank(left.relation) - sqlRelationRank(right.relation);
     if (relationDelta !== 0) return relationDelta;
-    const fileDelta = left.file.localeCompare(right.file);
+    const fileDelta = compareStrings(left.file, right.file);
     if (fileDelta !== 0) return fileDelta;
-    return left.name.localeCompare(right.name);
+    return compareStrings(left.name, right.name);
   });
   return boundAgentList(matches, limit);
 }
@@ -1078,7 +1079,7 @@ async function addRelatedSqlObjectsFromFacts(
 async function collectSqlFacts(snapshot: AgentProjectSnapshot): Promise<Map<string, SqlStatementFact[]>> {
   const sqlFiles = snapshot.files
     .filter((file) => isSqlFilePath(file, snapshot.index.languageExtensions))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
   const entries = await mapLimit(sqlFiles, SQL_FACT_READ_CONCURRENCY, async (file) => {
     const facts = extractSqlFactsFromSource(file, await fs.readFile(file, "utf8"));
     return [file, facts] as const;
@@ -1182,7 +1183,7 @@ function collectFollowUps(
   }
 
   return [...followUps.values()].sort((left, right) =>
-    formatAgentFollowUpAsCli(left).localeCompare(formatAgentFollowUpAsCli(right)),
+    compareStrings(formatAgentFollowUpAsCli(left), formatAgentFollowUpAsCli(right)),
   );
 }
 

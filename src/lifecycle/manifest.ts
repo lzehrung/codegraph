@@ -14,6 +14,7 @@ import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysis-summary.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 import { prepareCodegraphLifecycleGitignore, type CodegraphLifecycleGitignoreResult } from "./gitignore.js";
+import { compareStrings } from "../util/strings.js";
 
 export type CodegraphLifecycleManifest = {
   schemaVersion: 1;
@@ -489,7 +490,7 @@ async function hashConfig(
 function discoveredFileRelativePaths(files: readonly string[], root: string): string[] {
   return [...files]
     .map((file) => path.relative(root, file).replace(/\\/g, "/"))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
 }
 
 function diffLifecycleFileCounts(
@@ -524,7 +525,7 @@ function hashManifestEntries(
   signaturesFresh: boolean | undefined,
 ): string | undefined {
   if (!signaturesFresh || !entries || entries.size !== files.length) return undefined;
-  const sorted = [...files].sort((left, right) => left.localeCompare(right));
+  const sorted = [...files].sort((left, right) => compareStrings(left, right));
   const signatures = new Map<string, { size: string; mtimeMs: string }>();
   for (const file of sorted) {
     const entry = entries.get(file);
@@ -564,7 +565,7 @@ function parseLifecycleFileSignature(value: unknown): { size: string; mtimeMs: s
 }
 
 async function hashDiscoveredFiles(files: readonly string[], root: string): Promise<string> {
-  const sorted = [...files].sort((left, right) => left.localeCompare(right));
+  const sorted = [...files].sort((left, right) => compareStrings(left, right));
   const signatures = new Map<string, { size: number; mtimeMs: number }>();
   await mapLimit(sorted, FILE_SIGNATURE_STAT_CONCURRENCY, async (file) => {
     try {
@@ -621,7 +622,7 @@ export function stableStringify(value: unknown): string {
   }
   const entries = Object.entries(value)
     .filter(([, nested]) => nested !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) => compareStrings(left, right));
   return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`).join(",")}}`;
 }
 

@@ -63,6 +63,7 @@ import {
   scssReplacementText,
 } from "../scss/resolution.js";
 import { sassCanonical, SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
+import { compareStrings } from "../util/strings.js";
 
 export type RenamePreviewRequest = {
   root: string;
@@ -1713,27 +1714,27 @@ function normalizeMaxEdits(value: number | undefined): number {
 
 function compareEdits(left: RenameEdit, right: RenameEdit): number {
   return (
-    left.file.localeCompare(right.file) ||
+    compareStrings(left.file, right.file) ||
     left.range.start.line - right.range.start.line ||
     left.range.start.column - right.range.start.column ||
-    left.kind.localeCompare(right.kind)
+    compareStrings(left.kind, right.kind)
   );
 }
 
 function compareUnsafeSites(left: RenameUnsafeSite, right: RenameUnsafeSite): number {
   return (
-    left.location.file.localeCompare(right.location.file) ||
+    compareStrings(left.location.file, right.location.file) ||
     left.location.range.start.line - right.location.range.start.line ||
     left.location.range.start.column - right.location.range.start.column ||
-    left.reason.localeCompare(right.reason)
+    compareStrings(left.reason, right.reason)
   );
 }
 
 function compareConflicts(left: RenameConflict, right: RenameConflict): number {
   return (
-    left.file.localeCompare(right.file) ||
-    left.reason.localeCompare(right.reason) ||
-    left.message.localeCompare(right.message)
+    compareStrings(left.file, right.file) ||
+    compareStrings(left.reason, right.reason) ||
+    compareStrings(left.message, right.message)
   );
 }
 

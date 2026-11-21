@@ -33,6 +33,7 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
 import { pushAll } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { EVENT_LOOP_SLICE_MS, yieldToEventLoop } from "../util/concurrency.js";
 import {
   assertFilePathWithinRoot,
@@ -779,11 +780,11 @@ export async function collectDuplicateUnits(
   }
 
   units.sort((left, right) => {
-    const fileCompare = left.absoluteFile.localeCompare(right.absoluteFile);
+    const fileCompare = compareStrings(left.absoluteFile, right.absoluteFile);
     if (fileCompare) return fileCompare;
     const lineCompare = left.startLine - right.startLine;
     if (lineCompare) return lineCompare;
-    return (left.name ?? "").localeCompare(right.name ?? "");
+    return compareStrings(left.name ?? "", right.name ?? "");
   });
   return { units, belowThresholdUnits, belowThresholdUnitsByFile };
 }

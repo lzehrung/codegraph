@@ -1,6 +1,7 @@
 import type { Edge } from "../types.js";
 import { edgeKey } from "../util/graph-edges.js";
 import type { ArchitectureGraphEdge } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 export function toArchitectureGraphEdges(
   edges: readonly Edge[],
@@ -17,5 +18,5 @@ export function toArchitectureGraphEdges(
       ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
       ...(edge.includeForm ? { includeForm: edge.includeForm } : {}),
     }))
-    .sort((left, right) => left.key.localeCompare(right.key));
+    .sort((left, right) => compareStrings(left.key, right.key));
 }

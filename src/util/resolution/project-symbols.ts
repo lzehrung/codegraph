@@ -1,6 +1,7 @@
 import { normalizePath } from "../paths.js";
 import { listProjectFiles } from "../project-files.js";
 import { mapLimitSemaphore } from "../concurrency.js";
+import { compareStrings } from "../strings.js";
 
 export type LanguageProjectSymbolIndex = {
   files: string[];
@@ -41,12 +42,12 @@ function addProjectSymbolFile(
 
 function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
   for (const [packageName, files] of index.filesByPackage) {
-    files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+    files.sort((left, right) => compareStrings(normalizePath(left), normalizePath(right)));
     index.filesByPackage.set(packageName, files);
   }
   for (const symbolFiles of index.filesByPackageSymbol.values()) {
     for (const [symbolName, files] of symbolFiles) {
-      files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+      files.sort((left, right) => compareStrings(normalizePath(left), normalizePath(right)));
       symbolFiles.set(symbolName, files);
     }
   }

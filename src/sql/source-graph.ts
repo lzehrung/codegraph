@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 
 import { uniqueByKey } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { uniqueEdgePusher } from "../util/graph-edges.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
@@ -314,7 +315,7 @@ export async function buildSqlFactCache(
 ): Promise<SqlFactCache> {
   const sqlFiles = Array.from(
     new Set(allFiles.map(normalizePath).filter((file) => isSqlFilePath(file, languageExtensions))),
-  ).sort((left, right) => left.localeCompare(right));
+  ).sort((left, right) => compareStrings(left, right));
   const factGroups = await mapLimit(
     sqlFiles,
     SQL_FACT_READ_CONCURRENCY,

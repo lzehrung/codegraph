@@ -1,4 +1,5 @@
 import type { DuplicateSimilarityHint } from "../duplicates.js";
+import { compareStrings } from "../util/strings.js";
 
 type DuplicateSimilarityChange = {
   file: string;
@@ -14,7 +15,7 @@ export function changedFilesWithSimilaritySources(changes: readonly DuplicateSim
       files.add(change.oldFile);
     }
   }
-  return Array.from(files).sort((left, right) => left.localeCompare(right));
+  return Array.from(files).sort((left, right) => compareStrings(left, right));
 }
 
 export function duplicateSimilarityHintsFromChanges(

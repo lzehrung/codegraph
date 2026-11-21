@@ -7,6 +7,7 @@ import {
   readQueryIndexMetadata,
   type QueryIndexMetadata,
 } from "./schema.js";
+import { compareStrings } from "../../util/strings.js";
 
 export const QUERY_INDEX_BUSY_TIMEOUT_MS = 250;
 
@@ -308,7 +309,7 @@ export class QueryIndexStore {
         if (shortTerms.some((term) => normalizedText.includes(term))) paths.add(file);
       }
     }
-    return [...paths].sort((left, right) => left.localeCompare(right));
+    return [...paths].sort((left, right) => compareStrings(left, right));
   }
 
   replaceFiles(

@@ -27,6 +27,7 @@ import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 import { buildCompactImpactReport } from "./report-compact.js";
 import { buildFullImpactReport } from "./report-full.js";
+import { compareStrings } from "../util/strings.js";
 export { newFileRangeForHunk } from "./hunks.js";
 
 export async function buildImpactReport(
@@ -378,7 +379,7 @@ function buildClusters(
     severityByFile.set(item.file, current + item.severity);
   }
 
-  const orderedFiles = Array.from(candidateFiles).sort((a, b) => a.localeCompare(b));
+  const orderedFiles = Array.from(candidateFiles).sort((a, b) => compareStrings(a, b));
   const visited = new Set<FileId>();
   const clusters: ImpactCluster[] = [];
 
@@ -405,7 +406,7 @@ function buildClusters(
       }
     }
 
-    componentFiles.sort((a, b) => a.localeCompare(b));
+    componentFiles.sort((a, b) => compareStrings(a, b));
     const componentChanged = componentFiles.filter((componentFile) => changedFilesSet.has(componentFile));
 
     let totalSeverity = 0;
@@ -428,7 +429,7 @@ function buildClusters(
     const aKey = a.files[0] ?? "";
     const bKey = b.files[0] ?? "";
     if (aKey !== bKey) {
-      return aKey.localeCompare(bKey);
+      return compareStrings(aKey, bKey);
     }
     return a.files.length - b.files.length;
   });
@@ -481,7 +482,7 @@ function buildSurfaceArea(
   const topFanIn = [...files]
     .sort((a, b) => {
       if (b.fanIn !== a.fanIn) return b.fanIn - a.fanIn;
-      return a.file.localeCompare(b.file);
+      return compareStrings(a.file, b.file);
     })
     .slice(0, SURFACE_AREA_LIMIT)
     .map((item) => item.file);
@@ -489,7 +490,7 @@ function buildSurfaceArea(
   const topFanOut = [...files]
     .sort((a, b) => {
       if (b.fanOut !== a.fanOut) return b.fanOut - a.fanOut;
-      return a.file.localeCompare(b.file);
+      return compareStrings(a.file, b.file);
     })
     .slice(0, SURFACE_AREA_LIMIT)
     .map((item) => item.file);

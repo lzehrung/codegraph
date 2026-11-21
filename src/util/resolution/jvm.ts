@@ -14,6 +14,7 @@ import { getImportableLanguageGlobs } from "../resolution-candidates.js";
 import { JVM_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import { jvmPackageHead } from "../project-file-facts.js";
 import { normalizeKotlinIdentifier, normalizeKotlinQualifiedName } from "../identifiers.js";
+import { compareStrings } from "../strings.js";
 
 type JvmImportResolutionOptions = {
   languageId: JvmLanguageId;
@@ -162,7 +163,7 @@ async function jvmPackageFiles(projectRoot: string, indexRoot: string, packageNa
   ]);
   const packageFiles = new Set(javaIndex.filesByPackage.get(packageName) ?? []);
   for (const file of kotlinIndex.filesByPackage.get(packageName) ?? []) packageFiles.add(file);
-  const packageCandidates = [...packageFiles].sort((left, right) => left.localeCompare(right));
+  const packageCandidates = [...packageFiles].sort((left, right) => compareStrings(left, right));
   const confined: string[] = [];
   for (const candidate of packageCandidates) {
     const hit = await confineJvmResolvedPath(projectRoot, candidate);

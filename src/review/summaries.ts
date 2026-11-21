@@ -38,6 +38,7 @@ import type {
   ReviewSymbolSummary,
   ReviewTimingReport,
 } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 const REVIEW_EXPORT_NAMESPACE_PATTERN = new RegExp(
   String.raw`^export\s*\*\s+as\s+(${ECMASCRIPT_IDENTIFIER_SOURCE})\s+from\b`,
@@ -56,7 +57,7 @@ const REVIEW_EXPORT_STATEMENT_PATTERNS = [
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
-  return symbols.slice().sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
+  return symbols.slice().sort((left, right) => compareStrings(symbolId(left), symbolId(right)));
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {

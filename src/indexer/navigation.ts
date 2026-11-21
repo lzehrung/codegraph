@@ -163,6 +163,7 @@ import {
 import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
 import { kotlinCalleeUnderImplicitReceiver, kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import {
   isPythonDottedImportBinding,
   pythonImportedModuleFiles,
@@ -1235,7 +1236,7 @@ async function findReferencesInternal(
           )
           .map((candidateFile) => [fileIdentityKey(candidateFile), candidateFile]),
       ).values(),
-    ].sort((left, right) => left.localeCompare(right));
+    ].sort((left, right) => compareStrings(left, right));
   }
   // Candidates that share a compilation unit with the definition (or an equivalent
   // declaration) can name it without an import edge; the per-candidate scan below treats
@@ -1332,7 +1333,7 @@ async function findReferencesInternal(
       candidateFileKeys.add(key);
       unitPeerKeys.add(key);
     }
-    if (graphLinkedOrphans.size) candidateFiles.sort((left, right) => left.localeCompare(right));
+    if (graphLinkedOrphans.size) candidateFiles.sort((left, right) => compareStrings(left, right));
   }
 
   for (const fileId of candidateFiles) {
@@ -2139,7 +2140,7 @@ async function findReferencesInternal(
       const rightIndex = right.range.start.index ?? 0;
       return leftIndex - rightIndex;
     }
-    return left.file.localeCompare(right.file);
+    return compareStrings(left.file, right.file);
   });
 
   // A block local's lexical scope can run past the block. A use the SCSS resolver proves is a
