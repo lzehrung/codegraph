@@ -1,5 +1,6 @@
 import type { Edge } from "../types.js";
 import { toProjectDisplayPath } from "./paths.js";
+import { compareStrings } from "./strings.js";
 
 /**
  * Specifier fields that identify a file-dependency edge.
@@ -54,22 +55,22 @@ export function uniqueEdgePusher(edges: Edge[]): (edge: Edge) => void {
 }
 
 export function compareEdges(left: Edge, right: Edge): number {
-  const fromCompare = left.from.localeCompare(right.from);
+  const fromCompare = compareStrings(left.from, right.from);
   if (fromCompare) return fromCompare;
   if (left.to.type !== right.to.type) {
     return left.to.type === "file" ? -1 : 1;
   }
   const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
   const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
-  const toCompare = leftTo.localeCompare(rightTo);
+  const toCompare = compareStrings(leftTo, rightTo);
   if (toCompare) return toCompare;
-  const rawCompare = left.raw.localeCompare(right.raw);
+  const rawCompare = compareStrings(left.raw, right.raw);
   if (rawCompare) return rawCompare;
   const leftTypeOnly = left.typeOnly ? 1 : 0;
   const rightTypeOnly = right.typeOnly ? 1 : 0;
   const typeCompare = leftTypeOnly - rightTypeOnly;
   if (typeCompare) return typeCompare;
-  return (left.includeForm ?? "").localeCompare(right.includeForm ?? "");
+  return compareStrings(left.includeForm ?? "", right.includeForm ?? "");
 }
 
 export function toRelativeEdge(projectRoot: string, edge: Edge): Edge {

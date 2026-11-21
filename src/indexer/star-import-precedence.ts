@@ -6,6 +6,7 @@ import { localExportsNamed } from "./reference-query-index.js";
 import { sameDef } from "./reference-context.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import { createUnionFind } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 
 /**
  * What a language does when more than one star import can see the same simple name.
@@ -310,7 +311,7 @@ function sameStarIdentity(index: ProjectIndex, languageId: string, left: SymbolD
 }
 
 function compareSymbolDefs(left: SymbolDef, right: SymbolDef): number {
-  const byFile = fileIdentityKey(left.file).localeCompare(fileIdentityKey(right.file));
+  const byFile = compareStrings(fileIdentityKey(left.file), fileIdentityKey(right.file));
   if (byFile !== 0) return byFile;
   const leftIndex = left.range.start.index ?? 0;
   const rightIndex = right.range.start.index ?? 0;

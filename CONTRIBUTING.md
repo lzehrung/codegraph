@@ -2,6 +2,7 @@
 
 - Follow [AGENTS.md](AGENTS.md), including its Semantic Accuracy Bar and verification requirements.
 - See [agent workflows](docs/agent-workflows.md) for Codegraph CLI and library-session guidance.
+- Run `npm run answers:snapshot:check` (included in `npm run check`); regenerate with `npm run answers:snapshot` and classify every changed answer against base/head evidence before committing. `npm run answers:snapshot:corpora -- --help` describes scratch-only comparisons of pinned benchmark corpora.
 
 ## Agent workflows (ODW)
 

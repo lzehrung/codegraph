@@ -27,7 +27,7 @@ import {
 import { assertRealPathCandidateWithinRoot } from "../../util/confined-file.js";
 import { isMissingPathError } from "../../util/errors.js";
 import { getGitBlobHashes } from "../../util/git.js";
-import { stringifyUnknown } from "../../util/ast.js";
+import { stringifyUnknown } from "../../util/strings.js";
 import { removeStaleTempFiles, writeFileAtomically } from "../../util/atomic-file.js";
 
 import { cacheAbsolutePath, cacheRelativePath, fileSignature } from "./module-cache.js";

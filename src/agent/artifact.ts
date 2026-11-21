@@ -19,6 +19,7 @@ import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
 import { createRequestSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
+import { compareStrings } from "../util/strings.js";
 
 export type CodegraphArtifactBuildRequest = {
   root: string;
@@ -535,21 +536,21 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): Portabl
             : { type: "external" as const, name: edge.to.name },
       }))
       .sort((left, right) => {
-        const fromDelta = left.from.localeCompare(right.from);
+        const fromDelta = compareStrings(left.from, right.from);
         if (fromDelta !== 0) return fromDelta;
         const leftToType = left.to.type;
         const rightToType = right.to.type;
-        const toTypeDelta = leftToType.localeCompare(rightToType);
+        const toTypeDelta = compareStrings(leftToType, rightToType);
         if (toTypeDelta !== 0) return toTypeDelta;
         const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
         const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
-        const toDelta = leftTo.localeCompare(rightTo);
+        const toDelta = compareStrings(leftTo, rightTo);
         if (toDelta !== 0) return toDelta;
-        const rawDelta = left.raw.localeCompare(right.raw);
+        const rawDelta = compareStrings(left.raw, right.raw);
         if (rawDelta !== 0) return rawDelta;
         const typeOnlyDelta = Number(left.typeOnly ?? false) - Number(right.typeOnly ?? false);
         if (typeOnlyDelta !== 0) return typeOnlyDelta;
-        const resolvedDelta = (left.resolved ?? "").localeCompare(right.resolved ?? "");
+        const resolvedDelta = compareStrings(left.resolved ?? "", right.resolved ?? "");
         if (resolvedDelta !== 0) return resolvedDelta;
         return (left.confidence ?? -1) - (right.confidence ?? -1);
       }),
@@ -560,11 +561,11 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): Portabl
         file: normalizeAgentFilePath(snapshot.root, node.file),
       }))
       .sort((left, right) => {
-        const fileDelta = left.file.localeCompare(right.file);
+        const fileDelta = compareStrings(left.file, right.file);
         if (fileDelta !== 0) return fileDelta;
-        const nameDelta = left.name.localeCompare(right.name);
+        const nameDelta = compareStrings(left.name, right.name);
         if (nameDelta !== 0) return nameDelta;
-        const kindDelta = left.kind.localeCompare(right.kind);
+        const kindDelta = compareStrings(left.kind, right.kind);
         if (kindDelta !== 0) return kindDelta;
         const leftPosition = symbolPositions.get(left.id) ?? ZERO_SYMBOL_POSITION;
         const rightPosition = symbolPositions.get(right.id) ?? ZERO_SYMBOL_POSITION;
@@ -572,7 +573,7 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): Portabl
         if (lineDelta !== 0) return lineDelta;
         const columnDelta = leftPosition.column - rightPosition.column;
         if (columnDelta !== 0) return columnDelta;
-        return left.id.localeCompare(right.id);
+        return compareStrings(left.id, right.id);
       }),
     symbolEdges: [...snapshot.symbolGraph.edges]
       .map((edge) => ({
@@ -581,11 +582,11 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): Portabl
         to: portableSymbolId(edge.to),
       }))
       .sort((left, right) => {
-        const fromDelta = left.from.localeCompare(right.from);
+        const fromDelta = compareStrings(left.from, right.from);
         if (fromDelta !== 0) return fromDelta;
-        const toDelta = left.to.localeCompare(right.to);
+        const toDelta = compareStrings(left.to, right.to);
         if (toDelta !== 0) return toDelta;
-        const labelDelta = (left.label ?? "").localeCompare(right.label ?? "");
+        const labelDelta = compareStrings(left.label ?? "", right.label ?? "");
         if (labelDelta !== 0) return labelDelta;
         return compareSymbolEdgeSites(snapshot.root, left.site, right.site);
       }),
@@ -618,7 +619,7 @@ function compareSymbolEdgeSites(root: string, left: SymbolEdge["site"], right: S
   if (!left && !right) return 0;
   if (!left) return -1;
   if (!right) return 1;
-  const fileDelta = normalizeAgentFilePath(root, left.file).localeCompare(normalizeAgentFilePath(root, right.file));
+  const fileDelta = compareStrings(normalizeAgentFilePath(root, left.file), normalizeAgentFilePath(root, right.file));
   if (fileDelta !== 0) return fileDelta;
   const startLineDelta = left.range.start.line - right.range.start.line;
   if (startLineDelta !== 0) return startLineDelta;
@@ -835,7 +836,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     });
   }
 
-  return questions.sort((left, right) => left.id.localeCompare(right.id));
+  return questions.sort((left, right) => compareStrings(left.id, right.id));
 }
 
 function collectExportedSymbols(
@@ -860,11 +861,11 @@ function collectExportedSymbols(
     }
   }
   return exported.sort((left, right) => {
-    const fileDelta = left.file.localeCompare(right.file);
+    const fileDelta = compareStrings(left.file, right.file);
     if (fileDelta !== 0) return fileDelta;
-    const nameDelta = left.name.localeCompare(right.name);
+    const nameDelta = compareStrings(left.name, right.name);
     if (nameDelta !== 0) return nameDelta;
-    return left.localName.localeCompare(right.localName);
+    return compareStrings(left.localName, right.localName);
   });
 }
 
@@ -886,9 +887,9 @@ function collectSqlObjects(
       };
     })
     .sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
+      const fileDelta = compareStrings(left.file, right.file);
       if (fileDelta !== 0) return fileDelta;
-      return left.name.localeCompare(right.name);
+      return compareStrings(left.name, right.name);
     });
 }
 

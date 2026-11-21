@@ -17,6 +17,7 @@ import {
   type ArchitectureUnresolvedImport,
 } from "./types.js";
 import { toArchitectureGraphEdges } from "./graph-edges.js";
+import { compareStrings } from "../util/strings.js";
 
 interface ArtifactManifest {
   artifacts: { graphJson: string };
@@ -143,7 +144,7 @@ function unresolvedImports(graph: Graph): { total: number; imports: Architecture
       imports.push({ key: `${importer.file}\0${importer.raw}`, file: importer.file, specifier: importer.raw });
     }
   }
-  imports.sort((left, right) => left.key.localeCompare(right.key));
+  imports.sort((left, right) => compareStrings(left.key, right.key));
   return { total: imports.length, imports };
 }
 
@@ -162,13 +163,13 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     files: { total: graphJson.graph.files.length, byLanguage: countFilesByLanguage(graphJson.graph.files) },
     hotspots: getHotspots(graph)
       .map((entry) => ({ file: entry.file, fanIn: entry.fanIn, fanOut: entry.fanOut, score: entry.score }))
-      .sort((left, right) => left.file.localeCompare(right.file)),
+      .sort((left, right) => compareStrings(left.file, right.file)),
     cycles: sortDetailedCycles(findDetailedCycles(graph), "priority")
       .map((cycle) => {
         const files = cycle.files.map(normalizePath).sort();
         return { key: files.join("\0"), files, priorityScore: cycle.priorityScore, size: cycle.fileCount };
       })
-      .sort((left, right) => left.key.localeCompare(right.key)),
+      .sort((left, right) => compareStrings(left.key, right.key)),
     unresolved: unresolvedImports(graph),
     publicApi: [],
     duplicates: { groups: { total: 0 }, topGroupKeys: [] },

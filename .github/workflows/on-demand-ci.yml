@@ -55,6 +55,9 @@ jobs:
       - name: Check graph edge snapshot
         run: npm run graph:snapshot:check
 
+      - name: Check answer snapshot
+        run: npm run answers:snapshot:check
+
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json
   build-and-test-source:
@@ -96,6 +99,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check answer snapshot
+        run: npm run answers:snapshot:check
+
+      - name: Answer snapshot Unicode path regression tests
+        if: matrix.os == 'macos-latest'
+        run: npx vitest run tests/answer-snapshot.test.ts
+
       - name: Integration tests
         run: npm run test:integration
 
@@ -136,6 +146,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Check answer snapshot
+        run: npm run answers:snapshot:check
 
       - name: Fixture cleanliness
         run: npm run fixtures:check-clean
@@ -180,6 +193,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Check answer snapshot
+        run: npm run answers:snapshot:check
 
       - name: First and warm explore process exit
         run: npx vitest run tests/cli-process-teardown.test.ts tests/windows-process-drain.test.ts

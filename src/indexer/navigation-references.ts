@@ -95,6 +95,7 @@ import type { ImportBinding } from "./import-types.js";
 import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "./python-dotted-imports.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE, ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
+import { compareStrings } from "../util/strings.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -1473,7 +1474,7 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
   for (const moduleIndex of inModuleOrder(index, [...indirect.values()])) {
     if (reachesThroughIndirectImport(moduleIndex)) found.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
   }
-  offeredNeedingFullTest.sort((left, right) => left.importer.localeCompare(right.importer));
+  offeredNeedingFullTest.sort((left, right) => compareStrings(left.importer, right.importer));
   for (const { key, importer, moduleIndex } of offeredNeedingFullTest) {
     if (reachesThroughAnyImport(moduleIndex)) found.set(key, importer);
   }
@@ -1653,7 +1654,7 @@ export function getCachedReferenceCandidateFiles(
     }
   }
 
-  const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
+  const sorted = [...candidates.values()].sort((left, right) => compareStrings(left, right));
   cache.set(key, sorted);
   return sorted;
 }
@@ -2076,7 +2077,7 @@ export function buildIndexedCandidateCoverage(args: {
     const leftRank = rankByKey?.get(fileIdentityKey(left));
     const rightRank = rankByKey?.get(fileIdentityKey(right));
     if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
-    return left.localeCompare(right);
+    return compareStrings(left, right);
   });
   return {
     scope: "indexed_candidates",

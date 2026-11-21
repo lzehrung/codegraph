@@ -1,5 +1,5 @@
 import { logWithLevel, type LogLevel } from "../../logging.js";
-import { stringifyUnknown } from "../../util/ast.js";
+import { stringifyUnknown } from "../../util/strings.js";
 import type { BuildFileReport, BuildOptions, BuildReport, CacheReport, ManifestReport } from "../types.js";
 
 export function initCacheReport(

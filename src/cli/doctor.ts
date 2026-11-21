@@ -19,6 +19,7 @@ import {
 import { isPlainRecord } from "../util/guards.js";
 import type { NativeBindingOrigin } from "../native/contracts.js";
 import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtime-identity.js";
+import { compareStrings } from "../util/strings.js";
 
 type IndexedArtifactReport = {
   type: "jsonGraph" | "sqliteGraph" | "diskCache" | "artifactBundle" | "unknown";
@@ -166,7 +167,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function registeredGraphOnlyLanguageIds(): string[] {
-  return [...GRAPH_ONLY_LANGUAGE_IDS].sort((left, right) => left.localeCompare(right));
+  return [...GRAPH_ONLY_LANGUAGE_IDS].sort((left, right) => compareStrings(left, right));
 }
 
 function readField(record: Record<string, unknown> | undefined, key: string): unknown {

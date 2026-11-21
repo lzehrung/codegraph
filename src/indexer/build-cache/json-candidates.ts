@@ -11,6 +11,7 @@ import { iterateResolutionCandidates, STYLESHEET_RESOLUTION_EXTENSIONS } from ".
 import { probeRealpath } from "../../util/fs-probe-cache.js";
 import type { BuildOptions, ModuleIndex } from "../types.js";
 import { cacheRoot } from "./location.js";
+import { compareStrings } from "../../util/strings.js";
 
 /** One first-party JSON candidate and the importers whose resolution can depend on it. */
 export type JsonCandidateRecord = {
@@ -279,5 +280,5 @@ export async function updateJsonCandidates(args: {
     else if (row.expectedPresent !== undefined && (signature !== null) !== row.expectedPresent) signature = "changed";
     records.push({ file: row.file, signature, importers: [...row.importers].sort() });
   }
-  return records.sort((left, right) => left.file.localeCompare(right.file));
+  return records.sort((left, right) => compareStrings(left.file, right.file));
 }

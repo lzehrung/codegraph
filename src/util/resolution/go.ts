@@ -5,6 +5,7 @@ import { unquote } from "../ast.js";
 import { stripBom } from "../paths.js";
 import { fileExists } from "../workspace.js";
 import { findNearestFile } from "./files.js";
+import { compareStrings } from "../strings.js";
 
 type GoModuleInfo = {
   modulePath: string;
@@ -97,7 +98,7 @@ export async function findGoPackageEntry(dirPath: string): Promise<string | null
   const goFiles = entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go"))
     .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
+    .sort((a, b) => compareStrings(a, b));
   if (!goFiles.length) return null;
   return path.join(dirPath, goFiles[0] ?? "");
 }

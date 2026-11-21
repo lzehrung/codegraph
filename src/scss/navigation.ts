@@ -23,6 +23,7 @@ import {
   scssUseEditRange,
 } from "./resolution.js";
 import { scssOffsetAt, type ScssUse } from "./syntax.js";
+import { compareStrings } from "../util/strings.js";
 
 /**
  * SCSS navigation for Sass module members. Same-file selectors and other symbols the module
@@ -172,7 +173,7 @@ export async function findScssReferences(
 }
 
 function compareReferences(left: Reference, right: Reference): number {
-  const file = left.file.localeCompare(right.file);
+  const file = compareStrings(left.file, right.file);
   if (file !== 0) return file;
   if (left.range.start.line !== right.range.start.line) return left.range.start.line - right.range.start.line;
   return left.range.start.column - right.range.start.column;

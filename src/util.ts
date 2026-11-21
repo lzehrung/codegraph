@@ -1,4 +1,5 @@
-export { sliceText, stringifyUnknown, toRange, unquote } from "./util/ast.js";
+export { sliceText, toRange, unquote } from "./util/ast.js";
+export { stringifyUnknown } from "./util/strings.js";
 export {
   maskJsLikeCommentsAndStrings,
   parseJsonc,

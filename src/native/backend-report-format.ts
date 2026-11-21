@@ -1,4 +1,5 @@
 import type { BuildReport } from "../indexer/types.js";
+import { compareStrings } from "../util/strings.js";
 
 /** Keep CLI formatting independent of native runtime loading. */
 export function formatNativeBackendAffectedLanguages(report: BuildReport | undefined): string | undefined {
@@ -7,7 +8,7 @@ export function formatNativeBackendAffectedLanguages(report: BuildReport | undef
   const languages = Object.entries(native.byLanguage)
     .filter(([, entry]) => entry.filesFellBack > 0)
     .map(([languageId]) => languageId)
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
   if (!languages.length) return undefined;
   return `affected languages: ${languages.join(", ")}`;
 }

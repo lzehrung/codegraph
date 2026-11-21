@@ -1,4 +1,5 @@
 import { supportForFile } from "../languages.js";
+import { compareStrings } from "../util/strings.js";
 
 function driftLanguageId(id: string): string {
   if (id === "ts") return "typescript";
@@ -13,5 +14,5 @@ export function countFilesByLanguage(files: Iterable<string>): Record<string, nu
     const languageId = driftLanguageId(support.id);
     counts[languageId] = (counts[languageId] ?? 0) + 1;
   }
-  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
+  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => compareStrings(left, right)));
 }

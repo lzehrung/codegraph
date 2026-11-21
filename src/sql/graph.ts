@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import type { SqlFactKind, SqlStatementFact, SqlTruthTier } from "./types.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
+import { compareStrings } from "../util/strings.js";
 
 export type SqlArtifactNodeKind =
   | "sql_file"
@@ -162,15 +163,15 @@ function addCandidateMention(
 }
 
 function sortNodes(left: SqlArtifactNode, right: SqlArtifactNode): number {
-  return left.id.localeCompare(right.id);
+  return compareStrings(left.id, right.id);
 }
 
 function sortEdges(left: SqlArtifactEdge, right: SqlArtifactEdge): number {
-  const fromCompare = left.from.localeCompare(right.from);
+  const fromCompare = compareStrings(left.from, right.from);
   if (fromCompare !== 0) return fromCompare;
-  const toCompare = left.to.localeCompare(right.to);
+  const toCompare = compareStrings(left.to, right.to);
   if (toCompare !== 0) return toCompare;
-  return left.kind.localeCompare(right.kind);
+  return compareStrings(left.kind, right.kind);
 }
 
 export function projectSqlFactsToGraph(facts: readonly SqlStatementFact[]): SqlArtifactGraph {

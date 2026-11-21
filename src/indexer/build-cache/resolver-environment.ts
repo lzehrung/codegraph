@@ -11,6 +11,7 @@ import type { WorkspaceConfig } from "../../util/workspace.js";
 import type { BuildOptions } from "../types.js";
 import { csharpProjectUsingFiles } from "../../util/csharp-project-usings.js";
 import type { ProjectDiscoveryContext } from "../../util/project-files.js";
+import { compareStrings } from "../../util/strings.js";
 
 const PROJECT_RESOLUTION_INPUTS = [
   "package.json",
@@ -85,7 +86,7 @@ function nodeModulesRootCandidates(projectRoot: string, files: readonly string[]
     }
     if (candidates.size > MAX_NODE_MODULE_ROOTS) return null;
   }
-  return [...candidates].sort((left, right) => left.localeCompare(right));
+  return [...candidates].sort((left, right) => compareStrings(left, right));
 }
 
 async function activeNodeModulesRoots(projectRoot: string, files: readonly string[]): Promise<string[] | null> {
@@ -162,7 +163,7 @@ async function cargoManifestInputs(
   );
   return inputs
     .filter((input): input is ResolutionInput => input !== null)
-    .sort((left, right) => left.path.localeCompare(right.path));
+    .sort((left, right) => compareStrings(left.path, right.path));
 }
 /**
  * Fingerprints effective TypeScript and workspace resolution inputs once per cached build.
@@ -210,10 +211,12 @@ export async function computeResolverEnvironmentFingerprint(
     );
   }
   const hash = crypto.createHash("sha256");
-  for (const [, input] of [...configInputs].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [, input] of [...configInputs].sort(([left], [right]) => compareStrings(left, right))) {
     hash.update(`tsconfig\0${input}\n`);
   }
-  const packages = [...(workspace?.packages.values() ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+  const packages = [...(workspace?.packages.values() ?? [])].sort((left, right) =>
+    compareStrings(left.name, right.name),
+  );
   for (const pkg of packages) {
     hash.update(
       `workspace\0${JSON.stringify([pkg.name, normalizedRelativePath(projectRoot, pkg.path), pkg.main, pkg.exports])}\n`,
@@ -253,7 +256,7 @@ export async function computeResolverEnvironmentFingerprint(
     if (!manifests || inputs.length + manifests.length > MAX_PACKAGE_MANIFESTS) return null;
     inputs.push(...manifests);
   }
-  inputs.sort((left, right) => left.path.localeCompare(right.path));
+  inputs.sort((left, right) => compareStrings(left.path, right.path));
   hash.update("node_modules\0");
   for (const input of inputs) {
     hash.update(`${input.path}\0${input.mtimeMs}\0${input.size}\0${input.contentHash}\n`);

@@ -46,6 +46,7 @@ import {
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { pushAll } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { readConfinedUtf8File, readConfinedUtf8FileWithSize } from "../util/confined-file.js";
 import { resolveWorkerThreadCount } from "../util/worker-threads.js";
 import { runWithProbeCache } from "../util/fs-probe-cache.js";
@@ -451,7 +452,7 @@ function declaredContainerIndexFromModules(modules: Iterable<ModuleIndex>): Map<
   for (const [name, files] of byName) {
     index.set(
       name,
-      [...files].sort((left, right) => left.localeCompare(right)),
+      [...files].sort((left, right) => compareStrings(left, right)),
     );
   }
   return index;
@@ -534,7 +535,7 @@ async function collectCppMissDeclaredContainers(
   for (const [name, declaringFiles] of byName) {
     index.set(
       name,
-      [...declaringFiles].sort((left, right) => left.localeCompare(right)),
+      [...declaringFiles].sort((left, right) => compareStrings(left, right)),
     );
   }
   return index;
@@ -568,7 +569,7 @@ function sortedDeclaredContainerIndex(byName: ReadonlyMap<string, ReadonlySet<st
   for (const [name, files] of byName) {
     index.set(
       name,
-      [...files].sort((left, right) => left.localeCompare(right)),
+      [...files].sort((left, right) => compareStrings(left, right)),
     );
   }
   return index;
@@ -1544,7 +1545,7 @@ async function collectStaleCachedModules(args: {
         const merged = new Set([...(nextDeclaredContainers.get(name) ?? []), ...declaringFiles]);
         nextDeclaredContainers.set(
           name,
-          [...merged].sort((left, right) => left.localeCompare(right)),
+          [...merged].sort((left, right) => compareStrings(left, right)),
         );
       }
     }
@@ -2065,7 +2066,7 @@ async function buildIndexFromFileListInProbeCache(
   };
   const sqlFiles = normalizedFiles
     .filter((file) => isSqlFilePath(file, languageExtensions))
-    .sort((left, right) => left.localeCompare(right));
+    .sort((left, right) => compareStrings(left, right));
   const fileSignatures = await prepareFileSignatures({
     projectRoot,
     files: sqlFiles,

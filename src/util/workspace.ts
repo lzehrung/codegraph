@@ -9,6 +9,7 @@ import { stripHashInlineComment } from "./comments.js";
 import { resolvePackageExportTargets, type PackageExportConditionMode } from "./package-exports.js";
 import { listResolutionCandidates } from "./resolution-candidates.js";
 import { currentProbeCache, resetCurrentProbeCache } from "./fs-probe-cache.js";
+import { compareStrings } from "./strings.js";
 
 async function pathMatchesCachedStat(
   cache: Map<string, boolean>,
@@ -239,7 +240,7 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
     // Register each real package directory once, at its own path when a pattern matched it
     // there, else at the shortest alias, so a link never replaces the package's directory.
     const byDepth = (left: string, right: string): number =>
-      left.split("/").length - right.split("/").length || left.localeCompare(right);
+      left.split("/").length - right.split("/").length || compareStrings(left, right);
     let realRoot = root;
     try {
       realRoot = await fsp.realpath(root);

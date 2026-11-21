@@ -5,6 +5,7 @@ import type { SqliteArtifactFileSignature, SqliteGraphOptions, SqliteGraphUpdate
 import { execRowsParams } from "./common.js";
 import { withSqliteDatabase } from "./database.js";
 import { GRAPH_SNAPSHOT_RETENTION } from "./schema.js";
+import { compareStrings } from "../util/strings.js";
 export const SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY = "artifact_file_signatures_v1";
 
 function normalizeSqliteArtifactFileSignatures(
@@ -15,7 +16,7 @@ function normalizeSqliteArtifactFileSignatures(
     size: signature.size,
     mtimeMs: signature.mtimeMs,
   }));
-  normalized.sort((left, right) => left.path.localeCompare(right.path));
+  normalized.sort((left, right) => compareStrings(left.path, right.path));
   return normalized;
 }
 

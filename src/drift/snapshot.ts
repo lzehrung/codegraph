@@ -21,6 +21,7 @@ import {
   type ArchitectureUnresolvedImport,
 } from "./types.js";
 import { toArchitectureGraphEdges } from "./graph-edges.js";
+import { compareStrings } from "../util/strings.js";
 
 const DEFAULT_DUPLICATE_LIMIT = 50;
 
@@ -50,7 +51,7 @@ function toSnapshotCycles(root: string, cycles: ReturnType<typeof findDetailedCy
         size: cycle.fileCount,
       };
     })
-    .sort((left, right) => left.key.localeCompare(right.key));
+    .sort((left, right) => compareStrings(left.key, right.key));
 }
 
 function toSnapshotHotspots(root: string, hotspots: ReturnType<typeof getHotspots>): ArchitectureHotspot[] {
@@ -61,7 +62,7 @@ function toSnapshotHotspots(root: string, hotspots: ReturnType<typeof getHotspot
       fanOut: entry.fanOut,
       score: entry.score,
     }))
-    .sort((left, right) => left.file.localeCompare(right.file));
+    .sort((left, right) => compareStrings(left.file, right.file));
 }
 
 function toSnapshotUnresolved(
@@ -81,7 +82,7 @@ function toSnapshotUnresolved(
   }
   return {
     total: unresolved.length,
-    imports: unresolved.sort((left, right) => left.key.localeCompare(right.key)),
+    imports: unresolved.sort((left, right) => compareStrings(left.key, right.key)),
   };
 }
 
@@ -98,7 +99,7 @@ function toSnapshotPublicApi(root: string, index: Parameters<typeof getApiSurfac
       });
     }
   }
-  return symbols.sort((left, right) => left.id.localeCompare(right.id));
+  return symbols.sort((left, right) => compareStrings(left.id, right.id));
 }
 
 /**

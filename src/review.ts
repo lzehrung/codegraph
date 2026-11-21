@@ -38,6 +38,7 @@ import type {
   ReviewTask,
   ReviewTimingReport,
 } from "./review/types.js";
+import { compareStrings } from "./util/strings.js";
 
 export type {
   ReviewBuildReport,
@@ -280,7 +281,7 @@ export async function buildReviewReport(
     return report;
   }
 
-  const changedFileList = Array.from(changedFiles).sort((left, right) => left.localeCompare(right));
+  const changedFileList = Array.from(changedFiles).sort((left, right) => compareStrings(left, right));
   const diagnostics: ReviewDiagnostics = {
     missingFiles: [],
     symbolMappingParseFailures: [],

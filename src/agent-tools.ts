@@ -61,6 +61,7 @@ import {
   type RefactorPlanRequest,
   type RefactorPlanResponse,
 } from "./agent/refactor-plan.js";
+import { compareStrings } from "./util/strings.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -512,9 +513,9 @@ export async function tool_findSymbol(
 
     matches.sort((a, b) => {
       if (a.exactMatch !== b.exactMatch) return a.exactMatch ? -1 : 1;
-      const byName = a.name.localeCompare(b.name);
+      const byName = compareStrings(a.name, b.name);
       if (byName !== 0) return byName;
-      const byFile = a.file.localeCompare(b.file);
+      const byFile = compareStrings(a.file, b.file);
       if (byFile !== 0) return byFile;
       return a.line - b.line;
     });
@@ -669,7 +670,7 @@ async function collectToolDependencyEntries(
       limit: limit + 1,
     });
     const sortedEntries = [...entries].sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
+      const fileDelta = compareStrings(left.file, right.file);
       if (fileDelta !== 0) return fileDelta;
       return left.depth - right.depth;
     });

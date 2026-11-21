@@ -60,6 +60,12 @@ Results are not universal latency claims; compare the same root, revision, query
 - Corpora are indexed with `cache: "off"`, one file at a time, and no native worker pool. The text must not depend on the machine, so a platform-only difference is a bug to fix, not a snapshot to regenerate.
 - Each `tests/edge-corpus` scenario is indexed as its own project, as `tests/edge-corpus.test.ts` does. The script fails when the corpora leave a registered language without an indexed file.
 
+## Navigation answer snapshot
+
+`tests/snapshots/answers/` uses the same project groups to pin goto targets, public `via`/`provenance` metadata, and references for indexed declarations plus deduplicated goto targets. Reference `order=` ranks and `affectedFiles` arrays retain the API's returned order, so truncation-order regressions are visible even though records are sorted. Regenerate with `npm run answers:snapshot`, classify every changed answer against base/head evidence, and check with `npm run answers:snapshot:check` (also run in CI).
+
+Paths are project-relative POSIX and normalized to NFC for filesystem spelling differences; identifier spelling remains unchanged. [The answer snapshot review guide](./paired.md#answer-snapshots-for-reviews) documents the syntax selection, excluded leaves, and scratch-only pinned-corpus comparisons.
+
 ## Workflow definitions
 
 Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and exact steps for the required baseline and cold CLI variants. It may also declare the warm CLI and warm MCP variants, which use the same query steps.

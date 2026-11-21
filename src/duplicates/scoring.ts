@@ -1,4 +1,5 @@
 import { appendToArrayMap } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { lineSpan, shortHashText } from "./units.js";
 import type {
   DuplicateCleanupLabel,
@@ -293,13 +294,13 @@ export function unitRefRangeIdentity(ref: DuplicateUnitRef): string {
 }
 
 export function compareUnitRefs(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
-  const fileCompare = left.file.localeCompare(right.file);
+  const fileCompare = compareStrings(left.file, right.file);
   if (fileCompare) return fileCompare;
   const startCompare = left.startLine - right.startLine;
   if (startCompare) return startCompare;
   const endCompare = left.endLine - right.endLine;
   if (endCompare) return endCompare;
-  return (left.name ?? "").localeCompare(right.name ?? "");
+  return compareStrings(left.name ?? "", right.name ?? "");
 }
 
 export function unitPrimaryRank(ref: DuplicateUnitRef): number {
@@ -334,9 +335,9 @@ export function compareSuggestions(left: DuplicateSuggestion, right: DuplicateSu
   if (confidenceCompare) return confidenceCompare;
   const cloneTypeCompare = cloneTypeRank[right.cloneType] - cloneTypeRank[left.cloneType];
   if (cloneTypeCompare) return cloneTypeCompare;
-  const leftFileCompare = left.left.file.localeCompare(right.left.file);
+  const leftFileCompare = compareStrings(left.left.file, right.left.file);
   if (leftFileCompare) return leftFileCompare;
-  const rightFileCompare = left.right.file.localeCompare(right.right.file);
+  const rightFileCompare = compareStrings(left.right.file, right.right.file);
   if (rightFileCompare) return rightFileCompare;
   return left.left.startLine - right.left.startLine;
 }

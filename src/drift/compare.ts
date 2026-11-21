@@ -16,6 +16,7 @@ import type {
   ArchitectureSnapshotSummary,
   ArchitectureUnresolvedImport,
 } from "./types.js";
+import { compareStrings } from "../util/strings.js";
 
 export const DEFAULT_DRIFT_THRESHOLDS: ArchitectureDriftThresholds = {
   hotspotJump: 20,
@@ -365,9 +366,9 @@ function compareFindings(left: ArchitectureDriftFinding, right: ArchitectureDrif
   const severityRank = { error: 0, warning: 1, info: 2 } as const;
   const severityDelta = severityRank[left.severity] - severityRank[right.severity];
   if (severityDelta) return severityDelta;
-  const kindDelta = left.kind.localeCompare(right.kind);
+  const kindDelta = compareStrings(left.kind, right.kind);
   if (kindDelta) return kindDelta;
-  return left.key.localeCompare(right.key);
+  return compareStrings(left.key, right.key);
 }
 
 function summarizeFindings(findings: readonly ArchitectureDriftFinding[]): ArchitectureDriftSummary {

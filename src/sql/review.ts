@@ -4,6 +4,7 @@ import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/project-file
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { pushAll } from "../util/collections.js";
+import { compareStrings } from "../util/strings.js";
 import { isSqlFilePath } from "./classify-sql-file.js";
 import { extractSqlFactsFromSource } from "./extract-facts.js";
 import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
@@ -59,7 +60,7 @@ function entryKey(entry: SqlReviewContextEntry): string {
 function sortEntries(left: SqlReviewContextEntry, right: SqlReviewContextEntry): number {
   const leftKey = entryKey(left);
   const rightKey = entryKey(right);
-  return leftKey.localeCompare(rightKey);
+  return compareStrings(leftKey, rightKey);
 }
 
 async function readExistingFile(filePath: string): Promise<string | null> {

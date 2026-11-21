@@ -24,6 +24,7 @@ import {
   type QueryIndexMetadata,
 } from "./schema.js";
 import { isSqliteBusyError, isSqliteCorruptionError, QueryIndexStore } from "./store.js";
+import { compareStrings } from "../../util/strings.js";
 
 const QUERY_INDEX_TEMP_PATTERN = /^search-v1(?:\.v\d+)?\.tmp-\d+-[0-9a-f-]+\.sqlite$/u;
 
@@ -88,7 +89,7 @@ function currentQueryState(snapshot: AgentProjectSnapshot): QueryIndexCurrentSta
     files.push({ path: relativePath, sourceIdentity });
     identities.set(relativePath, sourceIdentity);
   }
-  files.sort((left, right) => left.path.localeCompare(right.path));
+  files.sort((left, right) => compareStrings(left.path, right.path));
   return {
     files,
     identities,
