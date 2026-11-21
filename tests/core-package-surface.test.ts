@@ -25,6 +25,8 @@ describe("codegraph-core package surface", () => {
     expect(files).toContain("graphs/types.d.ts");
     expect(files).toContain("agent/semantic.d.ts");
     expect(files).toContain("chunking/types.d.ts");
+    expect(files).toContain("indexer/build-cache/epochs.generated.js");
+    expect(files).toContain("indexer/build-cache/epochs.generated.d.ts");
     expect(files.some((file) => file.includes("mcp/"))).toBe(false);
     expect(files.some((file) => file.startsWith("cli/") || file.includes("/cli/"))).toBe(false);
   });

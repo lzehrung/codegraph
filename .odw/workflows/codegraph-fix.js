@@ -3,7 +3,7 @@ export const meta = {
   description:
     "Reproduce, implement, and differentially review a Codegraph fix or behavior-preserving refactor in place.",
   whenToUse:
-    "Run in a prepared worktree with a built baseline. Pass task and baseline; optionally reserve epochs, select implement/review models, and request the final full gate. The host owns publishing.",
+    "Run in a prepared worktree with a built baseline. Pass task and baseline; optionally select implement/review models and request the final full gate. The host owns publishing.",
   phases: [
     {
       title: "Reproduce",
@@ -18,7 +18,7 @@ export const meta = {
   ],
 };
 
-// args: { task, baseline, mode?, base?, oracle?, epochs?: { core?, language? },
+// args: { task, baseline, mode?, base?, oracle?,
 //         maxRounds?, fullGate?, corpora?, scratch?,
 //         models?: { implement?, review? }, adapters?: { implement?, review? } }
 const TEXT = { type: "string" };
@@ -164,11 +164,11 @@ No push, rebase, stash, checkout, reset, restore, switch, or clean. No branch cr
 Docs and all committed text must be ASCII-only. No local paths, machine names, usernames, or session details in committed text. Report observed command output, never guessed success. Native runtime is required; inspect the real APIs and existing consumer test patterns before writing probes.`;
 }
 function contextText() {
-  return `Task: ${task}\nMode: ${mode}; base: ${base}.\nPrepared reproduction: ${JSON.stringify(reproduction)}\nEpoch reservations: ${JSON.stringify(input.epochs ?? {})}\nOracle instructions: ${JSON.stringify(input.oracle ?? "")}`;
+  return `Task: ${task}\nMode: ${mode}; base: ${base}.\nPrepared reproduction: ${JSON.stringify(reproduction)}\nOracle instructions: ${JSON.stringify(input.oracle ?? "")}`;
 }
 function verificationInstructions(context) {
   return `Follow existing shared resolution modules; never establish a consumer-specific rule or a new mechanism for a rare form. Cover inclusion AND exclusion through goto, references including referenceCoverage.state, detailed graph, and rename-preview when relevant, with same-named decoys and cold/reopened disk-cache consumers. Update the relevant call-form matrix cell and regenerate docs/coverage/call-forms.md with the AGENTS.md command when call forms change. Preserve edge-corpus assertion meaning; never turn a real @known-gap into @not-ref or drop passing assertions.
-Update the applicable canonical docs, language parity/scenario coverage, and CHANGELOG per AGENTS.md. Bump CORE_ALGORITHM_EPOCH or LANGUAGE_BEHAVIOR_EPOCH only when changed persisted facts or language hooks require it. If a reservation is supplied for a needed epoch, use exactly that value and reject a stale/non-advancing reservation; otherwise follow the repository's normal epoch increment. Never consume an epoch for unrelated work.
+Update the applicable canonical docs, language parity/scenario coverage, and a changes/unreleased/<unique-slug>.md fragment per AGENTS.md; never add notes directly to CHANGELOG.md. When persisted facts change, add src/indexer/build-cache/epochs/core/<unique-slug>.txt with a one-line reason. Behavior-hook changes also add an epochs/language/ entry. Never edit existing entries, numeric seeds, or generated epoch constants. Do not add cache records for unrelated work.
 Run npm run build before worker/native consumer tests. Run focused affected suites, both TypeScript configs (npx tsc --noEmit -p tsconfig.json and npx tsc --noEmit -p tsconfig.tests.json), ESLint and Prettier checks on changed applicable files using the repository's configuration, npm run graph:snapshot:check, and npm run answers:snapshot:check. Do not run npm run check here; the separate optional full gate owns it. If test counts require fixture-report regeneration per repository guidance, regenerate that report too.
 If snapshots differ, classify EVERY diff line with file:line and base/head evidence. Regenerate with npm run graph:snapshot and npm run answers:snapshot ONLY if every changed line is a proven fix; never bless regression, conservative-loss, or unclear changes. In refactor mode ANY answer/edge difference violates preservation: correct the implementation instead of regenerating snapshots. Rerun both snapshot checks after justified regeneration. Report [] for unchanged snapshots.
 Record fixture baseline answers with node "${context.source}/scripts/answer-snapshot.mjs" --dist "${context.baseline}/dist" --dir "${context.scratch}/base-answers", then compare with the same command using --dist "${context.source}/dist" --check. Use the source script for both versions on identical input bytes, leaving baseline files unchanged.
@@ -264,14 +264,8 @@ if (input.scratch !== undefined) absolutePath(input.scratch, "scratch");
 const corpora = input.corpora ?? [];
 if (!Array.isArray(corpora)) throw new Error("corpora must be an array");
 corpora.forEach((path) => absolutePath(path, "corpora entry"));
-if (input.epochs !== undefined) {
-  if (!input.epochs || typeof input.epochs !== "object" || Array.isArray(input.epochs))
-    throw new Error("epochs must be an object");
-  for (const [key, value] of Object.entries(input.epochs)) {
-    if (!["core", "language"].includes(key) || !Number.isInteger(value) || value < 0)
-      throw new Error("epochs accepts only nonnegative core/language integers");
-  }
-}
+if (Object.hasOwn(input, "epochs"))
+  throw new Error("Numeric epoch reservations are not supported; add epoch entry files.");
 
 phase("Reproduce");
 const reproduction = await agent(

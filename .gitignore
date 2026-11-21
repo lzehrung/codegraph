@@ -8,6 +8,7 @@ codegraph.json
 target/
 release/
 packages/codegraph-core/dist/
+src/indexer/build-cache/epochs.generated.ts
 packages/codegraph-native/*.node
 packages/codegraph-native/npm/
 packages/codegraph-native/artifacts/

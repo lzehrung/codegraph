@@ -3165,8 +3165,8 @@ async function duplicateUnitCacheVariantOfPreviousBuild(
 }
 
 const previousBuildsOfDuplicateUnitCache: PreviousDuplicateUnitCacheBuild[] = [
-  { name: "core algorithm epoch", coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH - 1 },
-  { name: "language behavior epoch", languageBehaviorEpoch: LANGUAGE_BEHAVIOR_EPOCH - 1 },
+  { name: "core algorithm epoch", coreAlgorithmEpoch: 175 },
+  { name: "language behavior epoch", languageBehaviorEpoch: 30 },
   { name: "native runtime", nativeRuntimePackageVersion: "0.0.0-previous-runtime" },
   // A release whose variant held neither epoch nor the runtime.
   {

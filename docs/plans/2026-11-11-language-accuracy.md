@@ -17,8 +17,8 @@ Baseline (main at v3.2.1, 2026-11-11):
   `@goto`, or `@def` assertion. Never turn a real defect into `@not-ref`.
 - Check the expected answer against the language's compiler or reference implementation where one
   exists.
-- Compute per-file facts at index time and aggregate across files at query time. Bump
-  `CORE_ALGORITHM_EPOCH` when extracted or resolved index data changes.
+- Compute per-file facts at index time and aggregate across files at query time. Add a uniquely named
+  `src/indexer/build-cache/epochs/core/<slug>.txt` entry when extracted or resolved index data changes.
 - Run `npm run graph:snapshot:check`; every edge added or removed in the graph snapshots must be
   explained in the pull request.
 - Before merging, an independent review by a different model family and a full `npm run check`.

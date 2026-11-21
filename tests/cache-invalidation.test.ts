@@ -699,7 +699,8 @@ describe("Cache invalidation and strict hashing", () => {
       clearImplementationFingerprintCache();
 
       expect(getImplementationFingerprint()).toBe(fingerprint);
-      expect(getImplementationFingerprintForEpoch(LANGUAGE_BEHAVIOR_EPOCH + 1)).not.toBe(fingerprint);
+      expect(getImplementationFingerprintForEpoch(LANGUAGE_BEHAVIOR_EPOCH)).toBe(fingerprint);
+      expect(getImplementationFingerprintForEpoch(30)).not.toBe(fingerprint);
     } finally {
       if (originalNormalizeIdentifier === undefined) delete typescript.normalizeIdentifier;
       else typescript.normalizeIdentifier = originalNormalizeIdentifier;
@@ -707,7 +708,7 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  it("invalidates cached indexing written under an older core algorithm epoch", async () => {
+  it("invalidates cached indexing written under a different core algorithm epoch, then reuses it", async () => {
     const root = await mkTmpDir("dg-cache-core-epoch-");
     const entryPath = path.join(root, "entry.ts");
     const file = normalize(path.resolve(entryPath));
@@ -717,7 +718,7 @@ describe("Cache invalidation and strict hashing", () => {
     const stored = await readManifest(root);
     // Keep the stored implementation fingerprint current so the only difference is the epoch,
     // then attach an edge only a stale read could resurrect.
-    stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH - 1 };
+    stored.buildOptions = { ...stored.buildOptions, coreAlgorithmEpoch: 175 };
     stored.files = {
       [file]: {
         sig: "superseded-signature",
@@ -738,6 +739,10 @@ describe("Cache invalidation and strict hashing", () => {
     expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
     const refreshed = await readManifest(root);
     expect(refreshed.buildOptions?.coreAlgorithmEpoch).toBe(CORE_ALGORITHM_EPOCH);
+    const warmReport: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, { threads: 2, cache: "disk", report: warmReport });
+    expect(warmReport.manifest?.reused).toBe(true);
+    expect(warmReport.manifest?.optionsMismatch ?? []).toEqual([]);
   });
 
   it("rebuilds epoch 172 cached indexing to match a cold build", async () => {

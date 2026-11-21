@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runGit } from "./helpers/git.js";
 
 type PackageManifest = {
   scripts?: Record<string, string>;
@@ -73,8 +74,37 @@ function stepRun(step: string): string {
     .trim();
 }
 
+function workflowBash(): string | undefined {
+  let candidates: string[];
+  if (process.platform === "win32") {
+    const git = spawnSync("git", ["--exec-path"], { encoding: "utf8", windowsHide: true });
+    if (git.status !== 0) return undefined;
+    const gitRoot = path.resolve(git.stdout.trim(), "../../..");
+    candidates = [path.join(gitRoot, "bin", "bash.exe"), path.join(gitRoot, "usr", "bin", "bash.exe")];
+  } else {
+    candidates = ["/bin/bash", "/usr/bin/bash"];
+  }
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    const probe = spawnSync(candidate, ["--noprofile", "--norc", "-c", 'test -n "$BASH_VERSION"'], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if (probe.status === 0) return candidate;
+  }
+  return undefined;
+}
+
 describe("certified release workflows", () => {
-  it("preserves source notes and validates the transferred release changelog before staging", () => {
+  it("checks change records in the primary CI gate", () => {
+    const gate = jobBlock(onDemandWorkflow, "build-and-test");
+    expect(stepBlock(gate, "Check change records")).toContain("run: npm run changes:check");
+  });
+
+  it("preserves source notes and validates the transferred release changelog before staging", (context) => {
+    const bash = workflowBash();
+    if (!bash)
+      return context.skip("Requires POSIX Bash; on Windows use Bash from the Git installation, not the WSL launcher.");
     const plan = jobBlock(releaseWorkflow, "plan-release");
     const publish = jobBlock(releaseWorkflow, "publish-certified");
     const prepare = stepRun(stepBlock(plan, "Prepare release changelog"));
@@ -92,14 +122,6 @@ describe("certified release workflows", () => {
       "",
       "## [Unreleased]",
       "",
-      "### Fixed",
-      "",
-      "- Repair.",
-      "",
-      "### Changed",
-      "",
-      "- Faster indexes.",
-      "",
       "## [2.3.20] - 2026-09-04",
       "",
       "- Earlier fix.",
@@ -111,12 +133,33 @@ describe("certified release workflows", () => {
     try {
       for (const cwd of [planRoot, publishRoot]) {
         fs.mkdirSync(path.join(cwd, "scripts"), { recursive: true });
-        for (const file of ["prepare-release-changelog.mjs", "release-lib.mjs", "native-targets-lib.mjs"]) {
+        for (const file of [
+          "prepare-release-changelog.mjs",
+          "release-lib.mjs",
+          "changelog-fragments-lib.mjs",
+          "native-targets-lib.mjs",
+        ]) {
           fs.copyFileSync(path.join("scripts", file), path.join(cwd, "scripts", file));
         }
         fs.writeFileSync(path.join(cwd, "package.json"), '{"type":"module","version":"2.3.20"}\n');
         fs.writeFileSync(path.join(cwd, "CHANGELOG.md"), source);
+        fs.mkdirSync(path.join(cwd, "changes", "unreleased"), { recursive: true });
+        fs.writeFileSync(path.join(cwd, "changes", "unreleased", "repair.md"), "---\nsection: Fixed\n---\n\nRepair.\n");
+        fs.writeFileSync(
+          path.join(cwd, "changes", "unreleased", "faster.md"),
+          "---\nsection: Changed\n---\n\nFaster indexes.\n",
+        );
+        fs.writeFileSync(path.join(cwd, ".gitignore"), "temp/\n");
+        fs.writeFileSync(path.join(cwd, "package-lock.json"), "{}\n");
+        for (const name of ["codegraph-core", "codegraph-native"]) {
+          fs.mkdirSync(path.join(cwd, "packages", name), { recursive: true });
+          fs.writeFileSync(path.join(cwd, "packages", name, "package.json"), '{"version":"2.3.20"}\n');
+        }
       }
+      runGit(publishRoot, ["init", "-q"]);
+      runGit(publishRoot, ["config", "core.autocrlf", "false"]);
+      runGit(publishRoot, ["add", "."]);
+      runGit(publishRoot, ["commit", "-qm", "Source release notes"]);
       const [, ...prepareArgs] = prepare.replace("${{ inputs.release_type }}", "patch").split(/\s+/);
       const prepared = spawnSync(process.execPath, prepareArgs, {
         cwd: planRoot,
@@ -125,6 +168,7 @@ describe("certified release workflows", () => {
       });
       expect(prepared.status, `${prepared.stdout}\n${prepared.stderr}`).toBe(0);
       expect(fs.readFileSync(path.join(planRoot, "CHANGELOG.md"), "utf8")).toBe(source);
+      expect(fs.readdirSync(path.join(planRoot, "changes", "unreleased")).sort()).toEqual(["faster.md", "repair.md"]);
 
       // Transfer the uploaded file using the workflow's declared artifact name and paths.
       const uploadedPath = path.join(planRoot, artifactInput(upload, "path"));
@@ -138,7 +182,7 @@ describe("certified release workflows", () => {
       );
       const artifact = fs.readFileSync(uploadedPath, "utf8");
       expect(artifact).toContain("## [Unreleased]\n\n## [2.3.21] - ");
-      expect(artifact).toContain("### Fixed\n\n- Repair.\n\n### Changed\n\n- Faster indexes.");
+      expect(artifact).toContain("### Changed\n\n- Faster indexes.\n\n### Fixed\n\n- Repair.");
       expect(artifact).toContain("## [2.3.20] - 2026-09-04\n\n- Earlier fix.");
 
       const stageArtifact = (version: string) =>
@@ -151,9 +195,36 @@ describe("certified release workflows", () => {
       const rejected = stageArtifact("2.3.22");
       expect(rejected.status).not.toBe(0);
       expect(fs.readFileSync(path.join(publishRoot, "CHANGELOG.md"), "utf8")).toBe(source);
+      expect(fs.readdirSync(path.join(publishRoot, "changes", "unreleased")).length).toBe(2);
       const staged = stageArtifact("2.3.21");
       expect(staged.status, `${staged.stdout}\n${staged.stderr}`).toBe(0);
       expect(fs.readFileSync(path.join(publishRoot, "CHANGELOG.md"), "utf8")).toBe(artifact);
+      expect(fs.readdirSync(path.join(publishRoot, "changes", "unreleased"))).toEqual([]);
+      const commitStep = stepRun(stepBlock(publish, "Create release version commit and tags"));
+      const commandStart = commitStep.indexOf("\ngit add ");
+      const commandEnd = commitStep.indexOf("\nnode --input-type=module", commandStart + 1);
+      expect(commandStart).toBeGreaterThanOrEqual(0);
+      expect(commandEnd).toBeGreaterThan(commandStart);
+      const committed = spawnSync(bash, ["-e", "-c", commitStep.slice(commandStart + 1, commandEnd)], {
+        cwd: publishRoot,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Tests",
+          GIT_AUTHOR_EMAIL: "tests@example.com",
+          GIT_COMMITTER_NAME: "Tests",
+          GIT_COMMITTER_EMAIL: "tests@example.com",
+          ROOT_VERSION: "2.3.21",
+          NATIVE_VERSION: "2.3.21",
+        },
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(committed.status, `${committed.stdout}\n${committed.stderr}`).toBe(0);
+      expect(runGit(publishRoot, ["status", "--porcelain"])).toBe("");
+      expect(runGit(publishRoot, ["diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"])).toBe(
+        "M\tCHANGELOG.md\nD\tchanges/unreleased/faster.md\nD\tchanges/unreleased/repair.md",
+      );
+      expect(runGit(publishRoot, ["ls-tree", "-r", "--name-only", "HEAD", "--", "changes/unreleased/"])).toBe("");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

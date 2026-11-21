@@ -808,11 +808,10 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import fs from "node:fs";
-          import { assertChangelogPreparedForRelease } from "./scripts/release-lib.mjs";
+          import { stagePreparedReleaseChangelog } from "./scripts/release-lib.mjs";
 
           const changelog = fs.readFileSync("temp/release-changelog/CHANGELOG.md", "utf8");
-          assertChangelogPreparedForRelease(changelog, process.env.ROOT_VERSION);
-          fs.writeFileSync("CHANGELOG.md", changelog);
+          stagePreparedReleaseChangelog(process.cwd(), changelog, process.env.ROOT_VERSION);
           NODE
 
       - name: Publish only certified tarballs
@@ -871,6 +870,7 @@ jobs:
           npx --yes npm@10.9.2 install --package-lock-only --ignore-scripts
           npx --yes npm@10.9.2 ci --ignore-scripts --dry-run
           git add package.json package-lock.json packages/codegraph-core/package.json packages/codegraph-native/package.json CHANGELOG.md
+          git ls-files -z --deleted -- changes/unreleased/ | xargs -0 -r git add --all --
           git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-core@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";

@@ -50,7 +50,7 @@ export const DUPLICATE_TOKENIZER_REVISION = 6;
 // the project, so every analyzed file of a larger project stays cached: a fixed limit below the file
 // count evicts the oldest rows on each run and recomputes those files on the next. The floor serves
 // small projects with several variants, the ratio leaves room for a second variant (an option change
-// or an epoch bump) beside the current one, and the ceiling bounds the cache of a very large project.
+// or an epoch entry) beside the current one, and the ceiling bounds the cache of a very large project.
 export const DUPLICATE_UNIT_CACHE_MIN_ROWS = 5_000;
 export const DUPLICATE_UNIT_CACHE_ROWS_PER_FILE = 2;
 export const DUPLICATE_UNIT_CACHE_MAX_ROWS = 100_000;
@@ -148,7 +148,7 @@ function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEnt
  * A cached unit holds parser- and index-derived facts (chunk boundaries, symbol units built from
  * module locals, AST-shape hashes), while the file signature only names the file's content. The
  * two epochs and the native runtime therefore key the variant, as they key every other derived
- * cache: any future epoch bump or runtime change misses and recomputes the units, with no
+ * cache: any future epoch entry or runtime change misses and recomputes the units, with no
  * separate DUPLICATE_UNIT_CACHE_VERSION bump. The runtime fingerprint is hashed to keep the key
  * short, since it embeds the addon's paths.
  */

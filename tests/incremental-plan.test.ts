@@ -404,7 +404,7 @@ describe("resolveIncrementalFileList", () => {
         };
         if (metadata === "invalid") stored.gitDirtyFiles = ["../outside.ts"];
         else delete stored.gitDirtyFiles;
-        if (metadata === "older epoch") stored.buildOptions.coreAlgorithmEpoch -= 1;
+        if (metadata === "older epoch") stored.buildOptions.coreAlgorithmEpoch = 0;
         await fs.writeFile(manifestPath, JSON.stringify(stored));
         const plan = await resolveIncrementalFilePlan(root, options);
         if (metadata === "older epoch") {
@@ -846,7 +846,7 @@ describe("incremental discovery parity", () => {
       const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
         buildOptions: { coreAlgorithmEpoch: number };
       };
-      manifest.buildOptions.coreAlgorithmEpoch -= 1;
+      manifest.buildOptions.coreAlgorithmEpoch = 0;
       await fs.writeFile(manifestPath, JSON.stringify(manifest));
       expect(await resolveIncrementalFileList(root, options)).toBeNull();
       const repaired = await buildProjectIndexIncremental(root, options);
