@@ -177,6 +177,12 @@ const CPP_MEMBER_CONTAINER_TYPES = new Set(["class_specifier", "struct_specifier
 const MAX_REFERENCE_NAMESPACE_DEPTH = 8;
 const MAX_REFERENCE_NAMESPACE_PATHS = 64;
 
+function shouldPreserveImportAlias(binding: ImportBinding, definitionName: string): boolean {
+  if (binding.kind === "default") return true;
+  if (binding.kind !== "named") return false;
+  return !!binding.explicitAlias || binding.local !== definitionName;
+}
+
 /**
  * A package an unaliased Python `import a.b.c` names besides the leaf its binding resolves to: `a` or `a.b`, which a
  * module can reach under that package's own dotted spelling.
@@ -871,8 +877,7 @@ async function findReferencesInternal(
     if (ref.via?.importBinding === "imported" && binding.kind === "named" && binding.imported === def.localName) {
       return true;
     }
-    if (binding.kind === "default") return false;
-    return !binding.explicitAlias && binding.local === def.localName;
+    return !shouldPreserveImportAlias(binding, def.localName);
   };
   const verifiedReferenceFilter = (
     fileId: string,
@@ -1372,6 +1377,8 @@ async function findReferencesInternal(
     };
 
     const scannedNamespaceMemberRoots = new Set<string>();
+    let scannedUnresolvedImportNames: Set<string> | undefined;
+    let scannedPreservedAliasNames: Set<string> | undefined;
     const scanNamespaceMemberPaths = async (
       importBinding: ImportBinding,
       namespacePaths: Array<{ file: FileId; name: string; depth: number }>,
@@ -1833,6 +1840,18 @@ async function findReferencesInternal(
                 (candidate) => fileIdentityKey(targetFile) === fileIdentityKey(candidate.file),
               )
             ) {
+              // Every unresolved slot probes the same requested spelling, not the slot's import name. Rechecking
+              // it cannot add a site or improve its metadata. Rename keeps separate scans for bindings whose
+              // references are preserved, so an earlier alias cannot hide a later renameable binding.
+              const preservesAlias = collectionMode === "rename" && shouldPreserveImportAlias(imp, def.localName);
+              let scannedNames = preservesAlias ? scannedPreservedAliasNames : scannedUnresolvedImportNames;
+              if (scannedNames?.has(exportedName)) continue;
+              if (!scannedNames) {
+                scannedNames = new Set();
+                if (preservesAlias) scannedPreservedAliasNames = scannedNames;
+                else scannedUnresolvedImportNames = scannedNames;
+              }
+              scannedNames.add(exportedName);
               const remainingReferences = remainingCollectionSlots();
               const ranges = await collectVerifiedNamedNodeReferences(
                 index,

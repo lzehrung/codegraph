@@ -90,6 +90,8 @@ References verify each candidate through go-to-definition. The graph applies two
 
 References choose the files they verify from the importers of each file, which every index build records, and from two tables that the first lookup of an index builds and every later lookup reuses: the modules that re-export each file, and the modules sorted once. A lookup tests the files that can reach the definition (its re-exporters, their importers, and its compilation-unit peers), not every indexed module, so a definition with no importers costs the same on a project of 17,000 files as on one of 1,800. The indexes belong to one index object and are never stored in a module entry or on disk, so an incremental update returns a new index that starts without them.
 
+An unresolved import slot may require verifying every occurrence of the requested name in its file. `findReferences` reuses that scan for other unresolved slots within the same file and query, preserving the first import attribution and reference coverage. `findRenameReferences` and `rename_preview` separately check bindings whose aliases must stay unchanged.
+
 Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
