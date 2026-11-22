@@ -4,8 +4,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isPlainRecord } from "../../src/util/guards.js";
 
+export type LifecycleLeaseHolder = { pid: number; kill: () => Promise<void> };
+
 /** Holds the actual compiled lifecycle lease until the test forcibly kills its process. */
-export async function startLifecycleLeaseHolder(root: string): Promise<{ pid: number; kill: () => Promise<void> }> {
+export async function startLifecycleLeaseHolder(
+  root: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<LifecycleLeaseHolder> {
   const module = pathToFileURL(path.resolve("dist/installer/locks.js")).href;
   const lock = path.join(root, ".codegraph-server.lock");
   const code = [
@@ -18,6 +23,7 @@ export async function startLifecycleLeaseHolder(root: string): Promise<{ pid: nu
   ].join("\n");
   const child = spawn(process.execPath, ["--input-type=module", "--eval", code], {
     stdio: ["ignore", "ignore", "pipe", "ipc"],
+    env: { ...process.env, ...options.env },
     windowsHide: true,
   });
   const ready = Promise.withResolvers<void>();

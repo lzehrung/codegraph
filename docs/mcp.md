@@ -67,9 +67,13 @@ codegraph server stop --root /path/to/repo
 
 The v2 registry contains process metadata and a non-secret credential ID; the secret stays in the per-user Codegraph state directory, outside the project and separate from package files and compiler cache data. A live v1 registry is never signaled, so stop its old process manually before a new start.
 
-Lifecycle leases record the holder's host, platform, PID, and Linux PID namespace and boot ID. `server start`, `server stop`, and automatic owner startup can reclaim an unexpired lease early only when the recorded environment matches, the PID is provably absent, and no other recovery claim blocks it. A blocking or abandoned claim waits for a fresh observation to establish lease expiry; claims are not retired by age. Recovery otherwise inherits the existing expiry detach/verify/restore procedure, including its late-stale-observer window: this is not a fully exclusive cross-process mutex.
+`server start`, `server stop`, and automatic owner startup hold a kernel lock in the per-user Codegraph state directory when its anchor is accessible, keyed by physical project root. The kernel releases it when the process exits; do not delete its persistent anchor while commands run. `.codegraph-server.lock` carries owner metadata and, when locked, a hash of the canonical lock-anchor path, renewed every 10 seconds with a 30-second lease and normally removed on release. Processes with different state directories or inaccessible anchors coordinate only through lease expiry, even on the same machine.
 
-A crash can leave `.codegraph-server.lock.reclaim-*` or `.codegraph-server.lock.acquire-*` files in the project root. Unrelated UUID-named artifacts are not swept automatically, as with the existing acquisition path; recovery removes only the matching `.reclaim-dead-*` claim when the corresponding lease is reclaimed.
+Windows/WSL drvfs kernel locks did not exclude the other environment in an NTFS test. Foreign, differently anchored, or legacy metadata is reclaimed after expiry, and unparseable metadata after 60 seconds; an invalid expiry date or non-file lock path remains blocked. Older versions also use the renewed lease but not the kernel lock; expiry recovery across lease-only processes, state directories, environments, or mixed versions retains the earlier detach-and-verify stale-observer window, so a stalled heartbeat can permit recovery while a process remains alive.
+
+Busy lifecycle errors include the lock path, available holder identity, and a remedy. Wait for expiry when applicable, or remove the lock path only after confirming that no lifecycle command is running in any environment.
+
+An interrupted or older command can leave `.codegraph-server.lock.acquire-*` or `.codegraph-server.lock.reclaim-*` files; these are not swept automatically.
 
 Use `mcp serve` directly when another process manager owns the server:
 

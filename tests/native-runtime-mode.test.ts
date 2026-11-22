@@ -58,6 +58,20 @@ describe("required native runtime", () => {
     }
   });
 
+  it("defers the Windows exit drain for lock-only loads until native parsing is requested", () => {
+    __resetNativeTreeSitterBindingForTests();
+    resetWindowsProcessDrainForTests();
+    try {
+      expect(loadBinding({ lockOnly: true }).loaded).toBe(true);
+      expect(windowsProcessDrainIsRequired()).toBe(false);
+      expect(loadBinding().loaded).toBe(true);
+      expect(windowsProcessDrainIsRequired()).toBe(true);
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      resetWindowsProcessDrainForTests();
+    }
+  });
+
   it("reports a failed native import query without recovering imports from source text", () => {
     const state = loadBinding();
     if (!state.loaded) throw new Error("Native addon required for query failure test");

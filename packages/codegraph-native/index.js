@@ -54,6 +54,8 @@ function loadBinding() {
 
 const binding = loadBinding();
 
+export const NativeExclusiveLock = binding.NativeExclusiveLock;
+export const tryLockExclusive = binding.tryLockExclusive;
 export const parseSyntaxTree = binding.parseSyntaxTree;
 export const extractLanguage = binding.extractLanguage;
 export const querySetCompileCount = binding.querySetCompileCount;

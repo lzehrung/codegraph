@@ -142,6 +142,10 @@ export type NativeExtractionExecution = {
  */
 export type NativeQueryScope = "imports" | "full";
 
+export type NativeExclusiveLock = {
+  unlock: () => void;
+};
+
 export type NativeBinding = {
   /**
    * Registers one language's four extraction queries and returns the id the extraction calls take in place of the
@@ -162,6 +166,7 @@ export type NativeBinding = {
   /** Diagnostic: how many Tree-sitter compiles a registered set has cost. One for a set that runs merged. */
   querySetCompileCount?: (querySetId: number) => number;
   parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;
+  tryLockExclusive?: (filePath: string) => NativeExclusiveLock | null | undefined;
   tokenizeDuplicateSource?: (source: string) => NativeDuplicateTokens;
   supportedLanguageIds: () => string[];
 };

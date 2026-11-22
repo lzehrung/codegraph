@@ -11,6 +11,11 @@ import {
   uninstallCodegraphTargets,
   type InstallChange,
 } from "../src/installer/registry.js";
+import {
+  installerKernelLockPath,
+  installerTransactionLockScopes,
+  withInstallerTransactionLocks,
+} from "../src/installer/locks.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -1057,12 +1062,20 @@ describe("agent installer workflow", () => {
     return path.join(os.tmpdir(), `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`);
   }
 
-  it("reclaims an abandoned expired lock file and proceeds with the install", async () => {
+  it("reclaims a provably dead local legacy lock and proceeds with the install", async () => {
     const homeDir = await mkTmpDir("cg-install-abandoned-lock-");
     const lockPath = installerTransactionLockPathFor(homeDir);
     const metadata = `${JSON.stringify({
       owner: "abandoned-owner",
       pid: findDeadProcessId(),
+      host: os.hostname(),
+      platform: process.platform,
+      ...(process.platform === "linux"
+        ? {
+            pidNamespace: await fsp.readlink("/proc/self/ns/pid"),
+            bootId: (await fsp.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim(),
+          }
+        : {}),
       leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     })}\n`;
     await fsp.writeFile(lockPath, metadata, "utf8");
@@ -1082,7 +1095,7 @@ describe("agent installer workflow", () => {
     }
   });
 
-  it("does not reclaim a lock whose lease is still owned by another installer", async () => {
+  it("retains an unexpired lock with unidentified metadata", async () => {
     const homeDir = await mkTmpDir("cg-install-live-lock-");
     const lockPath = installerTransactionLockPathFor(homeDir);
     const metadata = `${JSON.stringify({
@@ -1099,6 +1112,31 @@ describe("agent installer workflow", () => {
       expect(await readFile(lockPath)).toBe(metadata);
     } finally {
       await fsp.rm(lockPath, { force: true });
+    }
+  });
+
+  it("does not enter an installer transaction while its expired lease is held", async () => {
+    const homeDir = await mkTmpDir("cg-install-expired-live-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = withInstallerTransactionLocks({ homeDir, env: {} }, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    try {
+      await entered.promise;
+      const lease = JSON.parse(await readFile(lockPath)) as { leaseExpiresAt: string };
+      lease.leaseExpiresAt = new Date(Date.now() - 60_000).toISOString();
+      const metadata = JSON.stringify(lease);
+      await fsp.writeFile(lockPath, metadata);
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        "Another Codegraph installer is still updating",
+      );
+      expect(await readFile(lockPath)).toBe(metadata);
+    } finally {
+      release.resolve();
+      await holder;
     }
   });
 
@@ -1123,7 +1161,7 @@ describe("agent installer workflow", () => {
     }
   });
 
-  it("reclaims a corrupt lock that provably has no live owner", async () => {
+  it("reclaims old corrupt metadata after the abandoned-file interval", async () => {
     const homeDir = await mkTmpDir("cg-install-orphaned-lock-");
     const lockPath = installerTransactionLockPathFor(homeDir);
     await fsp.writeFile(lockPath, "this is not installer lease metadata\n", "utf8");
@@ -1132,7 +1170,6 @@ describe("agent installer workflow", () => {
 
     try {
       const result = await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
-
       expect(result.installed).toBe(true);
       expect(result.verified).toBe(true);
       await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -1194,6 +1231,47 @@ describe("agent installer workflow", () => {
     }
     await expect(fsp.stat(transactionLockPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.stat(fileLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps installer kernel anchors in per-user state, not beside installed files or in temp", async () => {
+    const homeDir = await mkTmpDir("cg-install-kernel-location-");
+    const transactionLockPath = installerTransactionLockPathFor(homeDir);
+    const skillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    const stateLockPath = installerKernelLockPath({ homeDir, env: {} }, homeDir);
+    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    expect((await fsp.stat(stateLockPath)).isFile()).toBe(true);
+    await expect(fsp.stat(`${transactionLockPath}.kernel`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(`${skillPath}.codegraph-lock.kernel`)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    await expect(fsp.stat(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(`${skillPath}.codegraph-lock.kernel`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fsp.stat(stateLockPath)).isFile()).toBe(true);
+  });
+
+  it.skipIf(process.platform !== "win32")("serializes transaction scopes with different path casing", async () => {
+    const homeDir = await mkTmpDir("cg-install-scope-case-");
+    const env = { LOCALAPPDATA: path.join(homeDir, "state"), CODEX_HOME: homeDir.toUpperCase() };
+    expect(installerTransactionLockScopes({ homeDir, env })).toHaveLength(2);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = withInstallerTransactionLocks({ homeDir, env }, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    let contenderEntered = false;
+    try {
+      await entered.promise;
+      await expect(
+        withInstallerTransactionLocks({ homeDir: homeDir.toUpperCase(), env }, async () => {
+          contenderEntered = true;
+        }),
+      ).rejects.toThrow("Another Codegraph installer is still updating");
+      expect(contenderEntered).toBe(false);
+    } finally {
+      release.resolve();
+      await holder;
+    }
   });
 
   it("keeps concurrent installer attempts atomic and verified", async () => {

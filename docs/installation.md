@@ -80,6 +80,10 @@ codegraph install --all --yes
 
 Use `--target codex,claude` to select clients. Interactive installation detects clients and defaults to no; noninteractive writes require `--yes`. Restart or reload configured clients after installation. See [MCP setup](./mcp.md) and [agent workflows](./agent-workflows.md) for configuration and usage.
 
+`codegraph install` and uninstall operations use persistent kernel-lock anchors under `installer-locks` in the per-user Codegraph state directory, not beside client configuration files or in the temporary directory. Uninstall removes installed files but retains the anchors so concurrent waiters keep the same lock identity. Anchors accumulate there and are safe to delete when no Codegraph command is running. The matching native addon must support kernel locks; update or rebuild it if the command reports that lock support is missing.
+
+Installers using different state directories or unable to open an anchor coordinate through renewable leases rather than a shared kernel lock. Lease-only expiry recovery retains the earlier stale-observer window. Set `NODE_DEBUG=codegraph` to report an anchor fallback on stderr.
+
 ## Next steps
 
 - [CLI commands](./cli.md)
