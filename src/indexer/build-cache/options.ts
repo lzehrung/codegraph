@@ -10,224 +10,9 @@ import { type ProjectFileDiscoveryOptions } from "../../util/project-files.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import type { BuildOptions } from "../types.js";
 import { compareStrings } from "../../util/strings.js";
+import { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "./epochs.generated.js";
+export { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "./epochs.generated.js";
 export { normalizeLanguageExtensions } from "../../languages.js";
-
-/**
- * Bump whenever indexing or graph construction changes what a cached artifact would
- * contain. Old caches with a different epoch are discarded.
- * Epoch 71 binds C# `using N;` to a file that declares `N` even when several do, and never to a
- * path-like file in another language.
- * Epoch 72 persists per-module docstring-check availability and preserves JSDoc from collapsed
- * TypeScript overload signatures.
- * Epoch 73 captures documentation on regex-fallback CommonJS exports and rejects malformed
- * docstring-check markers in persisted modules.
- * Epoch 74 binds CommonJS fallback function exports to their assignment, not to a
- * same-named local, and records synthetic definitions at their export properties.
- * Epoch 75 re-resolves warm-cache import bindings after declaration-language files are added,
- * changed, or deleted. Older rows can keep bindings from an old file set.
- * Epoch 76 stores canonical callable identities and their call-form arities in module rows.
- * Epoch 77 updates Ruby relative imports, JVM reference candidates, and inherited member selection.
- * Epoch 78 gives TypeScript functions declared in a block body their own callable key scope.
- * Epoch 79 gives a C++ declaration without `static` the file-scoped key of a same-file `static` one.
- * Epoch 80 indexes Java static members by their declaring type and keeps static wildcards distinct
- * from JVM package and type-on-demand imports.
- * Epoch 81 ignores nested JVM declarations when resolving package-qualified named imports.
- * Epoch 82 marks non-public Java static members package-restricted for static imports.
- * Epoch 83 stores Java package-private instance and protected member visibility.
- * Epoch 84 resolves the visible first segment of a C++ qualified name before the direct path.
- * Epoch 85 classifies Python TYPE_CHECKING imports as type-only and resolves declared-typed field chains.
- * Epoch 86 removes the reduced-mode import recovery and native runtime option from persisted
- * cache identity; stale modules and graph edges must be rebuilt with required native parsing.
- * Epoch 87 removes obsolete graph and incremental options from persisted cache identity.
- * Epoch 88 indexes Terraform `.tf` files, adds the resource, data, module, and output symbol kinds,
- * and resolves local module sources to every Terraform file in the source directory.
- * Epoch 89 adds SQL routine call, alter, and drop edges and resolves SQL routines and relations in
- * separate namespaces.
- * Epoch 90 masks SCSS `//` comments and unquoted `url(...)` tokens, and resolves a Sass directory
- * load to its `_index.scss`.
- * Epoch 91 keeps qualified `case` names and `loop`/`repeat` identifiers out of SQL block tracking.
- * Epoch 92 records tree-sitter ERROR/MISSING ranges per file for `parse_error` reference coverage.
- * Epoch 93 stops indexing an annotation-only Python `self.x: T` as an instance attribute declaration.
- * Epoch 94 reads C# using directives and namespace declarations from native syntax nodes, and stores each C#
- * file's own namespace regions and declared types with its module (`csharpNamespaceFacts`) instead of
- * scanning source text for them.
- * Epoch 95 stores each module's native outcome (`nativeOutcome`) and whether part of it could not be indexed
- * (`parserDegraded`: no syntax tree, a failed import extraction of its source or of an embedded block, or a processing
- * failure) so the analysis summary counts files reused from the module cache or the project snapshot, not only the
- * files a build parsed.
- * Epoch 96 marks a C# module whose alias or static using type lookup could not read every C# file of its project
- * (`parserDegraded` and `importLookupIncomplete`), and extracts such a module again on the next build instead of
- * reusing it.
- * Epoch 97 re-extracts files with the Tree-sitter 0.27 runtime. Its error recovery changes the ERROR/MISSING ranges
- * and the symbols recovered from a file the grammar cannot parse cleanly, such as an SCSS `@include ns.mixin;`.
- * Epoch 98 re-extracts Kotlin files with a pinned fork of `tree-sitter-kotlin-ng`. Its trees differ for one-line class
- * bodies, annotated top-level declarations, files that end mid-annotation, and forms the published grammar rejects, so
- * symbols and ERROR ranges change.
- * Epoch 99 records the start of each C# `using` directive on its star binding (`csharpDirectiveStartIndex`), so a
- * lookup can tell which namespace the directive is written in, and no longer binds a dotted C# type name to a
- * path-like file when the project declares its namespace.
- * Epoch 101 re-extracts Kotlin files with a regenerated fork grammar that reads identifiers, labels, and template
- * names written with any Unicode letter (CJK ideographs, Hangul syllables, letters above U+10915), so a file that
- * ended in an ERROR at such a name now has its real symbols, references, and ERROR ranges. Epoch 100 is unused: it was
- * reserved for the change in #433, which takes epoch 102.
- * Epoch 102 reads Java and Kotlin packages, top-level declared names, and imports from native syntax nodes, and
- * stores each file's own package and declared names with its module (`jvmFacts`) instead of scanning source text. A
- * file with no usable syntax tree, or whose tree has a syntax error at the top, is `incomplete`: it may declare names
- * it did not list, and a file that cannot be parsed at all, or whose package clause was not read, may declare names in
- * any package. An import of a name such a file may declare stays unresolved, and marks its importer (`parserDegraded`
- * and `importLookupIncomplete`) like an unreadable C# lookup, as does a package wildcard while a file of its package is
- * incomplete or one whose package is unreadable may belong to it. A Java static member import resolves through the
- * type that owns the member, for its dependency edge as for its binding.
- * Epoch 103 caches an import resolution by the importer's tsconfig `baseUrl` and `paths` instead of by importer file. A
- * call that passed no path aliases (the module-level import of a Vue block) no longer decides the answer of a later call
- * for the same file and specifier that did, so a style import through a path alias gets its file edge. Edges cached by
- * an older build kept the external answer.
- * Epoch 104 keeps receiver proofs at their syntax sites, so a block, closure, or parameter that shadows a receiver
- * cannot reuse another site's proof. Detailed call graphs cached with the old cross-site proof sharing are rebuilt.
- * Epoch 105 keeps a missing Java or Kotlin import external once either language declares its package, instead of
- * guessing a file from the import path. A complete Java file with no declarations no longer proves its filename's type.
- * Epoch 106 carries JVM wildcard-package completeness through import bindings and expansion. Unread declarations
- * cannot prove a Kotlin call or callable reference, including a class name that may also name a factory function.
- * Epoch 109 rebuilds manifests that admitted discovery-ignored tracked files through Git change candidates.
- * Epoch 110 applies the native source byte limit to every C# namespace candidate, including ignored and unindexed
- * files, so serial and worker builds leave the same alias and static-using lookups partial beside oversized files.
- * Epoch 111 retains Python star-import statement positions so a later import cannot replace an
- * earlier module-level use of an explicit import before a same-named local declaration. Python
- * default-argument reads are excluded from parameter bindings and resolve in their enclosing scope,
- * before the function being defined replaces any earlier same-named binding.
- * Epoch 112 rebuilds graph artifacts whose star-export cycle resolution could depend on module lookup order
- * or discard an ambiguous branch in favor of a sibling export. Python star re-exports retain every
- * import statement in source order and do not revive locals excluded from the target's exports.
- * Epoch 115 rebuilds detailed graphs with normalized C# verbatim alias keys and receiver value proofs.
- * Epoch 116 matches Kotlin quoted and plain names across package imports, navigation, and graph edges
- * without rewriting source-spelled JVM facts or binding ranges.
- * Epoch 117 rebuilds C# alias results after lexical value bindings shadow expression receivers.
- * Type-only names retain their aliases, and declaration names cannot emit alias-use edges.
- * Epoch 118 rebuilds imports and symbol bindings restored by changes to existing declaration files.
- * Epoch 119 indexes unnamed JVM packages for Kotlin named imports and rejects Java unnamed-package imports.
- * Epoch 120 resolves qualified JVM types and constructors by owner, and excludes false C# type-use edges.
- * Epoch 121 rebuilds Swift quoted-name resolutions, shared-owner identities, and detailed call edges.
- * Epoch 122 resolves qualified C# declared and constructed receiver types through namespace-aware lookup.
- * Epoch 123 rebuilds detailed calls through lowercase and keyword-verbatim C# type aliases.
- * Epoch 124 rebuilds receiver proofs, alias uses, and qualified owners after the alias and identity review fixes.
- * Epoch 125 rejects PHP import path candidates whose parsed declarations do not contain the imported qualified name.
- * It persists qualified PHP declaration identities by role, so restoring one namespace or kind is not hidden by a decoy.
- * Epoch 126 rebuilds Swift extension owner symbols, marked as owners instead of type declarations, and excludes
- * extension headers as type declarations. It also rebuilds Swift base-clause edges that follow typealiases and keep
- * protocol inheritance as `extends`.
- * Epoch 127 rebuilds detailed graphs where a member of an enclosing C# type, or an unresolved base, binds a using alias's name.
- * Epoch 128 rebuilds imports and symbol bindings that incremental builds left stale when a deleted, renamed, or
- * newly duplicated declaration changed which files declare an imported name.
- * Epoch 130 rebuilds detailed graphs that record interface inheritance as `extends` (now also for Java and TypeScript),
- * C# interfaces declared in other files as `implements`, Kotlin interfaces as interface symbols, and each type's base
- * clause from its own declaration instead of a nested type's.
- * Epoch 131 rebuilds symbols that mark a generic type parameter and the detailed graphs whose receiver calls resolved a
- * type-parameter receiver to a same-named class.
- * Epoch 132 records dirty source paths against each manifest's commit or the empty tree before the first commit.
- * Older manifests rebuild before using the clean-state shortcut; missing or invalid metadata uses blob reconciliation.
- * Epoch 133 scopes C++ template parameters to their declaration and rebuilds navigation, references, and edges.
- * Epoch 134 rebuilds Kotlin detailed graphs that recorded the base class of a class with only secondary constructors as
- * `implements`, or the parameter and return types of a function-type supertype as supertypes: a bare entry that
- * resolves to a class is `extends`, and one whose kind is not proven, or a function type, records no edge.
- * Epoch 135 resolves a qualified base through its qualifier (Python module attribute, Ruby constant path, Swift nested
- * type, Go package type, JavaScript namespace member, Kotlin dotted type) and never by its last name or its qualifier.
- * Python `pkg.x` after `import pkg.mod` reads the package, and a call in a base list proves no base.
- * Epoch 136 rebuilds C# root lookup, records static-using directive positions for namespace precedence, and records
- * the non-generic types of the global namespace in each file's namespace facts.
- * Epoch 137 rebuilds detailed graphs and navigation where `super`, `this`, and bare member calls inside an anonymous
- * class or object body resolved through the enclosing type, adds the `calls` edges that class expressions lacked, and
- * binds a call to the method, and a plain read to the field or property, that share a name.
- * Epoch 138 persists per-file AngularJS registrations and references in module records and assembles their
- * cross-file framework edges from all indexed modules, including unchanged files, at graph-build time.
- * Epoch 139 qualifies each Git signature with the file's raw size, so an eol-only rewrite that Git reports clean no
- * longer reuses a module or graph entry extracted from other bytes, and records dirty submodules in each manifest.
- * Older manifests and cache entries rebuild.
- * Epoch 140 rebuilds detailed graphs whose Kotlin bare calls inside a lambda or extension body with an implicit
- * receiver named a member of the enclosing type instead of the receiver's, resolves lambda receivers declared by
- * project functions and aliases, and binds accessible cross-file receiver extensions and extension-property accessor
- * calls.
- * Epoch 143 resolves ECMAScript private names lexically and rebuilds their detailed call edges.
- * Epoch 144 applies C# global and project Using items with project-bounded visibility, rebuilds record-member
- * classifications, and keeps project Using facts out of per-module cache keys.
- * Epoch 145 re-extracts TypeScript and TSX files whose semicolonless generic call signatures previously
- * put later type aliases under ERROR, restoring their symbols and navigation references, and omits
- * zero-width or empty-name recovery declarations from cached symbols and scope bindings.
- * Epoch 146 restores split generic method identities and arities without indexing ordinary TypeScript
- * property signatures or changing ECMAScript property member selection.
- * Epoch 147 restores optional/modified and class-body split generic methods and excludes
- * split construct signatures from named members.
- * Epoch 148 restores decorated split class methods and rejects class-only recovery with
- * invalid readonly, declare, or accessor method modifiers.
- * Epoch 152 rebuilds PHP function/class resolution, trait-member ownership, composed properties, parent-static
- * dispatch, and their verified references and detailed call edges.
- * Adapted trait uses retain hierarchy and unadapted members; subclasses keep adaptation uncertainty and trait-body
- * calls retain their own abstract declarations.
- * Epoch 153 records Swift callable argument labels and rebuilds contextual member and call edges.
- * Epoch 154 indexes Ruby `attr_reader`, `attr_writer`, and `attr_accessor` methods at their argument tokens, binds
- * a Ruby `receiver.name = value` to the writer `name=`, and rebuilds the detailed edges of both.
- * Epoch 159 resolves PHP members composed through nested traits ahead of inherited ones and PHP constant reads in
- * namespace order, and rebuilds their navigation, references, and detailed edges.
- * Epoch 160 binds a C# record's positional parameters, a C# class's or struct's primary-constructor parameters, and a
- * Java record's components in the declaration's own scope (a parameter named like its own type stays unbound), resolves
- * `[Marker]` to `MarkerAttribute`, keeps the detailed `calls` edge of `T.Static()` when the caller's type declares a
- * field, property, or local typed `T`, and no longer reads a base-constructor argument as an `implements` edge.
- * Epoch 161 marks Swift protocol requirements as members of their protocol, keeps the parameters of protocol
- * functions, initializers, and subscripts out of the members, shares a Swift type's bases (and an extension's
- * `where Self: Q`) with its extensions, and reads `T...` as no receiver type, rebuilding navigation and edges.
- * Epoch 162 indexes Ruby `attr_*` methods wrapped in `private`, `protected`, or `public`, gives a Ruby class, module,
- * and `class << self` body its own locals, hides outer locals inside a `def`, and keeps a method of one type from
- * binding a bare name in an unrelated type, so Ruby navigation, references, and detailed edges are rebuilt.
- * Epoch 163 rebuilds TypeScript and TSX type-parameter scopes (a use of a signature, function, class, interface, or alias
- * type parameter binds to it, not to a same-named outer type), parameter and pattern default values read enclosing
- * names instead of binding them, `type B = A` reads `A`, and an export clause forwards an imported name as a
- * re-export. A comment on the line where the previous code ends is no longer the next declaration's docstring.
- * Epoch 164 rebuilds selector references while retaining Rust qualified items and excluding C initializer field labels.
- * Epoch 165 rebuilds Java and C# selectors, Java annotation and pattern bindings, C# initializer and designator facts,
- * and C# Bloom filters that mark unprobeable identifier spellings.
- * Epoch 167 rebuilds Rust namespace and tuple-pattern bindings and Swift tuple-label references and edges.
- * Epoch 168 records that a file's syntax tree cannot be projected because it exceeds the native node or depth
- * limit, so a later query or warm build reuses that fact for the same content instead of projecting the file again.
- * Epoch 169 rebuilds C# query and pointer bindings and Java lambda, switch-label, and pattern-flow resolutions.
- * Epoch 170 rebuilds Rust bare return type and record-expression bindings.
- * Epoch 171 rebuilds Java enum-subject labels, C# expression-variable scopes and record reads, and Swift pattern labels.
- * Epoch 172 rebuilds edges cached by incremental and warm full builds after native syntax projection failed.
- * Epoch 173 rebuilds workspace graphs, JSON modules, and JVM facts affected by warm-cache omissions.
- * Epoch 174 records relative JSON resolution candidates and persists Bloom filter item counts.
- * Epoch 175 makes selected representatives such as Go package entries use locale-independent ordering.
- */
-export const CORE_ALGORITHM_EPOCH = 175;
-/**
- * Bump whenever a language behavior hook changes. Hook source text is deliberately
- * not fingerprinted because bundling rewrites it; this epoch invalidates caches
- * consistently across the CLI and library build shapes.
- * Epoch 11 exports nested Ruby constants by qualified path, captures PHP promoted constructor
- * properties, scopes Ruby block parameters, reads Go selector `field_identifier` names, and skips
- * TypeScript parameter type annotations when binding names.
- * Epoch 12 treats Kotlin backticks as identifier delimiters, preserving case and source spelling.
- * Epoch 13 scopes C# lambda parameters, foreach variables, properties, and `out`/catch declarations,
- * and reads implicit lambda parameters as declarations.
- * Epoch 14 gives Swift quoted and plain identifiers one case-sensitive identity.
- * Epoch 15 scopes C# catch and for declarations and classifies Kotlin type parameters as types.
- * Epoch 16 re-extracts Kotlin files with the grammar fork's error recovery, which no longer reads the rest of a file as
- * one token: a file with a syntax error keeps the declarations after it, so its symbols, ERROR ranges, and package
- * facts change, and a stray `$` before a keyword-prefixed name with decimal digits above ASCII no longer stalls the parse.
- * Epoch 17 uses the pinned TypeScript grammar fork to parse adjacent generic call signatures without
- * semicolons; its syntax tree, ERROR ranges, and downstream language behavior differ from the old grammar.
- * Epoch 18 adds the Ruby hooks that name generated accessors, the method a property invokes, and the identifier token
- * and use-site spelling of a method name with a `?`, `!`, or `=` suffix.
- * Epoch 20 adds the C# hook that names an attribute class under its suffix-less spelling for reference candidates.
- * Epoch 22 adds the Ruby hook that tells which types a bare name can reach a declared method from.
- * Epoch 23 changes the TypeScript and TSX `isDeclarationName` hook: only the name of a type alias or type parameter, and
- * the alias of an export specifier, declare a name; the aliased type of `type B = A` and a constraint are reads.
- * Epoch 24 distinguishes declared C fields and Rust items from lexical variable bindings at selectors.
- * Epoch 25 isolates C# initializer variables, marks unprobeable identifier spellings, and classifies Java pattern
- * and annotation declarations.
- * Epoch 27 adds the Rust value and type namespace hook and the Swift tuple-label selector field.
- * Epoch 28 scopes C# query ranges and Java lambda parameters and excludes misparsed C# pointer expressions.
- * Epoch 29 separates Rust record expressions and bare return types from values and guards generic returns.
- * Epoch 30 scopes C# while-condition and switch-expression-arm variables.
- */
-export const LANGUAGE_BEHAVIOR_EPOCH = 30;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -312,7 +97,7 @@ function languageDefinitionFingerprintDescriptor(
  * typecheck error, and the runtime check in tests/cache-invalidation.test.ts
  * rejects definition objects carrying keys outside this set. Function-valued
  * behavior fields are intentionally covered by LANGUAGE_BEHAVIOR_EPOCH instead of
- * source text; bump that epoch with every hook behavior change.
+ * source text; add an epochs/language/ entry with every hook behavior change.
  */
 export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof LanguageDefinition, true>> = {
   id: true,
@@ -351,9 +136,9 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
 
 /**
  * Changes whenever this package version, a declarative language definition field,
- * or LANGUAGE_BEHAVIOR_EPOCH changes. Behavior-hook edits must bump that epoch.
+ * or the generated language epoch changes. Behavior-hook edits add an entry under epochs/language/.
  *
- * The optional epoch parameter exists for regression coverage of this declared
+ * The explicit epoch parameter exists for regression coverage of this declared
  * cache-invalidation contract.
  */
 export function getImplementationFingerprintForEpoch(languageBehaviorEpoch: number): string {

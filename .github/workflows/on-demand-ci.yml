@@ -28,6 +28,9 @@ jobs:
       - name: Audit production dependencies
         run: npm run security:production
 
+      - name: Check change records
+        run: npm run changes:check
+
       - name: Typecheck
         run: npm run typecheck
 

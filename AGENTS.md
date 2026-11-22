@@ -19,7 +19,7 @@
   across every consumer. Native is required; there is no reduced mode. Keep a valid empty result
   distinct from unsupported, unavailable, or failed work.
 - Always keep documentation updated and accurate while being minimal and concise.
-- Add a concise `[Unreleased]` entry for user-visible behavior, CLI output, support, compatibility, or user-facing fixes. Skip test-only, internal refactoring, and formatting-only changes; state why in the PR when omitted.
+- Add one `changes/unreleased/<unique-slug>.md` fragment for user-visible behavior, CLI output, support, compatibility, or user-facing fixes. Slugs match `[a-z0-9]+(-[a-z0-9]+)*`; use front matter `section: Breaking|Added|Changed|Deprecated|Removed|Fixed|Security` between `---` lines, then one entry paragraph. Never add notes directly to `CHANGELOG.md`'s empty `[Unreleased]` section; release preparation assembles and consumes fragments. Skip test-only, internal refactoring, and formatting-only changes; state why in the PR when omitted.
 - Keep paragraphs to no more than 4 concise sentences. Prefer bullets for dense details.
 - Keep `README.md` as the landing page and docs index. Do not turn it back into the only canonical reference for every example and workflow.
 - When public-facing install, runtime, CLI, library API, MCP, agent workflow, or release guidance changes, update the relevant canonical docs in the same change: `README.md`, `docs/installation.md`, `docs/cli.md`, `docs/library-api.md`, `docs/mcp.md`, `docs/agent-workflows.md`, `docs/how-it-works.md`, and `PUBLISHING.md` as applicable.
@@ -166,6 +166,13 @@ using syntax and facts proven from source. It must not emulate the full language
 - If a derived cached field changes behavior, invalidate existing snapshots by version or by
   fingerprinting every new input. Legacy snapshot migration MUST drop or recompute affected
   derived fields rather than relabel stale data as current.
+- When indexed facts, graph construction, scope, resolution, classification, or export visibility
+  changes, add `src/indexer/build-cache/epochs/core/<unique-slug>.txt` with a one-line reason;
+  epoch slugs also match `[a-z0-9]+(-[a-z0-9]+)*`.
+  A function-valued language behavior hook change also adds a record under `epochs/language/`.
+  Never edit, remove, rename, or reuse an existing epoch entry or change the legacy numeric seeds.
+  `npm run build` and `npm run typecheck` generate the ignored `epochs.generated.ts`; do not commit it.
+  Epochs are equality tokens, not ordered counters. Library, core-package, and CLI builds embed the same values.
 - Persist each per-file fact with its module and combine facts across files at query time. Never
   store an answer that depends on other files in one file's cache entry. A change to indexed facts
   needs a test that a warm build (disk and memory) matches a cold build after an edit, a delete, a

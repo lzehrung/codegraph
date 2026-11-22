@@ -24,7 +24,7 @@ npm run publish:major
 npm run publish:resume
 ```
 
-`release:*` detects changed packages, updates versions and the lockfile, runs the local release checks, commits, tags, and pushes. `publish:*` also publishes from the local checkout.
+`release:*` detects changed packages, prepares the root changelog from fragments when the root package changes, updates versions and the lockfile, runs the local release checks, commits, tags, and pushes. `publish:*` also publishes from the local checkout.
 
 These commands do not provide the full cross-platform certification evidence chain. Use the GitHub `release` workflow for a normal public release; use local publishing only for deliberate recovery with all target artifacts already collected.
 
@@ -39,15 +39,20 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 Use the manually triggered `release` GitHub Actions workflow for a complete certified release. Select `release_type=patch|minor|major`; the workflow publishes the certified packages, then builds, smokes, and attaches the standalone preview assets.
 
-The plan job automatically moves all `[Unreleased]` notes into the next root-version section and updates the comparison links in a separate artifact. No changelog preparation commit is required. After certification and package publication, the release version commit includes those exact prepared notes. Failed certification leaves the source branch unchanged.
+The plan job merges `changes/unreleased/*.md` into the next root-version section and updates the comparison links in a separate artifact, leaving source fragments untouched. `Breaking` notes come first, followed by Keep a Changelog order (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`); entries within each section sort by filename using code-unit order. After certification and package publication, the release version commit includes those exact prepared notes and deletes their fragments. Failed certification leaves the source branch unchanged.
 
-A matching release section that is already prepared is preserved. To preview the next changelog locally without changing the source file:
+A matching release section that is already prepared is preserved when there are no fragments, or when its text equals the entire rendered fragment set; the latter case consumes those fragments on resume. An empty fragment set without that matching release section is an error; add release notes before preparing a new version. To preview the next changelog locally without changing source files or consuming fragments:
 
 ```powershell
 npm run release:prepare-changelog -- patch --output temp/release-changelog/CHANGELOG.md
 ```
 
-Replace `patch` with `minor` or `major` when needed. Without `--output`, this optional local command updates `CHANGELOG.md` directly.
+Replace `patch` with `minor` or `major` when needed. Without `--output` (or when it names `CHANGELOG.md` itself), this optional local command updates `CHANGELOG.md` and deletes the consumed fragments. Certified staging checks that the transferred notes exactly match the source fragments before consuming them. `npm run changes:check` validates fragment formatting, epoch records, and the empty `[Unreleased]` section.
+
+Local release preparation validates the notes before changing versions, then persists planned
+versions before consuming fragments. A stop partway through fragment deletion leaves only a subset,
+which cannot prove the prepared section: restore the consumed fragments from the release's source
+revision before resuming. Do not add new notes during recovery.
 
 The workflow uses this immutable byte flow:
 
@@ -60,7 +65,7 @@ The workflow uses this immutable byte flow:
 7. Merge the gate outputs into `CertificationReportV1`.
 8. Revalidate every candidate checksum and required report row before the first registry write.
 9. Publish the tarball paths from the manifest, without rebuilding or repacking.
-10. Commit the versions and prepared changelog, tag the release, and attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
+10. Commit the versions and prepared changelog with consumed fragment deletions, tag the release, and attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
 
 A single native-target flake does not cancel the other target builds. After a failed run, use **Re-run failed jobs** on the same Actions run so successful native artifacts are reused; do not start a new release unless the planned source revision moved.
 

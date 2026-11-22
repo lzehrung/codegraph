@@ -202,15 +202,11 @@ describe("release script helpers", () => {
     expect(bumpVersion("1.8.37", "major")).toBe("2.0.0");
   });
 
-  it("moves Unreleased entries into the release section and advances its links", () => {
+  it("moves fragments into the release section and advances its links", () => {
     const changelog = [
       "# Changelog",
       "",
       "## [Unreleased]",
-      "",
-      "### Changed",
-      "",
-      "- Faster indexes.",
       "",
       "## [2.3.20] - 2026-09-04",
       "",
@@ -223,10 +219,11 @@ describe("release script helpers", () => {
       "",
     ].join("\n");
 
-    expect(finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05")).toBe(
+    const fragments = [{ name: "faster-indexes.md", section: "Changed", text: "Faster indexes." }];
+    expect(finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05", fragments)).toBe(
       changelog
         .replace(
-          "## [Unreleased]\n\n### Changed\n\n- Faster indexes.\n",
+          "## [Unreleased]\n",
           "## [Unreleased]\n\n## [2.3.21] - 2026-09-05\n\n### Changed\n\n- Faster indexes.\n",
         )
         .replace(
@@ -235,9 +232,7 @@ describe("release script helpers", () => {
             "[2.3.21]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.21",
         ),
     );
-    expect(() =>
-      finalizeChangelogForRelease(changelog.replace("- Faster indexes.\n", ""), "2.3.21", "2026-09-05"),
-    ).toThrow();
+    expect(() => finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05")).toThrow();
   });
 
   it("requires a prepared release section with no Unreleased entries", () => {
@@ -246,17 +241,14 @@ describe("release script helpers", () => {
       "",
       "## [Unreleased]",
       "",
-      "### Fixed",
-      "",
-      "- Repair.",
-      "",
       "## [2.3.20] - 2026-09-04",
       "",
       "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
       "[2.3.20]: https://github.com/lzehrung/codegraph/releases/tag/v2.3.20",
       "",
     ].join("\n");
-    const prepared = finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05");
+    const fragments = [{ name: "repair.md", section: "Fixed", text: "Repair." }];
+    const prepared = finalizeChangelogForRelease(changelog, "2.3.21", "2026-09-05", fragments);
 
     expect(finalizeChangelogForRelease(prepared, "2.3.21", "2026-09-06")).toBe(prepared);
     expect(() => assertChangelogPreparedForRelease(changelog, "2.3.21")).toThrow();
@@ -319,10 +311,6 @@ describe("release script helpers", () => {
         "",
         "## [Unreleased]",
         "",
-        "### Fixed",
-        "",
-        "- Repair.",
-        "",
         "## [2.3.20] - 2026-09-04",
         "",
         "[Unreleased]: https://github.com/lzehrung/codegraph/compare/v2.3.20...HEAD",
@@ -330,6 +318,11 @@ describe("release script helpers", () => {
         "",
       ].join("\n"),
     );
+    const fragmentDir = path.join(tempDir, "changes", "unreleased");
+    fs.mkdirSync(fragmentDir, { recursive: true });
+    const fragmentPath = path.join(fragmentDir, "repair.md");
+    const fragment = "---\nsection: Fixed\n---\n\nRepair.\n";
+    fs.writeFileSync(fragmentPath, fragment);
 
     const originalChangelog = fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8");
     const outputPath = path.join(tempDir, "temp", "release-changelog", "CHANGELOG.md");
@@ -344,6 +337,7 @@ describe("release script helpers", () => {
       assertChangelogPreparedForRelease(artifactChangelog, "2.3.21");
       expect(artifactChangelog).toContain("- Repair.");
       expect(fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8")).toBe(originalChangelog);
+      expect(fs.readFileSync(fragmentPath, "utf8")).toBe(fragment);
       expect(fs.readFileSync(path.join(tempDir, "package.json"), "utf8")).toBe('{"version":"2.3.20"}\n');
 
       const result = spawnSync(process.execPath, [scriptPath, "patch"], {
@@ -354,6 +348,7 @@ describe("release script helpers", () => {
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       assertChangelogPreparedForRelease(fs.readFileSync(path.join(tempDir, "CHANGELOG.md"), "utf8"), "2.3.21");
+      expect(fs.readdirSync(fragmentDir)).toEqual([]);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -478,6 +473,8 @@ describe("release script helpers", () => {
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
     expect(isAllowedResumePath("CHANGELOG.md")).toBe(true);
+    expect(isAllowedResumePath("changes/unreleased/repair.md")).toBe(true);
+    expect(isAllowedResumePath("changes/unreleased/../outside.md")).toBe(false);
     expect(isAllowedResumePath("scripts/check-native-artifacts.mjs")).toBe(true);
 
     expect(isAllowedResumePath("scripts/native-targets-lib.mjs")).toBe(true);
@@ -495,6 +492,7 @@ describe("release script helpers", () => {
 
   it("treats changelog changes as root package changes", () => {
     expect(detectChangedReleasePackages(["CHANGELOG.md"])).toEqual(["root", "core"]);
+    expect(detectChangedReleasePackages(["changes/unreleased/repair.md"])).toEqual(["root", "core"]);
   });
 
   it("recognizes generated native target artifacts separately from managed release files", () => {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { bumpVersion, finalizeChangelogForRelease, validReleaseTypes } from "./release-lib.mjs";
+import { bumpVersion, prepareReleaseChangelog, validReleaseTypes } from "./release-lib.mjs";
 
 const [releaseType, ...args] = process.argv.slice(2);
 if (!validReleaseTypes.has(releaseType) || (args.length && (args.length !== 2 || args[0] !== "--output" || !args[1]))) {
@@ -15,7 +15,5 @@ const version = bumpVersion(rootPackage.version, releaseType);
 const date = new Date().toISOString().slice(0, 10);
 
 const outputPath = args.length ? path.resolve(args[1]) : changelogPath;
-const changelog = finalizeChangelogForRelease(fs.readFileSync(changelogPath, "utf8"), version, date);
-fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-fs.writeFileSync(outputPath, changelog);
+prepareReleaseChangelog(rootPath, version, date, outputPath);
 console.log(`Prepared ${path.relative(rootPath, outputPath)} for ${version}.`);

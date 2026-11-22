@@ -17,6 +17,8 @@ const freshnessInputs = [
   "scripts/bundle-cli-lib.mjs",
   "scripts/stage-core-package.mjs",
   "scripts/stage-core-package-lib.mjs",
+  "scripts/generate-cache-epochs.mjs",
+  "scripts/cache-epochs-lib.mjs",
   "scripts/build-native-if-available.mjs",
   "scripts/build-native-if-available-lib.mjs",
   "packages/codegraph-native/src",

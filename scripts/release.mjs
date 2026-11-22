@@ -11,6 +11,7 @@ import {
   isNativeTargetArtifactPath,
   parseGitStatusPaths,
   prepareNativePackageManifestForPublish,
+  finalizeChangelogForRelease,
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
   releasePackages,
@@ -20,10 +21,12 @@ import {
   sanitizePublishedRootPackageManifest,
   selectLatestLegacyTag,
   selectLatestSemverTag,
+  stagePreparedReleaseChangelog,
   tagNamesForPackageVersion,
   validReleaseTypes,
 } from "./release-lib.mjs";
 import { assertCompleteNativeTargetArtifacts } from "./native-targets-lib.mjs";
+import { readChangelogFragments } from "./changelog-fragments-lib.mjs";
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
@@ -413,6 +416,10 @@ function commitAndTag(selectedPackages, versionPlan) {
     "packages/codegraph-core/package.json",
     "packages/codegraph-native/package.json",
   ]);
+  if (versionPlan.has("root")) {
+    const consumedFragments = getDirtyPaths().filter((filePath) => filePath.startsWith("changes/unreleased/"));
+    runGit(["add", "--all", "--", "CHANGELOG.md", ...consumedFragments]);
+  }
   const commitNeeded =
     spawnSync("git", ["diff", "--cached", "--quiet"], { windowsHide: true, cwd: rootDir, shell: false }).status !== 0;
   if (commitNeeded) {
@@ -501,7 +508,19 @@ const publishPlan = shouldPublish
     })
   : null;
 
+const rootVersion = versionPlan.get("root");
+let releaseChangelog;
+if (rootVersion) {
+  releaseChangelog = finalizeChangelogForRelease(
+    fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8"),
+    rootVersion,
+    new Date().toISOString().slice(0, 10),
+    readChangelogFragments(rootDir),
+  );
+}
+
 normalizeManagedManifests(versionPlan);
+if (rootVersion) stagePreparedReleaseChangelog(rootDir, releaseChangelog, rootVersion);
 refreshDependencies();
 normalizeManagedManifests(versionPlan);
 run("node", ["./scripts/build-native-if-available.mjs", "--strict"]);

@@ -1,3 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
+import {
+  CHANGELOG_FRAGMENT_DIRECTORY,
+  readChangelogFragments,
+  renderChangelogFragments,
+  unreleasedSection,
+} from "./changelog-fragments-lib.mjs";
 import { getSupportedNativeTargetPackageNames } from "./native-targets-lib.mjs";
 
 export const validReleaseTypes = new Set(["patch", "minor", "major"]);
@@ -20,6 +28,10 @@ export const releasePackages = [
       "scripts/release-lib.mjs",
       "scripts/release.mjs",
       "scripts/prepare-release-changelog.mjs",
+      "scripts/changelog-fragments-lib.mjs",
+      "scripts/check-changes.mjs",
+      "scripts/cache-epochs-lib.mjs",
+      "scripts/generate-cache-epochs.mjs",
       "scripts/set-native-package-version.mjs",
       "scripts/stage-native-package.mjs",
       "scripts/publish-native-targets.mjs",
@@ -31,7 +43,7 @@ export const releasePackages = [
       "tests/certification-report.test.ts",
       "tests/release-script.test.ts",
     ]),
-    ownedPrefixes: ["src/", "codegraph-skill/", "scripts/certification/"],
+    ownedPrefixes: ["src/", "changes/unreleased/", "codegraph-skill/", "scripts/certification/"],
   },
   {
     id: "core",
@@ -120,30 +132,27 @@ export function bumpVersion(version, releaseType) {
   return `${major + 1}.0.0`;
 }
 
-export function finalizeChangelogForRelease(changelog, version, date) {
+export function finalizeChangelogForRelease(changelog, version, date, fragments = []) {
   if (!isSemverLike(version)) {
     throw new Error(`Unsupported release version: ${version}`);
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error(`Unsupported release date: ${date}`);
   }
-  const unreleasedHeading = "## [Unreleased]";
-  const unreleasedStart = changelog.indexOf(`${unreleasedHeading}\n`);
-  if (unreleasedStart < 0) {
-    throw new Error("CHANGELOG.md is missing the Unreleased section.");
-  }
-  const contentStart = unreleasedStart + unreleasedHeading.length + 1;
-  const nextReleaseStart = changelog.indexOf("\n## [", contentStart);
-  if (nextReleaseStart < 0) {
-    throw new Error("CHANGELOG.md is missing a released version section.");
-  }
-  const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
-  if (!/^\s*-\s+\S/m.test(unreleasedContent)) {
+  const { start: unreleasedStart, end: nextReleaseStart } = unreleasedSection(changelog);
+  if (!fragments.length) {
     assertChangelogPreparedForRelease(changelog, version);
     return changelog;
   }
   if (new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "m").test(changelog)) {
-    throw new Error(`CHANGELOG.md already records version ${version}.`);
+    assertChangelogPreparedForRelease(changelog, version);
+    if (extractChangelogSection(changelog, version) !== renderChangelogFragments(fragments)) {
+      throw new Error(
+        "Prepared changelog does not match the source changelog fragments. " +
+          "Restore the consumed fragments from the release source revision (see PUBLISHING.md).",
+      );
+    }
+    return changelog;
   }
   const referencePattern = /^\[Unreleased\]: (https:\/\/github\.com\/lzehrung\/codegraph\/compare\/v[^\s]+)$/m;
   const reference = referencePattern.exec(changelog);
@@ -156,8 +165,8 @@ export function finalizeChangelogForRelease(changelog, version, date) {
   }
   const releaseHeading = `## [${version}] - ${date}`;
   const withReleasedSection =
-    `${changelog.slice(0, unreleasedStart)}${unreleasedHeading}\n\n${releaseHeading}\n` +
-    `${unreleasedContent}${changelog.slice(nextReleaseStart)}`;
+    `${changelog.slice(0, unreleasedStart)}## [Unreleased]\n\n${releaseHeading}\n\n` +
+    `${renderChangelogFragments(fragments)}\n${changelog.slice(nextReleaseStart)}`;
   return withReleasedSection.replace(
     reference[0],
     `[Unreleased]: https://github.com/lzehrung/codegraph/compare/v${version}...HEAD\n${releaseReference}`,
@@ -168,20 +177,7 @@ export function assertChangelogPreparedForRelease(changelog, version) {
   if (!isSemverLike(version)) {
     throw new Error(`Unsupported release version: ${version}`);
   }
-  const unreleasedHeading = "## [Unreleased]";
-  const unreleasedStart = changelog.indexOf(`${unreleasedHeading}\n`);
-  if (unreleasedStart < 0) {
-    throw new Error("CHANGELOG.md is missing the Unreleased section.");
-  }
-  const contentStart = unreleasedStart + unreleasedHeading.length + 1;
-  const nextReleaseStart = changelog.indexOf("\n## [", contentStart);
-  if (nextReleaseStart < 0) {
-    throw new Error("CHANGELOG.md is missing a released version section.");
-  }
-  const unreleasedContent = changelog.slice(contentStart, nextReleaseStart);
-  if (/^\s*-\s+\S/m.test(unreleasedContent)) {
-    throw new Error("CHANGELOG.md has Unreleased entries.");
-  }
+  const { end: nextReleaseStart } = unreleasedSection(changelog);
   const releaseHeading = `## [${version}] - `;
   if (!changelog.startsWith(releaseHeading, nextReleaseStart + 1)) {
     throw new Error(`CHANGELOG.md is not prepared for version ${version}.`);
@@ -192,6 +188,38 @@ export function assertChangelogPreparedForRelease(changelog, version) {
     !changelog.includes(releaseReference)
   ) {
     throw new Error(`CHANGELOG.md is missing release links for ${version}.`);
+  }
+}
+
+export function prepareReleaseChangelog(rootDir, version, date, outputPath = path.join(rootDir, "CHANGELOG.md")) {
+  const changelogPath = path.join(rootDir, "CHANGELOG.md");
+  const fragments = readChangelogFragments(rootDir);
+  const changelog = finalizeChangelogForRelease(fs.readFileSync(changelogPath, "utf8"), version, date, fragments);
+  if (path.resolve(outputPath) === path.resolve(changelogPath)) {
+    stagePreparedReleaseChangelog(rootDir, changelog, version);
+  } else {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, changelog);
+  }
+  return changelog;
+}
+
+export function stagePreparedReleaseChangelog(rootDir, changelog, version) {
+  assertChangelogPreparedForRelease(changelog, version);
+  const date = /^## \[\d+\.\d+\.\d+\] - (\d{4}-\d{2}-\d{2})$/m.exec(changelog)?.[1];
+  if (!date) throw new Error("Prepared changelog has no release date.");
+  const changelogPath = path.join(rootDir, "CHANGELOG.md");
+  const fragments = readChangelogFragments(rootDir);
+  const expected = finalizeChangelogForRelease(fs.readFileSync(changelogPath, "utf8"), version, date, fragments);
+  if (changelog !== expected) {
+    throw new Error(
+      "Prepared changelog does not match the source changelog fragments. " +
+        "Restore the consumed fragments from the release source revision (see PUBLISHING.md).",
+    );
+  }
+  fs.writeFileSync(changelogPath, changelog);
+  for (const fragment of fragments) {
+    fs.unlinkSync(path.join(rootDir, CHANGELOG_FRAGMENT_DIRECTORY, fragment.name));
   }
 }
 
@@ -216,7 +244,8 @@ export function extractChangelogSection(changelog, version) {
 }
 
 export function isAllowedResumePath(filePath) {
-  return managedReleasePaths.has(normalizeFilePath(filePath));
+  const normalized = normalizeFilePath(filePath);
+  return managedReleasePaths.has(normalized) || /^changes\/unreleased\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(normalized);
 }
 
 export function isNativeTargetArtifactPath(filePath) {

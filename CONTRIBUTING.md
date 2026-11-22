@@ -4,6 +4,43 @@
 - See [agent workflows](docs/agent-workflows.md) for Codegraph CLI and library-session guidance.
 - Run `npm run answers:snapshot:check` (included in `npm run check`); regenerate with `npm run answers:snapshot` and classify every changed answer against base/head evidence before committing. `npm run answers:snapshot:corpora -- --help` describes scratch-only comparisons of pinned benchmark corpora.
 
+## Change records
+
+User-visible changes add one uniquely named Markdown file under `changes/unreleased/`, not an
+edit to `CHANGELOG.md`. Slugs match `[a-z0-9]+(-[a-z0-9]+)*`. The fragment has one section and
+one entry paragraph (without a bullet):
+
+```markdown
+---
+section: Fixed
+---
+
+Describe the observable fix.
+```
+
+Sections are `Breaking`, `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`, in that release
+order. Entries within a section sort by filename using code-unit order. `npm run changes:check`
+rejects malformed fragments and nonempty `[Unreleased]` content, and runs in `npm run check`.
+See [PUBLISHING.md](PUBLISHING.md) for non-mutating previews and fragment consumption.
+
+Cache-changing work adds a uniquely named `.txt` file under
+`src/indexer/build-cache/epochs/core/`; behavior-hook changes also add one under `epochs/language/`.
+Epoch filenames use the same slug rule. Each record contains a one-line invalidation reason.
+Entries are permanent and append-only: never
+rename, delete, or reuse them, and never edit the immutable legacy seeds.
+
+`npm run build` and `npm run typecheck` derive safe-integer equality tokens from each sorted filename
+set and its legacy seed (core 175, language 30). The ignored `epochs.generated.ts` is compiled into
+the library, core package, and bundled CLI; worker bundles do not consume epochs. Runtime code
+never reads entry files.
+No reservations or merge-order renumbering are needed; add a new record even after another branch
+with a different record merges.
+
+Run `npm run generate:cache-epochs` before a bare `npx vitest` command or an IDE typecheck in a
+fresh checkout. The normal npm build, typecheck, and test commands already arrange generation.
+Dotfiles such as `.DS_Store` and `.gitkeep` are ignored in fragment and epoch directories.
+Dot-prefixed names ending in `.md` or `.txt` are rejected, like other invalid record names.
+
 ## Agent workflows (ODW)
 
 - Install Open Dynamic Workflows (ODW, 0.4.0 or later) and a tools-enabled agent adapter. For example, an `omp` adapter entry must allow shell/file tools; ODW's built-in tools-disabled `omp` entry is not sufficient. Pass your tools-enabled configuration with `--config <tools-config.json>` and choose `--adapter omp`, or use another tools-enabled adapter.
@@ -35,7 +72,7 @@ odw run codegraph-fix --wait --source <worktree> --args @args.json --adapter omp
 }
 ```
 
-- Optional fix args: `oracle` describes how to run the language reference implementation; `epochs` reserves `{ "core": 123, "language": 45 }` values only when the corresponding bump is needed. Replace example values with advancing reservations appropriate to the branch; omit reservations to follow normal repository epoch increments.
+- Optional fix arg: `oracle` describes how to run the language reference implementation. Cache-changing fixes follow the additive epoch-entry rule above; numeric epoch reservations are no longer accepted.
 
 Run the read-only review separately:
 

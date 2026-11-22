@@ -1,0 +1,1 @@
+Invalidate numeric-era behavior fingerprints consistently across library and bundled builds.
