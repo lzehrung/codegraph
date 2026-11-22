@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { delay } from "../util/concurrency.js";
 
-import { withInstallerLeaseLock } from "../installer/locks.js";
+import { describeInstallerLease, withInstallerLeaseLock } from "../installer/locks.js";
 import { isPlainRecord } from "../util/guards.js";
 import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { MCP_LIFECYCLE_HEALTH_TOKEN_ENV } from "../mcp/lifecycle-health.js";
@@ -1048,19 +1048,18 @@ async function assertRegularServerStateFile(filePath: string): Promise<void> {
 async function withServerLifecycleLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
   const lockPath = path.join(root, ".codegraph-server.lock");
   try {
-    return await withInstallerLeaseLock(lockPath, `MCP server lifecycle for ${normalizePath(root)}`, operation, {
-      reclaimDeadLocalOwner: true,
-    });
+    return await withInstallerLeaseLock(lockPath, `MCP server lifecycle for ${normalizePath(root)}`, operation);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Another Codegraph installer")) {
-      throw new Error(`Another Codegraph server lifecycle command is in progress for ${normalizePath(root)}.`, {
-        cause: error,
-      });
-    }
-    if (error instanceof Error && error.message.startsWith("Codegraph installer found an existing lock")) {
-      throw new Error(`Could not safely acquire the Codegraph server lifecycle lock for ${normalizePath(root)}.`, {
-        cause: error,
-      });
+    const busy = error instanceof Error && error.message.startsWith("Another Codegraph installer");
+    const blocked = error instanceof Error && error.message.startsWith("Codegraph installer found an existing lock");
+    if (busy || blocked) {
+      let message = `Could not safely acquire the Codegraph server lifecycle lock for ${normalizePath(root)}.`;
+      if (busy) message = `Another Codegraph server lifecycle command is in progress for ${normalizePath(root)}.`;
+      const holder = await describeInstallerLease(lockPath);
+      const remedy = busy
+        ? "Wait for the lease to expire; if no lifecycle command is running in any environment, remove the lock file and retry."
+        : "If no lifecycle command is running in any environment, remove the lock file and retry.";
+      throw new Error(`${message} Lock: ${normalizePath(lockPath)}. ${holder} ${remedy}`, { cause: error });
     }
     throw error;
   }

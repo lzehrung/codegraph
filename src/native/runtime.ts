@@ -29,6 +29,7 @@ const localNativePackageRoot = path.resolve(
 const NATIVE_REQUIRED_ERROR_PREFIX = "Required native addon @lzehrung/codegraph-native is unavailable";
 
 let bindingState: NativeBindingState | undefined;
+let nativeBindingMapped = false;
 let loadedRuntimeFingerprint: { state: NativeBindingState; value: string } | undefined;
 type CachedRuntimeFingerprintValidation = {
   sourcePath: string;
@@ -50,6 +51,7 @@ const cachedRuntimeIdentityValidations = new WeakMap<NativeRuntimeIdentity, Cach
 
 export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
+  nativeBindingMapped = false;
   loadedRuntimeFingerprint = undefined;
   cachedRuntimeFingerprints.clear();
 }
@@ -66,6 +68,7 @@ export function __setNativeTreeSitterBindingForTests(state: NativeBindingState):
  */
 export function adoptLoadedNativeBinding(loaded: { binding: NativeBinding; origin: NativeBindingOrigin }): void {
   if (bindingState || typeof loaded.binding.registerQuerySet !== "function") return;
+  nativeBindingMapped = true;
   bindingState = {
     loaded: true,
     binding: loaded.binding,
@@ -74,8 +77,11 @@ export function adoptLoadedNativeBinding(loaded: { binding: NativeBinding; origi
   };
 }
 
-export function loadBinding(): NativeBindingState {
-  if (bindingState) return bindingState;
+export function loadBinding(options?: { lockOnly?: boolean }): NativeBindingState {
+  if (bindingState) {
+    if (!options?.lockOnly && nativeBindingMapped) markWindowsProcessDrainRequired();
+    return bindingState;
+  }
   cachedRuntimeFingerprints.clear();
   const loaded = loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
@@ -84,8 +90,8 @@ export function loadBinding(): NativeBindingState {
     resolveFn: require.resolve,
   });
   if (loaded.binding) {
-    // The addon is already loaded, so its native handles need the Windows exit drain even when it is rejected below.
-    markWindowsProcessDrainRequired();
+    nativeBindingMapped = true;
+    if (!options?.lockOnly) markWindowsProcessDrainRequired();
     if (typeof loaded.binding.registerQuerySet !== "function") {
       // An addon from before query sets takes the query text on every extraction call, which this build no longer
       // passes. Treat it as unusable here, where the error names the fix, instead of failing each call.

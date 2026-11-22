@@ -9,6 +9,7 @@ import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "..
 import { isFileSystemErrorCode } from "../util/errors.js";
 import { isPlainRecord } from "../util/guards.js";
 import {
+  installerKernelLockPath,
   opencodeConfigHome,
   waitForInstallerLockRetry,
   withInstallerLeaseLock,
@@ -340,7 +341,7 @@ async function installDefinitions(
   const force = options.force ?? false;
   const install = async (): Promise<InstallResult> => {
     const plan = await prepareInstallPlan(definitions, settings, dryRun, force);
-    if (!dryRun) await applyInstallPlan(plan);
+    if (!dryRun) await applyInstallPlan(plan, settings);
     return {
       installed: plan.changes.some((change) => change.action === "create" || change.action === "update"),
       verified: !dryRun,
@@ -470,7 +471,11 @@ function sameInstallPath(left: string, right: string): boolean {
     : normalizedLeft === normalizedRight;
 }
 
-async function applyInstallPlan(plan: InstallPlan, verifyInstalledConfig = true): Promise<void> {
+async function applyInstallPlan(
+  plan: InstallPlan,
+  settings: InstallerSettings,
+  verifyInstalledConfig = true,
+): Promise<void> {
   try {
     for (const file of plan.files) {
       if (file.change.action === "unchanged") continue;
@@ -480,12 +485,13 @@ async function applyInstallPlan(plan: InstallPlan, verifyInstalledConfig = true)
         await writeTextFileAtomic(file.path, file.content, {
           mode: file.snapshot.mode ?? 0o600,
           root: file.root,
+          kernelPath: installerKernelLockPath(settings, `${file.path}.codegraph-lock`),
         });
       }
     }
     await verifyInstallPlan(plan, verifyInstalledConfig);
   } catch (error) {
-    const rollbackFailures = await rollbackInstallPlan(plan);
+    const rollbackFailures = await rollbackInstallPlan(plan, settings);
     if (rollbackFailures.length) {
       const details = rollbackFailures
         .map(
@@ -504,7 +510,7 @@ type InstallRollbackFailure = {
   error: unknown;
 };
 
-async function rollbackInstallPlan(plan: InstallPlan): Promise<InstallRollbackFailure[]> {
+async function rollbackInstallPlan(plan: InstallPlan, settings: InstallerSettings): Promise<InstallRollbackFailure[]> {
   const failures: InstallRollbackFailure[] = [];
   for (const file of [...plan.files].reverse()) {
     try {
@@ -515,6 +521,7 @@ async function rollbackInstallPlan(plan: InstallPlan): Promise<InstallRollbackFa
       await writeTextFileAtomic(file.path, file.snapshot.bytes, {
         mode: file.snapshot.mode ?? 0o600,
         root: file.root,
+        kernelPath: installerKernelLockPath(settings, `${file.path}.codegraph-lock`),
       });
     } catch (error) {
       failures.push({ file, error });
@@ -565,7 +572,7 @@ async function uninstallDefinitions(
   const dryRun = options.dryRun ?? false;
   const uninstall = async (): Promise<UninstallResult> => {
     const plan = await prepareUninstallPlan(definitions, settings, dryRun);
-    if (!dryRun) await applyInstallPlan(plan, false);
+    if (!dryRun) await applyInstallPlan(plan, settings, false);
     return {
       uninstalled: plan.changes.some(
         (plannedChange) => plannedChange.action === "delete" || plannedChange.action === "update",
@@ -1159,42 +1166,47 @@ function change(
 async function writeTextFileAtomic(
   filePath: string,
   content: string | Uint8Array,
-  options: { mode?: number; root?: string } = {},
+  options: { mode?: number; root?: string; kernelPath?: string } = {},
 ): Promise<void> {
   if (options.root === undefined) await assertNoSymbolicLinkAtPath(filePath);
   else await assertNoSymbolicLinksWithinRoot(filePath, options.root);
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
-  await withInstallerLeaseLock(`${filePath}.codegraph-lock`, normalizePathForDisplay(filePath), async () => {
-    if (options.root === undefined) await assertNoSymbolicLinkAtPath(filePath);
-    else await assertNoSymbolicLinksWithinRoot(filePath, options.root);
-    const nonce = `${process.pid}-${randomUUID()}`;
-    const temporaryPath = `${filePath}.codegraph-tmp-${nonce}`;
-    try {
-      let mode = options.mode ?? 0o600;
-      if (options.mode === undefined) {
-        try {
-          const existing = await fsp.lstat(filePath);
-          if (existing.isSymbolicLink()) throw unsafeSymbolicLinkError(filePath);
-          mode = existing.mode & 0o7777;
-        } catch (error) {
-          if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
+  await withInstallerLeaseLock(
+    `${filePath}.codegraph-lock`,
+    normalizePathForDisplay(filePath),
+    async () => {
+      if (options.root === undefined) await assertNoSymbolicLinkAtPath(filePath);
+      else await assertNoSymbolicLinksWithinRoot(filePath, options.root);
+      const nonce = `${process.pid}-${randomUUID()}`;
+      const temporaryPath = `${filePath}.codegraph-tmp-${nonce}`;
+      try {
+        let mode = options.mode ?? 0o600;
+        if (options.mode === undefined) {
+          try {
+            const existing = await fsp.lstat(filePath);
+            if (existing.isSymbolicLink()) throw unsafeSymbolicLinkError(filePath);
+            mode = existing.mode & 0o7777;
+          } catch (error) {
+            if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
+          }
         }
+        await fsp.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode });
+        await fsp.chmod(temporaryPath, mode);
+        await renameTemporaryFile(temporaryPath, filePath);
+      } catch (error) {
+        if (isFileSystemErrorCode(error, "EACCES") || isFileSystemErrorCode(error, "EPERM")) {
+          throw new Error(
+            `Permission denied while updating user-owned path ${normalizePathForDisplay(filePath)}. Check its ownership and permissions, then retry without administrator mode.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      } finally {
+        await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
       }
-      await fsp.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode });
-      await fsp.chmod(temporaryPath, mode);
-      await renameTemporaryFile(temporaryPath, filePath);
-    } catch (error) {
-      if (isFileSystemErrorCode(error, "EACCES") || isFileSystemErrorCode(error, "EPERM")) {
-        throw new Error(
-          `Permission denied while updating user-owned path ${normalizePathForDisplay(filePath)}. Check its ownership and permissions, then retry without administrator mode.`,
-          { cause: error },
-        );
-      }
-      throw error;
-    } finally {
-      await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
-    }
-  });
+    },
+    options.kernelPath ? { kernelPath: options.kernelPath } : undefined,
+  );
 }
 
 async function assertNoSymbolicLinkAtPath(filePath: string): Promise<void> {

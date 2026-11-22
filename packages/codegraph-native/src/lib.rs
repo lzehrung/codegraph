@@ -1,5 +1,6 @@
 mod duplicate_keywords;
 mod duplicate_tokens;
+mod file_lock;
 mod languages;
 mod parser_pool;
 mod projection;
