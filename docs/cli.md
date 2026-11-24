@@ -428,6 +428,8 @@ Successful `refs --json` results include `referenceCoverage`. `complete` means t
 
 Import declaration references include `via.importBinding`: `imported` identifies the source-side name, and `local` identifies a distinct alias or default binding. Target `provenance.resolution` and `provenance.confidence` describe definition selection only. They do not describe reference-search coverage.
 
+`refs` on a JSON module target returns `not_found` with a reason instead of a parser error, including when a TypeScript or JavaScript import resolves to that target. As with other `not_found` results, text and `--json` output use exit code 1; `goto` can still resolve the synthetic JSON default export.
+
 `grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. When text results are truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts. Human-readable grep output stays a plain streamed hit list.
 
 ### Symbol commands

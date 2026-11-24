@@ -97,6 +97,8 @@ unless they specifically need these shapes.
 
 After a queried file's syntax is evicted, `goToDefinition`, `findReferences`, and `buildSymbolGraphDetailed` reject a changed or deleted file with an error named `StaleQuerySourceError`; rebuild the `ProjectIndex` before retrying. The first query records a source fingerprint, so this check cannot prove that a file was unchanged between index construction and its first query. Syntax retained explicitly with `keepParsed` continues to use its build-time source.
 
+`findReferences` returns `not_found` with a reason for non-code module targets such as synthetic JSON default exports, including queries from their importing bindings or uses. Import resolution and `goToDefinition` can still name that module; a JSON module has no syntax tree for reference collection.
+
 Internal-only modules (anything outside the documented entry points above) are
 not covered by semver.
 

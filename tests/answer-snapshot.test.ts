@@ -112,7 +112,7 @@ describe("cross-language answer snapshots", () => {
     ).toBe(false);
   });
 
-  it("keeps unsupported indexed inputs explicit rather than treating them as empty supported files", async () => {
+  it("keeps unsupported syntax explicit and records non-code reference misses", async () => {
     const entry = await project({
       "data.json": '{"answer": 42}\n',
       "main.ts": 'import data from "./data.json";\ndata.answer;\n',
@@ -121,11 +121,9 @@ describe("cross-language answer snapshots", () => {
     expect(records).toContain(
       'file data.json language=unsupported identifiers=0 declarations=1 syntax=unsupported UnsupportedParserInputError "Unsupported file extension: data.json"',
     );
-    expect(
-      records.some(
-        (line) => line.startsWith("refs data.json:") && line.includes("unsupported UnsupportedParserInputError"),
-      ),
-    ).toBe(true);
+    expect(records).toContain(
+      'refs data.json:1:1-1:1 default "default" -> not_found "Reference collection is unavailable for non-code targets"',
+    );
   });
 
   it("discovers every sample project and every edge scenario using the graph snapshot grouping", () => {
