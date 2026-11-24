@@ -1,6 +1,7 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { SymbolKind, type SymbolDef } from "./types.js";
+import { enclosingSwiftExtension } from "./declaration-visibility-policies/swift-index.js";
 
 /**
  * Per-language declaration visibility for module exports and Swift shared-owner member lookup.
@@ -37,6 +38,16 @@ export type DeclarationVisibilityRow = {
    * requiring their own public modifier (Rust trait items).
    */
   inheritPublicFromParentTypes?: ReadonlySet<string>;
+  /** Access defaults for an unmodified member nested in a type. */
+  defaultPrivateMembers?: {
+    accessModifiers: ReadonlySet<string>;
+    containers: ReadonlySet<string>;
+    privateContainers: ReadonlySet<string>;
+  };
+  /** Kinds importable from another language's package at top level, when restricted. */
+  foreignTopLevelKinds?: Readonly<Partial<Record<string, Readonly<Partial<Record<SymbolKind, true>>>>>>;
+  /** An enclosing owner whose visibility also restricts a member to its file. */
+  fileHiddenOwner?: (node: SyntaxNodeLike) => SyntaxNodeLike | null;
 };
 
 const RUST_ROW: DeclarationVisibilityRow = {
@@ -71,7 +82,17 @@ const JAVA_ROW: DeclarationVisibilityRow = {
   ]),
   modifierNodeTypes: new Set(["modifiers"]),
   hiddenModifierTexts: new Set(["private"]),
+  foreignTopLevelKinds: { kotlin: { [SymbolKind.Class]: true, [SymbolKind.Interface]: true } },
 };
+
+const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);
+const CSHARP_MEMBER_CONTAINERS = new Set([
+  "class_declaration",
+  "struct_declaration",
+  "record_declaration",
+  "interface_declaration",
+]);
+const CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS = new Set(["class_declaration", "struct_declaration", "record_declaration"]);
 
 const CSHARP_ROW: DeclarationVisibilityRow = {
   declarationTypes: new Set([
@@ -97,6 +118,11 @@ const CSHARP_ROW: DeclarationVisibilityRow = {
     "interface_declaration",
     "enum_declaration",
   ]),
+  defaultPrivateMembers: {
+    accessModifiers: CSHARP_ACCESS_MODIFIERS,
+    containers: CSHARP_MEMBER_CONTAINERS,
+    privateContainers: CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS,
+  },
 };
 
 const KOTLIN_ROW: DeclarationVisibilityRow = {
@@ -124,6 +150,7 @@ const SWIFT_ROW: DeclarationVisibilityRow = {
   ]),
   modifierNodeTypes: new Set(["visibility_modifier"]),
   hiddenModifierTexts: new Set(["private", "fileprivate"]),
+  fileHiddenOwner: enclosingSwiftExtension,
 };
 
 /**
@@ -291,20 +318,9 @@ export function isJvmPackageSymbolVisible(
 ): boolean {
   if (target.javaPackagePrivate && !samePackage) return false;
   if (target.isMember) return true;
-  if (consumerLanguage === "java" && targetLanguage === "kotlin") {
-    return target.kind === SymbolKind.Class || target.kind === SymbolKind.Interface;
-  }
-  return true;
+  const kinds = VISIBILITY_BY_LANGUAGE[consumerLanguage]?.foreignTopLevelKinds?.[targetLanguage];
+  return !kinds || !!kinds[target.kind];
 }
-
-const CSHARP_ACCESS_MODIFIERS = new Set(["public", "protected", "internal", "private"]);
-const CSHARP_MEMBER_CONTAINERS = new Set([
-  "class_declaration",
-  "struct_declaration",
-  "record_declaration",
-  "interface_declaration",
-]);
-const CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS = new Set(["class_declaration", "struct_declaration", "record_declaration"]);
 
 /**
  * Whether `node`'s declaration is `private` (and not C# `private protected`). A private member is
@@ -317,12 +333,12 @@ export function isPrivateDeclaration(languageId: string, node: SyntaxNodeLike): 
   const tokens = modifierTokens(collectModifierTexts(declaration, row));
   // C# `private protected` stays accessible to derived classes in the same assembly.
   if (tokens.includes("private")) return !tokens.includes("protected");
-  // A C# class, struct, or record member without an access modifier is private; interface
-  // members are public.
+  // Unmodified members can inherit a language's private-by-default container rule.
+  const defaults = row.defaultPrivateMembers;
+  if (!defaults) return false;
   return (
-    languageId === "csharp" &&
-    !tokens.some((token) => CSHARP_ACCESS_MODIFIERS.has(token)) &&
-    CSHARP_PRIVATE_BY_DEFAULT_CONTAINERS.has(enclosingAncestor(declaration, CSHARP_MEMBER_CONTAINERS)?.type ?? "")
+    !tokens.some((token) => defaults.accessModifiers.has(token)) &&
+    defaults.privateContainers.has(enclosingAncestor(declaration, defaults.containers)?.type ?? "")
   );
 }
 
@@ -345,56 +361,15 @@ export function isCsharpAccessibleOutsideType(node: SyntaxNodeLike): boolean {
 }
 
 /**
- * Go export visibility is spelled in the identifier itself (Go spec, "Exported identifiers"):
- * a name is visible outside its declaring package only when its first Unicode letter is
- * upper case. Unlike every `DeclarationVisibilityRow` above, this must never filter a Go
- * file's module exports: Go's own compilation-unit peers (any file in the same package)
- * legitimately see an unexported name, and that same-package lookup reads the same export
- * list. Only a reference that crosses into a different Go package, whether by namespace
- * selector (`pkg.hidden`) or by a proven receiver of an imported type (`v.hidden()`), must
- * reject an unexported name. Both paths call this rule instead of adding a `GO_ROW` here.
- */
-export function isGoExportedMemberName(languageId: string | undefined, name: string): boolean {
-  if (languageId !== "go") return true;
-  return /^\p{Lu}/u.test(name);
-}
-
-function swiftDeclarationKind(container: SyntaxNodeLike): string {
-  const kind = container.childForFieldName("declaration_kind");
-  if (kind) {
-    const text = kind.text.trim();
-    if (text) return text;
-  }
-  for (let index = 0; ; index += 1) {
-    const child = container.child(index);
-    if (!child) return "";
-    const text = child.text.trim();
-    if (text === "extension" || text === "class" || text === "struct" || text === "enum" || text === "actor") {
-      return text;
-    }
-  }
-}
-
-function enclosingSwiftExtension(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  let current: SyntaxNodeLike | null = node;
-  while (current) {
-    if (current.type === "class_declaration") {
-      return swiftDeclarationKind(current) === "extension" ? current : null;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-/**
  * Swift `private`/`fileprivate` is file-scoped, including when that modifier is on the
  * enclosing `extension` rather than the member.
  */
 export function isSwiftFileHiddenSharedOwnerMember(languageId: string, memberNode: SyntaxNodeLike): boolean {
-  if (languageId !== "swift") return false;
-  if (!isExportedDeclaration("swift", memberNode)) return true;
-  const extension = enclosingSwiftExtension(memberNode);
-  return !!extension && !isExportedDeclaration("swift", extension);
+  const fileHiddenOwner = VISIBILITY_BY_LANGUAGE[languageId]?.fileHiddenOwner;
+  if (!fileHiddenOwner) return false;
+  if (!isExportedDeclaration(languageId, memberNode)) return true;
+  const extension = fileHiddenOwner(memberNode);
+  return !!extension && !isExportedDeclaration(languageId, extension);
 }
 
 /**

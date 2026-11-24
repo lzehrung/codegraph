@@ -80,6 +80,8 @@ export interface LanguageDefinition {
 
   /** Rename spelling rules; absent uses the conservative generic identifier pattern. */
   identifierValidation?: IdentifierValidation;
+  /** Cross-package member visibility by spelling; absent permits all names. Does not filter module exports. */
+  exportedNamePattern?: RegExp;
   /** An additional Bloom key for a normalized identifier; absent adds no key. */
   bloomAlternateKey?: (normalized: string) => string;
   /** Additional Bloom markers derived once from a file's source. */

@@ -3,12 +3,17 @@ import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { hasNonAsciiCodePoint, JAVA_IDENTIFIER_IGNORABLE_SOURCE } from "../../util/identifiers.js";
 import { isJavaPatternVariableName } from "../../util/java-patterns.js";
+import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../../util/bloom-filter.js";
 
 const JAVA_IDENTIFIER_IGNORABLE_PATTERN = new RegExp(`[${JAVA_IDENTIFIER_IGNORABLE_SOURCE}]`, "gu");
 
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
+  bloomSourceTokens: (source, add) => {
+    if (source.includes("\\u")) add(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN);
+  },
+  capturesDocstrings: true,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

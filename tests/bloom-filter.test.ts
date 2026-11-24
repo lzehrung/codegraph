@@ -3,6 +3,7 @@ import {
   BloomFilter,
   buildBloomFilterFromSource,
   BloomFilterCache,
+  JAVA_UNICODE_ESCAPE_BLOOM_TOKEN,
   isBloomIdentifierToken,
 } from "../src/util/bloom-filter.js";
 import {
@@ -188,6 +189,15 @@ describe("buildBloomFilterFromSource", () => {
     const filter = buildBloomFilterFromSource("@Override\nclass Child {}", JAVA_SUPPORT);
 
     expect(filter.mightContain("Override")).toBe(true);
+  });
+
+  test("adds the Unicode escape marker only for Java sources containing an escape", () => {
+    const escaped = "class \\u0043lassName {}";
+    expect(buildBloomFilterFromSource(escaped, JAVA_SUPPORT).mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN)).toBe(true);
+    expect(
+      buildBloomFilterFromSource("class ClassName {}", JAVA_SUPPORT).mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN),
+    ).toBe(false);
+    expect(buildBloomFilterFromSource(escaped, JS_SUPPORT).mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN)).toBe(false);
   });
 
   test("matches C# verbatim identifiers", () => {

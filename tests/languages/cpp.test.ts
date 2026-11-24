@@ -149,6 +149,40 @@ const definition: LanguageTestDefinition = {
 
 runLanguageTests(definition);
 
+it("keeps a static forward declaration's callable identity on its definition and out of other files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-linkage-completion-"));
+  const own = normalizePath(path.join(root, "own.cpp"));
+  const decoy = normalizePath(path.join(root, "decoy.cpp"));
+  try {
+    await fs.writeFile(
+      own,
+      "static int run(int);\nint run(int value) { return value; }\nint use() { return run(1); }\n",
+    );
+    await fs.writeFile(decoy, "static int run(int value) { return value + 1; }\n");
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const ownRun = index.byFile.get(fileIdentityKey(own))?.locals.filter((local) => local.localName === "run") ?? [];
+    expect(ownRun).toHaveLength(2);
+    expect(ownRun[0]?.callable?.key).toBe(ownRun[1]?.callable?.key);
+    const otherRun = index.byFile.get(fileIdentityKey(decoy))?.locals.find((local) => local.localName === "run");
+    expect(otherRun?.callable?.key).not.toBe(ownRun[0]?.callable?.key);
+    const result = await goToDefinition(index, { file: own, line: 3, column: 20 });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("Expected the file-local callable");
+    expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(own));
+    const refs = await findReferences(index, { file: own, line: 2, column: 5 });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") throw new Error("Expected references to the file-local callable");
+    expect(
+      refs.references.some(
+        (reference) => fileIdentityKey(reference.file) === fileIdentityKey(own) && reference.range.start.line === 3,
+      ),
+    ).toBe(true);
+    expect(refs.references.some((reference) => fileIdentityKey(reference.file) === fileIdentityKey(decoy))).toBe(false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("C++ language boundaries", () => {
   it("identifies .h headers with C++ syntax", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-language-"));

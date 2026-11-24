@@ -3,6 +3,17 @@ import { stripJsLikeComments } from "../../util/comments.js";
 import { isNameFieldOnParent, isNameOrPropertyFieldOnParent } from "./shared.js";
 import { ecmaPrivateNameKey } from "../../util/identifiers.js";
 
+/** Enclosing blocks preferred for reference context in ECMAScript sources. */
+export const ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES = {
+  function_declaration: 2,
+  method_definition: 2,
+  class_declaration: 2,
+  arrow_function: 2,
+  function_expression: 2,
+  statement_block: 1,
+  class_body: 1,
+} as const;
+
 /** Private identifier escapes share one reference key without changing public identifier spelling. */
 export function ecmaReferenceSpelling(name: string, node?: SyntaxNodeLike): string {
   return node?.type === "private_property_identifier" ? ecmaPrivateNameKey(name) : name;

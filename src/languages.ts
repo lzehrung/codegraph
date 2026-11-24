@@ -46,6 +46,7 @@ export type LanguageSupport = {
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
   referenceSpelling?: LanguageDefinition["referenceSpelling"];
   identifierValidation?: LanguageDefinition["identifierValidation"];
+  exportedNamePattern?: LanguageDefinition["exportedNamePattern"];
   bloomAlternateKey?: LanguageDefinition["bloomAlternateKey"];
   bloomSourceTokens?: LanguageDefinition["bloomSourceTokens"];
   capturesDocstrings?: LanguageDefinition["capturesDocstrings"];
@@ -83,6 +84,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     capturesDocstrings: def.capturesDocstrings ?? false,
     referenceBlockPriorities: def.referenceBlockPriorities ?? EMPTY_REFERENCE_BLOCK_PRIORITIES,
     ...(def.identifierValidation ? { identifierValidation: def.identifierValidation } : {}),
+    ...(def.exportedNamePattern ? { exportedNamePattern: def.exportedNamePattern } : {}),
     ...(def.bloomAlternateKey ? { bloomAlternateKey: def.bloomAlternateKey } : {}),
     ...(def.bloomSourceTokens ? { bloomSourceTokens: def.bloomSourceTokens } : {}),
     ...(def.impactDefinitionTypes ? { impactDefinitionTypes: def.impactDefinitionTypes } : {}),

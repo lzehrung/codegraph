@@ -1,0 +1,1 @@
+Select explicit export capture and module export completion from declaration policies.

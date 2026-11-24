@@ -1,0 +1,1 @@
+Select Swift qualified type suffix lookup through its prelexical name policy.

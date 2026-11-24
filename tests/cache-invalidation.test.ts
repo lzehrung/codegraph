@@ -51,6 +51,7 @@ import {
   LANGUAGE_BEHAVIOR_EPOCH,
   languageDefinitionFingerprintCoverage,
 } from "../src/indexer/build-cache/options.js";
+import { callableIdentityPolicyFor } from "../src/indexer/callable-identity-policies/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { BloomFilter } from "../src/util/bloom-filter.js";
 import { BLOOM_FILTER_IDENTIFIER_SOURCE } from "../src/util/identifiers.js";
@@ -708,6 +709,35 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("rebuilds cached indexing when a callable key shape changes", async () => {
+    const root = await mkTmpDir("dg-callable-key-shape-");
+    const entryPath = path.join(root, "entry.ts");
+    const source = "export const fingerprinted = 1;\n";
+    await fsp.writeFile(entryPath, source, "utf8");
+    const policy = callableIdentityPolicyFor("ts");
+    const descriptor = Object.getOwnPropertyDescriptor(policy, "keyShape");
+    if (!descriptor) throw new Error("Expected TypeScript callable key shape.");
+
+    clearImplementationFingerprintCache();
+    try {
+      await buildProjectIndex(root, { cache: "disk", threads: 1 });
+      const originalFingerprint = getImplementationFingerprint();
+      Object.defineProperty(policy, "keyShape", { ...descriptor, value: "file-name" });
+      clearImplementationFingerprintCache();
+      expect(getImplementationFingerprint()).not.toBe(originalFingerprint);
+
+      const report: BuildReport = { timings: {} };
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+      expect(report.manifest?.optionsMismatch).toContain("implementation");
+      expect(report.files?.parsed).toBe(1);
+      expect(await fsp.readFile(entryPath, "utf8")).toBe(source);
+      expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "fingerprinted")).toBe(true);
+    } finally {
+      Object.defineProperty(policy, "keyShape", descriptor);
+      clearImplementationFingerprintCache();
+    }
+  });
+
   it("invalidates cached indexing written under a different core algorithm epoch, then reuses it", async () => {
     const root = await mkTmpDir("dg-cache-core-epoch-");
     const entryPath = path.join(root, "entry.ts");
@@ -898,7 +928,12 @@ describe("Cache invalidation and strict hashing", () => {
   };
 
   const definitionFieldMutations: Array<{
-    field: "usesQueryDrivenLocals" | "membersAreImplicitlyInScope" | "renameMatchesNormalizedIdentifiers";
+    field:
+      | "usesQueryDrivenLocals"
+      | "membersAreImplicitlyInScope"
+      | "renameMatchesNormalizedIdentifiers"
+      | "capturesDocstrings"
+      | "exportedNamePattern";
     apply: (definition: LanguageDefinition) => void;
   }> = [
     {
@@ -917,6 +952,18 @@ describe("Cache invalidation and strict hashing", () => {
       field: "renameMatchesNormalizedIdentifiers",
       apply: (definition) => {
         definition.renameMatchesNormalizedIdentifiers = true;
+      },
+    },
+    {
+      field: "capturesDocstrings",
+      apply: (definition) => {
+        definition.capturesDocstrings = false;
+      },
+    },
+    {
+      field: "exportedNamePattern",
+      apply: (definition) => {
+        definition.exportedNamePattern = /^X/u;
       },
     },
   ];
@@ -961,6 +1008,22 @@ describe("Cache invalidation and strict hashing", () => {
       }
     });
   }
+
+  it("fingerprints exported-name pattern flags as well as source", () => {
+    const go = getLanguageById("go");
+    const original = go?.exportedNamePattern;
+    if (!go || !original) throw new Error("Expected Go exported-name pattern.");
+    clearImplementationFingerprintCache();
+    try {
+      const fingerprint = getImplementationFingerprint();
+      go.exportedNamePattern = new RegExp(original.source, "iu");
+      clearImplementationFingerprintCache();
+      expect(getImplementationFingerprint()).not.toBe(fingerprint);
+    } finally {
+      go.exportedNamePattern = original;
+      clearImplementationFingerprintCache();
+    }
+  });
 
   it("guards that every LanguageDefinition field is covered by the implementation fingerprint", () => {
     for (const definition of getAllLanguages()) {

@@ -1,13 +1,7 @@
 import type { SyntaxTreeLike } from "../languages/types.js";
-import { collectCsharpNamespaceFacts, type CsharpNamespaceFacts } from "./csharp-tree.js";
-import { collectJvmFileFacts, jvmPackageName, type JvmFileFacts } from "./jvm-tree.js";
-import { isJvmLanguage, type JvmLanguageId } from "./syntax-tree.js";
-
-/** Per-file declarations only; project scans combine these after extraction finishes. Null means unavailable. */
-export type ProjectFileFacts = {
-  csharpNamespaceFacts?: CsharpNamespaceFacts | null;
-  jvmFacts?: JvmFileFacts | null;
-};
+import { indexLanguagePolicyFor } from "../indexer/index-language-policies/index.js";
+import type { JvmLanguageId } from "./syntax-tree.js";
+import type { ProjectFileFacts } from "./project-file-facts-types.js";
 
 export const JVM_PACKAGE_HEAD_CHARS = 64 * 1024;
 
@@ -24,9 +18,7 @@ export function jvmPackageHead(source: string): string {
  * Callers prime that slot instead of branching on the language id themselves.
  */
 export function projectFactsSlot(languageId: string | undefined): "csharp" | "jvm" | undefined {
-  if (languageId === "csharp") return "csharp";
-  if (isJvmLanguage(languageId)) return "jvm";
-  return undefined;
+  return languageId ? indexLanguagePolicyFor(languageId).module?.projectFacts?.slot : undefined;
 }
 
 /** Reuses the extraction's tree. Only an unavailable JVM tree needs a bounded package-only parse. */
@@ -36,16 +28,6 @@ export function collectProjectFileFacts(
   tree: SyntaxTreeLike | null,
   parsePackageHead: (head: string, languageId: JvmLanguageId) => SyntaxTreeLike | null,
 ): ProjectFileFacts | undefined {
-  if (languageId === "csharp") return { csharpNamespaceFacts: tree ? collectCsharpNamespaceFacts(tree) : null };
-  if (!isJvmLanguage(languageId)) return undefined;
-  if (tree) return { jvmFacts: collectJvmFileFacts(tree, languageId) };
-  let head: SyntaxTreeLike | null = null;
-  try {
-    head = parsePackageHead(jvmPackageHead(source), languageId);
-  } catch {
-    // A failed bounded parse cannot place the file in a package.
-  }
-  return {
-    jvmFacts: head ? { packageName: jvmPackageName(head, languageId), symbols: [], incomplete: true } : null,
-  };
+  const collect = indexLanguagePolicyFor(languageId).module?.projectFacts?.collect;
+  return collect?.(source, tree, parsePackageHead, jvmPackageHead);
 }

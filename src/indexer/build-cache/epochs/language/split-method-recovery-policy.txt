@@ -1,0 +1,1 @@
+Keep split-method syntax recovery in the TypeScript declaration policy.

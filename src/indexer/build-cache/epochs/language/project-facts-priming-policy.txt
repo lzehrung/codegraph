@@ -1,0 +1,1 @@
+Keep C# namespace and JVM package priming with their project-fact collectors.

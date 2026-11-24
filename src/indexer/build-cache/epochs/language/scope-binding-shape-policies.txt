@@ -1,0 +1,1 @@
+Move language-specific lexical binding syntax and promoted names into scope policies.

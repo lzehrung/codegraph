@@ -109,7 +109,6 @@ import {
   isExportedDeclaration,
   isJvmPackageSymbolVisible,
   isPrivateDeclaration,
-  isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
 } from "./declaration-visibility.js";
 import { isJvmTypeWildcardMember } from "./expand-star-imports.js";
@@ -1674,6 +1673,8 @@ export async function resolveMemberAccessDefinition(params: {
   resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
   resolveJvmTypeName: JvmTypeNameResolver;
   loadParsedFile?: PythonParsedFileLoader;
+  /** A preselected member-name restriction; null means the language has none. */
+  memberNamePattern?: RegExp | null;
   pythonReceiverResolutionCache?: PythonReceiverResolutionCache;
 }): Promise<GoToResult | null> {
   const {
@@ -1688,7 +1689,10 @@ export async function resolveMemberAccessDefinition(params: {
     resolveJvmTypeName,
     loadParsedFile,
     pythonReceiverResolutionCache,
+    memberNamePattern: selectedMemberNamePattern,
   } = params;
+  const memberNamePattern =
+    selectedMemberNamePattern === undefined ? sup.exportedNamePattern : selectedMemberNamePattern;
   const ensureScopeIndex = (): ScopeIndex =>
     ownedScopeIndex ?? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree);
   if (sup.id === "ruby") {
@@ -2019,7 +2023,7 @@ export async function resolveMemberAccessDefinition(params: {
         }
         if (namespaceName) return resolveCsharpQualifiedName(index, mod, namespaceName, expr.startIndex);
         if (base?.kind === "namespace") {
-          if (!isGoExportedMemberName(sup.id, memberName)) return null;
+          if (memberNamePattern && !memberNamePattern.test(memberName)) return null;
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
@@ -2485,7 +2489,8 @@ export async function resolveMemberAccessDefinition(params: {
           if (
             memberDef &&
             (sup.id === "cpp" ||
-              isGoExportedMemberName(sup.id, member) ||
+              !memberNamePattern ||
+              memberNamePattern.test(member) ||
               getCompilationUnitPeers(index, mod.file).files.has(memberDef.file)) &&
             !crossFilePeerMemberHidden(mod.file, memberDef, memberContext)
           ) {
@@ -2998,11 +3003,12 @@ function resolveExportPath(
   sup: LanguageSupport,
 ): SymbolDef | undefined {
   let file = startFile;
+  const memberNamePattern = sup.exportedNamePattern;
   for (let partIndex = 0; partIndex < path.length; partIndex += 1) {
     const part = path[partIndex]!;
     const last = partIndex === path.length - 1;
     // Go reaches another package through its exported names only.
-    if (!isGoExportedMemberName(sup.id, part)) return undefined;
+    if (memberNamePattern && !memberNamePattern.test(part)) return undefined;
     const hit = resolveExport(index, file, part, { allowLocalFallback: false });
     if (!hit) return undefined;
     if (hit.kind === "namespace") {

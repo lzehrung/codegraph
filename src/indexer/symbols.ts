@@ -16,7 +16,6 @@ import { importNodeId } from "./import-types.js";
 import { isDeclaredSymbol } from "./declarations.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links/language-ids.js";
-import { DOCSTRING_CAPTURE_LANGUAGES } from "./locals-and-exports.js";
 import { compareStrings } from "../util/strings.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
@@ -331,7 +330,7 @@ export function getUndocumentedApiSurface(index: ProjectIndex): UndocumentedApiS
       // their own. Re-exports are excluded too: they have no local declaration
       // to check. Languages WITH capture always count as unchecked — without
       // a parse we cannot know whether exports exist (reduced mode).
-      if (!DOCSTRING_CAPTURE_LANGUAGES.has(support.id) && !mod.exports.some((entry) => entry.type === "local")) {
+      if (!support.capturesDocstrings && !mod.exports.some((entry) => entry.type === "local")) {
         continue;
       }
       uncheckedFiles.add(mod.file);

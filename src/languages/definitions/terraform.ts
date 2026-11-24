@@ -45,6 +45,7 @@ const LOCALS_DECLARATION = `(config_file (body (block . (identifier) @kind (#eq?
 export const TERRAFORM_DEF: LanguageDefinition = {
   id: "terraform",
   extensions: [".tf"],
+  referenceBlockPriorities: { block: 2 },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

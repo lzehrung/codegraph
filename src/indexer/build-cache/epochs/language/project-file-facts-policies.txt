@@ -1,0 +1,1 @@
+Move C# namespace and JVM package fact collection into their index policies.

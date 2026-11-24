@@ -3,9 +3,9 @@ import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectParseErrorRanges } from "./parse-errors.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
-import { isSwiftQualifiedExtensionSuffix } from "../util/swift-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import { callableIdentityForDeclaration, callableIdentityForGeneratedMember } from "./callable-identity.js";
+import { callableIdentityPolicyFor } from "./callable-identity-policies/index.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import {
@@ -18,7 +18,6 @@ import { phpConstructorPromotedVariable } from "./navigation-php.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { LanguageSupport } from "../languages.js";
 import { generatedMembersIn } from "../languages/generated-members.js";
-import { isSwiftExtensionContainer } from "./shared-owner-identity.js";
 import {
   bindingCoversUse,
   bindingHiddenFromUse,
@@ -32,7 +31,6 @@ import {
   scopeIsEmptyBody,
   scopeIsLocalGate,
   scopeNodesFor,
-  typeOnlyName,
   type ScopeNodeRow,
 } from "./scope-nodes.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
@@ -99,14 +97,6 @@ function qualifiedCppIdentifierForName(nameNode: SyntaxNodeLike, boundary?: Synt
   return null;
 }
 
-/** A type argument in a qualified C++ declarator refers to a type, not a new declarator name. */
-function isCppTemplateArgumentName(node: SyntaxNodeLike): boolean {
-  for (let current = node.parent; current; current = current.parent) {
-    if (current.type === "template_argument_list") return true;
-  }
-  return false;
-}
-
 export function buildScopeIndexFromSource(
   file: string,
   source: string,
@@ -171,6 +161,15 @@ export function buildScopeIndexFromSource(
   const nameSpanKey = (node: SyntaxNodeLike): string => `${node.startIndex}:${node.endIndex}`;
 
   const normalizeIdentifier = support.normalizeIdentifier;
+  const row = scopeNodesFor(support.id);
+  const bindingRules = row.bindingRules;
+  const receiverProperty = bindingRules?.receiverProperty;
+  const implicitReceiverName = bindingRules?.implicitReceiverName;
+  const variablePrefix = bindingRules?.variablePrefix ?? "";
+  const promotedBindings = bindingRules?.promotedBindings;
+  const callableIdentityPolicy = callableIdentityPolicyFor(support.id);
+  const callableKeyShape = callableIdentityPolicy.keyShape;
+  const callableDeclarationParameters = callableIdentityPolicy.declarationParameters;
   const indexedCallables = opts?.locals ? new Map<string, SymbolDef["callable"]>() : undefined;
   if (indexedCallables && opts?.locals) {
     for (const local of opts.locals) {
@@ -188,7 +187,11 @@ export function buildScopeIndexFromSource(
     } else if (kind === "function") {
       callable =
         indexedCallables?.get(`${nameNode.startIndex}:${nameNode.endIndex}`) ??
-        callableIdentityForDeclaration({ file, name, range: def, languageId: support.id, source, node: nameNode });
+        callableIdentityForDeclaration(
+          { file, name, range: def, languageId: support.id, source, node: nameNode },
+          callableKeyShape,
+          callableDeclarationParameters,
+        );
     }
     const heldModuleSpecifier = kind === "local" && jsTs ? heldModuleSpecifierForDeclaration(nameNode) : undefined;
     const binding: Binding = {
@@ -215,7 +218,7 @@ export function buildScopeIndexFromSource(
       import: importBinding,
     };
     const key =
-      support.id === "c" && importBinding.kind === "named" && importBinding.cNamespace === "tag"
+      bindingRules?.usesTagNamespace && importBinding.kind === "named" && importBinding.cNamespace === "tag"
         ? cScopeName(binding.canonicalName, "tag")
         : binding.canonicalName;
     rootScope.map.set(key, binding);
@@ -233,7 +236,6 @@ export function buildScopeIndexFromSource(
     }
   }
 
-  const row = scopeNodesFor(support.id);
   const checksParseErrors =
     row.referenceVerificationRequiresParseError &&
     (!(tree instanceof ProjectedSyntaxTree) || tree.columns.kinds.includes("ERROR"));
@@ -271,9 +273,20 @@ export function buildScopeIndexFromSource(
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const scopeDeclarationNames = support.scopeDeclarationNames;
   const typeOnlyUseTypes = row.typeOnlyUseTypes;
-  /** Whether a use appears only in type syntax: a row that lists those node types answers from the list. */
-  const isTypeOnlyUse = (node: SyntaxNodeLike): boolean =>
-    typeOnlyUseTypes ? typeOnlyUseTypes.has(node.type) : typeOnlyName(support.id, node);
+  const typeOnlyParentTypes = row.typeOnlyParentTypes;
+  let isTypeOnlyUse: (node: SyntaxNodeLike) => boolean;
+  if (typeOnlyUseTypes) {
+    isTypeOnlyUse = (node) => typeOnlyUseTypes.has(node.type);
+  } else if (row.typeOnlyName) {
+    isTypeOnlyUse = row.typeOnlyName;
+  } else if (typeOnlyParentTypes) {
+    isTypeOnlyUse = (node) => {
+      const parent = node.parent;
+      return !!parent && typeOnlyParentTypes.has(parent.type);
+    };
+  } else {
+    isTypeOnlyUse = () => false;
+  }
 
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
@@ -373,7 +386,7 @@ export function buildScopeIndexFromSource(
     if (row.wholeScopeKinds?.has(target.kind) || declarationCoversScope(nameNode)) {
       binding.coversEnclosingScope = true;
     }
-    const tagRole = support.id === "c" ? cTagRole(nameNode) : undefined;
+    const tagRole = bindingRules?.usesTagNamespace ? cTagRole(nameNode) : undefined;
     const key = tagRole ? cScopeName(binding.canonicalName, "tag") : binding.canonicalName;
     if (tagRole === "reference") {
       const visible = lookup(binding.name, nameNode);
@@ -415,21 +428,21 @@ export function buildScopeIndexFromSource(
       return;
     }
     if (kind === "function" && existing?.kind === "function") {
-      if (support.id === "c") {
+      if (bindingRules?.functionRedeclarations === "shared-occurrences") {
         // C prototypes and their definitions are declarations of one function. Keep each
         // declaration addressable while sharing the occurrence list collected for that name.
         binding.occurrences = existing.occurrences;
         preserveExtraBinding(binding);
         return;
       }
-      if (support.id === "cpp") {
+      if (bindingRules?.functionRedeclarations === "overload-group") {
         const collisions = existing.sameScopeFunctionBindings ?? [existing];
         collisions.push(binding);
         for (const collision of collisions) collision.sameScopeFunctionBindings = collisions;
         cppFunctionCollisionGroups.add(collisions);
         preserveExtraBinding(existing);
       }
-      if (support.id === "ts" || support.id === "tsx") {
+      if (bindingRules?.functionRedeclarations === "signature-group") {
         const candidates = existing.sameScopeFunctionBindings ?? [existing];
         const collisions = typescriptCallableCandidatesInContainer(
           candidates,
@@ -484,7 +497,9 @@ export function buildScopeIndexFromSource(
       !sameSpan &&
       existing &&
       (!extraBindingSpans.has(bindingSpanKey(existing)) ||
-        (support.id === "cpp" && kind === "function" && existing.kind === "function"))
+        (bindingRules?.functionRedeclarations === "overload-group" &&
+          kind === "function" &&
+          existing.kind === "function"))
     ) {
       binding.earlierSameScope = existing;
     }
@@ -492,7 +507,7 @@ export function buildScopeIndexFromSource(
     if (binding.coversEnclosingScope) target.pendingCoveringNames?.delete(binding.canonicalName);
     if (!tracksLexicalNames) stealCoveredOccurrences(target, binding, key);
     const cppNamespace = cppNamespacePathByMap.get(target.map);
-    if (support.id === "cpp" && kind === "function" && cppNamespace) {
+    if (bindingRules?.qualifiedFunctionNames && kind === "function" && cppNamespace) {
       const qualifiedKey = `${cppNamespace}::${binding.name}`;
       const qualifiedBindings = cppQualifiedMemberBindings.get(qualifiedKey) ?? [];
       qualifiedBindings.push(binding);
@@ -574,7 +589,7 @@ export function buildScopeIndexFromSource(
   const lookup = (name: string, node?: SyntaxNodeLike): Binding | undefined => {
     const normalizedName = node ? scopeIdentifierKey(row, name, node, normalizeIdentifier) : normalizeIdentifier(name);
     const canonicalName =
-      support.id === "c" && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
+      bindingRules?.usesTagNamespace && node && cTagRole(node) ? cScopeName(normalizedName, "tag") : normalizedName;
     const methodCall = !!node && isExplicitMethodCall(row, node);
     const typeOnly = !!node && isTypeOnlyUse(node);
     // A gate between the use and a scope hides that scope's local variables.
@@ -621,7 +636,7 @@ export function buildScopeIndexFromSource(
   };
 
   const lookupOutsideFunctions = (name: string): Binding | undefined => {
-    const canonicalName = `$${normalizeIdentifier(name)}`;
+    const canonicalName = `${variablePrefix}${normalizeIdentifier(name)}`;
     for (let index = stack.length - 1; index >= 0; index -= 1) {
       const scope = stack[index]!;
       if (scope.kind === "function") continue;
@@ -631,45 +646,20 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(canonicalName);
   };
 
-  const isPhpThisPropertyName = (nameNode: SyntaxNodeLike): boolean => {
+  const isImplicitReceiverPropertyName = (nameNode: SyntaxNodeLike): boolean => {
+    if (!receiverProperty) return false;
     const parent = nameNode.parent;
-    if (!parent || parent.type !== "member_access_expression") return false;
+    if (!parent || parent.type !== receiverProperty.accessType) return false;
     const property =
-      parent.childForFieldName("name") ?? parent.namedChildren.find((child) => child.type === "name") ?? null;
+      parent.childForFieldName(receiverProperty.nameField) ??
+      parent.namedChildren.find((child) => child.type === receiverProperty.fallbackNameType) ??
+      null;
     if (!property || property.startIndex !== nameNode.startIndex || property.endIndex !== nameNode.endIndex) {
       return false;
     }
-    const object = parent.childForFieldName("object") ?? parent.namedChildren[0] ?? null;
+    const object = parent.childForFieldName(receiverProperty.receiverField) ?? parent.namedChildren[0] ?? null;
     if (!object || object.startIndex === property.startIndex) return false;
-    return sliceText(object, source) === "$this";
-  };
-
-  const promotedVariablesInClass = (classNode: SyntaxNodeLike): SyntaxNodeLike[] => {
-    const variables: SyntaxNodeLike[] = [];
-    const visit = (current: SyntaxNodeLike): void => {
-      if (
-        current !== classNode &&
-        (current.type === "class_declaration" ||
-          current.type === "trait_declaration" ||
-          current.type === "enum_declaration" ||
-          current.type === "function_definition")
-      ) {
-        return;
-      }
-      if (current.type === "method_declaration") {
-        const name = current.childForFieldName("name");
-        if (!name || sliceText(name, source) !== "__construct") return;
-        const params = current.childForFieldName("parameters");
-        for (const child of params?.namedChildren ?? []) {
-          const variable = phpConstructorPromotedVariable(child, source);
-          if (variable) variables.push(variable);
-        }
-        return;
-      }
-      for (const child of current.namedChildren) visit(child);
-    };
-    visit(classNode);
-    return variables;
+    return sliceText(object, source) === implicitReceiverName;
   };
 
   /** The default-value expression of a pattern node: a read of an enclosing name, never a name the pattern binds. */
@@ -726,7 +716,7 @@ export function buildScopeIndexFromSource(
     // Parameter type and default-value fields are reads, not additional bound names.
     if (row.destructuringTypeFieldTypes?.has(pattern.type)) {
       const nameNode = pattern.childForFieldName("name");
-      if (support.id === "csharp" && nameNode) {
+      if (nameNode && bindingRules?.nameOnlyPatternTypes?.has(pattern.type)) {
         addPatternDecls(nameNode, kind, addBindingToScope);
         // C# defaults have no value field: every named child other than the name is a read.
         const functionScope = kind === "param" ? stack.pop() : undefined;
@@ -1024,8 +1014,8 @@ export function buildScopeIndexFromSource(
 
   const canonicalUseName = (name: string, node: SyntaxNodeLike): string => {
     const normalized = scopeIdentifierKey(row, name, node, normalizeIdentifier);
-    if (support.id === "php" && isPhpThisPropertyName(node)) return `$${normalized}`;
-    return support.id === "c" && cTagRole(node) ? cScopeName(normalized, "tag") : normalized;
+    if (receiverProperty && isImplicitReceiverPropertyName(node)) return `${variablePrefix}${normalized}`;
+    return bindingRules?.usesTagNamespace && cTagRole(node) ? cScopeName(normalized, "tag") : normalized;
   };
 
   const scopeOwnsBinding = (scope: Scope, canonical: string, binding: Binding): boolean => {
@@ -1108,7 +1098,7 @@ export function buildScopeIndexFromSource(
     start: Scope | undefined,
     useNode: SyntaxNodeLike,
     canonical: string,
-    phpThis: boolean,
+    receiverPropertyUse: boolean,
     crossedGateAtStart = false,
   ): Binding | undefined => {
     const useStart = useNode.startIndex;
@@ -1128,7 +1118,7 @@ export function buildScopeIndexFromSource(
         scope = scope.parent;
         continue;
       }
-      if (!(phpThis && scope.kind === "function")) {
+      if (!(receiverPropertyUse && scope.kind === "function")) {
         let binding = scope.map.get(canonical);
         const atModuleRuntime = scope.kind === "module" && moduleBindingAtFunctionRuntime(useNode);
         while (
@@ -1155,7 +1145,7 @@ export function buildScopeIndexFromSource(
       return;
     }
     const range = toRange(useNode);
-    if (support.id === "cpp" && binding.kind === "function") {
+    if (bindingRules?.functionRedeclarations === "overload-group" && binding.kind === "function") {
       cppFunctionOccurrences.push({ binding, node: useNode, range });
     } else {
       binding.occurrences.push(range);
@@ -1187,9 +1177,9 @@ export function buildScopeIndexFromSource(
       const id = queued[index]!;
       const useNode = nodeById(id);
       if (!useNode) continue;
-      const phpThis = support.id === "php" && isPhpThisPropertyName(useNode);
+      const receiverPropertyUse = !!receiverProperty && isImplicitReceiverPropertyName(useNode);
       const canonical = canonicalUseName(sliceText(useNode, source), useNode);
-      const binding = lookupCovering(scope, useNode, canonical, phpThis, gateCrossedUses.has(id));
+      const binding = lookupCovering(scope, useNode, canonical, receiverPropertyUse, gateCrossedUses.has(id));
       if (!binding) {
         if (laterLocalBlocksOuterUse(row, scope, canonical, useNode.startIndex, normalizeIdentifier, useNode)) continue;
         if (receiver) {
@@ -1248,7 +1238,7 @@ export function buildScopeIndexFromSource(
         // and skip only that node below, which keeps one binding per function without hiding
         // `function_declarator > parameter_list` from parameter registration.
         preRegisteredNameSpans.add(nameSpanKey(name));
-        const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(name, node) : null;
+        const qualifiedName = bindingRules?.qualifiedFunctionNames ? qualifiedCppIdentifierForName(name, node) : null;
         if (qualifiedName) {
           const qualifiedKey = cppQualifiedNameSegments(qualifiedName, source).join("::");
           const ownerKey = qualifiedKey.slice(0, qualifiedKey.lastIndexOf("::"));
@@ -1260,7 +1250,7 @@ export function buildScopeIndexFromSource(
           }
         } else if (row.hoistedFunctionTypes?.has(nodeType)) {
           addHoistedDecl(name, "function");
-        } else if (support.id === "cpp" && parentType === "template_declaration") {
+        } else if (parentType && bindingRules?.functionOutsideTypeScopeParents?.has(parentType)) {
           addDeclSkippingTypeScope(name, "function");
         } else {
           addDecl(name, "function");
@@ -1270,8 +1260,18 @@ export function buildScopeIndexFromSource(
     // A method that a call generates (Ruby `attr_reader :name`) binds the way a `def` of that name does.
     if (generatedMembers) for (const member of generatedMembers(node)) addDecl(member.node, "function", member);
     if (row.classNameTypes?.has(nodeType)) {
-      const isExtension = support.id === "swift" && isSwiftExtensionContainer(node, source);
-      if (!isExtension) {
+      const exclusion = bindingRules?.classNameExclusion;
+      let nameIsExcluded = false;
+      if (exclusion) {
+        const kind = node.childForFieldName(exclusion.field);
+        let keyword = kind ? sliceText(kind, source).trim() : "";
+        if (!keyword) {
+          const first = node.child(0);
+          keyword = first ? sliceText(first, source).trim() : "";
+        }
+        nameIsExcluded = keyword === exclusion.keyword;
+      }
+      if (!nameIsExcluded) {
         const name = node.childForFieldName("name");
         if (name) addDecl(name, "class");
       }
@@ -1302,7 +1302,9 @@ export function buildScopeIndexFromSource(
     let pushedScopeCount = 0;
     const namespacePathStart = cppNamespacePath.length;
     const cppNamespaceName =
-      support.id === "cpp" && nodeType === "namespace_definition" ? node.childForFieldName("name") : null;
+      bindingRules?.qualifiedFunctionNames && nodeType === "namespace_definition"
+        ? node.childForFieldName("name")
+        : null;
     const cppNamespaceIsInline = !!cppNamespaceName && /^\s*inline\s+namespace\b/u.test(sliceText(node, source));
     const createsCppNamespaceScope = !!cppNamespaceName && !cppNamespaceIsInline;
     const createsMemberScope = !!row.memberScopeTypes?.has(nodeType);
@@ -1382,9 +1384,7 @@ export function buildScopeIndexFromSource(
       pushedScopeCount = 1;
     } else if (
       opensTypeScope(node, nodeType) ||
-      (support.id === "cpp" &&
-        nodeType === "template_parameter_list" &&
-        parentType === "template_template_parameter_declaration")
+      (!!parentType && bindingRules?.nestedTypeScopeParents?.[nodeType] === parentType)
     ) {
       // A generic type's parameters belong to its own declaration, not a sibling declaration.
       // Fields retain their existing scope through `addDeclSkippingTypeScope` below.
@@ -1452,7 +1452,7 @@ export function buildScopeIndexFromSource(
     }
 
     let declarationName = isIdentifierNode && support.isDeclarationName(node);
-    if (declarationName && support.id === "cpp" && isCppTemplateArgumentName(node)) declarationName = false;
+    if (declarationName && bindingRules?.declarationNameIsUse?.(node)) declarationName = false;
     if (declarationName && row.shortVariableDeclarationTypes) {
       for (let current = node.parent; current; current = current.parent) {
         if (row.shortVariableDeclarationTypes.has(current.type)) {
@@ -1475,7 +1475,7 @@ export function buildScopeIndexFromSource(
 
     const nestedIdentifier = parentType !== undefined && idSet.has(parentType) && row.childSkipNameTypes?.has(nodeType);
     if (isIdentifierNode && !declarationName && !nestedIdentifier) {
-      const qualifiedName = support.id === "cpp" ? qualifiedCppIdentifierForName(node) : null;
+      const qualifiedName = bindingRules?.qualifiedFunctionNames ? qualifiedCppIdentifierForName(node) : null;
       if (qualifiedName) {
         const key = cppQualifiedNameSegments(qualifiedName, source).join("::");
         const occurrences = cppQualifiedMemberOccurrences.get(key) ?? [];
@@ -1487,17 +1487,17 @@ export function buildScopeIndexFromSource(
         const memberProperty =
           parent &&
           (row.nonLexicalMemberPropertyTypes?.has(parent.type) ||
-            (support.id === "cpp" && isMemberAccessNode(support, parent)))
+            (bindingRules?.nonLexicalMemberAccess && isMemberAccessNode(support, parent)))
             ? getMemberAccessParts(support, parent).property
             : null;
         const isMemberProperty =
           !!memberProperty && memberProperty.startIndex <= node.startIndex && memberProperty.endIndex >= node.endIndex;
         // The suffix of a dotted extension owner is a member of its prefix; its spelling proves no binding.
-        const isQualifiedSuffix = support.id === "swift" && isSwiftQualifiedExtensionSuffix(node);
+        const isQualifiedSuffix = bindingRules?.nonLexicalUse?.(node) ?? false;
         if (!isMemberProperty && !isQualifiedSuffix) {
-          const phpThis = support.id === "php" && isPhpThisPropertyName(node);
+          const receiverPropertyUse = !!receiverProperty && isImplicitReceiverPropertyName(node);
           const name = sliceText(node, source);
-          const binding = phpThis ? lookupOutsideFunctions(name) : lookup(name, node);
+          const binding = receiverPropertyUse ? lookupOutsideFunctions(name) : lookup(name, node);
           const canonical = canonicalUseName(name, node);
           const deferred = deferToScope(canonical, binding, node);
           const useId = node.id;
@@ -1507,9 +1507,9 @@ export function buildScopeIndexFromSource(
       }
     }
 
-    if (support.id === "php" && nodeType === "class_declaration") {
+    if (promotedBindings?.containerTypes.has(nodeType)) {
       const target = stack[stack.length - 1] ?? rootScope;
-      for (const variable of promotedVariablesInClass(node)) addBinding(target, variable, "local");
+      for (const variable of promotedBindings.collect(node, source)) addBinding(target, variable, "local");
     }
 
     const params = pushed ? node.childForFieldName("parameters") : null;

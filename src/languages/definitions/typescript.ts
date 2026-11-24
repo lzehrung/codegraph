@@ -8,6 +8,7 @@ import {
   ECMASCRIPT_DECLARATION_NAME_PARENTS,
   ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES,
   ecmaReferenceSpelling,
   isEcmaScriptTypeOnlyStatement,
 } from "./js-family.js";
@@ -170,6 +171,8 @@ const DECLARATION_NAME_PARENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 const BASE_HELPERS = {
+  capturesDocstrings: true,
+  referenceBlockPriorities: ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES,
   nodeTypes: {
     identifier: ["identifier", "type_identifier"],
     propertyIdentifier: ["property_identifier", "private_property_identifier"],

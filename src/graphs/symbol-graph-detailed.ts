@@ -27,11 +27,7 @@ import {
   typescriptOverloadImplementationAcceptsCount,
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import {
-  isExportedDeclaration,
-  isGoExportedMemberName,
-  languageHasDeclarationVisibility,
-} from "../indexer/declaration-visibility.js";
+import { isExportedDeclaration, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { inheritsMemberOverloads, kotlinPropertyInvocationArity } from "../indexer/member-selection.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
@@ -289,10 +285,17 @@ export async function buildSymbolGraphDetailed(
     added.add(key);
     return maybePushEdge(fromId, toId, label, site);
   };
+  // A target's language can change along a namespace path; select its pattern once per target file.
+  let exportPatternsByFile: Map<string, RegExp | null> | undefined;
 
   const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null => {
-    const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
-    if (!isGoExportedMemberName(languageId, exportedName)) return null;
+    let memberNamePattern = exportPatternsByFile?.get(file);
+    if (memberNamePattern === undefined) {
+      memberNamePattern =
+        supportForFileWithoutHeaderSample(file, index.languageExtensions)?.exportedNamePattern ?? null;
+      (exportPatternsByFile ??= new Map()).set(file, memberNamePattern);
+    }
+    if (memberNamePattern && !memberNamePattern.test(exportedName)) return null;
     return resolveExport(index, file, exportedName);
   };
 
@@ -325,7 +328,8 @@ export async function buildSymbolGraphDetailed(
     }
 
     if (targetDef) return targetDef;
-    const languageId = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions)?.id;
+    const memberSupport = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions);
+    const languageId = memberSupport?.id;
     if (
       languageId === "c" ||
       languageId === "cpp" ||
@@ -336,7 +340,8 @@ export async function buildSymbolGraphDetailed(
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
     const lastName = names[0];
-    if (languageId === "go" && (!lastName || !isGoExportedMemberName(languageId, lastName))) return null;
+    const memberNamePattern = memberSupport?.exportedNamePattern;
+    if (languageId === "go" && (!lastName || (memberNamePattern && !memberNamePattern.test(lastName)))) return null;
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
   };
 
@@ -447,6 +452,7 @@ export async function buildSymbolGraphDetailed(
       }
       const { sup, source: src, tree } = parsed;
       if (!sup.supportsCrossModuleSymbols) continue;
+      const memberNamePattern = sup.exportedNamePattern;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
@@ -688,6 +694,7 @@ export async function buildSymbolGraphDetailed(
       const edgePassContext = {
         index,
         sup,
+        memberNamePattern,
         source: src,
         tree,
         moduleEntry,
@@ -740,6 +747,7 @@ export async function buildSymbolGraphDetailed(
             source: src,
             tree,
             sup,
+            memberNamePattern: memberNamePattern ?? null,
             scopeIndex,
             resolveJvmTypeName,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {

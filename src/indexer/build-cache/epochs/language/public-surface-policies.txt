@@ -1,0 +1,1 @@
+Move per-language declaration names, normalization, and import rechecks into index policies.

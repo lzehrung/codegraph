@@ -20,8 +20,8 @@ import {
   deletedDeclarationNameChanges,
   propagateReexportSurfaceChanges,
   publicSurfaceKind,
-  type DeclarationNameChanges,
 } from "../src/indexer/public-surface.js";
+import type { DeclarationNameChanges } from "../src/indexer/public-surface-types.js";
 import * as publicSurface from "../src/indexer/public-surface.js";
 import { createTempRootRegistry } from "./helpers/filesystem.js";
 

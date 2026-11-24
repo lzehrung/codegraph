@@ -6,7 +6,7 @@ import {
 } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import type { SymbolDef } from "./types.js";
+import type { CallableIdentityArgs, CallableIdentityPolicy } from "./callable-identity-policy-types.js";
 import {
   cppCallableHasInternalLinkage,
   cppCallableIsDefinition,
@@ -14,15 +14,6 @@ import {
   cppCallableSignatureForNode,
 } from "./cpp-callables.js";
 import { typescriptCallableContainerKeyForNode, typescriptCallableRole } from "./ts-callables.js";
-import { swiftCallableParameters } from "../util/swift-tree.js";
-
-/** Facts a language's callable declaration carries beside its identity key: Swift external labels and defaults. */
-const CALLABLE_FACT_EXTRACTORS: Readonly<Record<string, (declaration: SyntaxNodeLike) => Partial<CallableIdentity>>> = {
-  swift: (declaration) => {
-    const parameters = swiftCallableParameters(declaration);
-    return parameters ? { swiftParameters: parameters } : {};
-  },
-};
 
 function callableDeclaration(node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined {
   for (let current = node; current; current = current.parent ?? undefined) {
@@ -40,14 +31,11 @@ function callableDeclaration(node: SyntaxNodeLike | undefined): SyntaxNodeLike |
 }
 
 /** Only syntax and the declaring file are known here; imports and using-directives remain query-time facts. */
-export function callableIdentityForDeclaration(args: {
-  file: string;
-  name: string;
-  range: Range;
-  languageId: string;
-  source: string;
-  node?: SyntaxNodeLike;
-}): CallableIdentity {
+export function callableIdentityForDeclaration(
+  args: CallableIdentityArgs,
+  keyShape: CallableIdentityPolicy["keyShape"],
+  declarationParameters: CallableIdentityPolicy["declarationParameters"],
+): CallableIdentity {
   const { file, name, range, languageId, source, node } = args;
   const declaration = callableDeclaration(node);
   const facts = declaration ? getCallableDeclarationFacts({ languageId, source, declaration }) : null;
@@ -59,11 +47,11 @@ export function callableIdentityForDeclaration(args: {
     arity,
     ...(facts?.unboundArity ? { unboundArity: facts.unboundArity } : {}),
   };
-  if (languageId === "c" || languageId === "cpp") {
+  if (keyShape === "file-name" || keyShape === "qualified-signature") {
     const signature = node ? cppCallableSignatureForNode(node, arity) : null;
-    const owner = languageId === "cpp" && node ? cppCallableOwnerPath(node) : "";
+    const owner = keyShape === "qualified-signature" && node ? cppCallableOwnerPath(node) : "";
     let key = uniqueKey;
-    if (languageId === "c") key = `${file}\0${name}`;
+    if (keyShape === "file-name") key = `${file}\0${name}`;
     else if (signature) {
       const qualifiedSignature = `${owner}\0${name}\0${signature}`;
       key = node && cppCallableHasInternalLinkage(node) ? `${file}\0${qualifiedSignature}` : qualifiedSignature;
@@ -76,12 +64,14 @@ export function callableIdentityForDeclaration(args: {
       definition: !!node && cppCallableIsDefinition(node),
     };
   }
-  if (languageId === "ts" || languageId === "tsx") {
+  if (keyShape === "file-owner-name") {
     const owner = node ? typescriptCallableContainerKeyForNode(node) : "module";
     return { ...base, owner, key: node ? `${file}\0${owner}\0${name}` : uniqueKey, role: typescriptCallableRole(node) };
   }
-  const languageFacts = CALLABLE_FACT_EXTRACTORS[languageId];
-  if (languageFacts && declaration) return { ...base, owner: "", key: uniqueKey, ...languageFacts(declaration) };
+  if (declaration && declarationParameters) {
+    const parameters = declarationParameters(declaration);
+    if (parameters) return { ...base, owner: "", key: uniqueKey, swiftParameters: parameters };
+  }
   return { ...base, owner: "", key: uniqueKey };
 }
 
@@ -102,25 +92,6 @@ export function callableIdentityForGeneratedMember(args: {
     owner: "",
     key: `${file}\0${name}\0${range.start.index ?? -1}\0${range.end.index ?? -1}`,
   };
-}
-
-/**
- * A C++ function first declared `static` keeps internal linkage when a later declaration in the
- * same file omits `static` (`static int run(); int run() {}`). One declaration node cannot see
- * that, so give every same-signature declaration in the file the static one's file-scoped key.
- */
-export function propagateCppInternalLinkage(file: string, locals: readonly SymbolDef[]): void {
-  const prefix = file + "\0";
-  const internal = new Set<string>();
-  for (const local of locals) {
-    const callable = local.callable;
-    if (callable?.signature && callable.key.startsWith(prefix)) internal.add(callable.key.slice(prefix.length));
-  }
-  if (!internal.size) return;
-  for (const local of locals) {
-    const callable = local.callable;
-    if (callable?.signature && internal.has(callable.key)) local.callable = { ...callable, key: prefix + callable.key };
-  }
 }
 
 /** Rebase file-scoped keys; external C++ signature keys have no file prefix. */

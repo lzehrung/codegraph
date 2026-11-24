@@ -20,6 +20,7 @@ const PHP_IMPORT_QUERY = `
 export const PHP_DEF: LanguageDefinition = {
   id: "php",
   extensions: [".php", ".phtml", ".php4", ".php8"],
+  bloomAlternateKey: foldPhpIdentifierCase,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

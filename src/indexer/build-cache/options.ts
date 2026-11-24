@@ -10,6 +10,8 @@ import { type ProjectFileDiscoveryOptions } from "../../util/project-files.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import type { BuildOptions } from "../types.js";
 import { compareStrings } from "../../util/strings.js";
+import { callableIdentityPolicyFor } from "../callable-identity-policies/index.js";
+import type { CallableIdentityPolicy } from "../callable-identity-policy-types.js";
 import { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "./epochs.generated.js";
 export { CORE_ALGORITHM_EPOCH, LANGUAGE_BEHAVIOR_EPOCH } from "./epochs.generated.js";
 export { normalizeLanguageExtensions } from "../../languages.js";
@@ -47,6 +49,9 @@ type LanguageDefinitionFingerprintDescriptor = {
     usesQueryDrivenLocals: boolean;
     membersAreImplicitlyInScope: boolean;
     supportsExportFromReferences: boolean;
+    callableKeyShape?: CallableIdentityPolicy["keyShape"];
+    exportedNamePattern?: string;
+    capturesDocstrings: boolean;
     bloomUnprobeableIdentifiers: boolean;
     renameMatchesNormalizedIdentifiers: boolean;
     exportScopeBlockers: string[];
@@ -82,6 +87,9 @@ function languageDefinitionFingerprintDescriptor(
       usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
       membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? false,
       supportsExportFromReferences: definition.supportsExportFromReferences ?? false,
+      callableKeyShape: callableIdentityPolicyFor(definition.id).keyShape,
+      ...(definition.exportedNamePattern ? { exportedNamePattern: definition.exportedNamePattern.toString() } : {}),
+      capturesDocstrings: definition.capturesDocstrings ?? false,
       bloomUnprobeableIdentifiers: definition.bloomUnprobeableIdentifiers ?? false,
       renameMatchesNormalizedIdentifiers: definition.renameMatchesNormalizedIdentifiers ?? false,
       exportScopeBlockers: [...(definition.exportScopeBlockers ?? [])].sort(),
@@ -107,9 +115,10 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   structure: true,
   graph: true,
   identifierValidation: true, // Query-only rename validation.
+  exportedNamePattern: true, // Included in the declarative fingerprint for detailed graph visibility.
   bloomAlternateKey: true, // Function-valued Bloom behavior is covered by LANGUAGE_BEHAVIOR_EPOCH.
   bloomSourceTokens: true, // Function-valued Bloom behavior is covered by LANGUAGE_BEHAVIOR_EPOCH.
-  capturesDocstrings: true, // Dormant; fingerprint this data before indexing consumes it.
+  capturesDocstrings: true, // Included in the declarative fingerprint.
   referenceBlockPriorities: true, // Query-only reference context.
   impactDefinitionTypes: true, // Query-only impact classification.
   usesQueryDrivenLocals: true,

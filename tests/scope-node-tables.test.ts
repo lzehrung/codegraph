@@ -4,6 +4,7 @@ import {
   SCOPE_NODE_ROWS,
   isTypeParameterBinding,
   scopeNodesFor,
+  typeOnlyName,
   type ScopeNodeRow,
 } from "../src/indexer/scope-nodes.js";
 import { getNativeSingleQueryExecution, getNativeSyntaxTreeExecution } from "../src/native/execution.js";
@@ -131,6 +132,7 @@ const SCOPE_NODE_LIST_FIELDS = [
   "returnTypeParameterOwnerTypes",
   "shortVariableDeclarationTypes",
   "typeNameTypes",
+  "typeOnlyParentTypes",
   "typeOnlyUseTypes",
   "typeParameterTypes",
   "templateValueParameterTypes",
@@ -146,6 +148,7 @@ const SCOPE_NODE_LIST_FIELDS = [
 /** Row fields that hold behavior or a call/declaration shape rather than a bare node-type list. */
 const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "acceptLocalCapture",
+  "bindingRules",
   "declarationOutsideScope",
   "referenceNeedsVerification",
   "referenceVerificationRequiresParseError",
@@ -168,6 +171,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "declarationPatternName",
   "patternBindingVisibleAt",
   "bindingCoversBeforeDeclaration",
+  "typeOnlyName",
   "typeParameterListField",
   "moduleBindingsAtFunctionRuntime",
   "laterLocalBlocksOuterKinds",
@@ -182,6 +186,36 @@ function declaredNodeTypeLists(row: ScopeNodeRow): Array<{ field: string; types:
   for (const field of SCOPE_NODE_LIST_FIELDS) {
     const types = row[field];
     if (types) lists.push({ field, types });
+  }
+  const rules = row.bindingRules;
+  if (rules?.nameOnlyPatternTypes) {
+    lists.push({ field: "bindingRules.nameOnlyPatternTypes", types: rules.nameOnlyPatternTypes });
+  }
+  if (rules?.functionOutsideTypeScopeParents) {
+    lists.push({ field: "bindingRules.functionOutsideTypeScopeParents", types: rules.functionOutsideTypeScopeParents });
+  }
+  if (rules?.promotedBindings) {
+    lists.push({ field: "bindingRules.promotedBindings.containerTypes", types: rules.promotedBindings.containerTypes });
+  }
+  if (rules?.nestedTypeScopeParents) {
+    lists.push({
+      field: "bindingRules.nestedTypeScopeParents.types",
+      types: new Set(Object.keys(rules.nestedTypeScopeParents)),
+    });
+    lists.push({
+      field: "bindingRules.nestedTypeScopeParents.parents",
+      types: new Set(Object.values(rules.nestedTypeScopeParents)),
+    });
+  }
+  if (rules?.receiverProperty) {
+    lists.push({
+      field: "bindingRules.receiverProperty.accessType",
+      types: new Set([rules.receiverProperty.accessType]),
+    });
+    lists.push({
+      field: "bindingRules.receiverProperty.fallbackNameType",
+      types: new Set([rules.receiverProperty.fallbackNameType]),
+    });
   }
   if (row.requireCall) lists.push({ field: "requireCall.callTypes", types: row.requireCall.callTypes });
   if (row.namelessVariableDeclaration) {
@@ -481,6 +515,26 @@ describe("scope node tables", () => {
     const bindings = scope.allScopes.flatMap((candidate) => candidate.map.get("T") ?? []);
     expect(bindings).toHaveLength(2);
     expect(bindings.map((binding) => binding.kind)).toEqual(["type", "type"]);
+  });
+
+  it("distinguishes Kotlin type uses from the same spelling in declarations and expressions", () => {
+    const root = parseProbeSource("kotlin", "class Thing\nfun use(value: Thing) = Thing()\n");
+    const names = collectNodes(root, "identifier").filter((node) => node.text === "Thing");
+    const row = scopeNodesFor("kotlin");
+    expect(names.map((node) => typeOnlyName(row, node))).toEqual([false, true, false]);
+
+    let parentReads = 0;
+    const tracked = new Proxy(names[1]!, {
+      get(target, property, receiver) {
+        if (property === "parent") parentReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(typeOnlyName(row, tracked)).toBe(true);
+    expect(parentReads).toBe(1);
+    parentReads = 0;
+    expect(typeOnlyName(scopeNodesFor("go"), tracked)).toBe(false);
+    expect(parentReads).toBe(0);
   });
 
   it("flags a type parameter only where the language row names its type-only syntax", () => {
