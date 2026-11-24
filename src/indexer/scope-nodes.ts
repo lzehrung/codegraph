@@ -32,12 +32,14 @@ import { javaPatternBindingVisibleAt, javaPatternVariableName } from "../util/ja
 import { csharpAttributeParameterCoversUse } from "./name-lookup-policies/csharp-attribute-parameters.js";
 import { blocksCsharpJavaSelectorBinding } from "./name-lookup-policies/csharp-java-selectors.js";
 import { SymbolKind, type ParseErrorRange } from "./types.js";
-import type { Binding, Scope, ScopeIndex } from "./scope-types.js";
+import type { Binding, Scope, ScopeBindingRules, ScopeIndex } from "./scope-types.js";
 import { isRecoveredTypeParameterName } from "./type-parameters.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
   parameterParents?: ReadonlySet<string>;
+  /** Same-scope binding behavior; absent uses the generic binding rules. */
+  bindingRules?: ScopeBindingRules;
   /** Reject a language-specific nonbinding name in native captures and destructuring patterns. */
   acceptLocalCapture?: (name: SyntaxNodeLike) => boolean;
   /** A declaration in this scope's outer-evaluated expression belongs in the enclosing scope instead. */
@@ -114,6 +116,10 @@ export type ScopeNodeRow = {
    * any other use skips type-parameter bindings, so a value `R` still reaches `import * as R` beside a generic `<R>`.
    */
   typeOnlyUseTypes?: ReadonlySet<string>;
+  /** Parent types whose child names occur only in a type position. */
+  typeOnlyParentTypes?: ReadonlySet<string>;
+  /** Special type-position predicate; absent falls back to the type-only node tables. */
+  typeOnlyName?: (node: SyntaxNodeLike) => boolean;
   /**
    * Pattern node types mapped to the field that holds a default-value expression. The default is a read of an
    * enclosing name, never a name the pattern binds (ECMAScript `a = K` in a parameter or destructuring pattern).

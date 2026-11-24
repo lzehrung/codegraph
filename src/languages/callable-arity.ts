@@ -137,6 +137,15 @@ const CALL_NODE_TYPES: Record<string, true> = {
   scoped_call_expression: true,
 };
 
+/** Parameter shapes used when collecting detailed-graph declaration arity. */
+export type GraphParameterShapes = Readonly<{
+  directParameterChildType?: string;
+  ignoredParameterTypes?: ReadonlySet<string>;
+  defaultValueSiblingTypes?: ReadonlySet<string>;
+  variadicMarkerTypes?: ReadonlySet<string>;
+  soleVoidMeansEmpty?: boolean;
+}>;
+
 /**
  * Everything the arity extractors know about one language's parameter and argument shapes. A row
  * omits a capability by leaving its field null/empty; the generic rule then applies. The node-type
@@ -144,6 +153,10 @@ const CALL_NODE_TYPES: Record<string, true> = {
  * tree-sitter-swift parameter/default_value siblings, tree-sitter-kotlin-ng `parameter_modifiers`).
  */
 export interface CallableArityLanguageProfile {
+  /** Binding used by resolved member calls; absent means bound. */
+  readonly memberLookupBinding?: CallableBinding;
+  /** Detailed-graph parameter shapes; absent keeps generic declaration counting. */
+  readonly graphDeclarationParameters?: GraphParameterShapes;
   /** Receiver-parameter recognition; see {@link CallableBinding} for how binding maps to slots. */
   readonly receiver: {
     /** Parameter node types that are the receiver (Java `receiver_parameter`, Rust `self_parameter`). */

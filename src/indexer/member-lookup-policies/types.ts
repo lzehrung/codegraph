@@ -1,8 +1,13 @@
 /** Types of the per-language member lookup policies in this directory. */
+import type { ReceiverBinding, ReceiverMemberScope } from "../../graphs/symbol-graph-detailed/receiver-types.js";
+import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import type { FileId, Range } from "../../types.js";
 import type { MemberScope } from "../member-selection.js";
+import type { JvmTypeNameResolver } from "../name-resolution-types.js";
 import type { ParsedFileContext } from "../parse-context.js";
-import type { ModuleIndex, ProjectIndex, Reference, SymbolDef } from "../types.js";
+import type { ScopeIndex } from "../scope-types.js";
+import type { GoToResult, ModuleIndex, ProjectIndex, Reference, ResolvedExport, SymbolDef } from "../types.js";
 
 /** The detailed-graph edge a resolved member call records. */
 export type MemberCallEdge = "calls" | "instantiates";
@@ -135,7 +140,114 @@ export type MemberAccessRules = {
   unnameableMember(member: SymbolDef, isStatic: () => boolean): string | undefined;
 };
 
+/** Parsed class facts cached by the existing receiver-resolution path. */
+export type ReceiverClassRef = {
+  def: SymbolDef;
+  container: SyntaxNodeLike;
+  context: ParsedFileContext;
+  module: ModuleIndex;
+};
+
+export type ReceiverResolutionCache = {
+  classRefs: Map<string, Promise<ReceiverClassRef | null>>;
+  members: Map<string, Promise<SymbolDef | undefined>>;
+};
+
+/** Arguments already available to positioned member access resolution. */
+export type ReceiverAccessContext = {
+  index: ProjectIndex;
+  mod: ModuleIndex;
+  node: SyntaxNodeLike;
+  source: string;
+  tree: SyntaxTreeLike;
+  sup: LanguageSupport;
+  scopeIndex?: ScopeIndex;
+  resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
+  resolveJvmTypeName: JvmTypeNameResolver;
+  loadParsedFile?: (file: string) => Promise<ParsedFileContext | null>;
+  pythonReceiverResolutionCache?: ReceiverResolutionCache;
+};
+
+/** Receiver facts and dependencies already available to member navigation. */
+export type ReceiverResolutionContext = {
+  index: ProjectIndex;
+  object: SyntaxNodeLike;
+  source: string;
+  support: LanguageSupport;
+  resolveExpression: (expression: SyntaxNodeLike) => Promise<ResolvedExport | null>;
+  module: ModuleIndex;
+  getScopeIndex: () => ScopeIndex;
+  proof?: ReceiverBinding | null;
+  resolvedDirect?: ResolvedExport | null;
+  hiddenReceiverType?: (expression: SyntaxNodeLike) => Promise<SymbolDef | null>;
+  tree?: SyntaxTreeLike;
+};
+
+export type ResolvedReceiver = {
+  def: SymbolDef;
+  memberScope: ReceiverMemberScope;
+  runtimeTypeOnly?: true;
+};
+
+/** Language-specific receiver paths; undefined continues the generic lookup. */
+export type ReceiverHooks = Readonly<{
+  resolveAccess?: (context: ReceiverAccessContext) => Promise<GoToResult | null | undefined>;
+  resolveReceiver?: (context: ReceiverResolutionContext) => Promise<ResolvedReceiver | null | undefined>;
+}>;
+
+/** Language-specific shared-owner, qualified-owner, and base lookup. */
+export type OwnerHooks = Readonly<{
+  parts?: (args: {
+    index: ProjectIndex;
+    ownerFile: string;
+    ownerContainer: SyntaxNodeLike;
+    ownerSource: string;
+    languageId: string;
+  }) => Promise<readonly MemberOwnerRef[] | undefined>;
+  qualified?: (args: {
+    index: ProjectIndex;
+    mod: ModuleIndex;
+    baseName: string;
+    path: readonly string[];
+    normalize: (name: string) => string;
+    sup: LanguageSupport;
+    use?: { node: SyntaxNodeLike; source: string; tree: SyntaxTreeLike; scopeIndex?: ScopeIndex };
+  }) => Promise<SymbolDef | null | undefined>;
+  bases?: (
+    index: ProjectIndex,
+    owner: MemberOwnerRef,
+    deps: MemberLookupDeps,
+  ) => Promise<readonly MemberOwnerRef[] | undefined>;
+}>;
+
+/** Existing graph-pass state used by language-specific graph additions. */
+export type GraphHookContext = {
+  index: ProjectIndex;
+  sup: LanguageSupport;
+  source: string;
+  tree: SyntaxTreeLike;
+  moduleEntry: ModuleIndex;
+  scopeIndex: ScopeIndex;
+  deps: MemberLookupDeps;
+  recordEdge: (fromId: string, toId: string, label?: string, site?: { file: FileId; range: Range }) => boolean;
+};
+
+/** Language-specific graph facts at declaration, owner, and resolved-call events. */
+export type GraphHooks = Readonly<{
+  declaration?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
+  owner?: (context: GraphHookContext, owner: MemberOwnerRef) => void | Promise<void>;
+  call?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
+}>;
+
 export type MemberLookupPolicy = {
+  /** Member scopes are distinct for this language; absent means false. */
+  separateMemberScopes?: boolean;
+  /** Specialized receiver lookup; absent keeps the generic member path. */
+  receiverResolution?: ReceiverHooks;
+  /** Specialized owner and ancestry lookup; absent keeps generic owner lookup. */
+  ownerResolution?: OwnerHooks;
+  /** Additional graph facts; absent adds none. */
+  graph?: GraphHooks;
   /**
    * The declaration of a type is not one of its members: a member lookup skips the type's own name token. A language
    * sets this where member names fold case, so a method called `deep` would otherwise match `class Deep`.

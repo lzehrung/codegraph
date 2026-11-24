@@ -58,9 +58,36 @@ export type {
   GraphImportRequiredCapture,
 } from "./graph-captures.js";
 
+/** Identifier spelling accepted by rename, including any member-only private prefix. */
+export type IdentifierValidation = Readonly<{
+  pattern: RegExp;
+  privatePrefix?: string;
+  reservedPrivateNames?: ReadonlySet<string>;
+}>;
+
+/** Syntax shapes that impact analysis can classify as definitions. */
+export type ImpactDefinitionShapes = Readonly<{
+  wholeChangedNode?: boolean;
+  names: readonly Readonly<{ nodeType: string; parentType?: string; field?: string }>[];
+  acceptsName?: (node: SyntaxNodeLike, source: string) => boolean;
+}>;
+
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
+
+  /** Rename spelling rules; absent uses the conservative generic identifier pattern. */
+  identifierValidation?: IdentifierValidation;
+  /** An additional Bloom key for a normalized identifier; absent adds no key. */
+  bloomAlternateKey?: (normalized: string) => string;
+  /** Additional Bloom markers derived once from a file's source. */
+  bloomSourceTokens?: (source: string, add: (token: string) => void) => void;
+  /** Whether native captures provide definition docstrings; absent means false. */
+  capturesDocstrings?: boolean;
+  /** Enclosing-block priorities for reference context; absent node types have priority zero. */
+  referenceBlockPriorities?: Readonly<Record<string, 0 | 1 | 2>>;
+  /** Definition forms specific to impact analysis; absent uses generic classification. */
+  impactDefinitionTypes?: ImpactDefinitionShapes;
 
   /**
    * Configuration for semantic chunking.

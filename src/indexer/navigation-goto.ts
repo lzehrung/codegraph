@@ -91,11 +91,10 @@ import {
   supportsStaticMemberScope,
   TRANSPARENT_MEMBER_CONTAINER_TYPES,
   type KotlinSupertypeEntry,
-  type ReceiverBinding,
-  type ReceiverMemberScope,
   unwrapNamedType,
   type PhpObjectCreationKeyword,
 } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import type { ReceiverBinding, ReceiverMemberScope } from "../graphs/symbol-graph-detailed/receiver-types.js";
 import { getCallArgumentCount, memberLookupBinding, type CallableArity } from "../languages/callable-arity.js";
 import {
   csharpNamespaceAt,

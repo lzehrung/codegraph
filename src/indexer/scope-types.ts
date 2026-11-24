@@ -3,6 +3,17 @@ import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
 import type { CallableIdentity } from "../languages/callable-arity.js";
 
+/** Special same-scope binding behavior; absent fields preserve the generic scope walk. */
+export type ScopeBindingRules = Readonly<{
+  functionRedeclarations?: "latest" | "shared-occurrences" | "overload-group" | "signature-group";
+  usesTagNamespace?: boolean;
+  qualifiedFunctionNames?: boolean;
+  variablePrefix?: string;
+  implicitReceiverName?: string;
+  /** Return true when the specialized operation handled the binding, or undefined to continue. */
+  specialBinding?: (scope: Scope, binding: Binding, node: SyntaxNodeLike) => true | undefined;
+}>;
+
 export type BindingKind =
   | "local"
   | "param"
