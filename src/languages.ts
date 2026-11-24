@@ -51,6 +51,7 @@ export type LanguageSupport = {
   capturesDocstrings?: LanguageDefinition["capturesDocstrings"];
   referenceBlockPriorities?: LanguageDefinition["referenceBlockPriorities"];
   impactDefinitionTypes?: LanguageDefinition["impactDefinitionTypes"];
+  referenceRange?: LanguageDefinition["referenceRange"];
   bloomProbeName?: (name: string) => string;
   bloomUnprobeableIdentifiers?: boolean;
   alternateUseNames?: (declared: string) => readonly string[];
@@ -96,6 +97,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     ...(def.useSiteMemberName ? { useSiteMemberName: def.useSiteMemberName } : {}),
     ...(def.isDeclarationSpelling ? { isDeclarationSpelling: def.isDeclarationSpelling } : {}),
     ...(def.referenceSpelling ? { referenceSpelling: def.referenceSpelling } : {}),
+    ...(def.referenceRange ? { referenceRange: def.referenceRange } : {}),
     ...(def.bloomProbeName ? { bloomProbeName: def.bloomProbeName } : {}),
     ...(def.bloomUnprobeableIdentifiers ? { bloomUnprobeableIdentifiers: true } : {}),
     ...(def.alternateUseNames ? { alternateUseNames: def.alternateUseNames } : {}),

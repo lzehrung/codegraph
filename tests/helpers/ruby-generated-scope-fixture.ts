@@ -1278,6 +1278,7 @@ export const RUBY_SCOPE_REFERENCES: ReadonlyArray<
   [
     ["order.rb", 3, "ay"],
     [
+      ["order.rb", 2, "ay"],
       ["order.rb", 3, "ay"],
       ["order.rb", 4, "ay", 0],
       ["order.rb", 4, "ay", 1],

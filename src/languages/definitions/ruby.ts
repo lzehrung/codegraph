@@ -8,6 +8,8 @@ import {
   rubyInvokedMethodName,
   rubyIsSetterDeclaration,
   rubyMethodVisibleAt,
+  rubyReferenceRange,
+  rubyReferenceSpelling,
   rubySelfIsInstanceAt,
   rubyUseSiteMethodName,
 } from "../../util/ruby-tree.js";
@@ -71,7 +73,9 @@ export const RUBY_DEF: LanguageDefinition = {
     `,
   },
   nodeTypes: {
-    identifier: ["identifier", "constant"],
+    identifier: ["identifier", "constant", "simple_symbol"],
+    // Literal strings are reference candidates, never lexical values or graph import-alias uses.
+    propertyIdentifier: ["string_content"],
     memberExpression: "call",
   },
   supportsCrossModuleSymbols: true,
@@ -86,6 +90,8 @@ export const RUBY_DEF: LanguageDefinition = {
   useSiteMemberName: rubyUseSiteMethodName,
   isDeclarationSpelling: rubyIsSetterDeclaration,
   bloomProbeName: rubyBloomProbeName,
+  referenceSpelling: rubyReferenceSpelling,
+  referenceRange: rubyReferenceRange,
   // Query-driven locals capture the declared name inside a `class`, `module`, `method`, or
   // `singleton_method`, so classification must read the parent type the same way the scope
   // walker's structural handling does.

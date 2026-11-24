@@ -23,6 +23,57 @@ export const rubyOmissions: readonly CallFormOmission[] = [
 
 export const rubyCells: MatrixCell[] = [
   {
+    id: "ruby/class-body-singleton-namespace",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": "class Widget\n  def self.calculate; 42; end\n  def calculate; -1; end\n  p calculate\nend\n",
+    },
+    use: { file: "widget.rb", line: 4, token: "calculate" },
+    expected: { file: "widget.rb", line: 2, token: "calculate" },
+    decoy: { file: "widget.rb", line: 3, token: "calculate" },
+    decoyKind: "callable",
+  },
+  {
+    id: "ruby/class-singleton-visibility-symbol",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": "class Widget\n  def self.calculate; 42; end\n  private_class_method :calculate\nend\n",
+      "decoy.rb": "class Decoy\n  def self.calculate; -1; end\nend\n",
+    },
+    use: { file: "widget.rb", line: 3, token: "calculate" },
+    expected: { file: "widget.rb", line: 2, token: "calculate" },
+    decoy: { file: "decoy.rb", line: 2, token: "calculate" },
+    decoyKind: "callable",
+  },
+  {
+    id: "ruby/visibility-method-symbol",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": "class Widget\n  def calculate; 42; end\n  private :calculate\nend\n",
+      "decoy.rb": "class Decoy\n  def calculate; -1; end\nend\n",
+    },
+    use: { file: "widget.rb", line: 3, token: "calculate" },
+    expected: { file: "widget.rb", line: 2, token: "calculate" },
+    decoy: { file: "decoy.rb", line: 2, token: "calculate" },
+    decoyKind: "callable",
+  },
+  {
+    id: "ruby/command-local-operand",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": "class Widget\n  def total; 99; end\n  def work\n    total = 10\n    total -1\n  end\nend\n",
+      "decoy.rb": "class Decoy\n  def total; -1; end\nend\n",
+    },
+    use: { file: "widget.rb", line: 5, token: "total" },
+    expected: { file: "widget.rb", line: 4, token: "total" },
+    decoy: { file: "decoy.rb", line: 2, token: "total" },
+    decoyKind: "callable",
+  },
+  {
     id: "ruby/default-value-call",
     language: "ruby",
     callForm: "bare-call",
@@ -127,12 +178,13 @@ export const rubyCells: MatrixCell[] = [
     edge: { label: "instantiates", fromFile: "use.rb", fromName: "make_widget" },
   },
   {
+    // Module singleton references remain partial; this complete-coverage cell uses a class.
     id: "ruby/qualified-call",
     language: "ruby",
     callForm: "qualified-call",
     files: {
-      "calc.rb": ["module Calc", "  def self.add(a, b)", "    a + b", "  end", "end", ""].join("\n"),
-      "decoy.rb": ["module Decoy", "  def self.add(a, b)", "    -1", "  end", "end", ""].join("\n"),
+      "calc.rb": ["class Calc", "  def self.add(a, b)", "    a + b", "  end", "end", ""].join("\n"),
+      "decoy.rb": ["class Decoy", "  def self.add(a, b)", "    -1", "  end", "end", ""].join("\n"),
       "use.rb": ["require_relative 'calc'", "", "def sum_pair", "  Calc.add(1, 2)", "end", ""].join("\n"),
     },
     use: { file: "use.rb", line: 4, token: "add" },

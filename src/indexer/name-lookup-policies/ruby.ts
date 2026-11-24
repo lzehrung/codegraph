@@ -6,12 +6,20 @@
 import { fileIdentityKey } from "../../util/paths.js";
 import {
   rubyDeclaresLocalVariable,
+  rubyBareCallReaches,
+  rubyIsClassBodyCall,
   rubyIsBlockTypeMethod,
   rubyLambdaParameterShadows,
   rubyMayBuildTypesWithBlocks,
   rubyMethodIsOwnedAt,
+  rubyMethodIsPendingAt,
   rubyMethodVisibleAt,
   rubyNamesLocalVariable,
+  rubyMethodNameLiteral,
+  rubyMethodNameOwner,
+  rubyMethodNameIsStatic,
+  rubyMethodNameIsAliasDestination,
+  rubyMethodNameRefersTo,
   rubyReadsLocalAsOperand,
 } from "../../util/ruby-tree.js";
 import { UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON } from "../ambiguous-resolution.js";
@@ -69,16 +77,25 @@ function unmodeledLocal({ use, closestBinding }: NameLookupState): NameResolutio
  * A method that the type around the use declares itself names it, before a method of a base, a mixin, or an includer
  * that the file declares later: the scope lookup would take the later declaration.
  */
-function ownTypeMethod({ use, closestBinding }: NameLookupState): GoToResult | undefined {
+function ownTypeMethod({ use, closestBinding }: NameLookupState): NameResolution | undefined {
   if (closestBinding?.kind !== "function" || !closestBinding.node) return undefined;
-  if (rubyMethodIsOwnedAt(closestBinding.node, use.node)) return undefined;
+  const pending = rubyMethodIsPendingAt(closestBinding.node, use.node);
+  const classBodyCall = rubyIsClassBodyCall(use.node);
+  const namespaceFits = !classBodyCall || rubyBareCallReaches(closestBinding.node, use.node);
+  const closestIsOwned = rubyMethodIsOwnedAt(closestBinding.node, use.node);
+  if (closestIsOwned && !pending && namespaceFits) return undefined;
   const sup = use.parsed.sup;
   for (let binding = closestBinding.earlierSameScope; binding; binding = binding.earlierSameScope) {
     const declaration = binding.node;
     if (binding.kind !== "function" || !declaration || !rubyMethodIsOwnedAt(declaration, use.node)) continue;
+    if (rubyMethodIsPendingAt(declaration, use.node)) continue;
+    if (classBodyCall && !rubyBareCallReaches(declaration, use.node)) continue;
     if (binding.generatedOwner && !sup.generatedMemberVisibleAt?.(binding.generatedOwner, use.node)) continue;
     const own = definitionForBinding(binding, use.file, use.node, sup, use.parsed.source, use.parsed.tree);
     return own ? okGoToResult(use.index, own, { resolution: "exact", confidence: "high" }) : undefined;
+  }
+  if (classBodyCall && closestIsOwned && (!namespaceFits || pending)) {
+    return { status: "not_found", reason: "No proven Ruby singleton method at this class-body call" };
   }
   return undefined;
 }
@@ -112,7 +129,54 @@ function blockTypeMethod(use: BareNameUse, lookupName: string): GoToResult | und
   return found ? okGoToResult(use.index, found, { resolution: "exact", confidence: "high" }) : undefined;
 }
 
+/** Literal method-naming statements have a method namespace, never the local scope's values. */
+function methodNameReference(use: BareNameUse): NameResolution | undefined {
+  if (!rubyMethodNameLiteral(use.node)) return undefined;
+  const unproven: NameResolution = { status: "not_found", reason: "Unproven Ruby method-name argument" };
+  const naming = rubyMethodNameOwner(use.node);
+  if (!naming) return unproven;
+  if (rubyMethodNameIsAliasDestination(use.node)) return unproven;
+  const sup = use.parsed.sup;
+  const method = naming.childForFieldName("method")?.text;
+  const attributeDeclaration = method === "attr_reader" || method === "attr_writer" || method === "attr_accessor";
+  // A generated attribute declaration names itself, including a writer spelled without its `=`.
+  const own = attributeDeclaration
+    ? use.mod.locals.find(
+        (local) =>
+          local.kind === SymbolKind.Function &&
+          local.range.start.index === use.node.startIndex &&
+          local.range.end.index === use.node.endIndex,
+      )
+    : undefined;
+  if (own) return okGoToResult(use.index, own, { resolution: "exact", confidence: "high" });
+  if (!rubyMethodNameIsStatic(use.node)) {
+    // Preserve lexical alias operands in ordinary blocks whose nominal owner is not modeled.
+    if (naming.type === "alias" && use.node.type === "identifier") return undefined;
+    return unproven;
+  }
+  let spelling = use.name;
+  if (use.node.type === "simple_symbol") spelling = spelling.slice(1);
+  if (method === "attr_writer") spelling += "=";
+  const name = sup.normalizeIdentifier(spelling);
+  const definesMethod = method === "attr_reader" || method === "attr_writer" || method === "define_method";
+  let target: SymbolDef | undefined;
+  for (const local of use.mod.locals) {
+    if (local.kind !== SymbolKind.Function || sup.normalizeIdentifier(local.localName) !== name) continue;
+    const start = local.range.start.index;
+    const end = local.range.end.index;
+    if (start === undefined || end === undefined) continue;
+    if (!definesMethod && start > use.node.startIndex) continue;
+    const declaration = use.parsed.tree.rootNode.descendantForIndex(start, end);
+    if (!rubyMethodNameRefersTo(declaration, use.node)) continue;
+    // Reader/writer pairs share one indexed range; do not invent a single-method reference to that token.
+    const macro = declaration.parent?.parent;
+    if (macro?.type === "call" && macro.childForFieldName("method")?.text === "attr_accessor") return unproven;
+    target = local;
+  }
+  return target ? okGoToResult(use.index, target, { resolution: "exact", confidence: "high" }) : unproven;
+}
 export const rubyLookupPolicy: NameLookupPolicy = {
+  beforeLexical: methodNameReference,
   fromClosestBinding(state) {
     return declarationNamesItself(state) ?? unmodeledLocal(state) ?? ownTypeMethod(state);
   },
@@ -136,7 +200,7 @@ export const rubyLookupPolicy: NameLookupPolicy = {
     if (definition.kind === SymbolKind.Variable) {
       if (!rubyDeclaresLocalVariable(declaration)) return undefined;
       // `c0&mask` is a read of the local `c0` that the parser took for a call, so the local is the answer.
-      return rubyReadsLocalAsOperand(use.node, declaration, use.parsed.source) ? undefined : null;
+      return rubyReadsLocalAsOperand(use.node, declaration) ? undefined : null;
     }
     if (definition.kind === SymbolKind.Function && !rubyMethodVisibleAt(declaration, use.node)) return null;
     return undefined;

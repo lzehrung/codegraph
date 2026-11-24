@@ -1,4 +1,5 @@
 import type { GeneratedMember, SyntaxNodeLike } from "../languages/types.js";
+import type { Range } from "../types.js";
 
 /** What each `attr_*` macro defines for one attribute name. */
 const ATTRIBUTE_MACROS: Readonly<Record<string, { reader: boolean; writer: boolean }>> = {
@@ -11,6 +12,8 @@ const ATTRIBUTE_MACROS: Readonly<Record<string, { reader: boolean; writer: boole
 const ATTRIBUTE_NAME = /^[A-Za-z_\u0080-\u{10FFFF}][A-Za-z0-9_\u0080-\u{10FFFF}]*$/u;
 
 const NO_MEMBERS: readonly GeneratedMember[] = [];
+const generatedMembersByCall = new WeakMap<SyntaxNodeLike, readonly GeneratedMember[]>();
+const generatedDeclarationStartsByCall = new WeakMap<SyntaxNodeLike, ReadonlySet<number>>();
 
 function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike): boolean {
   return !!left && left.type === right.type && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
@@ -45,20 +48,21 @@ const VISIBILITY_CALLS: ReadonlySet<string> = new Set(["private", "protected", "
 /**
  * The class or module body that `call` is a statement of: directly (`attr_reader :name`), or as the argument of a
  * visibility call that is itself a statement (`private attr_reader :name`, `protected(attr_accessor(:name))`). Any
- * other call around it (`memoize attr_reader :name`, a modifier, a block) gives null: the names it defines are unproven.
+ * other call around it (`memoize attr_reader :name`, a modifier, a block) gives null by default: definitions are unproven.
+ * Coverage can allow an unknown argument wrapper: evaluating its arguments cannot rebind the argument's `self`.
  */
-function macroBody(call: SyntaxNodeLike): SyntaxNodeLike | null {
+function macroBody(call: SyntaxNodeLike, allowArgumentWrapper = false): SyntaxNodeLike | null {
   let statement = call;
   const list = call.parent;
   if (list?.type === "argument_list") {
     const wrapper = list.parent;
-    const visibility = wrapper?.childForFieldName("method");
+    if (wrapper?.type !== "call") return null;
+    const visibility = wrapper.childForFieldName("method");
     const isVisibilityCall =
-      wrapper?.type === "call" &&
       !wrapper.childForFieldName("receiver") &&
       visibility?.type === "identifier" &&
       VISIBILITY_CALLS.has(visibility.text);
-    if (!isVisibilityCall) return null;
+    if (!isVisibilityCall && !allowArgumentWrapper) return null;
     statement = wrapper;
   }
   const body = statement.parent;
@@ -83,6 +87,8 @@ export function rubyGeneratedMembers(call: SyntaxNodeLike): readonly GeneratedMe
   const macro = Object.hasOwn(ATTRIBUTE_MACROS, macroName) ? ATTRIBUTE_MACROS[macroName] : undefined;
   const argumentList = call.childForFieldName("arguments");
   if (!macro || !argumentList) return NO_MEMBERS;
+  const cached = generatedMembersByCall.get(call);
+  if (cached) return cached;
   const body = macroBody(call);
   if (!body) return NO_MEMBERS;
   const members: GeneratedMember[] = [];
@@ -94,7 +100,9 @@ export function rubyGeneratedMembers(call: SyntaxNodeLike): readonly GeneratedMe
       members.push({ name: `${name}=`, node: argument, arity: 1 });
     }
   }
-  return members.length ? members : NO_MEMBERS;
+  const result = members.length ? members : NO_MEMBERS;
+  generatedMembersByCall.set(call, result);
+  return result;
 }
 
 /** Definitions that start their own local variable scope and their own `self`. */
@@ -378,12 +386,12 @@ function bindsLocalAt(leaf: SyntaxNodeLike): boolean {
 }
 
 /** Whether a parameter list binds `use`'s spelling no later than the use. */
-function parameterListBindsUse(node: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+function parameterListBindsUse(node: SyntaxNodeLike, use: SyntaxNodeLike, name = use.text): boolean {
   if (node.startIndex > use.startIndex) return false;
-  if (node.type === "identifier") return node.text === use.text && bindsLocalAt(node);
+  if (node.type === "identifier") return node.text === name && bindsLocalAt(node);
   if (BLOCK_SCOPES.has(node.type) || LOCAL_SCOPE_OWNERS.has(node.type)) return false;
   for (const child of node.namedChildren) {
-    if (parameterListBindsUse(child, use)) return true;
+    if (parameterListBindsUse(child, use, name)) return true;
   }
   return false;
 }
@@ -392,7 +400,8 @@ function parameterListBindsUse(node: SyntaxNodeLike, use: SyntaxNodeLike): boole
 export function rubyLambdaParameterShadows(use: SyntaxNodeLike): boolean {
   if (use.type !== "identifier") return false;
   const call = use.parent;
-  if (call?.type === "call" && sameNode(call.childForFieldName("method"), use)) return false;
+  const methodToken = call?.type === "call" && sameNode(call.childForFieldName("method"), use);
+  if (methodToken && !rubyCallReadsLocal(use)) return false;
   let child = use;
   for (let current = use.parent; current; child = current, current = current.parent) {
     if (current.type === "singleton_method" && sameNode(current.childForFieldName("object"), child)) continue;
@@ -418,7 +427,7 @@ function holdsUse(scope: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
 }
 
 /** Where a local is bound, and the block or lambda it is local to, or null where it is local to the whole scope. */
-type LocalSite = { start: number; block: SyntaxNodeLike | null };
+type LocalSite = { start: number; block: SyntaxNodeLike | null; node: SyntaxNodeLike };
 
 /** The locals each definition, type body, or program binds, by name: the same answer for every use in it. */
 const localSitesByScope = new WeakMap<SyntaxNodeLike, ReadonlyMap<string, readonly LocalSite[]>>();
@@ -441,10 +450,10 @@ function localSitesOf(scope: SyntaxNodeLike): ReadonlyMap<string, readonly Local
   const cached = localSitesByScope.get(scope);
   if (cached) return cached;
   const sites = new Map<string, LocalSite[]>();
-  const add = (name: string, start: number, block: SyntaxNodeLike | null): void => {
+  const add = (name: string, start: number, block: SyntaxNodeLike | null, node: SyntaxNodeLike): void => {
     const known = sites.get(name);
-    if (known) known.push({ start, block });
-    else sites.set(name, [{ start, block }]);
+    if (known) known.push({ start, block, node });
+    else sites.set(name, [{ start, block, node }]);
   };
   const pending: Array<{ node: SyntaxNodeLike; block: SyntaxNodeLike | null }> = [];
   for (const child of scope.namedChildren) pending.push({ node: child, block: null });
@@ -452,11 +461,11 @@ function localSitesOf(scope: SyntaxNodeLike): ReadonlyMap<string, readonly Local
     const { node, block } = pending.pop()!;
     const type = node.type;
     if (type === "identifier" || type === "hash_key_symbol") {
-      if (bindsLocalAt(node)) add(node.text, node.startIndex, block);
+      if (bindsLocalAt(node)) add(node.text, node.startIndex, block, node);
       continue;
     }
     if (LOCAL_SCOPE_OWNERS.has(type)) continue;
-    if (type === "binary") for (const name of capturedNames(node)) add(name, node.startIndex, block);
+    if (type === "binary") for (const name of capturedNames(node)) add(name, node.startIndex, block, node);
     const inner = BLOCK_SCOPES.has(type) ? node : block;
     for (const child of node.namedChildren) pending.push({ node: child, block: inner });
   }
@@ -482,13 +491,76 @@ function bindsNameBefore(scope: SyntaxNodeLike, name: string, use: SyntaxNodeLik
 export function rubyNamesLocalVariable(use: SyntaxNodeLike): boolean {
   if (use.type !== "identifier") return false;
   const call = use.parent;
-  if (call?.type === "call" && sameNode(call.childForFieldName("method"), use)) return false;
+  if (call?.type === "call" && sameNode(call.childForFieldName("method"), use)) return rubyCallReadsLocal(use);
   return bindsLocalAt(use) || bindsNameBefore(localScopeOf(use), use.text, use);
 }
 
 /** Whether `declaration`, the name token of a definition, names a local variable, not a method or a constant. */
 export function rubyDeclaresLocalVariable(declaration: SyntaxNodeLike): boolean {
   return declaration.type === "identifier" && bindsLocalAt(declaration);
+}
+
+/** A block captures an earlier local, but its parameters and newly introduced locals remain its own. */
+function localSiteOwner(node: SyntaxNodeLike, scope: SyntaxNodeLike, name = node.text): SyntaxNodeLike {
+  for (let current = node.parent; current && !sameNode(current, scope); current = current.parent) {
+    if (!BLOCK_SCOPES.has(current.type)) continue;
+    const parameters = current.childForFieldName("parameters");
+    if (parameters && parameterListBindsUse(parameters, node, name)) return current;
+    if (!bindsNameBefore(scope, name, current)) return current;
+  }
+  return scope;
+}
+
+/** Unsupported module singletons and separate local assignment bindings leave reference completeness unproven. */
+export function rubyReferenceFamilyUnproven(declaration: SyntaxNodeLike): boolean {
+  let method = declaration.parent;
+  if (method?.type === "setter") method = method.parent;
+  if (method?.type === "singleton_method" && enclosingType(declaration)?.type === "module") return true;
+  if (!rubyDeclaresLocalVariable(declaration)) return false;
+  const scope = localScopeOf(declaration);
+  const sites = localSitesOf(scope).get(declaration.text);
+  if (!sites || sites.length < 2) return false;
+  const owner = localSiteOwner(declaration, scope);
+  for (const site of sites) {
+    const node = site.node;
+    if (sameNode(node, declaration)) continue;
+    const parentType = node.parent?.type;
+    if (!parentType) continue;
+    const separateBinding =
+      node.type === "binary" ||
+      parentType === "assignment" ||
+      PARAMETER_LISTS.has(parentType) ||
+      NAMED_PARAMETERS.has(parentType);
+    if (separateBinding && sameNode(localSiteOwner(node, scope, declaration.text), owner)) return true;
+  }
+  return false;
+}
+
+/** A direct type/program-body call runs before a later `def`; method and block bodies can run later. */
+export function rubyMethodIsPendingAt(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+  if (declaration.startIndex <= use.startIndex) return false;
+  let child = use;
+  for (let current = use.parent; current; child = current, current = current.parent) {
+    if (current.type === "singleton_method" && sameNode(current.childForFieldName("object"), child)) continue;
+    if (current.type === "method" || current.type === "singleton_method" || BLOCK_SCOPES.has(current.type))
+      return false;
+    if (LOCAL_SCOPE_OWNERS.has(current.type)) return true;
+  }
+  return true;
+}
+
+/** A direct class or module body runs with the type as `self`, not one of its instances. */
+export function rubyIsClassBodyCall(use: SyntaxNodeLike): boolean {
+  const call = use.parent;
+  const explicitCall = call?.type === "call" && sameNode(call.childForFieldName("method"), use);
+  if (!rubyIsBareRead(use) && !explicitCall) return false;
+  if (explicitCall && call.childForFieldName("receiver")) return false;
+  for (let current = use.parent; current; current = current.parent) {
+    const type = current.type;
+    if (type === "method" || type === "singleton_method" || BLOCK_SCOPES.has(type)) return false;
+    if (type === "class" || type === "module" || type === "singleton_class") return true;
+  }
+  return false;
 }
 
 /** The first arguments that make `name -x`, `name [x]`, or `name &x` an operator on a local when `name` is one. */
@@ -508,7 +580,15 @@ export function rubyCallMayReadLocal(use: SyntaxNodeLike): boolean {
   if (!sameNode(call.childForFieldName("method"), use)) return false;
   const argumentsNode = call.childForFieldName("arguments");
   const first = argumentsNode?.child(0);
-  return !!first && OPERATOR_OPERANDS.has(first.type);
+  if (!first || !OPERATOR_OPERANDS.has(first.type)) return false;
+  if (first.type !== "unary") return true;
+  const operator = first.childForFieldName("operator")?.text;
+  return operator === "-" || operator === "+";
+}
+
+/** The command's name is already bound in Ruby's local table at this position. */
+export function rubyCallReadsLocal(use: SyntaxNodeLike): boolean {
+  return rubyCallMayReadLocal(use) && bindsNameBefore(localScopeOf(use), use.text, use);
 }
 
 /** Whether the text after `use` starts an argument that is an operator on a local when `use` is one: `c0&x`, `c0 -x`. */
@@ -516,7 +596,7 @@ function operatorFollows(use: SyntaxNodeLike, source: string): boolean {
   let at = use.endIndex;
   if (source.charCodeAt(at) === 32) at += 1;
   const code = source.charCodeAt(at);
-  return code === 38 || code === 45 || code === 91 || code === 42 || code === 60;
+  return code === 38 || code === 43 || code === 45 || code === 91 || code === 42 || code === 60;
 }
 
 /**
@@ -535,8 +615,8 @@ export function rubyIsOperatorOnLocal(use: SyntaxNodeLike, source: string): bool
 }
 
 /** Whether `local`, the definition the lookup found for such an operator, is a local of the scope of the use. */
-export function rubyReadsLocalAsOperand(use: SyntaxNodeLike, local: SyntaxNodeLike, source: string): boolean {
-  return rubyIsOperatorOnLocal(use, source) && sameNode(localScopeOf(use), localScopeOf(local));
+export function rubyReadsLocalAsOperand(use: SyntaxNodeLike, local: SyntaxNodeLike): boolean {
+  return rubyCallReadsLocal(use) && sameNode(localScopeOf(use), localScopeOf(local));
 }
 
 /**
@@ -945,9 +1025,9 @@ function singletonClassOpensSelf(singletonClass: SyntaxNodeLike): boolean {
 }
 
 /**
- * What `self` is at `use`: an instance inside an instance method, the class inside `def self.name` or a `class << self`
- * body, and unknown where a block hands the code another `self` (`instance_eval`, `Struct.new`, a DSL call's block), where
- * a `def object.name` or `class << object` runs on another object, or where no method holds it.
+ * What `self` is at `use`: an instance inside an instance method, the class in its body, inside `def self.name`, or in
+ * a `class << self` body, and unknown where a block hands the code another `self` (`instance_eval`, `Struct.new`, a DSL
+ * call's block), where a `def object.name` or `class << object` runs on another object, or at the top level.
  */
 function selfKindAt(use: SyntaxNodeLike): "instance" | "class" | null {
   let kind: "instance" | "class" | null = null;
@@ -960,8 +1040,10 @@ function selfKindAt(use: SyntaxNodeLike): "instance" | "class" | null {
       } else if (type === "singleton_method") {
         if (!singletonDefinesTypeMethod(current)) return null;
         kind = "class";
-      } else if (type === "class" || type === "module" || type === "singleton_class") {
-        return null;
+      } else if (type === "class" || type === "module") {
+        return "class";
+      } else if (type === "singleton_class") {
+        return singletonClassOpensSelf(current) ? "class" : null;
       }
     } else if (type === "singleton_class") {
       if (!singletonClassOpensSelf(current)) return null;
@@ -1060,4 +1142,174 @@ export function rubyIsSetterDeclaration(node: SyntaxNodeLike): boolean {
 /** `empty?`, `save!`, and `name=` are stored in a Bloom filter as `empty`, `save`, and `name`. */
 export function rubyBloomProbeName(name: string): string {
   return name.replace(/[?!=]$/u, "");
+}
+
+/** Calls whose literal arguments name methods, rather than arbitrary Ruby symbols. */
+const METHOD_NAME_CALLS: Readonly<Record<string, "all" | "first" | "dynamic" | "alias">> = {
+  module_function: "all",
+  private: "all",
+  protected: "all",
+  public: "all",
+  private_class_method: "all",
+  public_class_method: "all",
+  alias_method: "alias",
+  define_method: "first",
+  attr_reader: "all",
+  attr_writer: "all",
+  attr_accessor: "all",
+  send: "dynamic",
+  __send__: "dynamic",
+  public_send: "dynamic",
+  "respond_to?": "dynamic",
+  method: "dynamic",
+};
+
+/** Literal method names never occupy the local-variable namespace, including bare `alias` operands. */
+export function rubyMethodNameLiteral(node: SyntaxNodeLike): boolean {
+  return (
+    node.type === "simple_symbol" ||
+    node.type === "bare_symbol" ||
+    node.type === "string_content" ||
+    node.parent?.type === "alias"
+  );
+}
+
+/** The naming call or alias holding this literal; nested interpolation remains dynamic. */
+export function rubyMethodNameOwner(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (!rubyMethodNameLiteral(node)) return null;
+  if (node.parent?.type === "alias") return node.parent;
+  let argument = node;
+  for (let parent = argument.parent; parent; parent = argument.parent) {
+    if (parent.type === "alias") return parent;
+    if (parent.type === "argument_list") {
+      const call = parent.parent;
+      if (call?.type !== "call") return null;
+      const method = call.childForFieldName("method")?.text;
+      if (!method || !Object.hasOwn(METHOD_NAME_CALLS, method)) return null;
+      const firstOnly = METHOD_NAME_CALLS[method] === "first" || METHOD_NAME_CALLS[method] === "dynamic";
+      if (firstOnly && !sameNode(parent.namedChildren[0], argument)) return null;
+      return call;
+    }
+    const literalWrapper =
+      parent.type === "string" ||
+      parent.type === "delimited_symbol" ||
+      parent.type === "interpolation" ||
+      parent.type === "bare_symbol" ||
+      parent.type === "symbol_array" ||
+      parent.type === "array" ||
+      parent.type === "splat_argument";
+    if (!literalWrapper) return null;
+    argument = parent;
+  }
+  return null;
+}
+
+/** An alias destination declares a new method, never a reference of an earlier same-named method. */
+export function rubyMethodNameIsAliasDestination(node: SyntaxNodeLike): boolean {
+  const naming = rubyMethodNameOwner(node);
+  if (!naming) return false;
+  let destination: SyntaxNodeLike | undefined;
+  if (naming.type === "alias") destination = naming.namedChildren[0];
+  else {
+    const method = naming.childForFieldName("method")?.text;
+    if (!method || METHOD_NAME_CALLS[method] !== "alias") return false;
+    destination = naming.childForFieldName("arguments")?.namedChildren[0];
+  }
+  if (!destination || destination.type === "splat_argument") return false;
+  return destination.startIndex <= node.startIndex && node.endIndex <= destination.endIndex;
+}
+
+/** Only literal symbols in a direct class/module naming statement prove the method owner. */
+export function rubyMethodNameIsStatic(node: SyntaxNodeLike): boolean {
+  const naming = rubyMethodNameOwner(node);
+  if (!naming) return false;
+  if (node.type !== "simple_symbol" && node.type !== "identifier") return false;
+  if (naming.type === "call") {
+    const method = naming.childForFieldName("method")?.text;
+    if (!method || METHOD_NAME_CALLS[method] === "dynamic" || method === "attr_accessor") return false;
+    const receiver = naming.childForFieldName("receiver");
+    if (receiver && receiver.type !== "self") return false;
+    if (node.parent?.type !== "argument_list") return false;
+  }
+  let statement = naming;
+  const modifier = naming.parent;
+  if (modifier?.type === "if_modifier" || modifier?.type === "unless_modifier") statement = modifier;
+  const body = statement.parent?.type === "argument_list" ? macroBody(statement) : statement.parent;
+  if (body?.type !== "body_statement") return false;
+  const owner = body.parent;
+  if (owner?.type === "class" || owner?.type === "module") return true;
+  return owner?.type === "singleton_class" && singletonClassOpensSelf(owner);
+}
+
+/** The method namespace a static naming statement addresses. */
+function methodNameNamespaceMatches(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+  const naming = rubyMethodNameOwner(use)!;
+  const method = naming.childForFieldName("method")?.text;
+  const namesClassMethod = method === "private_class_method" || method === "public_class_method";
+  const singletonBody = declarationKind(naming) === "class";
+  const expectedKind = namesClassMethod || singletonBody ? "class" : "instance";
+  return declarationKind(declaration) === expectedKind;
+}
+
+/** A proven naming statement selects only a matching method of its own source class/module. */
+export function rubyMethodNameRefersTo(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+  if (!rubyMethodNameIsStatic(use) || !methodNameNamespaceMatches(declaration, use)) return false;
+  return programOf(declaration) === programOf(use) && rubyMethodIsOwnedAt(declaration, use);
+}
+
+/** Inherited or mixed-in names stay uncertain, while unrelated owners and method namespaces are excluded. */
+export function rubyMethodNameMayReferTo(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+  if (!rubyMethodNameIsStatic(use)) {
+    const naming = rubyMethodNameOwner(use);
+    if (naming?.type !== "call") return true;
+    const method = naming.childForFieldName("method")?.text;
+    if (!method || METHOD_NAME_CALLS[method] === "dynamic") return true;
+    const receiver = naming.childForFieldName("receiver");
+    if (receiver && receiver.type !== "self") return true;
+    if (!macroBody(naming, true)) return true;
+  }
+  if (!methodNameNamespaceMatches(declaration, use)) return false;
+  return programOf(declaration) === programOf(use)
+    ? rubyMethodVisibleAt(declaration, use)
+    : rubyOtherFileMethodReaches(declaration, use);
+}
+
+/** Arbitrary symbols and strings are not identifier candidates; known method-naming arguments are. */
+export function rubyReferenceSpelling(name: string, node?: SyntaxNodeLike): string | null {
+  if (node && rubyMethodNameLiteral(node)) {
+    const owner = rubyMethodNameOwner(node);
+    if (!owner) return null;
+    const declaration = node.type === "string_content" && node.parent?.type === "string" ? node.parent : node;
+    if (owner.type === "call") {
+      let declarations = generatedDeclarationStartsByCall.get(owner);
+      if (!declarations) {
+        const members = rubyGeneratedMembers(owner);
+        if (members.length) {
+          const starts = new Set<number>();
+          for (const member of members) starts.add(member.node.startIndex);
+          generatedDeclarationStartsByCall.set(owner, starts);
+          declarations = starts;
+        }
+      }
+      if (declarations?.has(declaration.startIndex)) return null;
+    }
+    const methodName = node.type === "simple_symbol" ? name.slice(1) : name;
+    return rubyUseSiteMethodName(methodName);
+  }
+  return name;
+}
+
+/** Rename only the symbol's name, leaving its colon intact. */
+export function rubyReferenceRange(node: SyntaxNodeLike): Range {
+  const prefix = node.type === "simple_symbol" ? 1 : 0;
+  const start = node.startPosition;
+  const end = node.endPosition;
+  return {
+    start: {
+      line: start.row + 1,
+      column: start.column + 1 + prefix,
+      index: node.startIndex + prefix,
+    },
+    end: { line: end.row + 1, column: end.column + 1, index: node.endIndex },
+  };
 }

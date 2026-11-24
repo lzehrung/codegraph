@@ -1,0 +1,1 @@
+Recognize bound Ruby local operands and unmodeled lambda operand shadowing in shared hooks.
