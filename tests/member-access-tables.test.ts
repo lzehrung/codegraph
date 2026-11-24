@@ -53,6 +53,23 @@ function declaredNodeTypeLists(row: MemberAccessRow): Array<{ field: string; typ
   if (row.memberExpressionType) lists.push({ field: "memberExpressionType", types: [row.memberExpressionType] });
   if (row.extraTraversalTypes) lists.push({ field: "extraTraversalTypes", types: row.extraTraversalTypes });
   if (row.extraMemberAccessTypes) lists.push({ field: "extraMemberAccessTypes", types: row.extraMemberAccessTypes });
+  const qualified = row.qualifiedAccess;
+  for (const field of [
+    "containingTypes",
+    "segmentTypes",
+    "unwrapNameTypes",
+    "constantSegmentTypes",
+    "literalSegmentTypes",
+  ] as const) {
+    const types = qualified?.[field];
+    if (types) lists.push({ field: `qualifiedAccess.${field}`, types: [...types] });
+  }
+  if (qualified?.expressionType)
+    lists.push({ field: "qualifiedAccess.expressionType", types: [qualified.expressionType] });
+  for (const field of ["parentFields", "baseFields"] as const) {
+    const shapes = qualified?.[field];
+    if (shapes) lists.push({ field: `qualifiedAccess.${field}`, types: Object.keys(shapes) });
+  }
   for (const [index, clause] of (row.receiverAncestry?.clauses ?? []).entries()) {
     lists.push({ field: `receiverAncestry.clauses[${index}]`, types: [clause.nodeType] });
   }

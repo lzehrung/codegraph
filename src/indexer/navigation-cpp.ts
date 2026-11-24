@@ -1,6 +1,7 @@
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { cppOutOfLineOwnerPath, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { receiverSyntaxDeps, cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppOutOfLineOwnerPath } from "./member-lookup-policies/cpp-receiver.js";
 import { sliceText } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
@@ -1020,7 +1021,7 @@ export async function cppFunctionHasImplicitThis(
 ): Promise<boolean> {
   if (sup.id !== "cpp" || definition.type !== "function_definition") return false;
   if (hasStaticStorageClass(definition)) return false;
-  const ownerPath = cppOutOfLineOwnerPath(definition, source, sup);
+  const ownerPath = cppOutOfLineOwnerPath(definition, source, sup, receiverSyntaxDeps);
   if (!ownerPath) {
     for (let current = definition.parent; current; current = current.parent) {
       if (CPP_MEMBER_CONTAINER_TYPES.has(current.type)) return true;

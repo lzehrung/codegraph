@@ -391,8 +391,8 @@ export const javaCells: MatrixCell[] = [
     // intermediate ancestor's same-named, wrong-arity method to reach a grandparent's matching
     // overload. `GrandBase` declares `hit(int)`; `Base extends GrandBase` declares a different
     // overload, `hit()`; `Derived extends Base` calls `this.hit(1)`, which only `GrandBase.hit`
-    // accepts -- including the detailed graph's `calls` edge, via `inheritsMemberOverloads` in
-    // `src/indexer/member-selection.ts`.
+    // accepts -- including the detailed graph's `calls` edge, through the language policy's
+    // inherited-overload selection rule.
     id: "java/overload-arity-inherited",
     language: "java",
     callForm: "overload-arity",

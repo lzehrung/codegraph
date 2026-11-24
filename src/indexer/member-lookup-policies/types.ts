@@ -1,13 +1,27 @@
 /** Types of the per-language member lookup policies in this directory. */
 import type { ReceiverBinding, ReceiverMemberScope } from "../../graphs/symbol-graph-detailed/receiver-types.js";
 import type { LanguageSupport } from "../../languages.js";
+import type { CallableArity } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import type { MemberAccessRow } from "../../util/member-access-tables.js";
 import type { FileId, Range } from "../../types.js";
-import type { MemberScope } from "../member-selection.js";
+import type { MemberScope, MemberSelectionOptions } from "../member-selection-types.js";
 import type { JvmTypeNameResolver } from "../name-resolution-types.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { ScopeIndex } from "../scope-types.js";
-import type { GoToResult, ModuleIndex, ProjectIndex, Reference, ResolvedExport, SymbolDef } from "../types.js";
+import type {
+  GoToResult,
+  ImportBinding,
+  ModuleIndex,
+  ProjectIndex,
+  Reference,
+  ResolvedExport,
+  SymbolDef,
+} from "../types.js";
+import type { SharedOwnerRules } from "./owner-identity-types.js";
+import type { ImplicitReceiverRules, MemberUseSyntax } from "./receiver-syntax-types.js";
+import type { PhpObjectCreationKeyword } from "./receiver-operation-types.js";
+import type { RubyConstantReference } from "./ruby-owner-types.js";
 
 /** The detailed-graph edge a resolved member call records. */
 export type MemberCallEdge = "calls" | "instantiates";
@@ -31,6 +45,57 @@ export type ParameterReferenceScanFilter = {
  * that imported them back would close a dependency cycle. Each consumer passes the helpers it already imports.
  */
 export type MemberLookupDeps = {
+  memberContainerForDefinition(index: ProjectIndex, definition: SymbolDef): SymbolDef | undefined;
+  resolveQualifiedCppOwner(
+    index: ProjectIndex,
+    module: ModuleIndex,
+    path: readonly string[],
+  ): Promise<SymbolDef | null>;
+  resolveRubyConstantReference(
+    index: ProjectIndex,
+    module: ModuleIndex,
+    reference: RubyConstantReference,
+  ): SymbolDef | null;
+  resolveJvmQualifiedPath(
+    index: ProjectIndex,
+    useFile: string,
+    languageId: "java" | "kotlin",
+    owner: SymbolDef | null,
+    path: readonly string[],
+    typeOnly: boolean,
+  ): SymbolDef | null;
+  namedDefinition(index: ProjectIndex, module: ModuleIndex, support: LanguageSupport, name: string): GoToResult | null;
+  getScopeIndex(
+    index: ProjectIndex,
+    module: ModuleIndex,
+    source: string,
+    support: LanguageSupport,
+    tree: SyntaxTreeLike,
+  ): ScopeIndex;
+  pythonImportAtUse(
+    module: ModuleIndex,
+    node: SyntaxNodeLike,
+    source: string,
+    tree: SyntaxTreeLike,
+    support: LanguageSupport,
+    scope: ScopeIndex,
+  ): ImportBinding | null | undefined;
+  pythonDottedPhraseAtUse(
+    index: ProjectIndex,
+    module: ModuleIndex,
+    node: SyntaxNodeLike,
+    phrase: string,
+    source: string,
+    tree: SyntaxTreeLike,
+    support: LanguageSupport,
+    scope: ScopeIndex,
+  ): string | null | undefined;
+  resolveExportPath(
+    index: ProjectIndex,
+    file: string,
+    path: readonly string[],
+    support: LanguageSupport,
+  ): SymbolDef | undefined;
   nameNodeForDef(context: ParsedFileContext, def: SymbolDef): SyntaxNodeLike | null;
   sameParameterTypes(index: ProjectIndex, left: SymbolDef, right: SymbolDef): Promise<boolean>;
   memberAcceptsCallAt(
@@ -191,12 +256,35 @@ export type ResolvedReceiver = {
 
 /** Language-specific receiver paths; undefined continues the generic lookup. */
 export type ReceiverHooks = Readonly<{
+  ownMemberMissReason?: string;
+  namedOwnMemberMissReason?: string;
+  callablePropertyArity?: (name: SyntaxNodeLike) => CallableArity | null | undefined;
+  implicit?: ImplicitReceiverRules;
+  memberUse?: MemberUseSyntax;
+  syntax?: ReceiverSyntaxRules;
   resolveAccess?: (context: ReceiverAccessContext) => Promise<GoToResult | null | undefined>;
   resolveReceiver?: (context: ReceiverResolutionContext) => Promise<ResolvedReceiver | null | undefined>;
 }>;
 
+type OwnerMemberHidden = (useFile: string, member: SymbolDef, context: ParsedFileContext) => boolean;
+
 /** Language-specific shared-owner, qualified-owner, and base lookup. */
 export type OwnerHooks = Readonly<{
+  shared?: SharedOwnerRules;
+  supertypeEntry?: (name: SyntaxNodeLike) => "invoked" | "bare" | null;
+  implicitBase?: Readonly<{ clauseType: string; members: Readonly<Record<string, number>> }>;
+  lookup?: Readonly<{
+    hierarchy?: boolean;
+    directFallback?: boolean;
+    namespaceContainers?: Readonly<Record<string, true>>;
+  }>;
+  parameterTypeScope?: "namespace-region";
+  memberHidden?: OwnerMemberHidden;
+  sharedMemberHidden?: OwnerMemberHidden;
+  nonInheritedStaticOwners?: Readonly<{
+    nodeTypes: Readonly<Record<string, true>>;
+    graphKinds: Readonly<Record<string, true>>;
+  }>;
   parts?: (args: {
     index: ProjectIndex;
     ownerFile: string;
@@ -204,15 +292,16 @@ export type OwnerHooks = Readonly<{
     ownerSource: string;
     languageId: string;
   }) => Promise<readonly MemberOwnerRef[] | undefined>;
-  qualified?: (args: {
-    index: ProjectIndex;
-    mod: ModuleIndex;
-    baseName: string;
-    path: readonly string[];
-    normalize: (name: string) => string;
-    sup: LanguageSupport;
-    use?: { node: SyntaxNodeLike; source: string; tree: SyntaxTreeLike; scopeIndex?: ScopeIndex };
-  }) => Promise<SymbolDef | null | undefined>;
+  qualified?: (
+    index: ProjectIndex,
+    mod: ModuleIndex,
+    baseName: string,
+    path: readonly string[],
+    normalize: (name: string) => string,
+    sup: LanguageSupport,
+    use: { node: SyntaxNodeLike; source: string; tree: SyntaxTreeLike; scopeIndex?: ScopeIndex } | undefined,
+    deps: MemberLookupDeps,
+  ) => SymbolDef | null | undefined | Promise<SymbolDef | null | undefined>;
   bases?: (
     index: ProjectIndex,
     owner: MemberOwnerRef,
@@ -242,6 +331,13 @@ export type GraphHooks = Readonly<{
 export type MemberLookupPolicy = {
   /** Member scopes are distinct for this language; absent means false. */
   separateMemberScopes?: boolean;
+  /** Existing selector options shared by navigation and graph consumers. */
+  selection?: Readonly<
+    Pick<
+      MemberSelectionOptions,
+      "inheritOverloads" | "firstDeclarationWins" | "caseInsensitiveCallableNames" | "normalizeIdentifier" | "callSite"
+    >
+  >;
   /** Specialized receiver lookup; absent keeps the generic member path. */
   receiverResolution?: ReceiverHooks;
   /** Specialized owner and ancestry lookup; absent keeps generic owner lookup. */
@@ -255,6 +351,16 @@ export type MemberLookupPolicy = {
   excludesContainerNameFromMembers?: boolean;
   /** Superset key for normalized member names; final selection still checks symbol-specific name equality. */
   memberNameKey?: (normalizedName: string) => string;
+  /** Equality key for class/type names, separate from callable and data member names. */
+  typeNameKey?: (name: string) => string;
+  /** Symbol-kind-aware equality where methods and data members use different name namespaces. */
+  compareMemberNames?: (
+    reference: string,
+    symbol: string,
+    options?: { symbolKind?: string },
+  ) => "equivalent" | "different" | "unverified";
+  /** Node kinds that are static declarations without a modifier. */
+  staticDeclarationTypes?: Readonly<Record<string, true>>;
   /** Resolve a declared receiver type through positioned source-unit lookup; a value itself cannot own members. */
   declaredReceiverUsesNameLookup?: boolean;
   /** A declarator gets its explicit type from this parent node, rather than from its initializer. */
@@ -361,7 +467,7 @@ export type MemberLookupPolicy = {
     usesOf(def: SymbolDef): Promise<readonly Reference[] | null>;
   }): Promise<RenameCompanions | undefined>;
   /** Whether a declaration node declares a static member without a `static` modifier (an enum case). */
-  isStaticDeclaration?(node: SyntaxNodeLike): boolean;
+  isStaticDeclaration?(this: void, node: SyntaxNodeLike): boolean;
   /** Whether a callable declaration lists its parameters as its own children, with no parameter-list node. */
   parametersAreDirectChildren?(declaration: SyntaxNodeLike): boolean;
   /**
@@ -415,3 +521,51 @@ export type RenameCompanions = {
   definitions: readonly SymbolDef[];
   unprovenReason?: string;
 };
+
+/** File/query-owned facts passed through receiver and binding walks. */
+export type ReceiverSyntaxContext = Readonly<{
+  policy: MemberLookupPolicy | undefined;
+  access: MemberAccessRow | undefined;
+}>;
+
+/** Existing syntax helpers supplied by the receiver consumer, without a graph-to-policy cycle. */
+export type ReceiverSyntaxDeps = {
+  constructionTypeName(
+    node: SyntaxNodeLike,
+    source: string,
+    support: LanguageSupport,
+    syntax: ReceiverSyntaxContext,
+  ): SyntaxNodeLike | null;
+  unwrapNamedType(node: SyntaxNodeLike, support: LanguageSupport): SyntaxNodeLike | null;
+  sameSyntaxNode(left: SyntaxNodeLike | null, right: SyntaxNodeLike): boolean;
+  constructorNameNode(node: SyntaxNodeLike, support: LanguageSupport): SyntaxNodeLike | null;
+  nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | null;
+  qualifiedNameSegments(node: SyntaxNodeLike, source: string): string[];
+  declarationMemberArity(node: SyntaxNodeLike, languageId: string): number | undefined;
+  findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxNodeLike | null;
+  isIdentifierType(support: LanguageSupport, type: string): boolean;
+};
+export type ReceiverSyntaxRules = Readonly<{
+  parallelBindings?: Readonly<
+    Record<
+      string,
+      Readonly<{
+        names: (node: SyntaxNodeLike) => SyntaxNodeLike[];
+        construction: (
+          node: SyntaxNodeLike,
+          receiverName: string,
+          source: string,
+          support: LanguageSupport,
+          syntax: ReceiverSyntaxContext,
+          deps: ReceiverSyntaxDeps,
+        ) => SyntaxNodeLike | null;
+      }>
+    >
+  >;
+  keywordConstruction?: (
+    node: SyntaxNodeLike,
+    source: string,
+    support: LanguageSupport,
+    deps: ReceiverSyntaxDeps,
+  ) => PhpObjectCreationKeyword | null;
+}>;

@@ -28,7 +28,7 @@ import {
 } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isExportedDeclaration, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { inheritsMemberOverloads, kotlinPropertyInvocationArity } from "../indexer/member-selection.js";
+import { kotlinPropertyInvocationArity } from "../indexer/member-lookup-policies/kotlin-receiver.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
@@ -51,7 +51,8 @@ import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
 import { findClosestBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
 import { findClosestScopeBinding } from "../indexer/scope-lookup.js";
-import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
+import { memberLookupPolicyFor, type MemberLookupPolicy } from "../indexer/member-lookup-policies/index.js";
+import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
@@ -349,6 +350,7 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
+  const memberPoliciesByFile = new Map<string, MemberLookupPolicy>();
   const phpAdaptedTraitMembers = hasPhpModules ? new Map<string, ReadonlySet<string>>() : undefined;
   const phpAbstractTraitMembers = hasPhpModules ? new Set<string>() : undefined;
   const phpUnprovenTraitOwners = hasPhpModules ? new Set<string>() : undefined;
@@ -431,6 +433,8 @@ export async function buildSymbolGraphDetailed(
   for (const indexedModule of index.byFile.values()) {
     const moduleEntry = withCsharpGlobalUsings(index, indexedModule);
     const file = moduleEntry.file;
+    const memberPolicy = memberLookupPolicyFor(supportForIndexedFile(file)?.id ?? "");
+    memberPoliciesByFile.set(fileIdentityKey(file), memberPolicy);
     if (optionFileKeys && !optionFileKeys.has(fileIdentityKey(file))) continue;
     assertQuerySourceForIndex(index, file);
     if (scopeMode === "imported") {
@@ -451,6 +455,7 @@ export async function buildSymbolGraphDetailed(
         continue;
       }
       const { sup, source: src, tree } = parsed;
+      const access = MEMBER_ACCESS_ROWS[sup.id];
       if (!sup.supportsCrossModuleSymbols) continue;
       const memberNamePattern = sup.exportedNamePattern;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
@@ -669,7 +674,7 @@ export async function buildSymbolGraphDetailed(
         node: SyntaxNodeLike,
         positionedResolution?: NameResolution | null,
       ): boolean => {
-        if (isQualifiedTypeSuffix(sup, node)) return false;
+        if (isQualifiedTypeSuffix(access?.qualifiedAccess, node)) return false;
         if (sup.id === "csharp") {
           const key = aliasKey(name);
           // A name no import alias holds has nothing in the tables to contradict; the shared lookup orders it.
@@ -692,6 +697,8 @@ export async function buildSymbolGraphDetailed(
       };
 
       const edgePassContext = {
+        policy: memberPolicy,
+        access,
         index,
         sup,
         memberNamePattern,
@@ -752,7 +759,7 @@ export async function buildSymbolGraphDetailed(
             resolveJvmTypeName,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
-              const policy = memberLookupPolicyFor(sup.id);
+              const policy = memberPolicy;
               if (policy.lexicalBinding) {
                 return policy.lexicalBinding({
                   scopeBindingIsImport: () => !!findClosestScopeBinding(scopeIndex, name, expression, sup)?.import,
@@ -909,8 +916,8 @@ export async function buildSymbolGraphDetailed(
   }
   const lambdaRejectedTargets = new Set<string>();
   const memberIdentities = new Map<string, CallableIdentity>();
-  const hasHierarchyReceiver = callableReceiverCalls.some((candidate) =>
-    inheritsMemberOverloads(supportForIndexedFile(candidate.site.file)?.id ?? ""),
+  const hasHierarchyReceiver = callableReceiverCalls.some(
+    (candidate) => !!memberPoliciesByFile.get(fileIdentityKey(candidate.site.file))?.selection?.inheritOverloads,
   );
   const receiverMemberDefinitions = hasHierarchyReceiver ? new Map<string, SymbolDef>() : undefined;
   if (callableReceiverCalls.length) {
@@ -950,7 +957,7 @@ export async function buildSymbolGraphDetailed(
         receiverMemberDefinitions,
         sharedOwnerAnchors,
         sharedOwnerAccessibleMembers,
-        index.languageExtensions,
+        memberPoliciesByFile,
         (derived, inherited) => sameParameterTypes(index, derived, inherited),
       )
     : undefined;
@@ -958,6 +965,7 @@ export async function buildSymbolGraphDetailed(
     { nodes, edges },
     callableReceiverCalls,
     recordEdge,
+    memberPoliciesByFile,
     receiverMemberScopes,
     nodeAliases,
     receiverMemberArities,
@@ -983,7 +991,6 @@ export async function buildSymbolGraphDetailed(
       });
     },
     memberIdentities,
-    index.languageExtensions,
     overridingSignatures,
     receiverMemberDefinitions || generatedMemberIds || replacedByGeneratedMemberIds
       ? (memberId, useFile, candidate) => {

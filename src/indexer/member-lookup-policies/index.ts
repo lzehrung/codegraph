@@ -8,6 +8,14 @@ import { csharpMemberLookupPolicy } from "./csharp.js";
 import { phpMemberLookupPolicy } from "./php.js";
 import { rubyMemberLookupPolicy } from "./ruby.js";
 import { swiftMemberLookupPolicy } from "./swift.js";
+import { javaImplicitReceiverRules, javaMemberUseSyntax } from "./java-receiver.js";
+import { kotlinReceiverHooks } from "./kotlin-receiver.js";
+import { cppQualifiedOwner } from "./cpp-receiver.js";
+import { goReceiverSyntax } from "./go-receiver.js";
+import { jvmCrossFileMemberHidden, jvmQualifiedOwner } from "./jvm-owner.js";
+import { javascriptOwnerResolution, typescriptOwnerResolution } from "./typescript-owner.js";
+import { pythonQualifiedOwner } from "./python-owner.js";
+import { kotlinOwnerSyntax } from "./kotlin-owner.js";
 import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { getCompilationUnitPeers } from "../compilation-units.js";
@@ -29,7 +37,33 @@ const NO_POLICY: MemberLookupPolicy = {};
 
 export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
   csharp: csharpMemberLookupPolicy,
+  cpp: {
+    ownerResolution: { lookup: { hierarchy: true }, qualified: cppQualifiedOwner },
+  },
+  go: { receiverResolution: { syntax: goReceiverSyntax } },
+  js: { separateMemberScopes: true, ownerResolution: javascriptOwnerResolution },
+  ts: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution },
+  tsx: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution },
+  kotlin: {
+    separateMemberScopes: true,
+    selection: { inheritOverloads: true, callSite: true },
+    receiverResolution: kotlinReceiverHooks,
+    ownerResolution: {
+      ...kotlinOwnerSyntax,
+      lookup: { hierarchy: true },
+      memberHidden: jvmCrossFileMemberHidden,
+      qualified: jvmQualifiedOwner("kotlin"),
+    },
+  },
   java: {
+    selection: { inheritOverloads: true },
+    receiverResolution: { implicit: javaImplicitReceiverRules, memberUse: javaMemberUseSyntax },
+    ownerResolution: {
+      lookup: { hierarchy: true, directFallback: true },
+      memberHidden: jvmCrossFileMemberHidden,
+      qualified: jvmQualifiedOwner("java"),
+      nonInheritedStaticOwners: { nodeTypes: { interface_declaration: true }, graphKinds: { interface: true } },
+    },
     declaredReceiverUsesNameLookup: true,
     membersBeforeFileExports: true,
     unprovenReferenceCandidate: javaUnprovenReferenceCandidate,
@@ -46,6 +80,7 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
     },
   },
   php: phpMemberLookupPolicy,
+  python: { ownerResolution: { qualified: pythonQualifiedOwner } },
   ruby: rubyMemberLookupPolicy,
   swift: swiftMemberLookupPolicy,
 };

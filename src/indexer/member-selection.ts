@@ -3,8 +3,7 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import type { SymbolDef } from "./types.js";
 import { typescriptCollapsedOverloadTarget } from "./ts-callables.js";
 import { ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
-
-export type MemberScope = "any" | "static" | "instance";
+import type { MemberScope, MemberSelectionOptions } from "./member-selection-types.js";
 
 type PrivateNameResolution =
   | { status: "resolved"; definitions: SymbolDef[]; target: SymbolDef | null; owner: SyntaxNodeLike }
@@ -127,44 +126,7 @@ export type MemberSelection<Member> =
       unprovenTrait?: true;
     };
 
-export type MemberSelectionOptions = {
-  name: string;
-  argumentCount: number | null;
-  scope: MemberScope;
-  useFile: string;
-  phpCaseInsensitive?: boolean;
-  separateMemberScopes?: boolean;
-  classAncestorsOnly?: boolean;
-  startAtAncestor?: boolean;
-  keepUniqueArityMismatch?: boolean;
-  /**
-   * With `inheritOverloads`, a lone mismatched member stands in only when the receiver's own type declares it. This
-   * moves the stand-in to the first level of the hierarchy that declares the name, as if the walk stopped there: a lone
-   * declaration inherited from an ancestor stands in, and declarations further up do not compete with it.
-   */
-  standInAtFirstDeclaringLevel?: boolean;
-  inheritOverloads?: boolean;
-  /** Ruby reopening uses the first indexed declaration for a method name. */
-  firstDeclarationWins?: boolean;
-  /** Language-specific identifier equality; source names remain unchanged. */
-  normalizeIdentifier?: ((name: string) => string) | undefined;
-  /** A call prefers methods and invokable properties; a value read prefers non-method members. */
-  callSite?: boolean;
-  valueRead?: boolean;
-};
-
-/** Static and instance members have independent lookup chains in these languages. */
-const SEPARATE_MEMBER_SCOPES = new Set(["js", "ts", "tsx", "ruby", "swift", "kotlin"]);
-
-export function hasSeparateMemberScopes(languageId: string): boolean {
-  return SEPARATE_MEMBER_SCOPES.has(languageId);
-}
 const MAX_DEPTH = 16;
-
-/** Java, Kotlin, and C# inherit overloads beyond the first declaring class. */
-export function inheritsMemberOverloads(languageId: string): boolean {
-  return languageId === "java" || languageId === "kotlin" || languageId === "csharp";
-}
 
 function accepts(range: CallableArity | null | undefined, count: number | null): boolean {
   return count === null || !range || (count >= range.minArgs && (range.maxArgs === null || count <= range.maxArgs));
@@ -190,24 +152,6 @@ function onlyCountFit<Owner, Member>(
     found = member;
   }
   return found;
-}
-/** A Kotlin property is invokable when its declared function type or initializer proves it. */
-export function kotlinPropertyInvocationArity(nameNode: SyntaxNodeLike): CallableArity | null | undefined {
-  const variable = nameNode.parent;
-  if (variable?.type !== "variable_declaration" || variable.parent?.type !== "property_declaration") return undefined;
-  const type = variable.namedChildren.find((child) => child.type === "function_type");
-  const parameters = type?.namedChildren.find((child) => child.type === "function_type_parameters");
-  if (parameters) {
-    const count = parameters.namedChildren.length;
-    return { minArgs: count, maxArgs: count };
-  }
-  const initializer = variable.parent.namedChildren.find((child) => child !== variable);
-  if (initializer?.type === "callable_reference") return null;
-  if (initializer?.type !== "lambda_literal") return undefined;
-  const lambdaParameters = initializer.namedChildren.find((child) => child.type === "lambda_parameters");
-  if (!lambdaParameters) return null;
-  const count = lambdaParameters.namedChildren.length;
-  return { minArgs: count, maxArgs: count };
 }
 
 /** Fold equivalent declarations only after their overload signatures have been checked. */
@@ -264,7 +208,7 @@ function memberNameMatches<Owner, Member>(
   queryName: string,
 ): boolean {
   const name = model.name(member);
-  if (!options.phpCaseInsensitive) {
+  if (!options.caseInsensitiveCallableNames) {
     if (name === queryName) return true;
     return options.normalizeIdentifier ? options.normalizeIdentifier(name) === queryName : false;
   }
@@ -333,11 +277,12 @@ export function selectMember<Owner, Member>(
   // Whether a level nearer the receiver already declares the name.
   let nameDeclared = false;
   let named = false;
-  const queryName = options.phpCaseInsensitive
+  const queryName = options.caseInsensitiveCallableNames
     ? foldPhpIdentifierCase(options.name)
     : (options.normalizeIdentifier?.(options.name) ?? options.name);
-  const phpTraits = options.phpCaseInsensitive ? model : undefined;
-  const classOnly = !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.phpCaseInsensitive);
+  const phpTraits = options.caseInsensitiveCallableNames ? model : undefined;
+  const classOnly =
+    !!options.classAncestorsOnly || (!!options.startAtAncestor && !options.caseInsensitiveCallableNames);
   const composing = phpTraits && (phpTraits.isTraitOwner || phpTraits.composesUnprovenTrait) ? phpTraits : undefined;
   // PHP searches the traits composed into a class, to any depth, before its parent (`splitComposedOwners`). The walk
   // stays at one inheritance depth while `level` holds composed traits, and the inherited owners wait in `deferred`.

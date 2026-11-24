@@ -1,6 +1,6 @@
 import { isGeneratedMember } from "../languages/generated-members.js";
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
-import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import { MEMBER_LOOKUP_POLICIES, memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
@@ -25,8 +25,8 @@ import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-
 import { BloomFilter, isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
-import { memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
-import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
+import { MEMBER_ACCESS_ROWS, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
+import { receiverSyntaxDeps } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   findCsharpPartialTypeEquivalents,
   innermostNamespaceImport,
@@ -114,12 +114,12 @@ import {
   isReceiverNameNode,
 } from "../util/member-access.js";
 import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
+import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   cppOutOfLineOwnerPath,
   cppOutOfLineMemberName,
   cppOutOfLineMemberDeclarationNode,
-  cppQualifiedNameSegments,
-} from "../graphs/symbol-graph-detailed/receiver-calls.js";
+} from "./member-lookup-policies/cpp-receiver.js";
 import { cppEquivalentCallableBindings } from "./cpp-callables.js";
 import type { Binding } from "./scope-types.js";
 import { resolveCppExportedCallables, resolveCppQualifiedMemberContainer } from "./navigation-cpp.js";
@@ -293,7 +293,8 @@ async function goToDefinitionInternal(
     return okGoToResult(index, target, { resolution: "member-access", confidence: "medium" });
   }
   if (sup.id === "php") {
-    const keyword = phpObjectCreationKeyword(node, source, sup);
+    const keywordConstruction = MEMBER_LOOKUP_POLICIES[sup.id]?.receiverResolution?.syntax?.keywordConstruction;
+    const keyword = keywordConstruction?.(node, source, sup, receiverSyntaxDeps);
     if (keyword) {
       const created = resolvePhpObjectCreationTarget(index, mod, keyword, source, sup);
       if (!created) return { status: "not_found", reason: "No matching PHP class" };
@@ -2503,7 +2504,9 @@ async function cppEquivalentCallableFamily(
   const context = parsedContext ?? (await ensureParsedContextForIndex(index, definition.file));
   const definitionNameNode = syntaxNodeForDefinition(context, definition);
   const receiverOwner = await cppOutOfLineReceiverOwner(index, mod, definition, context, definitionNameNode);
-  const memberName = receiverOwner ? cppOutOfLineMemberName(definitionNameNode, context.source, context.sup) : null;
+  const memberName = receiverOwner
+    ? cppOutOfLineMemberName(definitionNameNode, context.source, context.sup, receiverSyntaxDeps)
+    : null;
   const referenceDef =
     memberName && memberName !== definition.localName ? { ...definition, localName: memberName } : definition;
   const normalizedLocalName = context.sup.normalizeIdentifier(referenceDef.localName);
@@ -2568,7 +2571,12 @@ async function cppOutOfLineReceiverOwner(
   definitionNameNode: SyntaxNodeLike,
 ): Promise<SymbolDef | null> {
   if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return null;
-  const ownerPath = cppOutOfLineOwnerPath(definitionNameNode, parsedContext.source, parsedContext.sup);
+  const ownerPath = cppOutOfLineOwnerPath(
+    definitionNameNode,
+    parsedContext.source,
+    parsedContext.sup,
+    receiverSyntaxDeps,
+  );
   return ownerPath ? await resolveCppQualifiedMemberContainer(index, mod, ownerPath) : null;
 }
 
@@ -2589,6 +2597,7 @@ async function cppOutOfLineEquivalentDefinitions(
     ownerNameNode,
     ownerParsed.source,
     parsedContext.sup,
+    receiverSyntaxDeps,
   );
   if (!declaration) return [];
   const normalizedName = parsedContext.sup.normalizeIdentifier(def.localName);
@@ -2669,7 +2678,12 @@ function cppNamespaceFunctionEquivalentDefinitions(
   definitionNameNode: SyntaxNodeLike,
 ): SymbolDef[] {
   if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return [];
-  const ownerPath = cppOutOfLineOwnerPath(definitionNameNode, parsedContext.source, parsedContext.sup);
+  const ownerPath = cppOutOfLineOwnerPath(
+    definitionNameNode,
+    parsedContext.source,
+    parsedContext.sup,
+    receiverSyntaxDeps,
+  );
   const namespacePath: string[][] = [];
   if (!ownerPath) {
     let current = definitionNameNode.parent;
@@ -2686,7 +2700,8 @@ function cppNamespaceFunctionEquivalentDefinitions(
   const owners = ownerPath ?? namespacePath.flat();
   if (!owners.length) return [];
   const memberName =
-    cppOutOfLineMemberName(definitionNameNode, parsedContext.source, parsedContext.sup) ?? def.localName;
+    cppOutOfLineMemberName(definitionNameNode, parsedContext.source, parsedContext.sup, receiverSyntaxDeps) ??
+    def.localName;
   const qualifiedName = [...owners, memberName].join("::");
   const expectedShape = def.callable?.signature;
   if (!expectedShape) return [];
@@ -2756,6 +2771,7 @@ export async function collectNamespaceMemberRefs(
   const sup = parsed.sup;
   const source = parsed.source;
   const tree = parsed.tree;
+  const memberAccess = MEMBER_ACCESS_ROWS[sup.id];
   const ranges: Range[] = [];
 
   // Identifier equality follows the language rule, so C# `@X::@Target` matches alias `X` member `Target`.
@@ -2796,7 +2812,7 @@ export async function collectNamespaceMemberRefs(
             scopeIndex && isMemberObjectIdentifier(receiver.type)
               ? findClosestScopeBinding(scopeIndex, sliceText(receiver, source), receiver, sup)
               : null;
-          const aliasQualified = isCsharpAliasQualifier(receiver, sup);
+          const aliasQualified = isCsharpAliasQualifier(receiver, memberAccess);
           const inFileScope =
             sup.id === "python"
               ? !closest || !!closest.import

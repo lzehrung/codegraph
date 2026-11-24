@@ -7,11 +7,8 @@
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../parsed-cache.js";
-import {
-  getSharedOwnerIdentity,
-  isSwiftConstrainedExtension,
-  isSwiftExtensionContainer,
-} from "../shared-owner-identity.js";
+import { getSharedOwnerIdentity } from "../shared-owner-identity.js";
+import { isSwiftConstrainedExtension, isSwiftExtensionContainer } from "./swift-owner.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../types.js";
 import type { MemberLookupDeps, MemberOwnerRef, RenameCompanions } from "./types.js";
 
