@@ -172,8 +172,6 @@ export function pythonImportersOfPackageInits(
 }
 
 const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);
-/** Sass loads `dir/_index.scss` for `@use "dir"`, the same directory role as `dir/index.scss`. */
-const SCSS_PARTIAL_INDEX_STEM = "_index";
 /** `.d.ts` and similar: a resolver probes `foo` + `.d.ts`, so `foo.d.ts` satisfies stem `foo`. */
 const MULTI_PART_RESOLUTION_EXTENSIONS = DEFAULT_RESOLUTION_EXTENSIONS.filter(
   (extension) => extension.lastIndexOf(".") > 0,
@@ -218,6 +216,7 @@ function externalSpecifierResolutionRule(languageId: string): ExternalSpecifierR
 /** Stems an added file can satisfy, plus directories used by language-specific module imports. */
 export function addedResolutionStems(addedFiles: readonly string[], languageId = "default"): Set<string> {
   const rule = externalSpecifierResolutionRule(languageId);
+  const directoryEntryStems = IMPORT_RESOLUTION_ROWS[languageId]?.directoryEntryStems;
   const stems = new Set<string>();
   for (const file of addedFiles) {
     const base = path.basename(file);
@@ -232,8 +231,7 @@ export function addedResolutionStems(addedFiles: readonly string[], languageId =
     }
     const directoryEntry = fileStems.some(
       (stem) =>
-        RESOLUTION_ENTRY_STEMS.has(stem) ||
-        (languageId === "scss" && stem === SCSS_PARTIAL_INDEX_STEM && path.extname(file).toLowerCase() === ".scss"),
+        RESOLUTION_ENTRY_STEMS.has(stem) || !!directoryEntryStems?.[path.extname(file).toLowerCase()]?.includes(stem),
     );
     if (!rule.importNamesDirectory && !directoryEntry) continue;
     let directory = path.dirname(file);

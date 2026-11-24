@@ -4,10 +4,14 @@ import {
   rustImportKeywordOffset,
   type ParsedRustImportStatement,
 } from "../../languages/import-statement-parsers.js";
-import type { LanguageExtensionMap } from "../../languages.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
-import { csharpExternAlias, csharpUsingDirective, type CsharpUsingDirective } from "../../util/csharp-tree.js";
-import type { JvmImportDirective } from "../../util/jvm-tree.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import {
+  collectCsharpImportDirectives,
+  csharpExternAlias,
+  csharpUsingDirective,
+  type CsharpUsingDirective,
+} from "../../util/csharp-tree.js";
+import { collectJvmImportDirectives, type JvmImportDirective } from "../../util/jvm-tree.js";
 import { isJvmLanguage } from "../../util/syntax-tree.js";
 import { toRange } from "../../util/ast.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
@@ -19,41 +23,23 @@ import { collectLineStartOffsets } from "../../util/lines.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia, sourceRangeFromOffsets } from "./binding-ranges.js";
 import type { Range } from "../../types.js";
 import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
-import type { BuildReport, ImportBinding } from "../types.js";
-import type { ImportBindingSink, ImportDegradedHook, ImportResolver, ResolvedImportTarget } from "./context.js";
-import type { ParsedFileContext } from "../parse-context.js";
+import type { ImportBinding } from "../types.js";
+import type { LanguageSpecificImportContext, ResolvedImportTarget } from "./context.js";
 import type { CsharpProjectUsing } from "../../util/csharp-project-usings.js";
+import { normalizeGoImports } from "./go-imports.js";
+import { appendPhpComposerImplicitImports } from "./php-imports.js";
+import { collectPythonImportsFromNativeMatches } from "./python.js";
+import { needsValueRequireSupplement } from "./js-text-imports.js";
 
 /**
- * Per-language import-binding registry for statement overrides and implicit native-capture
- * mapping. Rows are keyed by language id and live next to `language-specific.ts` because that
- * file is the only dispatch consumer this wave.
- *
- * One row owns the statement handler, the implicit mapper, and the flags those paths used to
- * spell as `languageId === "..."` chains: trivia masking, Rust statement-key offsets, and Rust's
- * reduced-mode rescan. C# and the JVM languages bind their directives from syntax-tree nodes
- * (`applyCsharpImportDirective`, `applyJvmImportDirective`), so their rows name no statement handler.
- * `text-import-extractors.ts` stays the shared discovery source; this table does not re-scan.
+ * Per-language import-binding registry for statement overrides, tree/capture extraction,
+ * implicit native-capture mapping, and file-boundary completion. `imports.ts` and
+ * `language-specific.ts` keep their existing extraction and completion order while reading
+ * these preselected operations. `text-import-extractors.ts` remains the discovery source.
  *
  * `tests/import-binding-tables.test.ts` asserts every registered language has a row, that an
  * omission names a reason, and that a capability row names a reason for each handler it lacks.
  */
-
-export type LanguageSpecificImportContext = ImportBindingSink & {
-  file: string;
-  projectRoot: string;
-  source: string;
-  languageId: string;
-  resolveFrom: ImportResolver;
-  /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
-  languageExtensions?: LanguageExtensionMap;
-  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
-  report?: BuildReport;
-  /** Reports that this file's imports are incomplete, so the module that holds them is marked parser-degraded. */
-  onDegraded?: ImportDegradedHook;
-  getBindings: () => ImportBinding[];
-  replaceBindings: (bindings: ImportBinding[]) => void;
-};
 
 export type ImplicitImportBindingArgs = {
   from: string;
@@ -93,6 +79,12 @@ export type ImportBindingRow = {
   omittedReason?: string;
   applyStatement?: ApplyStatementImportOverride;
   appendImplicit?: AppendImplicitImportBinding;
+  normalizeBindings?: (context: LanguageSpecificImportContext) => void;
+  appendImplicitFiles?: (context: LanguageSpecificImportContext) => Promise<void>;
+  captureBindings?: typeof collectPythonImportsFromNativeMatches;
+  treeBindings?: (context: LanguageSpecificImportContext, tree: SyntaxTreeLike) => Promise<void>;
+  needsValueRequireSupplement?: (source: string) => boolean;
+  fallbackBindingsFromSpecifiers?: true;
   /** Present only with `applyStatement`. */
   maskTrivia?: StatementTriviaMask;
   /**
@@ -498,7 +490,6 @@ function isRustTestOnlyStatement(
   normalizedStmt: string,
   statementStartIndex?: number,
 ): boolean {
-  if (context.languageId !== "rust") return false;
   if (statementStartIndex !== undefined) {
     const keywordOffset = rustImportKeywordOffset(context.source.slice(statementStartIndex));
     const keywordIndex = keywordOffset >= 0 ? statementStartIndex + keywordOffset : statementStartIndex;
@@ -695,6 +686,20 @@ function appendIncludeStarImplicitBinding(
   });
 }
 
+async function appendCsharpTreeBindings(context: LanguageSpecificImportContext, tree: SyntaxTreeLike): Promise<void> {
+  for (const directive of collectCsharpImportDirectives(tree)) await applyCsharpImportDirective(context, directive);
+}
+
+async function appendJvmTreeBindings(context: LanguageSpecificImportContext, tree: SyntaxTreeLike): Promise<void> {
+  if (!isJvmLanguage(context.languageId)) return;
+  const bound = new Set<string>();
+  for (const directive of collectJvmImportDirectives(tree, context.languageId)) {
+    if (bound.has(directive.statement.text)) continue;
+    bound.add(directive.statement.text);
+    await applyJvmImportDirective(context, directive);
+  }
+}
+
 const ECMASCRIPT_STATEMENT_OMITTED =
   "ECMAScript import bindings come from native captures and the JS text fallback, not a statement parser override.";
 const ECMASCRIPT_IMPLICIT_OMITTED =
@@ -714,20 +719,31 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
     appendImplicit: appendIncludeStarImplicitBinding,
     statementOmittedReason: INCLUDE_STATEMENT_OMITTED,
   },
-  css: { omittedReason: STYLESHEET_OMITTED },
+  css: {
+    statementOmittedReason: STYLESHEET_OMITTED,
+    implicitOmittedReason: STYLESHEET_OMITTED,
+    fallbackBindingsFromSpecifiers: true,
+  },
   csharp: {
+    treeBindings: appendCsharpTreeBindings,
     statementOmittedReason:
       "C# using directives are bound from syntax-tree nodes by applyCsharpImportDirective, not from statement text.",
     implicitOmittedReason: "C# using directives are bound from syntax-tree nodes; no native capture is mapped.",
   },
   go: {
+    normalizeBindings: normalizeGoImports,
     appendImplicit: appendGoImplicitBinding,
     statementOmittedReason:
       "Go import bindings come from native captures plus implicit alias/blank/dot mapping; there is no statement parser override.",
   },
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
-  html: { omittedReason: "Document format; embedded scripts parse as their own language." },
+  html: {
+    statementOmittedReason: "Document imports come from graph specifiers, not statement overrides.",
+    implicitOmittedReason: "Document imports come from graph specifiers, not native binding captures.",
+    fallbackBindingsFromSpecifiers: true,
+  },
   java: {
+    treeBindings: appendJvmTreeBindings,
     statementOmittedReason:
       "Java imports are bound from syntax-tree nodes by applyJvmImportDirective, not from statement text.",
     implicitOmittedReason: "Java imports are bound from syntax-tree nodes; no native capture is mapped.",
@@ -737,21 +753,28 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
     implicitOmittedReason: ECMASCRIPT_IMPLICIT_OMITTED,
   },
   kotlin: {
+    treeBindings: appendJvmTreeBindings,
     statementOmittedReason:
       "Kotlin imports are bound from syntax-tree nodes by applyJvmImportDirective, not from statement text.",
     implicitOmittedReason: "Kotlin imports are bound from syntax-tree nodes; no native capture is mapped.",
   },
-  less: { omittedReason: STYLESHEET_OMITTED },
+  less: {
+    statementOmittedReason: STYLESHEET_OMITTED,
+    implicitOmittedReason: STYLESHEET_OMITTED,
+    fallbackBindingsFromSpecifiers: true,
+  },
   markdown: { omittedReason: "Document format; fenced code blocks parse as their own language." },
   mdx: { omittedReason: "MDX document format; scripts parse as js/ts and templates as html." },
   php: {
+    appendImplicitFiles: appendPhpComposerImplicitImports,
     applyStatement: applyPhpStatementOverride,
     maskTrivia: "use-keyword",
     implicitOmittedReason: "PHP use and include statements are fully handled by the statement override.",
   },
   python: {
-    omittedReason:
-      "Python import bindings are collected in python.ts, not through statement overrides or implicit mapping.",
+    captureBindings: collectPythonImportsFromNativeMatches,
+    statementOmittedReason: "Python import bindings are collected in python.ts, not through statement overrides.",
+    implicitOmittedReason: "Python import bindings are collected in python.ts, not through implicit mapping.",
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
   ruby: {
@@ -766,7 +789,11 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
     statementKeyUsesOffset: true,
     rescanTextBindings: true,
   },
-  scss: { omittedReason: STYLESHEET_OMITTED },
+  scss: {
+    statementOmittedReason: STYLESHEET_OMITTED,
+    implicitOmittedReason: STYLESHEET_OMITTED,
+    fallbackBindingsFromSpecifiers: true,
+  },
   sql: { omittedReason: "Data language; no import-statement or implicit-binding dispatch." },
   terraform: {
     omittedReason: "A module call binds no local names; `module.<name>` resolves in src/terraform/.",
@@ -778,10 +805,12 @@ export const IMPORT_BINDING_ROWS: Record<string, ImportBindingRow> = {
       "Swift import bindings are implicit namespace/star (or named) mappings from native captures; there is no statement parser override.",
   },
   ts: {
+    needsValueRequireSupplement,
     statementOmittedReason: ECMASCRIPT_STATEMENT_OMITTED,
     implicitOmittedReason: ECMASCRIPT_IMPLICIT_OMITTED,
   },
   tsx: {
+    needsValueRequireSupplement,
     statementOmittedReason: ECMASCRIPT_STATEMENT_OMITTED,
     implicitOmittedReason: ECMASCRIPT_IMPLICIT_OMITTED,
   },

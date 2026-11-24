@@ -14,12 +14,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import { isJvmPackageSymbolVisible, languageHasDeclarationVisibility } from "./declaration-visibility.js";
 import { isJvmStaticWildcardMember, isJvmTypeWildcardMember, jvmWildcardTypeOwner } from "./expand-star-imports.js";
 import type { FileId } from "../types.js";
-import {
-  foldPhpIdentifierCase,
-  normalizeCsharpIdentifier,
-  normalizeCsharpQualifiedName,
-  normalizeKotlinIdentifier,
-} from "../util/identifiers.js";
+import { foldPhpIdentifierCase, normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
   csharpNamespaceAt,
@@ -30,7 +25,6 @@ import {
   isUnitBareNameVisible,
 } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
-import { resolvePythonSubmoduleExact } from "../util/resolution/python.js";
 import { PHP_CLASS_LIKE_KINDS } from "./php-namespace-symbols.js";
 import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
 import {
@@ -42,6 +36,11 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
+import { importNamePolicyFor } from "./name-lookup-policies/imports.js";
+import { selectFunctionOverloadByArity } from "./name-lookup-policies/jvm-imports.js";
+import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
+import type { ImportNameDeps, ImportNameResolutionOptions, ImportNameRules } from "./import-name-types.js";
 
 /**
  * Most `resolveExport` results one index keeps. A lookup that finds the cache at the limit drops the
@@ -68,6 +67,7 @@ type ModuleNameLookup = {
   /** `normalizePath(module.file)`. */
   file: string;
   languageId: string | undefined;
+  imports: ImportNameRules;
   normalizeIdentifier: (name: string) => string;
   localExports: Map<string, SymbolDef[]>;
   namespaceReexports: Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>;
@@ -86,24 +86,7 @@ type ModuleNameLookups = {
 let nextModuleNameLookupId = 0;
 const moduleNameLookups = new WeakMap<ProjectIndex, ModuleNameLookups>();
 
-export type ResolveExportOptions = {
-  preferredKind?: SymbolKind;
-  allowLocalFallback?: boolean;
-  cNamespace?: "tag" | "ordinary";
-  /** Source position for implicit C# namespace lookup in the initial file. */
-  referenceIndex?: number;
-  /** Explicit C# type argument count, including zero for a name without type arguments. */
-  csharpGenericArity?: number;
-  /**
-   * Explicit argument count at a call. Java and Kotlin overload sets (several functions
-   * exported under one name) are chosen by indexed `callable.arity`; other languages ignore it.
-   */
-  argumentCount?: number;
-  /** Whether the name is called (even with an unknown argument count) or is a callable-reference target. */
-  isCallableUse?: boolean;
-  /** JVM type syntax excludes same-named factory functions and values before judging uniqueness. */
-  typeOnly?: boolean;
-};
+export type ResolveExportOptions = ImportNameResolutionOptions;
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
@@ -176,6 +159,7 @@ function moduleNameLookupsFor(index: ProjectIndex): ModuleNameLookups {
         id: nextModuleNameLookupId++,
         file,
         languageId: normalizedSupport?.id,
+        imports: importNamePolicyFor(normalizedSupport?.id),
         normalizeIdentifier,
         localExports,
         namespaceReexports,
@@ -273,11 +257,14 @@ function resolveImplicitUnitExport(
   // lookup must not preempt those established fallbacks.
   const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
   if (!languageId || !IMPLICIT_UNIT_LANGUAGES[languageId]) return null;
+  const imports =
+    moduleNameLookups.get(index)?.byFile.get(fileIdentityKey(file))?.imports ?? importNamePolicyFor(languageId);
+  const namespaceLookup = imports.namespaceLookup;
   const matches: SymbolDef[] = [];
   const peers = getCompilationUnitPeers(
     index,
     file,
-    languageId === "csharp" && qualification !== undefined ? { csharpQualifiedName: true } : undefined,
+    qualification !== undefined ? namespaceLookup?.qualifiedUnitOptions : undefined,
   );
   for (const peerFile of peers.files) {
     const names = moduleNameLookup(index, peerFile);
@@ -301,51 +288,12 @@ function resolveImplicitUnitExport(
       }
     }
   }
-  const unique = languageId === "csharp" ? coalesceEquivalentCsharpPartialExports(index, matches) : matches;
+  const unique = namespaceLookup?.coalesce(index, matches) ?? matches;
   return unique.length === 1 ? (unique[0] ?? null) : null;
-}
-
-/**
- * Same-package Java/Kotlin export that the bare-name unit scan does not answer (a member, for
- * example). Peers come from `getCompilationUnitPeers`, so Java and Kotlin share one package
- * rule. An incomplete set (an unreadable peer, or the same package outside this directory)
- * is not a proven unique answer.
- */
-function resolveSiblingPackageExport(
-  index: ProjectIndex,
-  targetFile: string,
-  exportedName: string,
-): ResolvedExport | null {
-  const peers = getCompilationUnitPeers(index, targetFile);
-  if (!peers.complete) return null;
-  const targetFileKey = fileIdentityKey(targetFile);
-  const matches: ResolvedExport[] = [];
-  for (const peerFile of peers.files) {
-    if (fileIdentityKey(peerFile) === targetFileKey) continue;
-    const hit = resolveExport(index, peerFile, exportedName);
-    if (hit && !matches.some((candidate) => sameResolvedExport(index, candidate, hit))) {
-      matches.push(hit);
-    }
-  }
-  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 function declaresMemberKind(def: SymbolDef): boolean {
   return def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
-}
-
-/**
- * One function from an overload set, or null when the count is not accepted by exactly one.
- * Only indexed `callable.arity` is consulted: a missing arity does not accept, and a count
- * two overloads both accept stays unresolved.
- */
-function selectFunctionOverloadByArity(candidates: readonly SymbolDef[], argumentCount: number): SymbolDef | null {
-  if (candidates.length < 2 || candidates.some((candidate) => candidate.kind !== SymbolKind.Function)) return null;
-  const accepting = candidates.filter((candidate) => {
-    const arity = candidate.callable?.arity;
-    return !!arity && argumentCount >= arity.minArgs && (arity.maxArgs === null || argumentCount <= arity.maxArgs);
-  });
-  return accepting.length === 1 ? (accepting[0] ?? null) : null;
 }
 
 /**
@@ -361,7 +309,7 @@ export function javaKotlinFunctionOverloadIncludes(
 ): boolean {
   if (def.kind !== SymbolKind.Function) return false;
   const languageId = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
-  if (languageId !== "java" && languageId !== "kotlin") return false;
+  if (!isJvmLanguage(languageId)) return false;
   const moduleEntry = moduleFor(index, file);
   if (!moduleEntry) return false;
   const names = moduleNameLookup(index, moduleEntry.file);
@@ -491,22 +439,26 @@ export function resolveExport(
     const normalizedFile = names.file;
     const referenceIndex = innerKey === fileKey ? opts?.referenceIndex : undefined;
     const languageId = names.languageId;
-    const csharpFile = languageId === "csharp";
+    const importRules = names.imports;
+    const namespaceLookup = importRules.namespaceLookup;
     // A dotted name is a namespace path even when the caller has no source position
     // (`using PT = N.Inner.Point` resolves through the bound file, not a use site).
     // A bare name still needs a source position before namespace visibility applies.
     const filtersUseNamespace =
-      csharpFile && (referenceIndex !== undefined || name.includes(".") || name.startsWith("global::"));
-    const separator = filtersUseNamespace ? name.lastIndexOf(".") : -1;
+      namespaceLookup &&
+      (referenceIndex !== undefined ||
+        name.includes(namespaceLookup.separator) ||
+        name.startsWith(namespaceLookup.globalPrefix));
+    const separator = filtersUseNamespace ? name.lastIndexOf(namespaceLookup.separator) : -1;
     let qualification: string | undefined;
     let unqualifiedName = name;
     if (separator >= 0) {
       // `@P.Target` and `P.Target` name the same namespace path.
-      qualification = normalizeCsharpQualifiedName(name.slice(0, separator));
-      unqualifiedName = name.slice(separator + 1);
-    } else if (filtersUseNamespace && name.startsWith("global::")) {
-      qualification = "global::";
-      unqualifiedName = name.slice("global::".length);
+      qualification = namespaceLookup!.normalizeQualifier(name.slice(0, separator));
+      unqualifiedName = name.slice(separator + namespaceLookup!.separator.length);
+    } else if (filtersUseNamespace && name.startsWith(namespaceLookup.globalPrefix)) {
+      qualification = namespaceLookup.globalPrefix;
+      unqualifiedName = name.slice(namespaceLookup.globalPrefix.length);
     }
     const canonicalName = names.normalizeIdentifier(unqualifiedName);
     // A module with nothing under this name, no `export *`, and no fallback local answers null from its
@@ -605,7 +557,7 @@ export function resolveExport(
         if (downstream === "ambiguous") {
           // C include lookup retains its existing declaration recovery: an unresolved
           // intermediate header must not hide another included definition.
-          if (languageId === "c") continue;
+          if (importRules.includedAmbiguity === "continue") continue;
           return remember("ambiguous");
         }
         if (downstream && !included.some((candidate) => sameResolvedExport(index, candidate, downstream))) {
@@ -626,8 +578,8 @@ export function resolveExport(
       // Several same-named functions are an overload set, not a failed lookup. Java static
       // imports and Kotlin package imports both land here; arity picks the unique acceptor.
       const selected =
-        opts?.argumentCount !== undefined && (languageId === "java" || languageId === "kotlin")
-          ? selectFunctionOverloadByArity(localCandidates, opts.argumentCount)
+        opts?.argumentCount !== undefined && importRules.selectOverload
+          ? importRules.selectOverload(localCandidates, opts.argumentCount)
           : null;
       if (selected) {
         const result: ResolvedExport = { kind: "resolved", def: selected };
@@ -668,8 +620,7 @@ export function resolveExport(
     if (reexportCandidates.length) return remember("ambiguous");
     if (explicitExportsTakePrecedence && explicitReexports.length) return remember(null);
 
-    const usesPythonStarExports = languageId === "python";
-    if (usesPythonStarExports) {
+    if (importRules.exportStars === "last-wins") {
       for (let entryIndex = moduleEntry.exports.length - 1; entryIndex >= 0; entryIndex -= 1) {
         const entry = moduleEntry.exports[entryIndex]!;
         if (entry.type !== "exportStar") continue;
@@ -912,37 +863,6 @@ export function resolveModuleExports(
   return resolved;
 }
 
-/**
- * Qualified name a C# using-alias binds. `from` is either the namespace (`N.Inner`
- * for `using PT = N.Inner.Point`) or the full dotted type when an earlier resolver
- * already kept it (`Utils.UtilsClass`). A bare imported name must not be searched on
- * its own: compilation-unit lookup would accept a same-named type in another namespace.
- */
-function csharpNamedImportLookupName(from: string, exportedName: string): string {
-  if (!exportedName || exportedName.includes(".") || exportedName.startsWith("global::")) return exportedName;
-  const normalizedFrom = from.trim();
-  if (!normalizedFrom) return exportedName;
-  const parts = normalizedFrom.split(".").filter(Boolean);
-  const tail = parts[parts.length - 1];
-  if (!tail) return exportedName;
-  if (normalizeCsharpIdentifier(tail) === normalizeCsharpIdentifier(exportedName)) return normalizedFrom;
-  return `${normalizedFrom}.${exportedName}`;
-}
-
-/**
- * The name a C# binding looks up. A named binding qualifies with its alias target. A `using N;`
- * star binding qualifies with `N`: its resolved file is one of the files that declare `N`, and
- * the qualified lookup reaches exactly the types of `N` in every declaring file, not types of
- * other namespaces the bound file also declares.
- */
-function csharpImportLookupName(imp: ImportBinding, exportedName: string): string {
-  if (imp.kind === "named") return csharpNamedImportLookupName(imp.from, exportedName);
-  if (imp.kind !== "star" || imp.staticMembersOf) return exportedName;
-  if (!exportedName || exportedName.includes(".") || exportedName.startsWith("global::")) return exportedName;
-  const namespaceName = imp.from.trim();
-  return namespaceName ? `${namespaceName}.${exportedName}` : exportedName;
-}
-
 const csharpNamespaceImportDirectoryFiles = new WeakMap<ProjectIndex, Map<ImportBinding, FileId[]>>();
 
 /**
@@ -958,7 +878,10 @@ export function csharpNamespaceImportDirectories(index: ProjectIndex): Map<Impor
   const edgesByImporter = new Map<string, Map<string, Map<string, FileId>>>();
   for (const edge of index.graph.edges) {
     if (edge.to.type !== "file") continue;
-    if (supportForFileWithoutHeaderSample(edge.to.path, index.languageExtensions)?.id !== "csharp") continue;
+    const targetRules =
+      moduleNameLookups.get(index)?.byFile.get(fileIdentityKey(edge.to.path))?.imports ??
+      importNamePolicyFor(supportForFileWithoutHeaderSample(edge.to.path, index.languageExtensions)?.id);
+    if (!targetRules.namespaceLookup) continue;
     const importerKey = fileIdentityKey(edge.from);
     let byRaw = edgesByImporter.get(importerKey);
     if (!byRaw) edgesByImporter.set(importerKey, (byRaw = new Map()));
@@ -970,15 +893,27 @@ export function csharpNamespaceImportDirectories(index: ProjectIndex): Map<Impor
   }
   const result = new Map<ImportBinding, FileId[]>();
   for (const mod of index.byFile.values()) {
+    let moduleNamespaceLookup: ImportNameRules["namespaceLookup"] | null | undefined;
     for (const imp of mod.imports) {
-      const isNamespaceAlias =
-        imp.kind === "namespace" &&
-        supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id === "csharp";
+      let isNamespaceAlias = false;
+      if (imp.kind === "namespace") {
+        if (moduleNamespaceLookup === undefined) {
+          const imports =
+            moduleNameLookups.get(index)?.byFile.get(fileIdentityKey(mod.file))?.imports ??
+            importNamePolicyFor(supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id);
+          moduleNamespaceLookup = imports.namespaceLookup ?? null;
+        }
+        isNamespaceAlias = !!moduleNamespaceLookup;
+      }
       if (!isNamespaceAlias && (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string"))
         continue;
       const boundFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-      if (boundFile && supportForFileWithoutHeaderSample(boundFile, index.languageExtensions)?.id !== "csharp")
-        continue;
+      if (boundFile) {
+        const boundRules =
+          moduleNameLookups.get(index)?.byFile.get(fileIdentityKey(boundFile))?.imports ??
+          importNamePolicyFor(supportForFileWithoutHeaderSample(boundFile, index.languageExtensions)?.id);
+        if (!boundRules.namespaceLookup) continue;
+      }
       const files = new Map<string, FileId>();
       if (boundFile) files.set(fileIdentityKey(path.posix.dirname(normalizePath(boundFile))), boundFile);
       const targets = edgesByImporter.get(fileIdentityKey(mod.file))?.get(normalizeCsharpQualifiedName(imp.from));
@@ -1120,7 +1055,7 @@ function resolveJvmPackageExport(
   const candidates: SymbolDef[] = [];
   for (const file of files) {
     const targetLanguage = supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id;
-    if (targetLanguage !== "java" && targetLanguage !== "kotlin") continue;
+    if (!isJvmLanguage(targetLanguage)) continue;
     const names = moduleNameLookup(index, file);
     if (!names) continue;
     for (const target of names.localExports.get(names.normalizeIdentifier(name)) ?? []) {
@@ -1136,9 +1071,10 @@ function resolveJvmPackageExport(
   }
   // An unread declaration can overload any Kotlin call or callable reference, including a class name with a factory
   // function. Class type navigation remains safe: another class cannot redeclare the proven type.
+  const importerSyntax = importerLanguageId ? IMPORT_RESOLUTION_ROWS[importerLanguageId]?.packageSyntax : undefined;
   if (
     incomplete &&
-    importerLanguageId !== "java" &&
+    importerSyntax?.importKind !== "type" &&
     (isCallableUse || candidates.some((candidate) => candidate.kind === SymbolKind.Function))
   )
     return null;
@@ -1166,6 +1102,15 @@ export function javaStaticNamedImportIncludes(index: ProjectIndex, imp: ImportBi
   );
 }
 
+const IMPORT_NAME_DEPS: ImportNameDeps = {
+  resolveExport,
+  csharpShadowedImports,
+  resolveCsharpNamespaceImport,
+  resolvePhpExportByImportType,
+  directModuleValueEntry,
+  sameResolvedExport,
+};
+
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
@@ -1175,7 +1120,11 @@ export function resolveImported(
   if (!csharpGlobalNamespaceMayExport(imp, exportedName, opts?.csharpGenericArity)) return null;
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
-  if (imp.kind === "named" && imp.jvmPackageIncomplete && imp.jvmPackageLanguageId === "kotlin") {
+  const packageSyntax =
+    imp.kind === "named" && imp.jvmPackageLanguageId
+      ? IMPORT_RESOLUTION_ROWS[imp.jvmPackageLanguageId]?.packageSyntax
+      : undefined;
+  if (imp.kind === "named" && imp.jvmPackageIncomplete && packageSyntax?.importKind === "declaration") {
     if (opts?.isCallableUse || opts?.argumentCount !== undefined) return null;
     const hit = resolveExport(index, targetFile, exportedName, opts);
     return hit?.kind === "resolved" && hit.def.kind !== SymbolKind.Function ? hit.def : null;
@@ -1246,22 +1195,23 @@ export function resolveImported(
   const namespace = opts?.cNamespace ?? (imp.kind === "named" ? imp.cNamespace : undefined);
   if (opts?.cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== opts.cNamespace) return null;
 
-  const phpRole = phpNamedImportRole(imp);
-  // A C# `using PT = N.Inner.Point` stores the namespace in `from` and the type in
-  // `imported`. A bare `Point` lookup is an implicit compilation-unit search, so a peer
-  // `N.Point` is the only bare-visible match when this file also declares outer `N`.
-  // The alias names one namespace, and that qualified name is what every consumer resolves.
-  const support = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions);
-  if (support?.id === "csharp" && csharpShadowedImports(index).has(imp)) return null;
-  let lookupName = exportedName;
-  if (support?.id === "csharp") lookupName = csharpImportLookupName(imp, exportedName);
-  else if (support?.id === "java" || support?.id === "kotlin") lookupName = normalizeKotlinIdentifier(exportedName);
-  if (support?.id === "csharp" && imp.kind === "star" && !imp.staticMembersOf) {
-    return resolveCsharpNamespaceImport(index, imp, targetFile, lookupName, {
-      ...opts,
-      ...(namespace ? { cNamespace: namespace } : {}),
-    });
+  const importRules =
+    moduleNameLookups.get(index)?.byFile.get(fileIdentityKey(targetFile))?.imports ??
+    importNamePolicyFor(supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id);
+  if (importRules.resolveTarget) {
+    const specialized = importRules.resolveTarget(
+      index,
+      imp,
+      targetFile,
+      exportedName,
+      opts,
+      namespace,
+      IMPORT_NAME_DEPS,
+    );
+    if (specialized !== undefined) return specialized;
   }
+  const lookupName = importRules.aliasKey?.(exportedName) ?? exportedName;
+  const phpRole = phpNamedImportRole(imp);
   const hit = phpRole
     ? resolvePhpExportByImportType(index, targetFile, exportedName, phpRole)
     : resolveExport(index, targetFile, lookupName, {
@@ -1280,22 +1230,14 @@ export function resolveImported(
     if (directValue) return directValue.target;
   }
 
-  // Only Java, Kotlin, and Python matter below, so a `.h` target never needs its sample read.
-  if (support?.id === "java" || support?.id === "kotlin") {
-    const siblingHit = resolveSiblingPackageExport(index, targetFile, lookupName);
-    if (siblingHit?.kind === "resolved") {
-      if (imp.kind === "named" && siblingHit.def.javaPackagePrivate && !imp.jvmSamePackage) return null;
-      return siblingHit.def;
-    }
-    if (siblingHit?.kind === "namespace") {
-      return { namespace: siblingHit.file };
-    }
+  if (importRules.resolveMissingTarget) {
+    return importRules.resolveMissingTarget(index, imp, targetFile, lookupName, IMPORT_NAME_DEPS);
   }
 
   // A named `from pkg import child` may load child as a submodule. A plain
   // namespace import of pkg cannot gain child solely because child.py exists.
-  if (support?.id === "python" && imp.kind === "named" && imp.mechanism === "python") {
-    const submodule = resolvePythonSubmoduleExact(targetFile, exportedName);
+  if (importRules.resolveSubmodule && imp.kind === "named" && imp.mechanism === importRules.submoduleMechanism) {
+    const submodule = importRules.resolveSubmodule(targetFile, exportedName);
     if (submodule) return { namespace: submodule };
   }
 

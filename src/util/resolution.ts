@@ -13,31 +13,31 @@ import {
   resolveWorkspacePackage,
   type WorkspaceConfig,
 } from "./workspace.js";
-import { clearJvmResolutionCaches, lookupJvmImport } from "./resolution/jvm.js";
+import { clearJvmResolutionCaches } from "./resolution/jvm.js";
 import { clearCsharpResolutionCaches } from "./resolution/csharp.js";
-import { clearCppResolutionCaches, isCppNamedModuleSpecifier, resolveCppImportPath } from "./resolution/cpp.js";
+import { clearCppResolutionCaches } from "./resolution/cpp.js";
 import { findFirstExistingResolutionCandidate } from "./resolution/find-first-existing.js";
 import { isDirectory } from "./resolution/files.js";
-import { findGoPackageEntry, resolveGoImportPath } from "./resolution/go.js";
+import { findGoPackageEntry } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
-import { clearPhpResolutionCaches, resolvePhpImportPath } from "./resolution/php.js";
+import { clearPhpResolutionCaches } from "./resolution/php.js";
 import { clearPythonResolutionCache } from "./resolution/python.js";
-import { resolveRustImportPath } from "./resolution/rust.js";
 import {
   clearTsconfigCache,
   matchMappedSpecifier,
   matchPathScopeKey,
   type MatchPathFn,
 } from "./resolution/tsconfig.js";
-import type {
-  CFamilyIncludeForm,
-  ModuleSpecifierExportCondition,
-  ModuleSpecifierResolutionKind,
-} from "./specifiers.js";
+import type { ModuleSpecifierExportCondition, ModuleSpecifierResolutionKind } from "./specifiers.js";
 import type { PackageExportConditionMode } from "./package-exports.js";
 import { lruMapGet, lruMapSet } from "./lru-map.js";
 import { currentProbeCache, probeKind } from "./fs-probe-cache.js";
-import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { specifierTargetPolicyFor } from "./resolution/language-specifiers.js";
+import type {
+  ImportSpecifierDeps,
+  ImportSpecifierOptions,
+  SpecifierTargetPolicy,
+} from "./resolution/language-policy-types.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
@@ -65,58 +65,6 @@ function getResolveSpecifierCacheEntry(key: string): ResolveSpecifierCacheEntry 
 
 function setResolveSpecifierCacheEntry(key: string, value: ResolveSpecifierCacheEntry): void {
   lruMapSet(resolveSpecifierCache, key, value, MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES);
-}
-
-function isCFamilyQuotedIncludeLiteral(text: string | undefined): boolean {
-  if (!text) return false;
-  const trimmed = text.trim();
-  if (trimmed.length < 2) return false;
-  return trimmed.startsWith('"') && trimmed.endsWith('"');
-}
-
-function cFamilyQuotedIncludeRelativePath(spec: string): string {
-  if (isCFamilyQuotedIncludeLiteral(spec)) return spec.trim().slice(1, -1);
-  return spec;
-}
-
-/**
- * Angle includes stay external unless a configured resolution hint proves a first-party file.
- * Only the bracketed inner path feeds the hint lookup, and the includer's directory is never
- * consulted: `#include <lib.h>` is not a relative include.
- */
-async function resolveCFamilyAngleIncludeFromHints(
-  projectRoot: string,
-  spec: string,
-  resolutionHints: string[] | undefined,
-): Promise<FileId | null> {
-  // Native captures keep `<lib.h>`; the reduced-mode text extractor already strips the brackets.
-  const inner = spec.startsWith("<") && spec.endsWith(">") ? spec.slice(1, -1).trim() : spec.trim();
-  return resolveCFamilyExactIncludeFromHints(projectRoot, inner, resolutionHints);
-}
-
-/**
- * Combine a C-family include search directory with the include's inner path verbatim:
- * no extension or index probing, so quoted and angle includes cannot bind a same-stem script.
- * Hints are search directories; projectRoot is the boundary. Parent segments such as
- * `../private/secret.h` remain first-party when the exact candidate stays inside
- * projectRoot, and candidates that resolve outside it stay external.
- */
-async function resolveCFamilyExactIncludeFromHints(
-  projectRoot: string,
-  innerPath: string,
-  resolutionHints: string[] | undefined,
-): Promise<FileId | null> {
-  const inner = innerPath.trim();
-  if (!inner) return null;
-  for (const hint of normalizeResolutionHints(resolutionHints)) {
-    const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
-    if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
-    const base = path.resolve(baseDir, inner);
-    if (!isFilePathWithinRoot(projectRoot, base)) continue;
-    const hit = await acceptFirstPartyFile(projectRoot, base);
-    if (hit) return hit;
-  }
-  return null;
 }
 
 export type FileId = string;
@@ -232,105 +180,38 @@ async function confineLanguageHit(
   const confined = await acceptFirstPartyFile(projectRoot, resolved);
   return confined ?? { external: spec };
 }
+const IMPORT_SPECIFIER_DEPS: ImportSpecifierDeps = { confineLanguageHit, acceptFirstPartyFile, resolveSpecifier };
+const EMPTY_IMPORT_SPECIFIER_OPTIONS: ImportSpecifierOptions = {};
 
 export async function resolveImportSpecifier(
   projectRoot: string,
   fromFile: string,
   spec: string,
   languageId: string,
-  opts?: {
-    matchPath?: MatchPathFn;
-    workspaceConfig?: WorkspaceConfig;
-    resolveNodeModules?: boolean;
-    resolutionHints?: string[];
-    phpImportType?: "class" | "function" | "const";
-    resolutionKind?: ModuleSpecifierResolutionKind;
-    allowScssPartialResolution?: boolean;
-    exportCondition?: ModuleSpecifierExportCondition;
-    pathAttribute?: string;
-    statementStartIndex?: number;
-    includeForm?: CFamilyIncludeForm;
-    parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
-  },
+  opts?: ImportSpecifierOptions,
+  policy: SpecifierTargetPolicy = specifierTargetPolicyFor(languageId),
 ): Promise<FileId | { external: string }> {
-  if (languageId === "go") {
-    const goHit = await confineLanguageHit(projectRoot, await resolveGoImportPath(projectRoot, fromFile, spec), spec);
-    if (goHit) return goHit;
-  }
-  if (languageId === "kotlin" || languageId === "java") {
-    const lookup = await lookupJvmImport(projectRoot, spec, { languageId, fromFile });
-    const jvmHit = await confineLanguageHit(projectRoot, lookup.file, spec);
-    if (jvmHit) return jvmHit;
-    // A known package's declarations are authoritative, and an unread file may still declare the name. Neither miss
-    // permits a filename guess. Unknown packages can still name nested types through the path of their owner.
+  const declarationImport = policy.declarationImport;
+  if (declarationImport) {
+    const lookup = await declarationImport.lookup(projectRoot, spec, {
+      languageId: declarationImport.languageId,
+      fromFile,
+    });
+    const hit = await confineLanguageHit(projectRoot, lookup.file, spec);
+    if (hit) return hit;
+    // Known packages and unread declarations never permit a filename guess.
     if (lookup.incomplete || lookup.packageKnown) return { external: spec };
   }
-  if (languageId === "php") {
-    const phpHit = await confineLanguageHit(
+  const resolveLanguageImport = policy.resolveImport;
+  if (resolveLanguageImport) {
+    const resolved = await resolveLanguageImport(
       projectRoot,
-      await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType, opts?.parsedFiles),
+      fromFile,
       spec,
+      opts ?? EMPTY_IMPORT_SPECIFIER_OPTIONS,
+      IMPORT_SPECIFIER_DEPS,
     );
-    if (phpHit) return phpHit;
-    if (opts?.phpImportType) return { external: spec };
-  }
-  if (languageId === "c" || languageId === "cpp") {
-    // Include form is per occurrence: `#include "HEADER"` and `#include HEADER` both extract
-    // the specifier `HEADER`, so a file-wide spelling set cannot classify either occurrence.
-    const form = opts?.includeForm;
-    const isAngleInclude = form === "angle" || (form === undefined && spec.startsWith("<") && spec.endsWith(">"));
-    if (isAngleInclude) {
-      const angleHit = await resolveCFamilyAngleIncludeFromHints(projectRoot, spec, opts?.resolutionHints);
-      return angleHit ?? { external: spec };
-    }
-    const isQuotedInclude = form === "literal" || (form === undefined && isCFamilyQuotedIncludeLiteral(spec));
-    if (isQuotedInclude) {
-      const inner = cFamilyQuotedIncludeRelativePath(spec);
-      const siblingHit = await acceptFirstPartyFile(projectRoot, path.resolve(path.dirname(fromFile), inner));
-      if (siblingHit) return siblingHit;
-      const hintHit = await resolveCFamilyExactIncludeFromHints(projectRoot, inner, opts?.resolutionHints);
-      if (hintHit) return hintHit;
-      // A literal include never reaches generic extension/index/package/path-alias resolution:
-      // the exact include is either first-party or external under its raw spelling.
-      return { external: spec };
-    }
-    if (form === "macro") {
-      // A preprocessor macro include is never a C++ module import. Named C++ `import HEADER`
-      // declarations have no include form and continue through the module branch below.
-      return { external: spec };
-    }
-    if (languageId === "cpp") {
-      const cppHit = await confineLanguageHit(projectRoot, await resolveCppImportPath(projectRoot, spec), spec);
-      if (cppHit) return cppHit;
-      if (isCppNamedModuleSpecifier(spec)) return { external: spec };
-    }
-  }
-
-  if (languageId === "rust") {
-    const statementStartIndex = opts?.statementStartIndex;
-    const pathAttribute = statementStartIndex !== undefined ? opts?.pathAttribute : undefined;
-    const rustResolved = await resolveRustImportPath(projectRoot, fromFile, spec, pathAttribute, statementStartIndex);
-    const rustHit = await confineLanguageHit(projectRoot, rustResolved, spec);
-    if (rustHit) return rustHit;
-    return { external: spec };
-  }
-
-  if (
-    languageId === "zig" &&
-    spec.endsWith(".zig") &&
-    !spec.startsWith(".") &&
-    !spec.startsWith("/") &&
-    !/^[A-Za-z]:[\\/]/.test(spec)
-  ) {
-    // Bare api.zig names a sibling file. Reuse specifier resolution for path/root confinement.
-    // Packages std and build_options have no .zig suffix and stay external below.
-    const zigHit = await resolveSpecifier(fromFile, "./" + spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
-      resolveNodeModules: !!opts?.resolveNodeModules,
-      ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-      ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
-      ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
-    });
-    if (typeof zigHit === "string") return zigHit;
+    if (resolved !== undefined) return resolved;
   }
 
   const resolutionKind = opts?.resolutionKind;

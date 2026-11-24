@@ -1,16 +1,9 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { JvmLanguageId } from "./syntax-tree.js";
+import { IMPORT_RESOLUTION_ROWS } from "../indexer/import-resolution-tables.js";
 
 /** Nodes that spell a dotted name: Java `scoped_identifier` and Kotlin `qualified_identifier`. */
 const NAME_NODE_TYPES: Record<string, true> = { identifier: true, scoped_identifier: true, qualified_identifier: true };
-
-const JAVA_TYPE_DECLARATION_TYPES: Record<string, true> = {
-  class_declaration: true,
-  interface_declaration: true,
-  enum_declaration: true,
-  record_declaration: true,
-  annotation_type_declaration: true,
-};
 
 /**
  * What one Java or Kotlin file declares, read from its own syntax tree and stored with its module. Nothing here
@@ -83,7 +76,7 @@ function topLevelNodes(parent: SyntaxNodeLike): SyntaxNodeLike[] {
 
 /** The package a file declares, or `null` for the unnamed package. */
 export function jvmPackageName(tree: SyntaxTreeLike, languageId: JvmLanguageId): string | null {
-  const clauseType = languageId === "kotlin" ? "package_header" : "package_declaration";
+  const clauseType = IMPORT_RESOLUTION_ROWS[languageId]!.packageSyntax!.packageNodeType;
   const clause = topLevelNodes(tree.rootNode).find((member) => member.type === clauseType);
   const name = clause?.namedChildren.find((child) => NAME_NODE_TYPES[child.type]);
   const identifiers = name ? nameIdentifiers(name) : [];
@@ -99,18 +92,13 @@ export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguag
   const symbols = new Set<string>();
   const javaTypes = new Set<string>();
   const members = topLevelNodes(tree.rootNode);
+  const syntax = IMPORT_RESOLUTION_ROWS[languageId]!.packageSyntax!;
+  const nameFields = syntax.topLevelNames!;
+  const peerTypes = syntax.peerTypeDeclarations;
   for (const member of members) {
-    let name: string | undefined;
-    if (languageId === "java") {
-      if (JAVA_TYPE_DECLARATION_TYPES[member.type]) name = member.childForFieldName("name")?.text;
-    } else if (member.type === "class_declaration" || member.type === "object_declaration") {
-      name = member.childForFieldName("name")?.text;
-      if (name) javaTypes.add(name);
-    } else if (member.type === "type_alias") {
-      name = member.childForFieldName("type")?.text;
-    } else if (member.type === "function_declaration") {
-      name = member.childForFieldName("name")?.text;
-    }
+    const nameField = nameFields[member.type];
+    const name = nameField ? member.childForFieldName(nameField)?.text : undefined;
+    if (name && peerTypes?.[member.type]) javaTypes.add(name);
     if (name) symbols.add(name);
   }
   const packageName = jvmPackageName(tree, languageId);
@@ -118,7 +106,7 @@ export function collectJvmFileFacts(tree: SyntaxTreeLike, languageId: JvmLanguag
   return {
     packageName,
     symbols: [...symbols],
-    ...(languageId === "kotlin" ? { javaTypes: [...javaTypes] } : {}),
+    ...(peerTypes ? { javaTypes: [...javaTypes] } : {}),
     ...(incomplete ? { incomplete: true as const } : {}),
   };
 }
@@ -147,7 +135,7 @@ export function isJvmFileFacts(value: unknown): value is JvmFileFacts {
 
 /** The `import` statements of a file in source order; only the top level of a file, or an ERROR in it, can hold one. */
 export function collectJvmImportDirectives(tree: SyntaxTreeLike, languageId: JvmLanguageId): JvmImportDirective[] {
-  const statementType = languageId === "kotlin" ? "import" : "import_declaration";
+  const statementType = IMPORT_RESOLUTION_ROWS[languageId]!.packageSyntax!.importNodeType;
   const directives: JvmImportDirective[] = [];
   for (const statement of topLevelNodes(tree.rootNode)) {
     if (statement.type !== statementType) continue;

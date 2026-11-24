@@ -8,6 +8,8 @@ import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolution-candidates.
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
 import type { BuildReport } from "../indexer/types.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
+import { specifierTargetPolicyFor } from "../util/resolution/language-specifiers.js";
+import type { SpecifierTargetPolicy } from "../util/resolution/language-policy-types.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -56,6 +58,7 @@ function withSpecifierMetadata(entry: ModuleSpecifier, to: EdgeTo): ResolvedSpec
 export async function resolveModuleSpecifierEdges(
   entry: ModuleSpecifier,
   context: ModuleSpecifierResolutionContext,
+  policy: SpecifierTargetPolicy = specifierTargetPolicyFor(context.support.id),
 ): Promise<ResolvedSpecifierEdge[] | null> {
   const graphOnlyLanguage = isGraphOnlyLanguage(context.support.id);
   let resolutionExtensions: readonly string[] | undefined;
@@ -65,26 +68,32 @@ export async function resolveModuleSpecifierEdges(
     resolutionExtensions = getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document");
   }
 
-  const targets = await resolveSpecifierTargets(context.file, entry.spec, context.support.id, {
-    projectRoot: context.projectRoot,
-    ...(context.matchPath ? { matchPath: context.matchPath } : {}),
-    ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
-    resolveNodeModules: !!context.resolveNodeModules,
-    ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
-    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
-    ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
-    ...(entry.raw !== undefined ? { rawSpecifier: entry.raw } : {}),
-    ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
-    ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
-    ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
-    ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
-    ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
-    ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
-    ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
-    ...(resolutionExtensions ? { resolutionExtensions } : {}),
-    ...(context.report ? { report: context.report } : {}),
-    ...(context.parsedFiles ? { parsedFiles: context.parsedFiles } : {}),
-  });
+  const targets = await resolveSpecifierTargets(
+    context.file,
+    entry.spec,
+    context.support.id,
+    {
+      projectRoot: context.projectRoot,
+      ...(context.matchPath ? { matchPath: context.matchPath } : {}),
+      ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
+      resolveNodeModules: !!context.resolveNodeModules,
+      ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+      ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
+      ...(entry.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
+      ...(entry.raw !== undefined ? { rawSpecifier: entry.raw } : {}),
+      ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
+      ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
+      ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
+      ...(entry.pathAttribute ? { pathAttribute: entry.pathAttribute } : {}),
+      ...(entry.statementStartIndex !== undefined ? { statementStartIndex: entry.statementStartIndex } : {}),
+      ...(entry.includeForm ? { includeForm: entry.includeForm } : {}),
+      ...(entry.rubyLoadForm ? { rubyLoadForm: entry.rubyLoadForm } : {}),
+      ...(resolutionExtensions ? { resolutionExtensions } : {}),
+      ...(context.report ? { report: context.report } : {}),
+      ...(context.parsedFiles ? { parsedFiles: context.parsedFiles } : {}),
+    },
+    policy,
+  );
 
   if (targets.files.length) {
     return targets.files.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));

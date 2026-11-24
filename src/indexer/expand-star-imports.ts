@@ -1,15 +1,22 @@
-import { JAVA_SUPPORT, KOTLIN_SUPPORT, supportForFileWithoutHeaderSample } from "../languages.js";
+import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import { SymbolKind, type BuildOptions, type ModuleIndex, type SymbolDef } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
+import { importNamePolicyFor } from "./name-lookup-policies/imports.js";
+import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
+import type { StarExpansionRules } from "./import-name-types.js";
 
 type StarImportSymbol = {
   name: string;
   symbol: SymbolDef;
 };
 
-const STYLESHEET_LANGUAGE_IDS = new Set(["css", "scss", "less"]);
+const DEFAULT_CLASSIFIER_KINDS: Readonly<Partial<Record<SymbolKind, true>>> = {
+  [SymbolKind.Class]: true,
+  [SymbolKind.Interface]: true,
+};
 
 /**
  * Prefer explicit local exports when the target has any. Otherwise fall back
@@ -25,41 +32,47 @@ const STYLESHEET_LANGUAGE_IDS = new Set(["css", "scss", "less"]);
  */
 function symbolsForStarImport(
   target: ModuleIndex,
-  isStylesheet: boolean,
-  isRuby: boolean,
+  rules: StarExpansionRules | undefined,
   packageOnly: boolean,
   typeOwnerStartIndex?: number,
-  typeOwnerLanguageId?: string,
   staticOnly = false,
 ): StarImportSymbol[] {
+  const excludesMembers = rules?.excludeMembers || packageOnly;
+  const classifierKinds = rules?.classifierKinds ?? DEFAULT_CLASSIFIER_KINDS;
   const localExports: StarImportSymbol[] = [];
   for (const entry of target.exports) {
     if (
       entry.type === "local" &&
-      (!(isRuby || packageOnly) || !entry.target.isMember) &&
+      (!excludesMembers || !entry.target.isMember) &&
       (typeOwnerStartIndex === undefined ||
         (staticOnly
           ? isJvmStaticWildcardMember(entry.target, typeOwnerStartIndex)
-          : isJvmTypeWildcardMember(entry.target, typeOwnerStartIndex, typeOwnerLanguageId)))
+          : isTypeWildcardMember(entry.target, typeOwnerStartIndex, classifierKinds)))
     ) {
       localExports.push({ name: entry.exportedAs, symbol: entry.target });
     }
   }
-  if (localExports.length || isStylesheet || packageOnly || typeOwnerStartIndex !== undefined) return localExports;
+  if (
+    localExports.length ||
+    rules?.localFallback === "exports-only" ||
+    packageOnly ||
+    typeOwnerStartIndex !== undefined
+  )
+    return localExports;
   const visible: StarImportSymbol[] = [];
   for (const local of target.locals) {
-    if (local.localName.startsWith("_") || (isRuby && local.isMember)) continue;
+    if (local.localName.startsWith("_") || (rules?.excludeMembers && local.isMember)) continue;
     visible.push({ name: local.localName, symbol: local });
   }
   return visible;
 }
 
-function isJvmClassifier(symbol: SymbolDef, languageId: string | undefined): boolean {
-  return (
-    symbol.kind === SymbolKind.Class ||
-    symbol.kind === SymbolKind.Interface ||
-    (languageId === "java" && symbol.kind === SymbolKind.TypeAlias)
-  );
+function isTypeWildcardMember(
+  symbol: SymbolDef,
+  ownerStartIndex: number,
+  classifierKinds: Readonly<Partial<Record<SymbolKind, true>>>,
+): boolean {
+  return !!classifierKinds[symbol.kind] && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
 }
 
 /** The owner must be unique within the resolved JVM file. */
@@ -68,8 +81,9 @@ export function jvmWildcardTypeOwner(
   typeName: string,
   languageId: string | undefined,
 ): SymbolDef | undefined {
-  let normalizeIdentifier = languageId === "java" ? JAVA_SUPPORT.normalizeIdentifier : undefined;
-  if (languageId === "kotlin") normalizeIdentifier = KOTLIN_SUPPORT.normalizeIdentifier;
+  const rules = importNamePolicyFor(languageId).starExpansion;
+  const normalizeIdentifier = rules?.normalizeTypeName;
+  const classifierKinds = rules?.classifierKinds ?? DEFAULT_CLASSIFIER_KINDS;
   const normalizedTypeName = normalizeIdentifier ? normalizeIdentifier(typeName) : typeName;
   let owner: SymbolDef | undefined;
   for (const entry of target.exports) {
@@ -77,7 +91,7 @@ export function jvmWildcardTypeOwner(
       entry.type !== "local" ||
       (normalizeIdentifier ? normalizeIdentifier(entry.exportedAs) : entry.exportedAs) !== normalizedTypeName ||
       entry.target.isMember ||
-      !isJvmClassifier(entry.target, languageId)
+      !classifierKinds[entry.target.kind]
     )
       continue;
     if (owner && owner.range.start.index !== entry.target.range.start.index) return undefined;
@@ -91,7 +105,8 @@ export function isJvmTypeWildcardMember(
   ownerStartIndex: number,
   languageId: string | undefined,
 ): boolean {
-  return isJvmClassifier(symbol, languageId) && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
+  const classifierKinds = importNamePolicyFor(languageId).starExpansion?.classifierKinds ?? DEFAULT_CLASSIFIER_KINDS;
+  return isTypeWildcardMember(symbol, ownerStartIndex, classifierKinds);
 }
 /** A Java static import admits only direct static members of its declared owner. */
 export function isJvmStaticWildcardMember(symbol: SymbolDef, ownerStartIndex: number): boolean {
@@ -150,11 +165,11 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
         // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
         // so a header target must not pay for a header sample read here.
         const targetSupport = supportForFileWithoutHeaderSample(targetFile, opts?.languageExtensions);
-        const typeOnDemand =
-          !packageFiles &&
-          !!imp.jvmTypeWildcardName &&
-          (targetSupport?.id === "java" || targetSupport?.id === "kotlin");
-        const staticOnDemand = !packageFiles && !!imp.jvmStaticWildcardName && targetSupport?.id === "java";
+        const targetRules = importNamePolicyFor(targetSupport?.id).starExpansion;
+        const targetPackageSyntax = targetSupport ? IMPORT_RESOLUTION_ROWS[targetSupport.id]?.packageSyntax : undefined;
+        const typeOnDemand = !packageFiles && !!imp.jvmTypeWildcardName && isJvmLanguage(targetSupport?.id);
+        const staticOnDemand =
+          !packageFiles && !!imp.jvmStaticWildcardName && targetPackageSyntax?.importKind === "type";
         const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
         const typeOwner =
           (typeOnDemand || staticOnDemand) && ownerName
@@ -168,19 +183,21 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           continue;
         const exportedSymbols = symbolsForStarImport(
           target,
-          !!targetSupport && STYLESHEET_LANGUAGE_IDS.has(targetSupport.id),
-          targetSupport?.id === "ruby",
+          targetRules,
           !!packageFiles,
           typeOwnerStartIndex,
-          targetSupport?.id,
           staticOnDemand,
         );
-        const javaImportsKotlinTypes = imp.jvmPackageLanguageId === "java" && targetSupport?.id === "kotlin";
+        const importerPackageSyntax = imp.jvmPackageLanguageId
+          ? IMPORT_RESOLUTION_ROWS[imp.jvmPackageLanguageId]?.packageSyntax
+          : undefined;
+        const importsPeerTypesOnly =
+          importerPackageSyntax?.importKind === "type" && targetPackageSyntax?.importKind === "declaration";
         // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
         const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
         const seen = new Set<string>();
         for (const { name, symbol } of exportedSymbols) {
-          if (javaImportsKotlinTypes && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
+          if (importsPeerTypesOnly && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
             continue;
           }
           if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
@@ -191,7 +208,7 @@ export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: Buil
           const symbolKey = namespace ? `${name}\0${namespace}` : name;
           if (!name || seen.has(symbolKey)) continue;
           seen.add(symbolKey);
-          const treatAsNamespace = targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
+          const treatAsNamespace = targetRules?.namespaceKinds?.[symbol.kind];
           const expandedImport: ImportBinding = treatAsNamespace
             ? {
                 kind: "namespace",

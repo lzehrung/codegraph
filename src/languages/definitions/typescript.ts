@@ -1,5 +1,6 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { ECMASCRIPT_IDENTIFIER_VALIDATION } from "./ecmascript-imports.js";
 import { classifyByParentType, nodeTypeIn } from "./shared.js";
 import {
   ECMASCRIPT_BLOCK_SCOPE_TYPES,
@@ -238,6 +239,7 @@ const BASE_HELPERS = {
   // (registered above) and its parameters would land in the enclosing scope.
   createsFunctionScope: nodeTypeIn([...ECMASCRIPT_FUNCTION_SCOPE_TYPES, "generator_function"]),
   referenceSpelling: ecmaReferenceSpelling,
+  identifierValidation: ECMASCRIPT_IDENTIFIER_VALIDATION,
   supportsCrossModuleSymbols: true,
 };
 

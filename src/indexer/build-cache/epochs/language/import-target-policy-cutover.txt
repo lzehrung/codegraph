@@ -1,0 +1,1 @@
+Specifier resolution hooks select each language's existing path, package, namespace, and include operations.

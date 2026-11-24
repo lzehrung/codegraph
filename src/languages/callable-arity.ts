@@ -48,7 +48,7 @@ export type CallableBinding = "bound" | "unbound";
  * Every other language's member lookup binds the receiver.
  */
 export function memberLookupBinding(languageId: string): CallableBinding {
-  return languageId === "csharp" ? "unbound" : "bound";
+  return CALLABLE_ARITY_LANGUAGE_PROFILES[languageId as CallableArityLanguageId]?.memberLookupBinding ?? "bound";
 }
 
 /**
@@ -409,6 +409,7 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   // receiver: `value.M()` supplies it, while `Ext.M(value)` passes it explicitly.
   csharp: {
     ...GENERIC_PROFILE,
+    memberLookupBinding: "unbound",
     receiver: { ...GENERIC_PROFILE.receiver, firstParameterTypedPrefixes: ["this "] },
     parameterNodeTypes: ["parameter"],
     mergeParameterRuns: true,

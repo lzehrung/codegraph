@@ -38,6 +38,7 @@ import { primePhpModuleImportNames, setPhpModuleImportNamesReader } from "../uti
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
+import { specifierTargetPolicyFor } from "../util/resolution/language-specifiers.js";
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
@@ -1043,6 +1044,7 @@ async function specifierResolutionChanged(
     if (group) group.push(edge);
     else groups.set(key, [edge]);
   }
+  const targetPolicy = specifierTargetPolicyFor(support.id);
   for (const group of groups.values()) {
     const sample = group[0]!;
     const resolved = await resolveModuleSpecifierEdges(
@@ -1061,6 +1063,7 @@ async function specifierResolutionChanged(
         ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
         ...(languageExtensions ? { languageExtensions } : {}),
       },
+      targetPolicy,
     );
     const resolvedKeys = (resolved ?? []).map((item) => externalEdgeTargetKey(item.to)).sort();
     const cachedKeys = group.map((edge) => externalEdgeTargetKey(edge.to)).sort();
@@ -3798,19 +3801,26 @@ async function buildProjectIndexIncrementalInProbeCache(
           if (!changes) return false;
           const mod = modules.get(fileIdentityKey(candidate));
           if (!mod) return false;
+          const targetPolicy = specifierTargetPolicyFor(support.id);
           for (const binding of mod.imports) {
             const recheck = declarationImportRecheck(binding, support, changes);
             if (recheck === "none") continue;
             if (recheck === "reextract") return true;
             const packageWildcard = binding.kind === "star" && !!binding.jvmTypeWildcardName;
-            const targets = await resolveSpecifierTargets(candidate, binding.from, support.id, {
-              projectRoot,
-              resolveNodeModules: !!graphOptions.resolveNodeModules,
-              ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
-              ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-              ...(packageWildcard ? { jvmPackageWildcard: true } : {}),
-              ...(binding.kind === "named" && binding.phpImportType ? { phpImportType: binding.phpImportType } : {}),
-            });
+            const targets = await resolveSpecifierTargets(
+              candidate,
+              binding.from,
+              support.id,
+              {
+                projectRoot,
+                resolveNodeModules: !!graphOptions.resolveNodeModules,
+                ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+                ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+                ...(packageWildcard ? { jvmPackageWildcard: true } : {}),
+                ...(binding.kind === "named" && binding.phpImportType ? { phpImportType: binding.phpImportType } : {}),
+              },
+              targetPolicy,
+            );
             if (targets.files.length) return true;
           }
           return false;

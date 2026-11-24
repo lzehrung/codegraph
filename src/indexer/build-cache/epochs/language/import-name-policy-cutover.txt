@@ -1,0 +1,1 @@
+Import target, overload, namespace, and reopened-constant hooks own the existing language-specific lookup stages.

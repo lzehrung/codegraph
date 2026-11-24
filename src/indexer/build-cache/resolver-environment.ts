@@ -12,6 +12,7 @@ import type { BuildOptions } from "../types.js";
 import { csharpProjectUsingFiles } from "../../util/csharp-project-usings.js";
 import type { ProjectDiscoveryContext } from "../../util/project-files.js";
 import { compareStrings } from "../../util/strings.js";
+import { IMPORT_RESOLUTION_ROWS } from "../import-resolution-tables.js";
 
 const PROJECT_RESOLUTION_INPUTS = [
   "package.json",
@@ -147,11 +148,13 @@ async function cargoManifestInputs(
   const manifests = new Set<string>();
   const visited = new Set<string>();
   for (const file of files) {
-    if (supportForFileWithoutHeaderSample(file, opts.languageExtensions)?.id !== "rust") continue;
+    const languageId = supportForFileWithoutHeaderSample(file, opts.languageExtensions)?.id;
+    const manifestNames = languageId ? IMPORT_RESOLUTION_ROWS[languageId]?.resolverManifests : undefined;
+    if (!manifestNames) continue;
     let directory = path.dirname(file);
     while (isFilePathWithinRoot(projectRoot, directory) && !visited.has(directory)) {
       visited.add(directory);
-      manifests.add(path.join(directory, "Cargo.toml"));
+      for (const manifestName of manifestNames) manifests.add(path.join(directory, manifestName));
       if (path.resolve(directory) === path.resolve(projectRoot)) break;
       const parent = path.dirname(directory);
       if (parent === directory) break;
@@ -190,7 +193,7 @@ export async function computeResolverEnvironmentFingerprint(
     const support = supportForFileWithoutHeaderSample(file, opts.languageExtensions);
     if (
       support &&
-      (support.id === "ts" || support.id === "tsx" || graphOnlyLanguageSupportsImportAliases(support.id))
+      (IMPORT_RESOLUTION_ROWS[support.id]?.resolutionConfig || graphOnlyLanguageSupportsImportAliases(support.id))
     ) {
       directories.set(path.dirname(file), file);
     }

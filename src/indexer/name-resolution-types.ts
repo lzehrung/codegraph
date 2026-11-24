@@ -9,6 +9,7 @@ import type { ParsedFileContext } from "./parse-context.js";
 import type { ParsedFileProvider } from "./parsed-cache.js";
 import type { Binding, ScopeIndex } from "./scope-types.js";
 import type { GoToResult, ImportBinding, ModuleIndex, ProjectIndex, ReferenceCoverage, SymbolDef } from "./types.js";
+import type { ImportNameRules } from "./import-name-types.js";
 
 /** A lookup step that needs async member resolution before its answer is known. */
 export type DeferredNameRequest =
@@ -115,29 +116,11 @@ export type BindingHooks = Readonly<{
   ) => SymbolDef | null | undefined;
 }>;
 
-/** Options already used by export and import lookup. */
-export type ImportNameResolutionOptions = Readonly<{
-  preferredKind?: SymbolDef["kind"];
-  allowLocalFallback?: boolean;
-  cNamespace?: "tag" | "ordinary";
-  referenceIndex?: number;
-  csharpGenericArity?: number;
-  argumentCount?: number;
-  isCallableUse?: boolean;
-  typeOnly?: boolean;
-}>;
-
 /** Language-specific alias keys and import lookup stages. */
-export type ImportNameHooks = Readonly<{
-  aliasKey?: (name: string) => string;
-  resolveAlias?: (use: BareNameUse, binding: ImportBinding) => NameResolution | null | undefined;
-  resolveTarget?: (
-    index: ProjectIndex,
-    binding: ImportBinding,
-    exportedName: string,
-    options?: ImportNameResolutionOptions,
-  ) => SymbolDef | { namespace: FileId } | null | undefined;
-}>;
+export type ImportNameHooks = ImportNameRules &
+  Readonly<{
+    resolveAlias?: (use: BareNameUse, binding: ImportBinding) => NameResolution | null | undefined;
+  }>;
 
 /** Existing state needed to plan references to one definition. */
 export type ReferencePlanContext = Readonly<{

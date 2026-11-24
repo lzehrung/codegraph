@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import type { FileId, Range } from "../types.js";
-import {
-  GO_IDENTIFIER_SOURCE,
-  normalizeCsharpQualifiedName,
-  normalizeKotlinQualifiedName,
-} from "../util/identifiers.js";
+import { normalizeCsharpQualifiedName } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { maskTrivia } from "../util/trivia.js";
 import {
@@ -92,7 +88,7 @@ const SINGLE_FILE_UNIT_LANGUAGES: Readonly<Record<string, true>> = {
 
 /** Go, Java, and Kotlin read a package clause. Other package-kind languages are not parsed here. */
 function packageClauseLanguage(languageId: string | undefined): languageId is "go" | "java" | "kotlin" {
-  return languageId === "go" || languageId === "java" || languageId === "kotlin";
+  return !!languageId && !!IMPORT_RESOLUTION_ROWS[languageId]?.packageSyntax?.packageNodeType;
 }
 
 /**
@@ -102,8 +98,6 @@ function packageClauseLanguage(languageId: string | undefined): languageId is "g
 function unitLanguageGroup(languageId: string): string {
   return IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnitGroup ?? languageId;
 }
-
-const GO_PACKAGE_PATTERN = new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu");
 
 type PackageDeclaration = { name: string | null; readable: boolean };
 /** Go package clauses read from source, once per file and index snapshot. */
@@ -135,11 +129,12 @@ function packageDeclarationFor(
   languageId: "go" | "java" | "kotlin",
 ): PackageDeclaration {
   const fileKey = fileIdentityKey(filePath);
-  if (languageId !== "go") {
+  const syntax = IMPORT_RESOLUTION_ROWS[languageId]!.packageSyntax!;
+  if (!syntax.sourcePattern) {
     const facts = index.byFile.get(fileKey)?.jvmFacts;
     const packageName = facts?.packageName ?? null;
     return {
-      name: languageId === "kotlin" && packageName ? normalizeKotlinQualifiedName(packageName) : packageName,
+      name: packageName ? (syntax.normalizeQualifiedName?.(packageName) ?? packageName) : packageName,
       readable: !!facts && isJvmPackageKnown(facts),
     };
   }
@@ -151,7 +146,7 @@ function packageDeclarationFor(
   const cached = cache.get(fileKey);
   if (cached) return cached;
   const source = unitDeclarationSource(index, filePath, fileKey);
-  const packageName = source === null ? null : (GO_PACKAGE_PATTERN.exec(maskTrivia(source, "go"))?.[1] ?? null);
+  const packageName = source === null ? null : (syntax.sourcePattern.exec(maskTrivia(source, languageId))?.[1] ?? null);
   const declaration = { name: packageName, readable: source !== null };
   cache.set(fileKey, declaration);
   return declaration;
@@ -298,7 +293,8 @@ function aggregateCsharpDeclaredNames(index: ProjectIndex, files?: ReadonlySet<F
   };
   for (const mod of index.byFile.values()) {
     if (files && !files.has(mod.file)) continue;
-    if (supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id !== "csharp") continue;
+    const languageId = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id;
+    if (!languageId || IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnit !== "namespace") continue;
     const facts = mod.csharpNamespaceFacts;
     if (!facts) {
       complete = false;
@@ -752,7 +748,8 @@ function csharpProjectPeers(index: ProjectIndex, file: FileId): CompilationUnitP
     const byFile = new Map<string, CompilationUnitPeers>();
     const boundaries = new Map<string, string>();
     for (const mod of index.byFile.values()) {
-      if (supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id !== "csharp") continue;
+      const languageId = supportForFileWithoutHeaderSample(mod.file, index.languageExtensions)?.id;
+      if (!languageId || IMPORT_RESOLUTION_ROWS[languageId]?.implicitCompilationUnit !== "namespace") continue;
       const directory = fileIdentityKey(path.dirname(mod.file));
       let boundary = boundaries.get(directory);
       if (boundary === undefined) {

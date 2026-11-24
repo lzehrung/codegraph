@@ -52,7 +52,6 @@ import {
   terraformRenameCollisions,
   terraformScopedDataCaptures,
 } from "../terraform/resolution.js";
-import { TERRAFORM_IDENTIFIER_PATTERN } from "../terraform/syntax.js";
 import {
   isScssFile,
   scssMemberForDefinition,
@@ -62,7 +61,7 @@ import {
   scssRenamedName,
   scssReplacementText,
 } from "../scss/resolution.js";
-import { sassCanonical, SCSS_IDENTIFIER_PATTERN } from "../scss/syntax.js";
+import { sassCanonical } from "../scss/syntax.js";
 import { compareStrings } from "../util/strings.js";
 
 export type RenamePreviewRequest = {
@@ -711,15 +710,13 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const conflicts: RenameConflict[] = [];
   const invalidPathCharacters = newName.includes("/") || newName.includes("\\") || newName.includes("\0");
   const support = supportForFileWithoutHeaderSample(def.file, snapshot.index.languageExtensions);
-  const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
-  const privateMember = allowsDollar && def.isMember && def.localName.startsWith("#");
-  const missingPrivatePrefix = privateMember && !newName.startsWith("#");
-  const reservedPrivateName = privateMember && newName === "#constructor";
-  const identifier = privateMember && !missingPrivatePrefix ? newName.slice(1) : newName;
-  let identifierPattern = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
-  if (allowsDollar) identifierPattern = /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u;
-  else if (support?.id === "terraform") identifierPattern = TERRAFORM_IDENTIFIER_PATTERN;
-  else if (support?.id === "scss") identifierPattern = SCSS_IDENTIFIER_PATTERN;
+  const validation = support?.identifierValidation;
+  const privatePrefix = validation?.privatePrefix;
+  const privateMember = privatePrefix && def.isMember && def.localName.startsWith(privatePrefix);
+  const missingPrivatePrefix = privateMember && !newName.startsWith(privatePrefix);
+  const reservedPrivateName = privateMember && validation.reservedPrivateNames?.[newName];
+  const identifier = privateMember && !missingPrivatePrefix ? newName.slice(privatePrefix.length) : newName;
+  const identifierPattern = validation?.pattern ?? /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (
     !newName ||
     invalidPathCharacters ||

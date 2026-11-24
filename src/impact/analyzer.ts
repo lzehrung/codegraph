@@ -15,7 +15,6 @@ import { computeMemberResolutionCoverage } from "./member-resolution-coverage.js
 import { createReferenceLookupCache } from "./reference-cache.js";
 import { isTerraformFile, terraformModuleFiles } from "../terraform/resolution.js";
 import { terraformLocalModuleDirectory } from "../util/resolution/terraform.js";
-import { supportForFileWithoutHeaderSample } from "../languages.js";
 import {
   createImpactWorkBudget,
   IMPACT_SYMBOL_BATCH_SIZE,
@@ -273,7 +272,7 @@ function terraformImpactDependents(
   for (const change of changedFiles) {
     if (change.kind !== "deleted" && change.kind !== "renamed") continue;
     const oldPath = change.kind === "renamed" ? change.oldPath : change.path;
-    if (!oldPath || supportForFileWithoutHeaderSample(oldPath, index.languageExtensions)?.id !== "terraform") continue;
+    if (!oldPath || !isTerraformFile(index, oldPath)) continue;
     const directoryKey = fileIdentityKey(path.dirname(oldPath));
     const parts: Edge[][] = [];
     const peer = [...index.byFile.values()].find(

@@ -13,6 +13,12 @@ function declaredCapabilityFields(row: ImportBindingRow): string[] {
   const fields: string[] = [];
   if (row.applyStatement) fields.push("applyStatement");
   if (row.appendImplicit) fields.push("appendImplicit");
+  if (row.normalizeBindings) fields.push("normalizeBindings");
+  if (row.appendImplicitFiles) fields.push("appendImplicitFiles");
+  if (row.captureBindings) fields.push("captureBindings");
+  if (row.treeBindings) fields.push("treeBindings");
+  if (row.needsValueRequireSupplement) fields.push("needsValueRequireSupplement");
+  if (row.fallbackBindingsFromSpecifiers) fields.push("fallbackBindingsFromSpecifiers");
   if (row.maskTrivia !== undefined) fields.push("maskTrivia");
   if (row.statementKeyUsesOffset) fields.push("statementKeyUsesOffset");
   if (row.rescanTextBindings) fields.push("rescanTextBindings");

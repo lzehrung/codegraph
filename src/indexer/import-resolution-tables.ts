@@ -1,3 +1,5 @@
+import { GO_IDENTIFIER_SOURCE, normalizeKotlinIdentifier, normalizeKotlinQualifiedName } from "../util/identifiers.js";
+
 /**
  * Per-language import-resolution capabilities for declaration-resolved imports, implicit
  * compilation units, and external-specifier re-resolution. Rows are keyed by language id,
@@ -46,6 +48,17 @@ export type PackageSyntax = Readonly<{
   packageNameField?: string;
   importNodeType?: string;
   normalizeQualifiedName?: (name: string) => string;
+  normalizeImportName?: (name: string) => string;
+  /** A source-read package clause; absent package syntax reads the module's indexed facts. */
+  sourcePattern?: RegExp;
+  /** Top-level declaration node types and the fields that spell their importable names. */
+  topLevelNames?: Readonly<Record<string, string>>;
+  /** Declarations that another language's type imports can name. */
+  peerTypeDeclarations?: Readonly<Record<string, true>>;
+  /** A package import names only types, or any top-level declaration. */
+  importKind?: "type" | "declaration";
+  /** The other language sharing this package identity. */
+  peerLanguageId?: "java" | "kotlin";
 }>;
 
 export type ImportResolutionRow = {
@@ -53,6 +66,12 @@ export type ImportResolutionRow = {
   omittedReason?: string;
   /** Package syntax; absent keeps the generic unit behavior. */
   packageSyntax?: PackageSyntax;
+  /** Per-importer path mapping inputs. */
+  resolutionConfig?: "tsconfig";
+  /** Ancestor manifests read while resolving this language's imports. */
+  resolverManifests?: readonly string[];
+  /** Additional directory-entry stems, keyed by the added file's extension. */
+  directoryEntryStems?: Readonly<Record<string, readonly string[]>>;
   /**
    * Imports name declarations in other files, so a content change can move the target.
    */
@@ -112,6 +131,7 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
   css: { omittedReason: STYLESHEET_OMITTED },
   csharp: {
     resolvesImportsFromDeclarations: true,
+    packageSyntax: { importNodeType: "using_directive" },
     implicitCompilationUnit: "namespace",
     externalSpecifierResolution: {
       separator: "path",
@@ -122,6 +142,10 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     resolvesImportsFromDeclarationsOmittedReason:
       "An import path names a package directory, not a declaration scanned from another file.",
     implicitCompilationUnit: "package",
+    packageSyntax: {
+      packageNodeType: "package_clause",
+      sourcePattern: new RegExp(String.raw`^\s*package\s+(${GO_IDENTIFIER_SOURCE})`, "mu"),
+    },
     externalSpecifierResolution: {
       separator: "slash",
       importNamesDirectory: "parent",
@@ -133,6 +157,19 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     resolvesImportsFromDeclarations: true,
     implicitCompilationUnit: "package",
     implicitCompilationUnitGroup: "jvm",
+    packageSyntax: {
+      packageNodeType: "package_declaration",
+      importNodeType: "import_declaration",
+      topLevelNames: {
+        class_declaration: "name",
+        interface_declaration: "name",
+        enum_declaration: "name",
+        record_declaration: "name",
+        annotation_type_declaration: "name",
+      },
+      importKind: "type",
+      peerLanguageId: "kotlin",
+    },
     externalSpecifierResolution: {
       separator: "dot",
       reResolveAnyAddedExtensions: JVM_DECLARATION_EXTENSIONS,
@@ -143,6 +180,21 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     resolvesImportsFromDeclarations: true,
     implicitCompilationUnit: "package",
     implicitCompilationUnitGroup: "jvm",
+    packageSyntax: {
+      packageNodeType: "package_header",
+      importNodeType: "import",
+      normalizeQualifiedName: normalizeKotlinQualifiedName,
+      normalizeImportName: normalizeKotlinIdentifier,
+      topLevelNames: {
+        class_declaration: "name",
+        object_declaration: "name",
+        type_alias: "type",
+        function_declaration: "name",
+      },
+      peerTypeDeclarations: { class_declaration: true, object_declaration: true },
+      importKind: "declaration",
+      peerLanguageId: "java",
+    },
     externalSpecifierResolution: {
       separator: "dot",
       reResolveAnyAddedExtensions: JVM_DECLARATION_EXTENSIONS,
@@ -181,12 +233,13 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     resolvesImportsFromDeclarationsOmittedReason:
       "A use path names a module file, not a declaration discovered by scanning other files.",
     implicitCompilationUnitOmittedReason: "A cross-file name arrives through a use or mod item.",
+    resolverManifests: ["Cargo.toml"],
     externalSpecifierResolution: {
       separator: "rust",
       matchesModuleSegments: true,
     },
   },
-  scss: { omittedReason: STYLESHEET_OMITTED },
+  scss: { omittedReason: STYLESHEET_OMITTED, directoryEntryStems: { ".scss": ["_index"] } },
   sql: {
     omittedReason: "Data language; no declaration imports, implicit compilation unit, or external-specifier rule.",
   },
@@ -209,8 +262,8 @@ export const IMPORT_RESOLUTION_ROWS: Record<string, ImportResolutionRow> = {
     externalSpecifierResolutionOmittedReason:
       "Module imports are not file stems, so an added file does not re-resolve importers through an extension rule.",
   },
-  ts: ECMASCRIPT_ROW,
-  tsx: ECMASCRIPT_ROW,
+  ts: { ...ECMASCRIPT_ROW, resolutionConfig: "tsconfig" },
+  tsx: { ...ECMASCRIPT_ROW, resolutionConfig: "tsconfig" },
   vue: { omittedReason: "Vue component format; script blocks parse as js/ts and templates as html." },
   zig: {
     resolvesImportsFromDeclarationsOmittedReason: "@import names a file path, not a declaration in another file.",

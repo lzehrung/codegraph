@@ -64,7 +64,7 @@ export type {
 export type IdentifierValidation = Readonly<{
   pattern: RegExp;
   privatePrefix?: string;
-  reservedPrivateNames?: ReadonlySet<string>;
+  reservedPrivateNames?: Readonly<Record<string, true>>;
 }>;
 
 /** Syntax shapes that impact analysis can classify as definitions. */

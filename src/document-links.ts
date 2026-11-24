@@ -1,8 +1,5 @@
 import { type ModuleSpecifier } from "./util/specifiers.js";
-import { extractAsciidocModuleSpecifiers } from "./document-links/asciidoc.js";
-import { extractMarkdownModuleSpecifiers, extractMdxModuleSpecifiers } from "./document-links/markdown.js";
-import { extractRstModuleSpecifiers } from "./document-links/rst.js";
-import { extractAstroModuleSpecifiers, extractHandlebarsModuleSpecifiers } from "./document-links/sfc.js";
+import { DOCUMENT_SPECIFIER_EXTRACTORS } from "./document-links/document-specifiers.js";
 
 export { extractAsciidocModuleSpecifiers } from "./document-links/asciidoc.js";
 export {
@@ -33,23 +30,5 @@ export function graphOnlySpecifierNeedsResolutionConfig(specifier: string): bool
 }
 
 export function extractGraphOnlyModuleSpecifiers(languageId: string, source: string): ModuleSpecifier[] {
-  if (languageId === "markdown") {
-    return extractMarkdownModuleSpecifiers(source);
-  }
-  if (languageId === "mdx") {
-    return extractMdxModuleSpecifiers(source);
-  }
-  if (languageId === "astro") {
-    return extractAstroModuleSpecifiers(source);
-  }
-  if (languageId === "hbs") {
-    return extractHandlebarsModuleSpecifiers(source);
-  }
-  if (languageId === "rst") {
-    return extractRstModuleSpecifiers(source);
-  }
-  if (languageId === "adoc") {
-    return extractAsciidocModuleSpecifiers(source);
-  }
-  return [];
+  return DOCUMENT_SPECIFIER_EXTRACTORS[languageId]?.(source) ?? [];
 }

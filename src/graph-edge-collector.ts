@@ -24,8 +24,11 @@ import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
 import { isSqlFilePath } from "./sql/classify-sql-file.js";
-import { collectSqlEdgesForFile } from "./sql/source-graph.js";
+import { specifierExtractionPolicyFor } from "./graphs/specifiers/language-specifiers.js";
 import type { SqlFactCache } from "./sql/source-graph.js";
+import { IMPORT_RESOLUTION_ROWS } from "./indexer/import-resolution-tables.js";
+import { specifierTargetPolicyFor } from "./util/resolution/language-specifiers.js";
+import type { SpecifierTargetPolicy } from "./util/resolution/language-policy-types.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
@@ -156,7 +159,8 @@ export async function collectEdgesForFile(
   const parsed = opts.parsed;
   if (parsed?.specifiers) {
     const recordSupport = parsed.sup;
-    const specSources = parsed.specifiers.map((entry) => ({ entry, support: recordSupport }));
+    const targetPolicy = specifierTargetPolicyFor(recordSupport.id);
+    const specSources = parsed.specifiers.map((entry) => ({ entry, support: recordSupport, targetPolicy }));
     const edges = await resolveSpecifierEdges(file, projectRoot, workspaceConfig, opts, recordSupport, specSources);
     emitCacheEntry(edges);
     return edges;
@@ -225,11 +229,12 @@ export async function collectEdgesForFile(
     }
     tree = outcome.tree;
   }
-  if (sup.id === "sql") {
+  const collection = specifierExtractionPolicyFor(sup.id).collect;
+  if (collection?.fileEdges) {
     const allFiles = opts.allFiles ?? [normalizedFile];
     const sqlEdges = deduplicateEdges(
-      await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions),
-      true,
+      await collection.fileEdges(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions),
+      collection.rawEdgeIdentity,
     );
     emitCacheEntry(sqlEdges);
     return sqlEdges;
@@ -237,6 +242,7 @@ export async function collectEdgesForFile(
 
   const dynamicImportHeuristics = !!opts.dynamicImportHeuristics;
   const fileSupport = sup;
+  const targetPolicy = specifierTargetPolicyFor(fileSupport.id);
   const specSources = collectEdgeModuleSpecifiers(fileSupport, src, {
     ...(tree ? { tree } : {}),
     ...(parsed && parsed.nativeQueries !== undefined ? { nativeQueries: parsed.nativeQueries } : {}),
@@ -246,7 +252,7 @@ export async function collectEdgesForFile(
     ...(opts.report ? { report: opts.report } : {}),
     projectRoot,
     dynamicImportHeuristics,
-  }).map((entry) => ({ entry, support: fileSupport }));
+  }).map((entry) => ({ entry, support: fileSupport, targetPolicy }));
   for (const block of embeddedBlocks) {
     const blockSpecs = collectEdgeModuleSpecifiers(block.sup, block.source, {
       file: normalizedFile,
@@ -255,8 +261,9 @@ export async function collectEdgesForFile(
       projectRoot,
       dynamicImportHeuristics,
     });
+    const blockTargetPolicy = specifierTargetPolicyFor(block.sup.id);
     for (const entry of blockSpecs) {
-      specSources.push({ entry, support: block.sup });
+      specSources.push({ entry, support: block.sup, targetPolicy: blockTargetPolicy });
     }
   }
 
@@ -272,30 +279,34 @@ async function resolveSpecifierEdges(
   workspaceConfig: WorkspaceConfig | undefined,
   opts: CollectEdgesOptions,
   sup: LanguageSupport,
-  specSources: ReadonlyArray<{ entry: ModuleSpecifier; support: LanguageSupport }>,
+  specSources: ReadonlyArray<{ entry: ModuleSpecifier; support: LanguageSupport; targetPolicy: SpecifierTargetPolicy }>,
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
   const graphOnlyAliasLanguage = isGraphOnlyLanguage(sup.id) && graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
     graphOnlyAliasLanguage && specSources.some(({ entry }) => graphOnlySpecifierNeedsResolutionConfig(entry.spec));
   const { matchPath } =
-    sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
+    IMPORT_RESOLUTION_ROWS[sup.id]?.resolutionConfig || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file, projectRoot, opts.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
-  const edgeResolutionTasks = specSources.map(async ({ entry, support }) => {
-    return await resolveModuleSpecifierEdges(entry, {
-      support,
-      file,
-      projectRoot,
-      workspaceConfig,
-      matchPath,
-      resolveNodeModules: !!opts.resolveNodeModules,
-      ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-      ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-      ...(opts.report ? { report: opts.report } : {}),
-      ...(opts.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
-    });
+  const edgeResolutionTasks = specSources.map(async ({ entry, support, targetPolicy }) => {
+    return await resolveModuleSpecifierEdges(
+      entry,
+      {
+        support,
+        file,
+        projectRoot,
+        workspaceConfig,
+        matchPath,
+        resolveNodeModules: !!opts.resolveNodeModules,
+        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(opts.report ? { report: opts.report } : {}),
+        ...(opts.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
+      },
+      targetPolicy,
+    );
   });
 
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {

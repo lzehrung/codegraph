@@ -5,19 +5,15 @@ import { unquote } from "../../util/ast.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../../util/comments.js";
 import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets } from "../../util/lines.js";
-import {
-  cFamilyImportFormFromText,
-  isRubyLoadForm,
-  type CFamilyIncludeForm,
-  type RubyLoadForm,
-} from "../../util/specifiers.js";
+import type { CFamilyIncludeForm, RubyLoadForm } from "../../util/specifiers.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import type { ImportBinding } from "../types.js";
 import { importCapture } from "../../languages/graph-captures.js";
-import type { ImportResolver, ResolvedImportTarget } from "./context.js";
+import type { ImportResolver, LanguageSpecificImportContext, ResolvedImportTarget } from "./context.js";
 import { sourceRangeFromOffsets } from "./binding-ranges.js";
-import { appendImplicitImportBinding, type LanguageSpecificImportContext } from "./language-specific.js";
+import { appendImplicitImportBinding } from "./language-specific.js";
 import { splitNamedRequireBindingsWithOffsets } from "./js-text-imports.js";
+import { specifierExtractionPolicyFor } from "../../graphs/specifiers/language-specifiers.js";
 
 type ImportCaptureExtractionContext = {
   source: string;
@@ -216,6 +212,9 @@ export async function collectNativeCaptureImportBindings(
 ): Promise<void> {
   const byteIndexMap = buildByteToStringIndexMap(context.source);
   let lineStarts: number[] | undefined;
+  const collection = specifierExtractionPolicyFor(context.languageId).collect;
+  const captureIncludeForm = collection?.includeForm;
+  const methodLoadForm = collection?.loadForm;
   for (const match of matches) {
     const caps = capturesByName(match);
     const statementCapture = importCapture(caps, "stmt");
@@ -233,12 +232,9 @@ export async function collectNativeCaptureImportBindings(
     const from = fromCapture ? unquote(fromCapture.text) : undefined;
     // The extracted `from` drops delimiters, so an occurrence's literal/angle/macro form travels
     // separately. A bare C++ module import also has an unquoted target, but it is not an include.
-    const includeForm =
-      context.languageId === "c" || context.languageId === "cpp"
-        ? cFamilyImportFormFromText(stmtText, fromCapture?.text)
-        : undefined;
+    const includeForm = captureIncludeForm?.(stmtText, fromCapture?.text);
     const methodText = caps["method"]?.text;
-    const rubyLoadForm = context.languageId === "ruby" && isRubyLoadForm(methodText) ? methodText : undefined;
+    const rubyLoadForm = methodLoadForm?.(methodText);
     const patterns = capturesNamed(match, "pattern");
     if (patterns.length) {
       const rangeLineStarts = lineStarts ?? collectLineStartOffsets(context.source);
