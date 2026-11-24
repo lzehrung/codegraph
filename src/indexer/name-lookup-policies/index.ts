@@ -16,6 +16,7 @@ import { cLookupPolicy, cppLookupPolicy } from "./c-family.js";
 import { csharpLookupPolicy, javaLookupPolicy, kotlinLookupPolicy, swiftLookupPolicy } from "./implicit-self.js";
 import { phpLookupPolicy } from "./php.js";
 import { rubyLookupPolicy } from "./ruby.js";
+import { importNamePolicyFor } from "./imports.js";
 
 /** Whether a function shares its name with another function in its file (an overload set). */
 function hasSameNameSiblings(module: ModuleIndex, def: SymbolDef): boolean {
@@ -119,15 +120,18 @@ const zigLookupPolicy: NameLookupPolicy = {
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
-  c: cLookupPolicy,
+  c: { ...cLookupPolicy, imports: importNamePolicyFor("c") },
   cpp: cppLookupPolicy,
-  csharp: csharpLookupPolicy,
-  java: javaLookupPolicy,
+  csharp: { ...csharpLookupPolicy, imports: importNamePolicyFor("csharp") },
+  css: { imports: importNamePolicyFor("css") },
+  less: { imports: importNamePolicyFor("less") },
+  scss: { imports: importNamePolicyFor("scss") },
+  java: { ...javaLookupPolicy, imports: importNamePolicyFor("java") },
   go: goLookupPolicy,
-  kotlin: kotlinLookupPolicy,
+  kotlin: { ...kotlinLookupPolicy, imports: importNamePolicyFor("kotlin") },
   php: phpLookupPolicy,
-  python: pythonLookupPolicy,
-  ruby: rubyLookupPolicy,
+  python: { ...pythonLookupPolicy, imports: importNamePolicyFor("python") },
+  ruby: { ...rubyLookupPolicy, imports: importNamePolicyFor("ruby") },
   rust: rustLookupPolicy,
   swift: swiftLookupPolicy,
   ts: typescriptLookupPolicy,

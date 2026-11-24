@@ -1,17 +1,8 @@
-import path from "node:path";
-import { GO_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
-import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import { attributeNamedBindingRanges, maskImportBindingTrivia } from "./binding-ranges.js";
-import {
-  IMPORT_BINDING_ROWS,
-  type ImplicitImportBindingArgs,
-  type ImportBindingRow,
-  type LanguageSpecificImportContext,
-} from "./import-binding-tables.js";
+import { IMPORT_BINDING_ROWS, type ImplicitImportBindingArgs, type ImportBindingRow } from "./import-binding-tables.js";
 import { collectTextImportBindingRequests, hasTextImportBindings } from "./text-import-extractors.js";
-import type { ImportBinding } from "../types.js";
 
-export type { LanguageSpecificImportContext } from "./import-binding-tables.js";
+import type { LanguageSpecificImportContext } from "./context.js";
 
 export type StatementImportOverrideState = {
   handledStatements: Set<string>;
@@ -19,62 +10,6 @@ export type StatementImportOverrideState = {
 
 export function createStatementImportOverrideState(): StatementImportOverrideState {
   return { handledStatements: new Set() };
-}
-
-function normalizeGoImports(context: LanguageSpecificImportContext): void {
-  const imports = context.getBindings();
-  if (context.languageId !== "go" || !imports.length) {
-    return;
-  }
-  const aliasByFrom = new Map<string, string>();
-  // Go alias is either the standalone dot-import token or a real Go identifier (Unicode
-  // letter/underscore start, decimal-digit continuation); the blank identifier "_" is a
-  // valid identifier already covered by GO_IDENTIFIER_SOURCE.
-  const importPattern = new RegExp(
-    String.raw`^\s*(?:import\s+)?(?:(?<alias>\.|${GO_IDENTIFIER_SOURCE})\s+)?["'\u0060](?<from>[^"'\u0060]+)["'\u0060]`,
-    "gmu",
-  );
-  for (const match of context.source.matchAll(importPattern)) {
-    const from = match.groups?.from;
-    if (!from) continue;
-    const alias = match.groups?.alias;
-    if (alias) {
-      aliasByFrom.set(from, alias);
-    }
-  }
-
-  if (!aliasByFrom.size) {
-    return;
-  }
-
-  const normalized: ImportBinding[] = [];
-  const seen = new Set<string>();
-  for (const imp of imports) {
-    const alias = aliasByFrom.get(imp.from);
-    let next: ImportBinding | null = imp;
-    if (alias === ".") {
-      next = {
-        kind: "star",
-        from: imp.from,
-        ...(imp.resolved !== undefined ? { resolved: imp.resolved } : {}),
-        ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
-      };
-    } else if (alias === "_") {
-      next = null;
-    } else if (alias && imp.kind === "namespace") {
-      next = {
-        ...imp,
-        localNS: alias,
-      };
-    }
-    if (!next) continue;
-    const key = JSON.stringify(next);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(next);
-  }
-
-  context.replaceBindings(normalized);
 }
 
 /**
@@ -105,44 +40,11 @@ async function appendTextImportBindings(context: LanguageSpecificImportContext):
   }
 }
 
-async function appendPhpComposerImplicitImports(context: LanguageSpecificImportContext): Promise<void> {
-  if (context.languageId !== "php") {
-    return;
-  }
-
-  const implicitFiles = await getPhpComposerImplicitFiles(context.projectRoot, context.file);
-  const seenResolved = new Set(
-    context
-      .getBindings()
-      .map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null))
-      .filter((entry): entry is string => !!entry),
-  );
-
-  for (const implicitFile of implicitFiles) {
-    const normalizedResolved = implicitFile.replace(/\\/g, "/");
-    if (normalizedResolved === context.file.replace(/\\/g, "/")) {
-      continue;
-    }
-    if (seenResolved.has(normalizedResolved)) {
-      continue;
-    }
-
-    const relativeFrom = path.relative(path.dirname(context.file), implicitFile).replace(/\\/g, "/");
-    const from = relativeFrom.startsWith(".") || relativeFrom.startsWith("/") ? relativeFrom : `./${relativeFrom}`;
-    context.pushBinding({
-      kind: "star",
-      from,
-      resolved: normalizedResolved,
-      mechanism: "php",
-    });
-    seenResolved.add(normalizedResolved);
-  }
-}
-
 export async function finalizeLanguageSpecificImports(context: LanguageSpecificImportContext): Promise<void> {
-  normalizeGoImports(context);
+  const row = IMPORT_BINDING_ROWS[context.languageId];
+  row?.normalizeBindings?.(context);
   await appendTextImportBindings(context);
-  await appendPhpComposerImplicitImports(context);
+  await row?.appendImplicitFiles?.(context);
 }
 
 function masksStatementTrivia(row: ImportBindingRow, normalizedStmt: string): boolean {

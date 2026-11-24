@@ -15,13 +15,9 @@ import {
   supportForFileWithoutHeaderSample,
   type LanguageExtensionMap,
 } from "../languages.js";
-import {
-  detectSFCFramework,
-  parseSFC,
-  prepareSFCBlockSource,
-  scriptLanguageIdForBlock,
-  styleLanguageKey,
-} from "../languages/sfc.js";
+import { detectSFCFramework } from "../languages/sfc.js";
+import { collectEmbeddedImportRanges } from "../languages/embedded-imports.js";
+import { specifierExtractionPolicyFor } from "../graphs/specifiers/language-specifiers.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
@@ -32,7 +28,6 @@ import { getNativeDuplicateTokens, getNativeSingleQueryExecution } from "../nati
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
-import { pushAll } from "../util/collections.js";
 import { compareStrings } from "../util/strings.js";
 import { EVENT_LOOP_SLICE_MS, yieldToEventLoop } from "../util/concurrency.js";
 import {
@@ -267,24 +262,13 @@ function maskSourceRanges(source: string, ranges: readonly SourceRange[]): strin
   return pieces.join("");
 }
 
-function sfcImportStatementRanges(source: string): SourceRange[] {
-  const ranges: SourceRange[] = [];
-  for (const block of parseSFC(source)) {
-    if (block.type === "script") {
-      pushAll(ranges, importStatementRanges(prepareSFCBlockSource(source, block), scriptLanguageIdForBlock(block)));
-    } else if (block.type === "style") {
-      const languageId = styleLanguageKey(block);
-      if (languageId) pushAll(ranges, importStatementRanges(prepareSFCBlockSource(source, block), languageId));
-    }
-  }
-  return ranges;
-}
-
 /** Removes import declarations and directives before duplicate units are tokenized. */
 export function maskDuplicateImportStatements(source: string, filePath: string, languageId: string): string {
-  const hasEmbeddedImportLanguages = Boolean(detectSFCFramework(filePath)) || languageId === "html";
-  const ranges = hasEmbeddedImportLanguages
-    ? sfcImportStatementRanges(source)
+  const collectEmbeddedRanges = detectSFCFramework(filePath)
+    ? collectEmbeddedImportRanges
+    : specifierExtractionPolicyFor(languageId).collect?.importStatementRanges;
+  const ranges = collectEmbeddedRanges
+    ? collectEmbeddedRanges(source, importStatementRanges)
     : importStatementRanges(source, languageId);
   return maskSourceRanges(source, ranges);
 }

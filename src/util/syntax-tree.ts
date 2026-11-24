@@ -6,6 +6,7 @@ import {
   type NativeFallbackReason,
   type NativeSyntaxTreeExecution,
 } from "../native/tree-sitter-native.js";
+import { IMPORT_RESOLUTION_ROWS } from "../indexer/import-resolution-tables.js";
 import { errorMessage } from "./errors.js";
 
 export type JvmLanguageId = "java" | "kotlin";
@@ -16,7 +17,7 @@ export function isJvmLanguage(languageId: string | undefined): languageId is Jvm
 
 /** C# and the JVM languages read their imports and declarations from one syntax tree, so none has an import query. */
 export function readsSyntaxTree(languageId: string | undefined): boolean {
-  return languageId === "csharp" || isJvmLanguage(languageId);
+  return !!languageId && !!IMPORT_RESOLUTION_ROWS[languageId]?.packageSyntax?.importNodeType;
 }
 
 export type SyntaxTreeResult = {

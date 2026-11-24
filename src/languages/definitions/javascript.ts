@@ -1,5 +1,6 @@
 import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
+import { ECMASCRIPT_IDENTIFIER_VALIDATION } from "./ecmascript-imports.js";
 import { classifyByParentType, hasParentType, nodeTypeIn } from "./shared.js";
 import {
   ECMASCRIPT_BLOCK_SCOPE_TYPES,
@@ -36,6 +37,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
   capturesDocstrings: true,
   referenceBlockPriorities: ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES,
+  identifierValidation: ECMASCRIPT_IDENTIFIER_VALIDATION,
   supportsExportFromReferences: true,
   structure: {
     blocks: [...ECMASCRIPT_CORE_FUNCTION_BLOCKS, ...ECMASCRIPT_MODULE_VAR_BLOCKS],

@@ -1,4 +1,6 @@
-import type { ImportBinding } from "../types.js";
+import type { BuildReport, ImportBinding } from "../types.js";
+import type { LanguageExtensionMap } from "../../languages.js";
+import type { ParsedFileContext } from "../parse-context.js";
 import type { CFamilyIncludeForm, ModuleSpecifierResolutionKind, RubyLoadForm } from "../../util/specifiers.js";
 
 export type ResolvedImportTarget = Exclude<ImportBinding["resolved"], undefined>;
@@ -34,6 +36,22 @@ export type ImportBindingSink = {
  * the same source can resolve differently in a later build without changing.
  */
 export type ImportDegradedHook = (cause?: "lookup") => void;
+
+export type LanguageSpecificImportContext = ImportBindingSink & {
+  file: string;
+  projectRoot: string;
+  source: string;
+  languageId: string;
+  resolveFrom: ImportResolver;
+  /** Active extension-to-language mapping, so a resolved file is classified as the language that parses it. */
+  languageExtensions?: LanguageExtensionMap;
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
+  report?: BuildReport;
+  /** Reports that this file's imports are incomplete, so the module that holds them is marked parser-degraded. */
+  onDegraded?: ImportDegradedHook;
+  getBindings: () => ImportBinding[];
+  replaceBindings: (bindings: ImportBinding[]) => void;
+};
 
 /** Thrown when code reads the target of an import whose resolution a module record still defers. */
 export class PendingImportResolutionError extends Error {

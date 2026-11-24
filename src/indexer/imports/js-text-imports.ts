@@ -3,6 +3,7 @@ import { ECMASCRIPT_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { collectLineStartOffsets, positionAtOffset } from "../../util/lines.js";
 import type { Range } from "../../types.js";
 import type { ImportBindingSink, ImportResolver } from "./context.js";
+import { isJsTsLanguage } from "../../languages/js-family.js";
 
 export type JsTextImportExtractionContext = ImportBindingSink & {
   source: string;
@@ -22,10 +23,15 @@ const NAMED_REQUIRE_DECLARATION_PATTERN = /(?:^|[;{}])\s*(?:export\s+)?(?:const|
 const REQUIRE_AFTER_BINDING_PATTERN = /^\s*=\s*require\s*\(\s*(["'])(?<module>[^"']+)\1\s*\)/u;
 
 function sourceForTextImportExtraction(context: JsTextImportExtractionContext): string {
-  if (context.languageId === "ts" || context.languageId === "tsx" || context.languageId === "js") {
+  if (isJsTsLanguage(context.languageId)) {
     return stripJsLikeComments(context.source);
   }
   return context.source;
+}
+
+/** Native TS/TSX capture extraction supplements value-position CommonJS requires. */
+export function needsValueRequireSupplement(source: string): boolean {
+  return source.includes("require") && /\brequire\s*\(/.test(stripJsLikeComments(source));
 }
 
 /**

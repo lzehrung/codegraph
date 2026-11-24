@@ -11,7 +11,6 @@ import { collectModuleSpecifiersFromSource } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
-import { stripJsLikeComments } from "../util/comments.js";
 import { replaceContents } from "../util/collections.js";
 import {
   assertNativeRequiredAvailable,
@@ -21,8 +20,7 @@ import {
 } from "../native/tree-sitter-native.js";
 import type { NativeQueryExecution, NativeQueryResults } from "../native/tree-sitter-native.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
-import { collectCsharpImportDirectives } from "../util/csharp-tree.js";
-import { collectJvmImportDirectives, jvmPackageName } from "../util/jvm-tree.js";
+import { jvmPackageName } from "../util/jvm-tree.js";
 import { normalizeKotlinQualifiedName } from "../util/identifiers.js";
 import {
   isJvmLanguage,
@@ -31,7 +29,7 @@ import {
   syntaxTreeFromNativeExecution,
   type SyntaxTreeResult,
 } from "../util/syntax-tree.js";
-import { applyCsharpImportDirective, applyJvmImportDirective } from "./imports/import-binding-tables.js";
+import { IMPORT_BINDING_ROWS } from "./imports/import-binding-tables.js";
 import type {
   ImportDegradedHook,
   ImportResolver,
@@ -47,9 +45,11 @@ import {
   finalizeLanguageSpecificImports,
 } from "./imports/language-specific.js";
 import { collectNativeCaptureImportBindings } from "./imports/native-captures.js";
-import { collectPythonImportsFromNativeMatches } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ImportBinding } from "./types.js";
+import { IMPORT_RESOLUTION_ROWS } from "./import-resolution-tables.js";
+import { specifierTargetPolicyFor } from "../util/resolution/language-specifiers.js";
+import { specifierExtractionPolicyFor } from "../graphs/specifiers/language-specifiers.js";
 
 /** Inputs of a file's import resolver: everything that decides where an import specifier resolves. */
 export type ImportResolutionOptions = {
@@ -89,12 +89,14 @@ export async function createFileImportResolver(
   opts?: ImportResolutionOptions,
 ): Promise<FileImportResolver> {
   let matchPath = opts?.matchPath;
-  if ((languageId === "ts" || languageId === "tsx") && !matchPath) {
+  if (IMPORT_RESOLUTION_ROWS[languageId]?.resolutionConfig && !matchPath) {
     ({ matchPath } = await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel));
   }
   const workspaceConfig = opts?.workspaceConfig ?? (await loadWorkspaceConfig(projectRoot));
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
   const jvmPackageFiles = new Map<string, string[]>();
+  const targetPolicy = specifierTargetPolicyFor(languageId);
+  const representativeTarget = targetPolicy.representativeBindingTarget;
   const resolve: ImportResolver = async (from, phpImportType, resolverOpts) => {
     const resolutionKind = resolverOpts?.resolutionKind;
     const includeForm = resolverOpts?.includeForm;
@@ -104,25 +106,31 @@ export async function createFileImportResolver(
     if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolved = (async (): Promise<ResolvedImportTarget> => {
-      const result = await resolveSpecifierTargets(file, from, languageId, {
-        projectRoot,
-        ...(matchPath ? { matchPath } : {}),
-        ...(workspaceConfig ? { workspaceConfig } : {}),
-        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-        ...(resolutionHints ? { resolutionHints } : {}),
-        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-        ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
-        ...(opts?.report ? { report: opts.report } : {}),
-        ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
-        ...(phpImportType ? { phpImportType } : {}),
-        ...(resolutionKind ? { resolutionKind } : {}),
-        ...(includeForm ? { includeForm } : {}),
-        ...(rubyLoadForm ? { rubyLoadForm } : {}),
-        ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
-        ...(resolverOpts?.statementStartIndex !== undefined
-          ? { statementStartIndex: resolverOpts.statementStartIndex }
-          : {}),
-      });
+      const result = await resolveSpecifierTargets(
+        file,
+        from,
+        languageId,
+        {
+          projectRoot,
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          ...(resolutionHints ? { resolutionHints } : {}),
+          ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+          ...(opts?.parsedFiles ? { parsedFiles: opts.parsedFiles } : {}),
+          ...(opts?.report ? { report: opts.report } : {}),
+          ...(resolverOpts?.jvmPackageWildcard ? { jvmPackageWildcard: true } : {}),
+          ...(phpImportType ? { phpImportType } : {}),
+          ...(resolutionKind ? { resolutionKind } : {}),
+          ...(includeForm ? { includeForm } : {}),
+          ...(rubyLoadForm ? { rubyLoadForm } : {}),
+          ...(resolverOpts?.pathAttribute ? { pathAttribute: resolverOpts.pathAttribute } : {}),
+          ...(resolverOpts?.statementStartIndex !== undefined
+            ? { statementStartIndex: resolverOpts.statementStartIndex }
+            : {}),
+        },
+        targetPolicy,
+      );
       if (result.jvmPackageMatched) {
         jvmPackageFiles.set(
           from,
@@ -130,7 +138,7 @@ export async function createFileImportResolver(
         );
       }
       // JVM package files remain on the star binding; C# namespaces retain a representative.
-      if (result.files.length > 1 && (languageId === "java" || languageId === "kotlin" || languageId === "csharp")) {
+      if (result.files.length > 1 && representativeTarget) {
         return result.files[0]!.replace(/\\/g, "/");
       }
       const resolvedFile = result.files[0];
@@ -205,6 +213,8 @@ export async function collectImportsForFile(
 
   const imports: ImportBinding[] = [];
   assertNativeRequiredAvailable();
+  const bindingRow = IMPORT_BINDING_ROWS[resolvedSup.id];
+  const packageSyntax = IMPORT_RESOLUTION_ROWS[resolvedSup.id]?.packageSyntax;
   // C# and the JVM languages read their imports from one syntax tree, so none of them has an import query.
   const jvmLanguageId = isJvmLanguage(resolvedSup.id) ? resolvedSup.id : undefined;
   const readsTree = readsSyntaxTree(resolvedSup.id);
@@ -213,7 +223,7 @@ export async function collectImportsForFile(
   let directiveTree: SyntaxTreeLike | null | undefined = readsTree ? opts?.tree : undefined;
   let extractionTree: SyntaxTreeResult | undefined;
   if (opts?.nativeQueries === undefined && !jvmLanguageId) {
-    if (resolvedSup.id === "csharp") {
+    if (readsTree) {
       const extraction = getNativeExtractionExecution(resolvedSource, resolvedSup);
       nativeExecution = extraction;
       resolvedNativeQueries = extraction.results;
@@ -249,7 +259,7 @@ export async function collectImportsForFile(
   }
   if (!resolvedNativeQueries && !readsTree) return imports;
 
-  if (resolvedSup.id === "python") {
+  if (bindingRow?.captureBindings) {
     if (!resolvedNativeQueries) return imports;
     const context = {
       file,
@@ -258,7 +268,7 @@ export async function collectImportsForFile(
       pushBinding: (binding: ImportBinding) => imports.push(binding),
       getBindings: () => imports,
     };
-    await collectPythonImportsFromNativeMatches(context, resolvedNativeQueries.importBindings);
+    await bindingRow.captureBindings(context, resolvedNativeQueries.importBindings);
     return imports;
   }
 
@@ -266,10 +276,11 @@ export async function collectImportsForFile(
   const resolveFrom = resolver.resolve;
   const jvmPackageFiles = resolver.jvmPackageFiles;
   const declaredPackage = jvmLanguageId && directiveTree ? jvmPackageName(directiveTree, jvmLanguageId) : null;
-  const jvmDeclaredPackage =
-    jvmLanguageId === "kotlin" && declaredPackage ? normalizeKotlinQualifiedName(declaredPackage) : declaredPackage;
+  const jvmDeclaredPackage = declaredPackage
+    ? (packageSyntax?.normalizeQualifiedName?.(declaredPackage) ?? declaredPackage)
+    : declaredPackage;
 
-  const stylesheetLanguage = ["css", "scss", "less"].includes(resolvedSup.id);
+  const resolutionKind = specifierExtractionPolicyFor(resolvedSup.id).collect?.resolutionKind;
   const languageContext = {
     file,
     projectRoot,
@@ -281,7 +292,7 @@ export async function collectImportsForFile(
     ...(opts?.report ? { report: opts.report } : {}),
     resolveFrom: (from: string, phpImportType?: "class" | "function" | "const", resolverOpts?: ImportResolverOptions) =>
       resolveFrom(from, phpImportType, {
-        ...(stylesheetLanguage ? { resolutionKind: "stylesheet" as const } : {}),
+        ...(resolutionKind ? { resolutionKind } : {}),
         ...resolverOpts,
       }),
     pushBinding: (binding: ImportBinding) => imports.push(binding),
@@ -315,7 +326,7 @@ export async function collectImportsForFile(
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === normalizeKotlinQualifiedName(typePackage))
           binding.jvmSamePackage = true;
       }
-      if (binding.jvmStaticWildcardName && jvmLanguageId === "java") {
+      if (binding.jvmStaticWildcardName && packageSyntax?.importKind === "type") {
         const typePackage = binding.from.slice(0, -(binding.jvmStaticWildcardName.length + 1));
         if (jvmDeclaredPackage !== null && jvmDeclaredPackage === normalizeKotlinQualifiedName(typePackage))
           binding.jvmSamePackage = true;
@@ -359,18 +370,8 @@ export async function collectImportsForFile(
 
   if (resolvedNativeQueries || (readsTree && directiveTree)) {
     try {
-      if (directiveTree && resolvedSup.id === "csharp") {
-        for (const directive of collectCsharpImportDirectives(directiveTree)) {
-          await applyCsharpImportDirective(languageContext, directive);
-        }
-      } else if (directiveTree && jvmLanguageId) {
-        // A statement written twice binds once.
-        const bound = new Set<string>();
-        for (const directive of collectJvmImportDirectives(directiveTree, jvmLanguageId)) {
-          if (bound.has(directive.statement.text)) continue;
-          bound.add(directive.statement.text);
-          await applyJvmImportDirective(languageContext, directive);
-        }
+      if (directiveTree && bindingRow?.treeBindings) {
+        await bindingRow.treeBindings(languageContext, directiveTree);
       } else if (resolvedNativeQueries) {
         await collectNativeCaptureImportBindings(
           {
@@ -389,15 +390,11 @@ export async function collectImportsForFile(
       // Native capture results are valid even when no bindings match. The CommonJS
       // require supplement below remains native-owned for TS/TSX. Stripping comments only
       // blanks characters, so a source without the word `require` has no `require(` to find.
-      if (
-        (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
-        resolvedSource.includes("require") &&
-        /\brequire\s*\(/.test(stripJsLikeComments(resolvedSource))
-      ) {
+      if (bindingRow?.needsValueRequireSupplement?.(resolvedSource)) {
         await runValueRequireFallback();
         await finalizeImports();
       }
-      if (imports.length || !["html", "css", "scss", "less"].includes(resolvedSup.id)) return imports;
+      if (imports.length || !bindingRow?.fallbackBindingsFromSpecifiers) return imports;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       recordNativeExecutionOutcome(opts?.report, {
@@ -412,7 +409,7 @@ export async function collectImportsForFile(
     }
   }
 
-  if (!imports.length && ["html", "css", "scss", "less"].includes(resolvedSup.id)) {
+  if (!imports.length && bindingRow?.fallbackBindingsFromSpecifiers) {
     const specifiers = collectModuleSpecifiersFromSource(resolvedSup, resolvedSource, {
       file,
       nativeQueries: resolvedNativeQueries,

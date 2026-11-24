@@ -1,6 +1,10 @@
 import type { BlockDefinition, LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
-import { classifyTerraformDefinition, terraformDeclarationForNameNode } from "../../terraform/syntax.js";
+import {
+  classifyTerraformDefinition,
+  terraformDeclarationForNameNode,
+  TERRAFORM_IDENTIFIER_PATTERN,
+} from "../../terraform/syntax.js";
 
 /** A quoted block label with no interpolation, capturing its text as `capture`. */
 function literalLabel(capture?: string): string {
@@ -46,6 +50,7 @@ export const TERRAFORM_DEF: LanguageDefinition = {
   id: "terraform",
   extensions: [".tf"],
   referenceBlockPriorities: { block: 2 },
+  identifierValidation: { pattern: TERRAFORM_IDENTIFIER_PATTERN },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

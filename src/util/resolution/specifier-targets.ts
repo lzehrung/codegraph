@@ -1,81 +1,26 @@
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
-import type { WorkspaceConfig } from "../workspace.js";
-import { resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier } from "../resolution.js";
-import { getImportableLanguageExtensions, STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
-import {
-  csharpTypeNameQualifierDeclared,
-  resolveCsharpDottedTypeImportPath,
-  resolveCsharpNamespaceImportPaths,
-} from "./csharp.js";
-import { resolveJvmPackageImportPaths } from "./jvm.js";
-import { resolveTerraformModuleSourcePaths } from "./terraform.js";
-import type { BuildReport } from "../../indexer/types.js";
-import type { ParsedFileContext } from "../../indexer/parse-context.js";
-import type { MatchPathFn } from "./tsconfig.js";
-import type {
-  CFamilyIncludeForm,
-  ModuleSpecifierExportCondition,
-  ModuleSpecifierResolutionKind,
-  RubyLoadForm,
-} from "../specifiers.js";
-
-export type SpecifierTargetMetadata = {
-  projectRoot: string;
-  matchPath?: MatchPathFn;
-  workspaceConfig?: WorkspaceConfig;
-  resolveNodeModules?: boolean;
-  resolutionHints?: string[];
-  phpImportType?: "class" | "function" | "const";
-  resolutionKind?: ModuleSpecifierResolutionKind;
-  exportCondition?: ModuleSpecifierExportCondition;
-  pathAttribute?: string;
-  statementStartIndex?: number;
-  includeForm?: CFamilyIncludeForm;
-  rubyLoadForm?: RubyLoadForm;
-  languageExtensions?: LanguageExtensionMap;
-  parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
-  report?: BuildReport;
-  /** Distinguishes `import p.C.*` from `import p.C` when both a package and a class exist. */
-  jvmPackageWildcard?: true;
-  /** Rust tries this spelling before `specifier` when it differs, without `pathAttribute`. */
-  rawSpecifier?: string;
-  resolutionExtensions?: readonly string[];
-};
-
-export type SpecifierTargets = {
-  /** Every first-party file this specifier names. Empty when external. */
-  files: string[];
-  /** Name for an external edge or binding. Unused when `files` is non-empty. */
-  externalName: string;
-  /** True only when the JVM wildcard matched a package rather than a type. */
-  jvmPackageMatched?: true;
-  /**
-   * C# ambiguous and partial type matches keep an external edge.
-   * Other unresolved specifiers still honor `dropIfUnresolved`.
-   */
-  retainExternalEdge?: boolean;
-};
+import { resolveImportSpecifier, resolvePathLikeModule, resolveSpecifier } from "../resolution.js";
+import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../resolution-candidates.js";
+import { specifierTargetPolicyFor } from "./language-specifiers.js";
+import type { SpecifierTargetDeps, SpecifierTargetPolicy } from "./language-policy-types.js";
+import type { SpecifierTargetMetadata, SpecifierTargets } from "./specifier-target-types.js";
 
 type ResolvedSpecifier = string | { external: string };
 
-/**
- * A C# import never names a file of another language.
- * `using System;` beside a root `system.ts` stays external, whether path-like,
- * hint, workspace, or package resolution found that file.
- */
-function applyCsharpFileRule(
+/** A selected language policy may reject a resolved first-party target. */
+function applyResolvedFileRule(
   resolved: ResolvedSpecifier,
   rejectedExternalName: string,
-  languageId: string,
+  policy: SpecifierTargetPolicy,
   metadata: SpecifierTargetMetadata,
 ): ResolvedSpecifier {
-  if (languageId !== "csharp" || typeof resolved !== "string") return resolved;
-  if (supportForFileWithoutHeaderSample(resolved, metadata.languageExtensions)?.id === "csharp") return resolved;
+  const acceptsFile = policy.acceptsFile;
+  if (!acceptsFile || typeof resolved !== "string") return resolved;
+  if (acceptsFile(resolved, metadata)) return resolved;
   return { external: rejectedExternalName };
 }
 
-function scssPartialsAllowed(languageId: string, metadata: SpecifierTargetMetadata): boolean {
-  return languageId === "scss" && metadata.resolutionKind !== "document";
+function partialsAllowed(policy: SpecifierTargetPolicy, metadata: SpecifierTargetMetadata): boolean {
+  return !!policy.allowPartialResolution && metadata.resolutionKind !== "document";
 }
 
 function stylesheetExtensions(metadata: SpecifierTargetMetadata): readonly string[] | undefined {
@@ -89,28 +34,36 @@ async function resolveLanguageImport(
   specifier: string,
   languageId: string,
   metadata: SpecifierTargetMetadata,
+  policy: SpecifierTargetPolicy,
   specOverride?: string,
 ): Promise<ResolvedSpecifier> {
-  return resolveImportSpecifier(metadata.projectRoot, file, specOverride ?? specifier, languageId, {
-    ...(metadata.matchPath ? { matchPath: metadata.matchPath } : {}),
-    ...(metadata.workspaceConfig ? { workspaceConfig: metadata.workspaceConfig } : {}),
-    resolveNodeModules: !!metadata.resolveNodeModules,
-    ...(metadata.resolutionHints ? { resolutionHints: metadata.resolutionHints } : {}),
-    ...(metadata.phpImportType ? { phpImportType: metadata.phpImportType } : {}),
-    ...(metadata.resolutionKind ? { resolutionKind: metadata.resolutionKind } : {}),
-    ...(scssPartialsAllowed(languageId, metadata) ? { allowScssPartialResolution: true } : {}),
-    ...(metadata.exportCondition ? { exportCondition: metadata.exportCondition } : {}),
-    ...(metadata.pathAttribute ? { pathAttribute: metadata.pathAttribute } : {}),
-    ...(metadata.statementStartIndex !== undefined ? { statementStartIndex: metadata.statementStartIndex } : {}),
-    ...(metadata.includeForm ? { includeForm: metadata.includeForm } : {}),
-    ...(metadata.parsedFiles ? { parsedFiles: metadata.parsedFiles } : {}),
-  });
+  return resolveImportSpecifier(
+    metadata.projectRoot,
+    file,
+    specOverride ?? specifier,
+    languageId,
+    {
+      ...(metadata.matchPath ? { matchPath: metadata.matchPath } : {}),
+      ...(metadata.workspaceConfig ? { workspaceConfig: metadata.workspaceConfig } : {}),
+      resolveNodeModules: !!metadata.resolveNodeModules,
+      ...(metadata.resolutionHints ? { resolutionHints: metadata.resolutionHints } : {}),
+      ...(metadata.phpImportType ? { phpImportType: metadata.phpImportType } : {}),
+      ...(metadata.resolutionKind ? { resolutionKind: metadata.resolutionKind } : {}),
+      ...(partialsAllowed(policy, metadata) ? { allowScssPartialResolution: true } : {}),
+      ...(metadata.exportCondition ? { exportCondition: metadata.exportCondition } : {}),
+      ...(metadata.pathAttribute ? { pathAttribute: metadata.pathAttribute } : {}),
+      ...(metadata.statementStartIndex !== undefined ? { statementStartIndex: metadata.statementStartIndex } : {}),
+      ...(metadata.includeForm ? { includeForm: metadata.includeForm } : {}),
+      ...(metadata.parsedFiles ? { parsedFiles: metadata.parsedFiles } : {}),
+    },
+    policy,
+  );
 }
 
 async function resolveGenericSpecifier(
   file: string,
   specifier: string,
-  languageId: string,
+  policy: SpecifierTargetPolicy,
   metadata: SpecifierTargetMetadata,
 ): Promise<ResolvedSpecifier> {
   const resolutionExtensions = stylesheetExtensions(metadata);
@@ -120,7 +73,7 @@ async function resolveGenericSpecifier(
     ...(metadata.resolutionKind ? { resolutionKind: metadata.resolutionKind } : {}),
     ...(metadata.resolutionHints ? { resolutionHints: metadata.resolutionHints } : {}),
     ...(metadata.exportCondition ? { exportCondition: metadata.exportCondition } : {}),
-    ...(scssPartialsAllowed(languageId, metadata) ? { allowScssPartialResolution: true } : {}),
+    ...(partialsAllowed(policy, metadata) ? { allowScssPartialResolution: true } : {}),
   });
 }
 
@@ -129,110 +82,33 @@ async function resolveLanguageImportTargets(
   specifier: string,
   languageId: string,
   metadata: SpecifierTargetMetadata,
+  policy: SpecifierTargetPolicy,
 ): Promise<SpecifierTargets> {
-  if (languageId === "rust" && metadata.rawSpecifier && metadata.rawSpecifier !== specifier) {
-    const rawResolved = await resolveLanguageImport(
-      file,
-      specifier,
-      languageId,
-      {
-        projectRoot: metadata.projectRoot,
-        ...(metadata.matchPath ? { matchPath: metadata.matchPath } : {}),
-        ...(metadata.workspaceConfig ? { workspaceConfig: metadata.workspaceConfig } : {}),
-        resolveNodeModules: !!metadata.resolveNodeModules,
-        ...(metadata.resolutionHints ? { resolutionHints: metadata.resolutionHints } : {}),
-        ...(metadata.exportCondition ? { exportCondition: metadata.exportCondition } : {}),
-      },
-      metadata.rawSpecifier,
-    );
-    if (typeof rawResolved === "string") return { files: [rawResolved], externalName: metadata.rawSpecifier };
-  }
-  const resolved = await resolveLanguageImport(file, specifier, languageId, metadata);
-  const accepted = applyCsharpFileRule(resolved, specifier, languageId, metadata);
+  const resolved = await resolveLanguageImport(file, specifier, languageId, metadata, policy);
+  const accepted = applyResolvedFileRule(resolved, specifier, policy, metadata);
   if (typeof accepted === "string") return { files: [accepted], externalName: specifier };
   return { files: [], externalName: metadata.rawSpecifier ?? accepted.external };
 }
 
-function splitPythonRelativeSpecifier(specifier: string): { relDots: number; mod: string | null } {
-  const match = specifier.match(/^(\.+)(.*)$/);
-  if (!match) return { relDots: 0, mod: specifier };
-  const dots = match[1] ?? "";
-  const rest = match[2] ?? "";
-  return { relDots: dots.length, mod: rest || null };
-}
-
-async function resolvePythonTargets(
+async function resolvePathFallbackTargets(
   file: string,
   specifier: string,
+  policy: SpecifierTargetPolicy,
   metadata: SpecifierTargetMetadata,
 ): Promise<SpecifierTargets> {
-  const split = splitPythonRelativeSpecifier(specifier);
-  const resolved = await resolvePythonModule(metadata.projectRoot, file, split.mod, split.relDots);
-  if (typeof resolved === "string") return { files: [resolved], externalName: specifier };
-  return { files: [], externalName: specifier };
-}
-
-async function resolveCsharpOrRubyTargets(
-  file: string,
-  specifier: string,
-  languageId: string,
-  metadata: SpecifierTargetMetadata,
-): Promise<SpecifierTargets> {
-  if (languageId === "ruby" && metadata.rubyLoadForm === "require_relative") {
-    const relativeSpecifier = specifier.startsWith(".") ? specifier : "./" + specifier;
-    const relative = await resolveSpecifier(file, relativeSpecifier, metadata.projectRoot, undefined, undefined, {
-      resolutionExtensions: getImportableLanguageExtensions("ruby"),
-    });
-    if (typeof relative === "string") return { files: [relative], externalName: specifier };
-    return { files: [], externalName: specifier };
-  }
-  if (languageId === "csharp") {
-    if (specifier.includes("<") || specifier.includes(">")) {
-      return { files: [], externalName: metadata.rawSpecifier ?? specifier };
-    }
-    const namespaceTargets = await resolveCsharpNamespaceImportPaths(
-      metadata.projectRoot,
-      specifier,
-      file,
-      metadata.languageExtensions,
-      metadata.report,
-      metadata.parsedFiles,
-    );
-    if (namespaceTargets.length) return { files: namespaceTargets, externalName: specifier };
-    const typeMatch = await resolveCsharpDottedTypeImportPath(
-      metadata.projectRoot,
-      specifier,
-      file,
-      metadata.languageExtensions,
-      metadata.report,
-      metadata.parsedFiles,
-    );
-    if (typeMatch.status === "found") return { files: [typeMatch.file], externalName: specifier };
-    if (typeMatch.status === "ambiguous" || typeMatch.status === "partial") {
-      return {
-        files: [],
-        externalName: metadata.rawSpecifier ?? specifier,
-        retainExternalEdge: true,
-      };
-    }
-    // A declared namespace makes the type lookup authoritative: `N.Solo` never names the generic `Solo<T>`, so the
-    // path `N/Solo.cs` must not stand in for a type the lookup did not find.
-    const qualifierDeclared = await csharpTypeNameQualifierDeclared(
-      metadata.projectRoot,
-      specifier,
-      file,
-      metadata.languageExtensions,
-      metadata.report,
-      metadata.parsedFiles,
-    );
-    if (qualifierDeclared) return { files: [], externalName: metadata.rawSpecifier ?? specifier };
-  }
   const pathLike = await resolvePathLikeModule(metadata.projectRoot, specifier, stylesheetExtensions(metadata));
-  const resolved = pathLike ? pathLike : await resolveGenericSpecifier(file, specifier, languageId, metadata);
-  const accepted = applyCsharpFileRule(resolved, metadata.rawSpecifier ?? specifier, languageId, metadata);
+  const resolved = pathLike ? pathLike : await resolveGenericSpecifier(file, specifier, policy, metadata);
+  const accepted = applyResolvedFileRule(resolved, metadata.rawSpecifier ?? specifier, policy, metadata);
   if (typeof accepted === "string") return { files: [accepted], externalName: specifier };
   return { files: [], externalName: metadata.rawSpecifier ?? accepted.external };
 }
+
+const SPECIFIER_TARGET_DEPS: SpecifierTargetDeps = {
+  resolveSpecifier,
+  resolveLanguageImport,
+  resolveLanguageImportTargets,
+  resolvePathFallbackTargets,
+};
 
 /**
  * Map one import specifier to every first-party file it names.
@@ -244,38 +120,22 @@ export async function resolveSpecifierTargets(
   specifier: string,
   languageId: string,
   metadata: SpecifierTargetMetadata,
+  policy: SpecifierTargetPolicy = specifierTargetPolicyFor(languageId),
 ): Promise<SpecifierTargets> {
-  if (languageId === "python") return resolvePythonTargets(file, specifier, metadata);
-  if (languageId === "java" || languageId === "kotlin") {
-    if (metadata.jvmPackageWildcard) {
-      const packageTargets = await resolveJvmPackageImportPaths(metadata.projectRoot, specifier, file);
-      if (packageTargets.length) return { files: packageTargets, externalName: specifier, jvmPackageMatched: true };
+  const resolveTargets = policy.resolve;
+  if (resolveTargets === "import") {
+    const packageImportFiles = policy.packageImportFiles;
+    if (metadata.jvmPackageWildcard && packageImportFiles) {
+      const files = await packageImportFiles(metadata.projectRoot, specifier, file);
+      if (files.length) return { files, externalName: specifier, jvmPackageMatched: true };
     }
-    return resolveLanguageImportTargets(file, specifier, languageId, metadata);
+    return resolveLanguageImportTargets(file, specifier, languageId, metadata, policy);
   }
-  if (
-    languageId === "go" ||
-    languageId === "php" ||
-    languageId === "rust" ||
-    languageId === "zig" ||
-    languageId === "c" ||
-    languageId === "cpp"
-  ) {
-    return resolveLanguageImportTargets(file, specifier, languageId, metadata);
+  if (resolveTargets) {
+    const targets = await resolveTargets(file, specifier, metadata, SPECIFIER_TARGET_DEPS, policy);
+    if (targets !== undefined) return targets;
   }
-  if (languageId === "terraform") {
-    const files = await resolveTerraformModuleSourcePaths(
-      metadata.projectRoot,
-      specifier,
-      file,
-      metadata.languageExtensions,
-    );
-    return { files, externalName: specifier };
-  }
-  if (languageId === "csharp" || languageId === "ruby") {
-    return resolveCsharpOrRubyTargets(file, specifier, languageId, metadata);
-  }
-  const resolved = await resolveGenericSpecifier(file, specifier, languageId, metadata);
+  const resolved = await resolveGenericSpecifier(file, specifier, policy, metadata);
   if (typeof resolved === "string") return { files: [resolved], externalName: specifier };
   return { files: [], externalName: metadata.rawSpecifier ?? resolved.external };
 }

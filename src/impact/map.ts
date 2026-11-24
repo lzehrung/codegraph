@@ -12,7 +12,7 @@ import { isGraphOnlyLanguage } from "../document-links.js";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { ImpactDefinitionShapes, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { pushAll } from "../util/collections.js";
@@ -100,10 +100,20 @@ export async function locateChangedSymbolsWithLines(
   // Pre-build an O(1) position lookup so findDeclarationNameInAncestors does
   // not do an O(locals) scan for every candidate declaration name node.
   const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
+  const impactDefinitions = sup.impactDefinitionTypes;
 
   for (const node of changedNodes) {
-    const classification = classifyChangedNode(node, source, sup);
-    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification, source, trackedPositions);
+    const classification = classifyChangedNode(node, source, sup, impactDefinitions);
+    const symbolHandle = findSymbolHandleForNode(
+      index,
+      file,
+      node,
+      sup,
+      classification,
+      source,
+      trackedPositions,
+      impactDefinitions,
+    );
     if (!symbolHandle) continue;
 
     const symbolDef = mod?.locals.find((l) => symbolHandleFromLocal(file, l) === symbolHandle);
@@ -325,6 +335,7 @@ export async function mapChangedLinesToSymbols(
   const sup = parsedEntry.sup;
   const mod = index.byFile.get(fileIdentityKey(file));
   const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
+  const impactDefinitions = sup.impactDefinitionTypes;
 
   const nodes = findNodesInLines(tree, changedLines);
   const linesByHandle = new Map<SymbolHandle, Set<number>>();
@@ -337,8 +348,17 @@ export async function mapChangedLinesToSymbols(
       if (changedLines.has(line)) matchingLines.push(line);
     }
     if (!matchingLines.length) continue;
-    const classification = classifyChangedNode(node, source, sup);
-    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification, source, trackedPositions);
+    const classification = classifyChangedNode(node, source, sup, impactDefinitions);
+    const symbolHandle = findSymbolHandleForNode(
+      index,
+      file,
+      node,
+      sup,
+      classification,
+      source,
+      trackedPositions,
+      impactDefinitions,
+    );
     if (!symbolHandle) continue;
     const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
     for (const line of matchingLines) existing.add(line);
@@ -459,15 +479,13 @@ type NodeClassification = {
   typeOnly?: boolean;
 } | null;
 
-function classifyChangedNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): NodeClassification {
-  if (sup.id === "html" && isHtmlIdAttributeValue(node, source)) {
-    return { type: "definition" };
-  }
-  if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {
-    if (isStyleDefinitionNode(node, sup)) {
-      return { type: "definition" };
-    }
-  }
+function classifyChangedNode(
+  node: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  impactDefinitions: ImpactDefinitionShapes | undefined,
+): NodeClassification {
+  if (isImpactDefinitionName(node, source, impactDefinitions)) return { type: "definition" };
 
   // Check for definition nodes
   if (sup.isDeclarationName?.(node)) {
@@ -902,12 +920,13 @@ function findSymbolHandleForNode(
   classification: NodeClassification,
   source: string,
   trackedPositions?: ReadonlySet<string>,
+  impactDefinitions?: ImpactDefinitionShapes,
 ): SymbolHandle | null {
   const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return null;
 
   // Exact declaration name node
-  if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source)) {
+  if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source, impactDefinitions)) {
     const definitionLine = node.startPosition?.row + 1;
     const definitionColumn = node.startPosition?.column + 1;
     const local = findLocalByStartPosition(mod.locals, definitionLine, definitionColumn);
@@ -935,56 +954,27 @@ function findSymbolHandleForNode(
   return null;
 }
 
-function isStyleDefinitionNode(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
-  const parentType = node.parent?.type ?? "";
-  if (sup.id === "css" || sup.id === "less") {
-    if (node.type === "class_name" && parentType === "class_selector") {
-      return true;
-    }
-    if (node.type === "id_name" && parentType === "id_selector") {
-      return true;
-    }
-    return false;
+function isImpactDefinitionName(
+  node: SyntaxNodeLike,
+  source: string,
+  shapes: ImpactDefinitionShapes | undefined,
+): boolean {
+  if (!shapes) return false;
+  for (const shape of shapes.names) {
+    if (node.type !== shape.nodeType) continue;
+    if (shape.parentType && node.parent?.type !== shape.parentType) continue;
+    if (shape.field && node.parent?.childForFieldName(shape.field)?.id !== node.id) continue;
+    return shapes.acceptsName?.(node, source) ?? true;
   }
-
-  if (sup.id === "scss") {
-    if (node.type === "class_name" && parentType === "class_selector") {
-      return true;
-    }
-    if (node.type === "id_name" && parentType === "id_selector") {
-      return true;
-    }
-    if (node.type === "variable" && parentType === "variable_declaration") {
-      return true;
-    }
-    if (node.type === "name" && parentType === "mixin_statement") {
-      return true;
-    }
-    if (node.type === "name" && parentType === "function_statement") {
-      return true;
-    }
-  }
-
   return false;
 }
 
-function isHtmlIdAttributeValue(node: SyntaxNodeLike, source: string): boolean {
-  if (node.type !== "attribute_value") return false;
-  const quoted = node.parent;
-  if (!quoted) return false;
-  const attribute = quoted.parent;
-  if (!attribute || attribute.type !== "attribute") return false;
-  const nameNode = attribute.childForFieldName?.("name") ?? attribute.child(0);
-  if (!nameNode || nameNode.type !== "attribute_name") return false;
-  const nameText = source.slice(nameNode.startIndex, nameNode.endIndex).trim().toLowerCase();
-  return nameText === "id";
-}
-
-function isDefinitionNameNode(node: SyntaxNodeLike, sup: LanguageSupport, source: string): boolean {
+function isDefinitionNameNode(
+  node: SyntaxNodeLike,
+  sup: LanguageSupport,
+  source: string,
+  impactDefinitions: ImpactDefinitionShapes | undefined,
+): boolean {
   if (sup.isDeclarationName?.(node)) return true;
-  if (sup.id === "html") return isHtmlIdAttributeValue(node, source);
-  if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {
-    return isStyleDefinitionNode(node, sup);
-  }
-  return false;
+  return isImpactDefinitionName(node, source, impactDefinitions);
 }

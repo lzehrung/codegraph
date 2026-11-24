@@ -1,6 +1,7 @@
 import type { LanguageDefinition } from "../types.js";
 import { graphCapture, type GraphImportCapture } from "../graph-captures.js";
 import { registerLanguage } from "../registry.js";
+import { HTML_IMPACT_DEFINITIONS } from "./html-imports.js";
 
 function htmlAssetImportQuery(valueCapture: GraphImportCapture): string {
   const value = graphCapture(valueCapture);
@@ -19,6 +20,7 @@ const htmlAssetImports = htmlAssetImportQuery("from");
 export const HTML_DEF: LanguageDefinition = {
   id: "html",
   extensions: [".html", ".htm", ".xhtml"],
+  impactDefinitionTypes: HTML_IMPACT_DEFINITIONS,
   structure: {
     blocks: [
       {

@@ -1,0 +1,1 @@
+Import captures, document edges, embedded import ranges, and binding completion read language collection rows.

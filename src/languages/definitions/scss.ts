@@ -3,6 +3,7 @@ import { graphCapture } from "../graph-captures.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, matchesParentTypePairs } from "./shared.js";
 import { cssLikeGraph } from "./css-like.js";
+import { SCSS_IDENTIFIER_VALIDATION, SCSS_IMPACT_DEFINITIONS } from "./stylesheet-imports.js";
 
 const from = graphCapture("from");
 const stmt = graphCapture("stmt");
@@ -27,6 +28,8 @@ export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
   capturesDocstrings: true,
+  identifierValidation: SCSS_IDENTIFIER_VALIDATION,
+  impactDefinitionTypes: SCSS_IMPACT_DEFINITIONS,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [
