@@ -713,6 +713,7 @@ async function receiverProofUnavailable(
   range: Range,
   resolveDefinition: ReferenceDefinitionResolver,
   expectedDef: SymbolDef,
+  methodMayReference = false,
 ): Promise<boolean> {
   const position = {
     row: range.start.line - 1,
@@ -778,8 +779,11 @@ async function receiverProofUnavailable(
           declaresMembers(resolvedReceiver.definition)
         );
       }
+      // Language uncertainty can bypass the free-function shortcut, never a proven receiver miss.
       if (!unavailable) return false;
-      return !freeFunctionMemberSiteIsProvenNonReference(index, fileId, parsed, object, expectedDef);
+      return (
+        methodMayReference || !freeFunctionMemberSiteIsProvenNonReference(index, fileId, parsed, object, expectedDef)
+      );
     }
     current = current.parent;
   }
@@ -985,17 +989,29 @@ export async function collectVerifiedNamedNodeReferences(
       continue;
     }
     if (!recoveredByLanguageFallback && onReceiverProofUnavailable && mayReferenceDefinition()) {
-      if (
-        candidateFilter?.unproven?.(node, resolved.reason) ||
-        policy.unprovenReference?.(node, resolved.reason, expectedNameNode) ||
-        resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
-        // Qualified C# bases are reachable without an import-closure edge.
-        resolved.reason === AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON ||
-        (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
-        (await receiverProofUnavailable(index, fileId, parsed, range, resolveDefinition, expectedDef))
-      ) {
-        onReceiverProofUnavailable(fileId);
+      let unproven = candidateFilter?.unproven?.(node, resolved.reason) ?? false;
+      if (!unproven) {
+        const policyUnproven = !!policy.unprovenReference?.(node, resolved.reason, expectedNameNode);
+        const memberNeedsReceiverProof =
+          policyUnproven && policy.unprovenMembersRespectReceiverProof && isMemberAccessPropertyRange(parsed, range);
+        const unprovenWithoutReceiverProof = policyUnproven && !memberNeedsReceiverProof;
+        unproven =
+          unprovenWithoutReceiverProof ||
+          resolved.reason === UNRESOLVED_QUALIFIED_TYPE_REASON ||
+          // Qualified C# bases are reachable without an import-closure edge.
+          resolved.reason === AMBIGUOUS_CSHARP_ALIAS_MEMBER_REASON ||
+          (isAmbiguousResolutionReason(resolved.reason) && definitionVisibleHere()) ||
+          (await receiverProofUnavailable(
+            index,
+            fileId,
+            parsed,
+            range,
+            resolveDefinition,
+            expectedDef,
+            memberNeedsReceiverProof,
+          ));
       }
+      if (unproven) onReceiverProofUnavailable(fileId);
     }
   }
   return verified;

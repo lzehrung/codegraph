@@ -1,0 +1,1 @@
+Ruby generated readers preserve command-style local operands instead of treating them as explicit method calls.

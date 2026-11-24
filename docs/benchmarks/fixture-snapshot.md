@@ -6,9 +6,9 @@ Scope: this counts only the dedicated per-language smoke files, not a language's
 
 Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.
 
-Generated: 2026-11-24T05:35:41.704Z (Node v22.23.4)
+Generated: 2026-11-24T07:16:00.368Z (Node v22.23.4)
 
-Total across the 29 language suites: 1591 tests, 0 failed.
+Total across the 29 language suites: 1599 tests, 0 failed.
 The tests/languages run also executed 100 tests in cross-language files that are not attributed to a language: `tests/languages/callable-consumer-matrix.test.ts`, `tests/languages/chunk-sfc.test.ts`, `tests/languages/cpp-module-incremental.test.ts`, `tests/languages/graph-captures.test.ts`, `tests/languages/import-from-captures.test.ts`, `tests/languages/query-hygiene.test.ts`.
 
 | Language         | Status  | Tests | Test file(s)                         |
@@ -31,7 +31,7 @@ The tests/languages run also executed 100 tests in cross-language files that are
 | PHP              | passing | 153   | `tests/languages/php.test.ts`        |
 | Python           | passing | 81    | `tests/languages/python.test.ts`     |
 | reStructuredText | passing | 4     | `tests/languages/rst.test.ts`        |
-| Ruby             | passing | 40    | `tests/languages/ruby.test.ts`       |
+| Ruby             | passing | 48    | `tests/languages/ruby.test.ts`       |
 | Rust             | passing | 89    | `tests/languages/rust.test.ts`       |
 | SCSS             | passing | 146   | `tests/languages/scss.test.ts`       |
 | SQL              | passing | 89    | `tests/languages/sql.test.ts`        |

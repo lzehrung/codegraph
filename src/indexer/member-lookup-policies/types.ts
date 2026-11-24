@@ -203,6 +203,8 @@ export type MemberLookupPolicy = {
   ): boolean;
   /** Whether the lookup's `reason` for an unplaced `node` leaves a reference possible. */
   unprovenReference?(node: SyntaxNodeLike, reason: string | undefined, definitionName: SyntaxNodeLike): boolean;
+  /** Apply receiver exclusions before retaining an unresolved member reference marked by this policy. */
+  unprovenMembersRespectReceiverProof?: boolean;
   /** Whether an unplaced use's syntax can name the target at all, using the query's owned declaration token. */
   unprovenReferenceCandidate?(node: SyntaxNodeLike, definitionName: SyntaxNodeLike): boolean;
   /** The enum case or static member a leading-dot use selects in the type `target` names (or in the type around a node). */

@@ -23,6 +23,28 @@ export const rubyOmissions: readonly CallFormOmission[] = [
 
 export const rubyCells: MatrixCell[] = [
   {
+    id: "ruby/default-value-call",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": [
+        "class Widget",
+        "  def helper; 42; end",
+        "  def run(value = helper)",
+        "    value",
+        "  end",
+        "end",
+        "",
+      ].join("\n"),
+      "decoy.rb": ["class Decoy", "  def helper; -1; end", "end", ""].join("\n"),
+    },
+    use: { file: "widget.rb", line: 3, token: "helper" },
+    expected: { file: "widget.rb", line: 2, token: "helper" },
+    decoy: { file: "decoy.rb", line: 2, token: "helper" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.rb", fromName: "run" },
+  },
+  {
     id: "ruby/bare-call",
     language: "ruby",
     callForm: "bare-call",
@@ -683,5 +705,43 @@ export const rubyCells: MatrixCell[] = [
     decoy: { file: "decoy.rb", line: 1, token: "Decoy" },
     decoyKind: "type",
     edge: { label: "instantiates", fromFile: "use.rb", fromName: "build" },
+  },
+  {
+    id: "ruby/explicit-call-beside-parameter",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": [
+        "class Widget",
+        "  def total(value = 42); value; end",
+        "  def run(total)",
+        "    total(7)",
+        "  end",
+        "end",
+        "",
+      ].join("\n"),
+      "decoy.rb": ["class Decoy", "  def total(value = 42); -1; end", "end", ""].join("\n"),
+    },
+    use: { file: "widget.rb", line: 4, token: "total" },
+    expected: { file: "widget.rb", line: 2, token: "total" },
+    decoy: { file: "decoy.rb", line: 2, token: "total" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.rb", fromName: "run" },
+  },
+  {
+    id: "ruby/explicit-reader-beside-parameter",
+    language: "ruby",
+    callForm: "bare-call",
+    files: {
+      "widget.rb": ["class Widget", "  attr_reader :level", "  def run(level)", "    level()", "  end", "end", ""].join(
+        "\n",
+      ),
+      "decoy.rb": ["class Decoy", "  def level; -1; end", "end", ""].join("\n"),
+    },
+    use: { file: "widget.rb", line: 4, token: "level" },
+    expected: { file: "widget.rb", line: 2, token: "level" },
+    decoy: { file: "decoy.rb", line: 2, token: "level" },
+    decoyKind: "callable",
+    edge: { label: "calls", fromFile: "widget.rb", fromName: "run" },
   },
 ];

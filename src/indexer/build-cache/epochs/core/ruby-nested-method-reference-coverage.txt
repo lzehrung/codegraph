@@ -1,0 +1,1 @@
+Ruby untyped receiver candidates retain method reference uncertainty without changing module member classification.

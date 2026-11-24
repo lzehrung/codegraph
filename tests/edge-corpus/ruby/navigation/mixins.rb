@@ -1,7 +1,7 @@
 module Atlas # @ref atlas
   module Engine # @ref engine
     module Auditable # @def auditable=Auditable @coverage auditable complete
-      def audit # @def audit
+      def audit # @def audit @coverage audit partial
         :ok
       end
     end

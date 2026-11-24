@@ -20,7 +20,7 @@ import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName, isSwiftPatternLabel } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
-import { rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby-tree.js";
+import { rubyCallMayReadLocal, rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby-tree.js";
 import {
   csharpBindingVisibleAt,
   csharpDeclarationOutsideQuery,
@@ -927,6 +927,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   },
   ruby: {
     parameterParents: new Set(["lambda_parameters"]),
+    patternDefaultValueFields: { optional_parameter: "value", keyword_parameter: "value" },
     functionNameTypes: new Set(["method", "singleton_method"]),
     classNameTypes: new Set(["class", "module"]),
     variableDeclarationTypes: new Set(["assignment"]),
@@ -942,7 +943,8 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     localOnlyScopeTypes: new Set(["class", "module", "singleton_class"]),
     localVariableNameTypes: new Set(["identifier"]),
     referenceNeedsVerification: rubyLambdaParameterShadows,
-    namespaceHidesBinding: (_row, binding, use) => {
+    namespaceHidesBinding: (row, binding, use) => {
+      if (binding.kind === "param" && isExplicitMethodCall(row, use)) return !rubyCallMayReadLocal(use);
       if (binding.kind !== "function") return false;
       let earlier = binding.earlierSameScope;
       while (earlier && earlier.kind !== "local" && earlier.kind !== "param") earlier = earlier.earlierSameScope;

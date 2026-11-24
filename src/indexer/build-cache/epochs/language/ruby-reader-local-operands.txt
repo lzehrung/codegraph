@@ -1,0 +1,1 @@
+Ruby generated-member visibility distinguishes local command operands from explicit method calls.

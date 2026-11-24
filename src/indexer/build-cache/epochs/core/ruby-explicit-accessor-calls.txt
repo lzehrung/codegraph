@@ -1,0 +1,1 @@
+Ruby explicit accessor calls ignore same-named locals and parameters inside their declaring owner.
