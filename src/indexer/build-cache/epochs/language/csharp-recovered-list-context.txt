@@ -1,0 +1,1 @@
+C# recovered pattern checks exclude query clauses from possible binder names.

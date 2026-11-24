@@ -1,5 +1,5 @@
 /** C# additions to member navigation and to reference coverage. */
-import { csharpReceiverDeclaredBindingVisible } from "../../util/csharp-bindings.js";
+import { csharpReceiverDeclaredBindingVisible, isCsharpDiscardName } from "../../util/csharp-bindings.js";
 import {
   csharpNamedArgumentCall,
   csharpUnprovenReferenceCandidate,
@@ -86,7 +86,8 @@ export const csharpMemberLookupPolicy: MemberLookupPolicy = {
   membersBeforeFileExports: true,
   implicitMember: csharpRecordProperty,
   renameCompanions: csharpInterfaceRenameCompanions,
-  unprovenReferenceCandidate: csharpUnprovenReferenceCandidate,
+  unprovenReferenceCandidate: (node, definitionName) =>
+    !isCsharpDiscardName(node) && csharpUnprovenReferenceCandidate(node, definitionName),
   isStaticDeclaration: (node) =>
     node.type === "field_declaration" &&
     node.namedChildren.some((child) => child.type === "modifier" && child.text === "const"),

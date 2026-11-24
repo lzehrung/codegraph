@@ -1,6 +1,7 @@
 import { sliceText, toRange } from "../util/ast.js";
 import { getNativeSyntaxTreeExecution } from "../native/tree-sitter-native.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
+import { collectParseErrorRanges } from "./parse-errors.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { isSwiftQualifiedExtensionSuffix } from "../util/swift-tree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
@@ -37,7 +38,7 @@ import {
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { GeneratedMember, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import { SymbolKind, type ImportBinding, type SymbolDef } from "./types.js";
+import { SymbolKind, type ImportBinding, type ParseErrorRange, type SymbolDef } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 import { declaredNameNodes } from "./type-parameters.js";
 
@@ -111,7 +112,11 @@ export function buildScopeIndexFromSource(
   source: string,
   support: LanguageSupport,
   imports: ImportBinding[] = [],
-  opts?: { tree?: SyntaxTreeLike; locals?: readonly SymbolDef[] },
+  opts?: {
+    tree?: SyntaxTreeLike;
+    locals?: readonly SymbolDef[];
+    parseErrorRanges?: readonly ParseErrorRange[] | undefined;
+  },
 ): ScopeIndex {
   let tree = opts?.tree ?? null;
   if (!tree) {
@@ -229,6 +234,16 @@ export function buildScopeIndexFromSource(
   }
 
   const row = scopeNodesFor(support.id);
+  const checksParseErrors =
+    row.referenceVerificationRequiresParseError &&
+    (!(tree instanceof ProjectedSyntaxTree) || tree.columns.kinds.includes("ERROR"));
+  let errorRanges: readonly ParseErrorRange[] | undefined;
+  if (checksParseErrors) {
+    errorRanges = opts?.parseErrorRanges;
+    if (!errorRanges && tree instanceof ProjectedSyntaxTree) errorRanges = collectParseErrorRanges(tree);
+  }
+  const referenceNeedsVerification =
+    row.referenceVerificationRequiresParseError && !errorRanges?.length ? undefined : row.referenceNeedsVerification;
   const jsTs = isJsTsLanguage(support.id);
   const generatedMembers = generatedMembersIn(support, source);
   /** Covering-declaration names collected before a scope's body is walked, keyed by syntax node id. */
@@ -702,7 +717,7 @@ export function buildScopeIndexFromSource(
       return;
     }
     if (idSet.has(pattern.type)) {
-      addBindingToScope(pattern, kind);
+      if (!row.acceptLocalCapture || row.acceptLocalCapture(pattern)) addBindingToScope(pattern, kind);
       return;
     }
     // The names inside a parameter list are registered here and the list itself is not walked afterwards, so the reads
@@ -1135,7 +1150,7 @@ export function buildScopeIndexFromSource(
   const attachOccurrence = (binding: Binding, useNode: SyntaxNodeLike): void => {
     if (rejectsLexicalBindingAtSelector(row, binding, useNode)) return;
     if (row.nonLexicalUse?.(useNode)) return;
-    if (row.referenceNeedsVerification?.(useNode)) {
+    if (referenceNeedsVerification?.(useNode, errorRanges)) {
       binding.occurrencesComplete = false;
       return;
     }

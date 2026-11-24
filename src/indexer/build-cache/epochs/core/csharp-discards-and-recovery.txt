@@ -1,0 +1,1 @@
+Exclude C# discard designations from lexical bindings and protect recovered names by function body.

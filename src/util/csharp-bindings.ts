@@ -1,6 +1,138 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { normalizeCsharpIdentifier } from "./identifiers.js";
 
+type ParseErrorRange = { startIndex: number; endIndex: number };
+
+const ERROR_BODY_OWNERS: Readonly<Record<string, true>> = {
+  method_declaration: true,
+  constructor_declaration: true,
+  destructor_declaration: true,
+  operator_declaration: true,
+  conversion_operator_declaration: true,
+  local_function_statement: true,
+  accessor_declaration: true,
+  lambda_expression: true,
+  anonymous_method_expression: true,
+};
+const ERROR_NAMES = new WeakMap<SyntaxNodeLike, ReadonlySet<string>>();
+
+const QUERY_KEYWORDS: ReadonlySet<string> = new Set([
+  "from",
+  "let",
+  "join",
+  "into",
+  "where",
+  "select",
+  "group",
+  "orderby",
+  "on",
+  "equals",
+  "by",
+]);
+
+/** Recovery may put a slice designation after `..` or directly inside a parsed list. */
+function isRecoveredListDesignation(node: SyntaxNodeLike, type: SyntaxNodeLike): boolean {
+  if (type.type === "identifier" && QUERY_KEYWORDS.has(type.text)) return false;
+  let previous = node.previousSibling;
+  while (previous?.type === "comment") previous = previous.previousSibling;
+  let listElement = previous?.type === ".." || (previous?.type === "range_expression" && previous.text === "..");
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+    if (ancestor.type === "ERROR") {
+      const recoveredType = ancestor.childForFieldName("type");
+      if (recoveredType?.type === "identifier" && QUERY_KEYWORDS.has(recoveredType.text)) return false;
+    }
+    if (ancestor.type === "list_pattern" || ancestor.type === "element_binding_expression") listElement = true;
+    if (ancestor.type === "query_expression" || ERROR_BODY_OWNERS[ancestor.type]) break;
+  }
+  return listElement;
+}
+
+/** The first name the grammar recovered after a type in an ERROR, not a binding claim. */
+function firstRecoveredErrorName(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (node.type === "identifier" || node.type === "implicit_parameter") return node;
+  if (node.type !== "ERROR") return null;
+  for (const child of node.namedChildren) {
+    const name = firstRecoveredErrorName(child);
+    if (name) return name;
+  }
+  return null;
+}
+
+/** Read possible typed designations in ERROR nodes once per affected body or recovered file. */
+function errorNamesIn(node: SyntaxNodeLike): ReadonlySet<string> {
+  const cached = ERROR_NAMES.get(node);
+  if (cached) return cached;
+  const names = new Set<string>();
+  const visit = (current: SyntaxNodeLike): void => {
+    if (current !== node && ERROR_BODY_OWNERS[current.type]) return;
+    if (current.type === "ERROR") {
+      const type = current.childForFieldName("type");
+      if (type && isRecoveredListDesignation(current, type)) {
+        for (const child of current.namedChildren) {
+          if (child.startIndex < type.endIndex || child.type === "comment") continue;
+          const name = firstRecoveredErrorName(child);
+          if (name) names.add(normalizeCsharpIdentifier(name.text));
+          break;
+        }
+      }
+    }
+    for (const child of current.namedChildren) visit(child);
+  };
+  visit(node);
+  ERROR_NAMES.set(node, names);
+  return names;
+}
+
+/** A same-named possible designation inside ERROR prevents an outer lexical proof. */
+export function csharpUnparsedName(
+  node: SyntaxNodeLike,
+  ranges: readonly ParseErrorRange[],
+  closestBinding?: SyntaxNodeLike,
+): boolean {
+  if (node.type !== "identifier" && node.type !== "implicit_parameter") return false;
+  const parent = node.parent;
+  const memberSelector =
+    parent?.type === "member_access_expression" && sameNode(parent.childForFieldName("name"), node);
+  if (memberSelector) return false;
+  let normalizedName: string | undefined;
+  for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
+    if (ancestor.type === "ERROR") {
+      normalizedName ??= normalizeCsharpIdentifier(node.text);
+      if (errorNamesIn(ancestor).has(normalizedName)) return true;
+    }
+    if (!ERROR_BODY_OWNERS[ancestor.type]) continue;
+    const body = ancestor.childForFieldName("body");
+    if (!body || node.startIndex < body.startIndex || node.endIndex > body.endIndex) return false;
+    const hasBodyError = ranges.some((range) => range.startIndex < body.endIndex && range.endIndex > body.startIndex);
+    if (hasBodyError && errorNamesIn(body).has(normalizedName ?? normalizeCsharpIdentifier(node.text))) return true;
+    // A parsed binding in this function shadows any possible binder in an enclosing function.
+    if (closestBinding && containsNode(ancestor, closestBinding)) return false;
+    const nestedFunction =
+      ancestor.type === "lambda_expression" ||
+      ancestor.type === "anonymous_method_expression" ||
+      ancestor.type === "local_function_statement";
+    if (!nestedFunction) return false;
+  }
+  return false;
+}
+
+/** Scope occurrences in a recovered file also need verification when its enclosing type was lost. */
+export function csharpUnparsedReference(node: SyntaxNodeLike, ranges: readonly ParseErrorRange[]): boolean {
+  if (csharpUnparsedName(node, ranges)) return true;
+  let ancestor: SyntaxNodeLike = node;
+  while (ancestor.parent) {
+    ancestor = ancestor.parent;
+    if (
+      ancestor.type === "class_declaration" ||
+      ancestor.type === "struct_declaration" ||
+      ancestor.type === "record_declaration"
+    ) {
+      return false;
+    }
+  }
+  return errorNamesIn(ancestor).has(normalizeCsharpIdentifier(node.text));
+}
+
 function sameNode(left: SyntaxNodeLike | null | undefined, right: SyntaxNodeLike): boolean {
   return !!left && left.startIndex === right.startIndex && left.endIndex === right.endIndex;
 }
@@ -110,6 +242,38 @@ export function isCsharpQueryVariable(node: SyntaxNodeLike): boolean {
   return false;
 }
 
+/** A typed designation or repeated lambda parameter spelled `_` is not a binding. */
+export function isCsharpDiscardName(node: SyntaxNodeLike): boolean {
+  if (node.endIndex - node.startIndex !== 1 || node.text !== "_") return false;
+  const parent = node.parent;
+  if (parent?.type === "declaration_expression") {
+    // Recovery can parse a query range such as `from _` as a typed declaration.
+    if (parent.parent?.type === "ERROR") return false;
+    return sameNode(parent.childForFieldName("name"), node);
+  }
+  if (parent?.type !== "parameter") return false;
+  const list = parent.parent;
+  if (list?.type !== "parameter_list" || list.parent?.type !== "lambda_expression") return false;
+  let discards = 0;
+  for (const parameter of list.namedChildren) {
+    if (parameter.type !== "parameter" || parameter.childForFieldName("name")?.text !== "_") continue;
+    if (++discards === 2) return true;
+  }
+  return false;
+}
+
+/** A foreach name or an untyped deconstruction name under one or more tuple patterns. */
+export function isCsharpIterationOrDeconstructionName(node: SyntaxNodeLike): boolean {
+  if (node.type !== "identifier") return false;
+  let designation = node;
+  while (designation.parent?.type === "tuple_pattern") designation = designation.parent;
+  const parent = designation.parent;
+  if (parent?.type === "foreach_statement") return parent.childForFieldName("left")?.id === designation.id;
+  return (
+    designation !== node && parent?.type === "variable_declarator" && parent.parent?.type === "variable_declaration"
+  );
+}
+
 /**
  * Query and switch-label bindings respect their syntax visibility boundaries.
  * Keep `conditionalBindingParents` in the C# scope row in step with the declaration forms this can hide.
@@ -119,7 +283,10 @@ export function csharpBindingVisibleAt(declaration: SyntaxNodeLike, use: SyntaxN
   let child = declaration;
   const parent = declaration.parent;
   const declarationType = parent?.type;
-  let possibleSwitchLabel = declarationType === "declaration_pattern" || declarationType === "declaration_expression";
+  let possibleSwitchLabel =
+    declarationType === "declaration_pattern" ||
+    declarationType === "declaration_expression" ||
+    declarationType === "recursive_pattern";
   for (let loop = parent; loop; child = loop, loop = loop.parent) {
     if (possibleSwitchLabel) {
       if (loop.type === "block" || loop.type === "lambda_expression") {
@@ -246,8 +413,8 @@ function anonymousMethodBinds(method: SyntaxNodeLike, use: SyntaxNodeLike, wante
 }
 
 /**
- * Whether a binder the scope index does not model sits between `use` and `owner` and spells `wanted`, or declares `use`
- * itself: a deconstructed local or an anonymous method parameter. It, not a parameter or member, is the binding.
+ * Receiver-proof fallback for a deconstruction or anonymous-method parameter between `use` and `owner`. Normal
+ * scope construction binds these names; this check also rejects an outer proof when recovery left one unmodeled.
  */
 export function csharpShadowedByUnmodeledBinder(
   tree: SyntaxTreeLike,

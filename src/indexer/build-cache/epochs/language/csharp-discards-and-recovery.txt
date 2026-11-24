@@ -1,0 +1,1 @@
+C# discard and parse-recovery hooks respect type positions and nested function bodies.

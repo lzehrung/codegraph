@@ -1,14 +1,21 @@
-import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
+import type { LanguageDefinition } from "../types.js";
 import { registerLanguage } from "../registry.js";
 import { classifyByParentType, isNameFieldOnParent, nodeTypeIn } from "./shared.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import {
+  isCsharpDiscardName,
+  isCsharpIterationOrDeconstructionName,
   isCsharpMemberInitializer,
   isCsharpPointerExpression,
   isCsharpQueryVariable,
 } from "../../util/csharp-bindings.js";
 
-const SCOPED_DECLARATION_PARENTS = ["property_declaration", "declaration_expression", "catch_declaration"];
+const SCOPED_DECLARATION_PARENTS = [
+  "property_declaration",
+  "declaration_expression",
+  "recursive_pattern",
+  "catch_declaration",
+];
 const DECLARATION_NAME_PARENTS = [
   "class_declaration",
   "record_declaration",
@@ -26,17 +33,10 @@ const DECLARATION_NAME_PARENTS = [
   "parameter",
   "type_parameter",
   "declaration_pattern",
+  "recursive_pattern",
   "declaration_expression",
   "catch_declaration",
 ];
-
-/** Untyped foreach deconstruction names sit under nested tuple patterns in the loop's left field. */
-function isForeachDesignation(node: SyntaxNodeLike): boolean {
-  let designation = node;
-  while (designation.parent?.type === "tuple_pattern") designation = designation.parent;
-  const loop = designation.parent;
-  return loop?.type === "foreach_statement" && loop.childForFieldName("left")?.id === designation.id;
-}
 
 const createsCsharpBlockScope = nodeTypeIn([
   "block",
@@ -181,18 +181,20 @@ export const CSHARP_DEF: LanguageDefinition = {
     "operator_declaration",
     "conversion_operator_declaration",
     "local_function_statement",
+    "anonymous_method_expression",
     "lambda_expression",
   ]),
   createsBlockScope: (node) => createsCsharpBlockScope(node) || isCsharpMemberInitializer(node),
   scopeDeclarationNames: (node) =>
+    !isCsharpDiscardName(node) &&
     !isCsharpPointerExpression(node) &&
     (isNameFieldOnParent(node, SCOPED_DECLARATION_PARENTS) ||
-      isForeachDesignation(node) ||
+      isCsharpIterationOrDeconstructionName(node) ||
       isCsharpQueryVariable(node)),
   isDeclarationName: (node) =>
     !isCsharpPointerExpression(node) &&
     (node.type === "implicit_parameter" ||
-      isForeachDesignation(node) ||
+      isCsharpIterationOrDeconstructionName(node) ||
       isCsharpQueryVariable(node) ||
       isNameFieldOnParent(node, DECLARATION_NAME_PARENTS)),
   normalizeIdentifier: normalizeCsharpIdentifier,

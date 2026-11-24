@@ -24,19 +24,21 @@ import { rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby
 import {
   csharpBindingVisibleAt,
   csharpDeclarationOutsideQuery,
+  isCsharpDiscardName,
+  csharpUnparsedReference,
   isCsharpPointerExpression,
 } from "../util/csharp-bindings.js";
 import { javaPatternBindingVisibleAt, javaPatternVariableName } from "../util/java-patterns.js";
 import { csharpAttributeParameterCoversUse } from "./name-lookup-policies/csharp-attribute-parameters.js";
 import { blocksCsharpJavaSelectorBinding } from "./name-lookup-policies/csharp-java-selectors.js";
-import { SymbolKind } from "./types.js";
+import { SymbolKind, type ParseErrorRange } from "./types.js";
 import type { Binding, Scope, ScopeIndex } from "./scope-types.js";
 import { isRecoveredTypeParameterName } from "./type-parameters.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
   parameterParents?: ReadonlySet<string>;
-  /** Reject a native local capture when the language grammar parsed an expression as a declaration. */
+  /** Reject a language-specific nonbinding name in native captures and destructuring patterns. */
   acceptLocalCapture?: (name: SyntaxNodeLike) => boolean;
   /** A declaration in this scope's outer-evaluated expression belongs in the enclosing scope instead. */
   declarationOutsideScope?: (name: SyntaxNodeLike, scope: SyntaxNodeLike) => boolean;
@@ -270,7 +272,9 @@ export type ScopeNodeRow = {
   /** A syntactic member or argument designator cannot be an occurrence of a lexical binding. */
   nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
   /** Occurrences whose target needs the shared name resolver rather than lexical scope alone. */
-  referenceNeedsVerification?: (node: SyntaxNodeLike) => boolean;
+  referenceNeedsVerification?: (node: SyntaxNodeLike, errors?: readonly ParseErrorRange[]) => boolean;
+  /** Skip the verification hook in files with no parse errors. */
+  referenceVerificationRequiresParseError?: true;
 };
 
 const C_MEMBER_BINDING_NAME_TYPES: Readonly<Record<string, true>> = { field_identifier: true };
@@ -761,7 +765,9 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     ]),
   },
   csharp: {
-    acceptLocalCapture: (name) => !isCsharpPointerExpression(name),
+    acceptLocalCapture: (name) => !isCsharpPointerExpression(name) && !isCsharpDiscardName(name),
+    referenceNeedsVerification: (node, errors) => !!errors && csharpUnparsedReference(node, errors),
+    referenceVerificationRequiresParseError: true,
     declarationOutsideScope: csharpDeclarationOutsideQuery,
     parameterParents: new Set(["parameter"]),
     bindingCoversBeforeDeclaration: csharpAttributeParameterCoversUse,
@@ -795,6 +801,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     conditionalBindingParents: new Set([
       "declaration_expression",
       "declaration_pattern",
+      "recursive_pattern",
       "foreach_statement",
       "tuple_pattern",
       "from_clause",

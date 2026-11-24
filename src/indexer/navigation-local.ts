@@ -188,7 +188,11 @@ export function getOrBuildScopeIndex(
     sup = shared.sup;
     tree = shared.tree;
   }
-  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, { tree, locals: mod.locals });
+  scopeIndex = buildScopeIndexFromSource(file, source, sup, mod.imports, {
+    tree,
+    locals: mod.locals,
+    parseErrorRanges: mod.parseErrorRanges,
+  });
   retainScopeIndexForIndex(index, file, parsed, scopeIndex);
   return scopeIndex;
 }
