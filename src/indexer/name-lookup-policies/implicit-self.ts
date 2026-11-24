@@ -18,6 +18,7 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
+import { MEMBER_ACCESS_ROWS } from "../../util/member-access-tables.js";
 import { csharpUnparsedName, isCsharpDiscardName } from "../../util/csharp-bindings.js";
 import {
   csharpDesignatorReceiver,
@@ -32,6 +33,7 @@ import {
 } from "../../util/java-designators.js";
 import { csharpTypeArgumentArity } from "../../util/csharp-tree.js";
 import { csharpNamespaceMemberKind } from "../compilation-units.js";
+import { MEMBER_LOOKUP_POLICIES } from "../member-lookup-policies/index.js";
 import {
   csharpAliasAt,
   csharpAliasQualifiedLookupName,
@@ -119,7 +121,10 @@ function ownOverloadDeclaration({ use, closestBinding }: NameLookupState): GoToR
 
 /** The use is the callee of a receiverless call (`f()`). */
 const namesCallee = (use: BareNameUse): boolean =>
-  implicitSelfCallee(use.parsed.sup.id, use.node.parent ?? use.node)?.id === use.node.id;
+  implicitSelfCallee(
+    MEMBER_LOOKUP_POLICIES[use.parsed.sup.id]?.receiverResolution?.implicit?.call,
+    use.node.parent ?? use.node,
+  )?.id === use.node.id;
 const isImplicitSelfCall = ({ use }: NameLookupState): boolean => namesCallee(use);
 
 /** A Kotlin callable reference can name either a member function or a property. */
@@ -242,7 +247,7 @@ function csharpQualifiedThroughUsing({ use, lookupName }: NameLookupState): GoTo
  * Enclosing members precede an alias: only nested types participate in type positions, and `X::` bypasses both.
  */
 function namesAliasRequiringMemberLookup({ use, closestBinding }: NameLookupState): boolean {
-  if (!closestBinding?.import || isCsharpAliasQualifier(use.node, use.parsed.sup)) return false;
+  if (!closestBinding?.import || isCsharpAliasQualifier(use.node, MEMBER_ACCESS_ROWS[use.parsed.sup.id])) return false;
   return !!csharpAliasAt(use.index, use.mod, use.name, use.node);
 }
 

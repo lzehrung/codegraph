@@ -26,7 +26,7 @@ import {
 } from "./compilation-units.js";
 import { phpNamedImportRole } from "./import-types.js";
 import { PHP_CLASS_LIKE_KINDS } from "./php-namespace-symbols.js";
-import { coalesceEquivalentCsharpPartialExports } from "./shared-owner-identity.js";
+import { coalesceEquivalentCsharpPartialExports } from "./member-lookup-policies/csharp-owner.js";
 import {
   type ExportEntry,
   type ImportBinding,

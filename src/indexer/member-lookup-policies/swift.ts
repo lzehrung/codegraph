@@ -25,11 +25,8 @@ import {
 } from "../declaration-visibility.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../parsed-cache.js";
-import {
-  getSharedOwnerIdentity,
-  isSwiftExtensionContainer,
-  sharedOwnerCanUseMembers,
-} from "../shared-owner-identity.js";
+import { getSharedOwnerIdentity, sharedOwnerCanUseMembers } from "../shared-owner-identity.js";
+import { isSwiftExtensionContainer, swiftSharedOwnerRules, swiftCrossFileMemberHidden } from "./swift-owner.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../types.js";
 import type { MemberLookupDeps, MemberLookupPolicy, MemberOwnerRef, MemberUse } from "./types.js";
 import { swiftPropertyRenameCompanions } from "./swift-property-witness.js";
@@ -462,6 +459,15 @@ async function swiftGenericParameterFit(
 }
 
 export const swiftMemberLookupPolicy: MemberLookupPolicy = {
+  separateMemberScopes: true,
+  selection: { normalizeIdentifier: normalizeSwiftIdentifier },
+  ownerResolution: {
+    shared: swiftSharedOwnerRules,
+    lookup: { hierarchy: true },
+    memberHidden: swiftCrossFileMemberHidden,
+    sharedMemberHidden: swiftCrossFileMemberHidden,
+  },
+  receiverResolution: { implicit: { names: "all" }, ownMemberMissReason: "No matching Swift member definition" },
   async callEdge(index, member, callee, source, deps) {
     // A call of a type constructs it.
     if (deps.declaresMembers(member)) return "instantiates";

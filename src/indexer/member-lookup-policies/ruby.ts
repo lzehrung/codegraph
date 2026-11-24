@@ -10,6 +10,7 @@ import {
 import { AMBIGUOUS_RECEIVER_MEMBER_REASON } from "../ambiguous-resolution.js";
 import { SymbolKind } from "../types.js";
 import type { MemberAccessRules, MemberLookupPolicy, MemberWalkRules } from "./types.js";
+import { rubyQualifiedOwner } from "./ruby-owner.js";
 
 const NO_OWNER_REFINEMENTS = Promise.resolve();
 const NO_CONSTRAINT_BASES = Promise.resolve([]);
@@ -37,6 +38,9 @@ const METHOD_ACCESS: MemberAccessRules = {
 };
 
 export const rubyMemberLookupPolicy: MemberLookupPolicy = {
+  separateMemberScopes: true,
+  selection: { firstDeclarationWins: true },
+  ownerResolution: { lookup: { hierarchy: true }, qualified: rubyQualifiedOwner },
   memberAccessRules: () => METHOD_ACCESS,
   memberWalk: () => METHOD_WALK_RESULT,
   unprovenMembersRespectReceiverProof: true,

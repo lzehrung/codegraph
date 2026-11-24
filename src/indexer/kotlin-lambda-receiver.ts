@@ -40,6 +40,8 @@ import { UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON } from "./ambiguous-resolution.j
 import { sliceText } from "../util/ast.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
+import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
+import { MEMBER_LOOKUP_POLICIES } from "./member-lookup-policies/index.js";
 import { getPackageDeclarationName } from "./compilation-units.js";
 import { projectCallablesNamed } from "./kotlin-callable-index.js";
 import {
@@ -61,7 +63,7 @@ import {
   sameUnindexedReceiver,
   topLevelDeclarationInScope,
 } from "./kotlin-receiver-members.js";
-import { kotlinPropertyInvocationArity } from "./member-selection.js";
+import { kotlinPropertyInvocationArity } from "./member-lookup-policies/kotlin-receiver.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import {
   declarationReaches,
@@ -79,6 +81,8 @@ import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-c
 import type { ScopeIndex } from "./scope.js";
 import { bindsTypeParameter, kotlinSingleUpperBound } from "./type-parameters.js";
 import { type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef, SymbolKind } from "./types.js";
+
+const RECEIVER_SYNTAX = { policy: MEMBER_LOOKUP_POLICIES.kotlin, access: MEMBER_ACCESS_ROWS.kotlin };
 
 /** What a lambda literal's implicit receiver is. */
 export type LambdaReceiver =
@@ -291,7 +295,8 @@ export function enclosingReceiverScopes(node: SyntaxNodeLike): SyntaxNodeLike[] 
  * lexical binding: a receiverless call under a lambda or extension body.
  */
 export function kotlinCalleeUnderImplicitReceiver(node: SyntaxNodeLike): boolean {
-  const isBareCallee = implicitSelfCallee("kotlin", node.parent ?? node)?.id === node.id;
+  const isBareCallee =
+    implicitSelfCallee(RECEIVER_SYNTAX.policy?.receiverResolution?.implicit?.call, node.parent ?? node)?.id === node.id;
   return isBareCallee && !!enclosingReceiverScopes(node).length;
 }
 
@@ -783,7 +788,7 @@ async function receiverOfExpression(
   // Inside a lambda, `this` is whichever receiver is closest, and the enclosing lambdas already supply those.
   if (expression.type === "this_expression") return expression.namedChildren.length ? UNPROVEN : NONE;
   const { parsed } = env.site;
-  const evidence = receiverConstructorExpression(expression, parsed.source, parsed.sup);
+  const evidence = receiverConstructorExpression(expression, parsed.source, parsed.sup, RECEIVER_SYNTAX);
   if (!evidence) return UNPROVEN;
   if (bindsTypeParameter(sliceText(evidence, parsed.source), evidence, parsed.source, parsed.sup)) return UNPROVEN;
   const def = await resolveType(env, env.site, evidence);
@@ -821,7 +826,7 @@ function isExecutorsFactoryCall(mod: ModuleIndex, expression: SyntaxNodeLike): b
  */
 function isJdkExecutor(env: LambdaReceiverEnvironment, expression: SyntaxNodeLike): boolean {
   const { parsed, mod, scopeIndex } = env.site;
-  const evidence = receiverConstructorExpression(expression, parsed.source, parsed.sup);
+  const evidence = receiverConstructorExpression(expression, parsed.source, parsed.sup, RECEIVER_SYNTAX);
   if (evidence) return !!resolveExternalType(mod, sliceText(evidence, parsed.source), JDK_EXECUTOR_TYPES);
   if (isExecutorsFactoryCall(mod, expression)) return true;
   if (expression.type !== "identifier") return false;

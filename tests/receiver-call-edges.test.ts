@@ -13,6 +13,8 @@ import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
 import { findReferences, goToDefinition } from "../src/index.js";
 import { SymbolKind } from "../src/indexer/types.js";
+import { memberLookupPolicyFor } from "../src/indexer/member-lookup-policies/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { extractCallableSignature } from "../src/impact/call-compatibility.js";
 import * as filePrep from "../src/languages/file-prep.js";
 import { ProjectedSyntaxTree } from "../src/native/projected-tree.js";
@@ -2175,6 +2177,7 @@ nativeDescribe("receiver construction, reassignment, typed parameters, and stati
 });
 
 describe("emitReceiverCallEdges hierarchy walk", () => {
+  const memberPolicies = new Map([[fileIdentityKey("leaf.ts"), memberLookupPolicyFor("ts")]]);
   const site = {
     file: "leaf.ts",
     range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 4, index: 3 } },
@@ -2197,6 +2200,7 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         if (label === "calls") recorded.push({ from, to });
         return true;
       },
+      memberPolicies,
       undefined,
       undefined,
       arities,
@@ -2273,6 +2277,7 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         if (label === "calls") recorded.push({ from, to });
         return true;
       },
+      memberPolicies,
       scopes,
       aliases,
     );
@@ -2322,6 +2327,7 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
         if (label === "calls") recorded.push({ from, to });
         return true;
       },
+      memberPolicies,
       scopes,
       aliases,
       arities,
@@ -2572,7 +2578,7 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       { from: "mid.run", to: "Mid", label: "member_of" },
       { from: "leaf.go", to: "wrong.run", label: "calls", site },
     ];
-    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true, memberPolicies);
     expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
     expect(removed.map((edge) => edge.to)).toEqual(["wrong.run"]);
   });
@@ -2592,7 +2598,7 @@ describe("emitReceiverCallEdges hierarchy walk", () => {
       { from: "leaf.go", to: "wrong.second", label: "calls", site },
     ];
 
-    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true);
+    const removed = emitReceiverCallEdges({ nodes, edges }, [candidate()], () => true, memberPolicies);
 
     expect(edges.some((edge) => edge.label === "calls" && edge.from === "leaf.go")).toBe(false);
     expect(removed.map((edge) => edge.to).sort()).toEqual(["wrong.first", "wrong.second"]);

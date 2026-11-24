@@ -1,7 +1,13 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText, unquote } from "./ast.js";
-import { isKeywordReceiver, MEMBER_ACCESS_ROWS, type MemberAccessChild } from "./member-access-tables.js";
+import {
+  isKeywordReceiver,
+  MEMBER_ACCESS_ROWS,
+  type MemberAccessChild,
+  type MemberAccessRow,
+  type QualifiedAccessShapes,
+} from "./member-access-tables.js";
 
 export type MemberAccessParts = {
   object: SyntaxNodeLike | null;
@@ -84,87 +90,43 @@ export function isReceiverNameNode(sup: LanguageSupport, nodeType: string): bool
 }
 
 /** The qualified type containing a name, retaining its qualifier for receiver and import lookup. */
-export function qualifiedTypeContaining(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
-  const hasQualifiedTypeSyntax = sup.id === "java" || sup.id === "kotlin" || sup.id === "csharp";
-  if (!hasQualifiedTypeSyntax) return null;
-  let part = node;
-  if (sup.id === "csharp" && part.parent?.type === "generic_name") part = part.parent;
-  const parent = part.parent;
-  if (!parent) return null;
-  if (sup.id === "kotlin" && parent.type === "user_type") {
-    let identifiers = 0;
-    for (let index = 0; ; index += 1) {
-      const child = parent.child(index);
-      if (!child) break;
-      if (child.type === "identifier") identifiers += 1;
-      if (identifiers > 1) return parent;
-    }
-    return null;
+export function qualifiedTypeContaining(
+  shapes: QualifiedAccessShapes | undefined,
+  node: SyntaxNodeLike,
+): SyntaxNodeLike | null {
+  if (!shapes?.containingTypes) return null;
+  let parent = node.parent;
+  if (parent && shapes.unwrapNameTypes?.has(parent.type)) parent = parent.parent;
+  if (!parent || !shapes.containingTypes.has(parent.type)) return null;
+  if (!shapes.minimumSegments) return parent;
+  let identifiers = 0;
+  for (let index = 0; ; index += 1) {
+    const child = parent.child(index);
+    if (!child) break;
+    if (shapes.segmentTypes?.has(child.type)) identifiers += 1;
+    if (identifiers >= shapes.minimumSegments) return parent;
   }
-  if (sup.id === "java" && parent.type === "scoped_type_identifier") return parent;
-  if (sup.id === "csharp" && parent.type === "qualified_name") return parent;
   return null;
 }
 
 /** A later segment cannot use the bare-name binding of its own spelling. */
-export function isQualifiedTypeSuffix(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
-  const qualified = qualifiedTypeContaining(sup, node);
+export function isQualifiedTypeSuffix(shapes: QualifiedAccessShapes | undefined, node: SyntaxNodeLike): boolean {
+  const qualified = qualifiedTypeContaining(shapes, node);
   return !!qualified && node.startIndex > qualified.startIndex;
 }
 
-function collectJvmScopedTypeSegments(part: SyntaxNodeLike, endIndex: number, segments: SyntaxNodeLike[]): boolean {
-  if (part.startIndex >= endIndex) return true;
-  if (part.type === "identifier" || part.type === "type_identifier") {
-    segments.push(part);
-    return true;
-  }
-  if (part.type !== "scoped_type_identifier") return false;
-  for (const child of part.namedChildren) {
-    if (child.type === "line_comment" || child.type === "block_comment") continue;
-    if (!collectJvmScopedTypeSegments(child, endIndex, segments)) return false;
-  }
-  return true;
-}
-
-/** JVM type-name segments through `node`, retaining identifier syntax and ignoring type arguments. */
-export function jvmQualifiedTypeSegments(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike[] | null {
-  if (sup.id === "kotlin") {
-    let type: SyntaxNodeLike | null = null;
-    if (node.type === "user_type") type = node;
-    else if (node.parent?.type === "user_type") type = node.parent;
-    if (!type) return null;
-    const segments: SyntaxNodeLike[] = [];
-    let genericOwner = false;
-    for (let index = 0; ; index += 1) {
-      const child = type.child(index);
-      if (!child) break;
-      if (child.type === "identifier") {
-        if (genericOwner) return null;
-        segments.push(child);
-        if (node !== type && child.startIndex === node.startIndex) break;
-      } else if (child.type === "type_arguments" && segments.length) {
-        genericOwner = true;
-      }
-    }
-    return segments.length > 1 ? segments : null;
-  }
-  if (sup.id !== "java") return null;
-  let type: SyntaxNodeLike | null = null;
-  if (node.type === "scoped_type_identifier") type = node;
-  else if (node.parent?.type === "scoped_type_identifier") type = node.parent;
-  if (!type) return null;
-  const endIndex = node === type ? type.endIndex : node.endIndex;
-  const segments: SyntaxNodeLike[] = [];
-  return collectJvmScopedTypeSegments(type, endIndex, segments) && segments.length > 1 ? segments : null;
-}
-
 /** Kotlin's member token in a dotted expression, or the expression itself. */
-export function kotlinQualifiedExpression(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
-  if (sup.id !== "kotlin") return null;
-  if (node.type === "navigation_expression") return node;
+export function kotlinQualifiedExpression(
+  sup: LanguageSupport,
+  row: MemberAccessRow | undefined,
+  node: SyntaxNodeLike,
+): SyntaxNodeLike | null {
+  const expressionType = row?.qualifiedAccess?.expressionType;
+  if (!expressionType) return null;
+  if (node.type === expressionType) return node;
   const parent = node.parent;
-  if (parent?.type !== "navigation_expression") return null;
-  const property = getMemberAccessParts(sup, parent).property;
+  if (parent?.type !== expressionType) return null;
+  const property = getMemberAccessParts(sup, parent, row).property;
   return property?.startIndex === node.startIndex && property.endIndex === node.endIndex ? parent : null;
 }
 
@@ -235,9 +197,13 @@ function shapeChild(memberNode: SyntaxNodeLike, child: MemberAccessChild): Synta
   return memberNode.namedChildren[child.namedIndex] ?? memberNode.child(child.namedIndex);
 }
 
-export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
+export function getMemberAccessParts(
+  sup: LanguageSupport,
+  memberNode: SyntaxNodeLike,
+  row = MEMBER_ACCESS_ROWS[sup.id],
+): MemberAccessParts {
   // A shape without `nodeTypes` is the language's catch-all and must be its row's last entry.
-  const shape = MEMBER_ACCESS_ROWS[sup.id]?.memberAccessShapes?.find(
+  const shape = row?.memberAccessShapes?.find(
     (candidate) => candidate.nodeTypes === undefined || candidate.nodeTypes.includes(memberNode.type),
   );
   if (shape) {
@@ -265,6 +231,7 @@ export function collectMemberAccessChain(args: {
   let base: SyntaxNodeLike | null = null;
   const traversalTypes = memberAccessTraversalTypes(args.sup);
   const propertyTypes = memberPropertyIdentifierTypes(args.sup);
+  const qualified = MEMBER_ACCESS_ROWS[args.sup.id]?.qualifiedAccess;
 
   const pushPropertyName = (propNode: SyntaxNodeLike | null): void => {
     if (!propNode) return;
@@ -277,18 +244,17 @@ export function collectMemberAccessChain(args: {
       return;
     }
     let nameNode = propNode;
-    if (args.sup.id === "csharp" && nameNode.type === "generic_name") {
+    if (qualified?.unwrapNameTypes?.has(nameNode.type)) {
       nameNode = nameNode.childForFieldName("name") ?? nameNode.namedChildren[0] ?? nameNode;
     }
-    if (nameNode.type !== "identifier" && !(args.sup.id === "java" && nameNode.type === "type_identifier")) return;
+    if (nameNode.type !== "identifier" && !qualified?.constantSegmentTypes?.has(nameNode.type)) return;
     const keyName = sliceText(nameNode, args.source);
     const value = args.constStringOf?.get(keyName);
     if (typeof value === "string") names.push(value);
     // C#/Java qualified names, Rust's `mod::item` path, and Ruby's `receiver.method` call node
     // all spell every segment as a plain `identifier`, with no dedicated property-identifier
     // node type to tell a name from a value.
-    else if (args.sup.id === "csharp" || args.sup.id === "java" || args.sup.id === "rust" || args.sup.id === "ruby")
-      names.push(keyName);
+    else if (qualified?.literalSegmentTypes?.has(nameNode.type)) names.push(keyName);
   };
 
   while (current && traversalTypes.has(current.type)) {

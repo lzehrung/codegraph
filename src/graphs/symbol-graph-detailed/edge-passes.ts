@@ -1,6 +1,7 @@
 import { filterEarlierReplacedMembers, isGeneratedMember } from "../../languages/generated-members.js";
 import type { NameResolution } from "../../indexer/name-resolution-types.js";
 import type { ParsedFileProvider } from "../../indexer/parsed-cache.js";
+import type { ReceiverSyntaxContext } from "../../indexer/member-lookup-policies/types.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../../indexer/types.js";
 
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
@@ -56,8 +57,9 @@ import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.j
 import {
   isSwiftConstrainedExtension,
   isSwiftExtensionContainer,
-  selectCsharpPartialRepresentative,
-} from "../../indexer/shared-owner-identity.js";
+} from "../../indexer/member-lookup-policies/swift-owner.js";
+import { selectCsharpPartialRepresentative } from "../../indexer/member-lookup-policies/csharp-owner.js";
+import { kotlinMayNameClassBare, kotlinSupertypeEntry } from "../../indexer/member-lookup-policies/kotlin-owner.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import { getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
@@ -102,8 +104,6 @@ import {
   constructionTypeName,
   declarationIsStaticEquivalent,
   declarationNodeIsStatic,
-  cppOutOfLineOwnerPath,
-  cppOutOfLineMemberDeclarationNode,
   cppQualifiedNameSegments,
   declaredSupertypeKind,
   declaresMembers,
@@ -111,12 +111,10 @@ import {
   isNonBaseHeritageArgument,
   isUnprovenHeritageExpression,
   kotlinExtensionReceiverTypeNode,
-  kotlinMayNameClassBare,
-  kotlinSupertypeEntry,
   memberContainerDef,
   nearestMemberContainer,
   nodeInStaticMemberContext,
-  phpObjectCreationKeyword,
+  receiverSyntaxDeps,
   receiverCallAccess,
   rustImplSelfTypeNode,
   supportsImplicitSelfMemberCalls,
@@ -127,9 +125,13 @@ import {
   type ReceiverProof,
   importTypeQuerySpecifier,
 } from "./receiver-calls.js";
+import {
+  cppOutOfLineOwnerPath,
+  cppOutOfLineMemberDeclarationNode,
+} from "../../indexer/member-lookup-policies/cpp-receiver.js";
 import type { ReceiverBinding, ReceiverMemberScope } from "./receiver-types.js";
 
-type EdgePassContext = {
+type EdgePassContext = ReceiverSyntaxContext & {
   index: ProjectIndex;
   sup: LanguageSupport;
   memberNamePattern: RegExp | undefined;
@@ -677,7 +679,7 @@ async function memberOwner(
     return { def: owners[0].def, container: owners[0].node, cppOutOfLine: false };
   }
   if (context.sup.id === "cpp") {
-    const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup);
+    const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup, receiverSyntaxDeps);
     const def = ownerPath
       ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
       : null;
@@ -728,6 +730,7 @@ async function cppOutOfLineMemberDeclaration(
     ownerNameNode,
     parsed.source,
     context.sup,
+    receiverSyntaxDeps,
   );
   return declaration ? { node: declaration.node, nameNode: declaration.nameNode, source: parsed.source } : null;
 }
@@ -874,6 +877,7 @@ function recordGoEmbeddedFieldReceiverCall(
   if (!objectNode || !fieldNode || !isIdentifierType(context.sup, fieldNode.type)) return false;
   const ownerBinding = classifyReceiver(
     context.sup,
+    context,
     objectNode,
     context.source,
     null,
@@ -1068,7 +1072,7 @@ function recordImportTypeCall(
 
 /** Swift `Foo()` / `Worker(name:)` is construction. Record `instantiates` and skip the call path. */
 function recordSwiftCapitalizedConstruction(context: EdgePassContext, node: SyntaxNodeLike, fromId: string): boolean {
-  const constructed = constructionTypeName(node, context.source, context.sup);
+  const constructed = constructionTypeName(node, context.source, context.sup, context);
   if (!constructed) return false;
   if (isMemberAccessNode(context.sup, constructed)) return false;
   const name = sliceText(constructed, context.source);
@@ -1458,14 +1462,15 @@ export async function emitFunctionBodyEdges(
       const nameKey = context.aliasKey(name);
       const tableDef = context.aliasToTargetDef.get(nameKey);
       const jvmLanguage = context.sup.id === "java" || context.sup.id === "kotlin";
-      const qualifiedType = isQualifiedTypeSuffix(context.sup, node);
+      const qualifiedType = isQualifiedTypeSuffix(context.access?.qualifiedAccess, node);
       let qualifiedExpression = false;
       let valueReceiver = false;
       if (context.sup.id === "kotlin" && node.parent?.type === "navigation_expression") {
         const first = name[0];
         const capitalized = !!first && first === first.toUpperCase() && first !== first.toLowerCase();
         const importedName = !!tableDef || context.aliasToTargetModule.has(nameKey);
-        const expression = importedName || capitalized ? kotlinQualifiedExpression(context.sup, node) : null;
+        const expression =
+          importedName || capitalized ? kotlinQualifiedExpression(context.sup, context.access, node) : null;
         if (expression) {
           const chain = collectMemberAccessChain({ sup: context.sup, source: context.source, chainNode: expression });
           if (chain) {
@@ -1602,6 +1607,7 @@ export async function emitFunctionBodyEdges(
         proof ??
         classifyReceiver(
           context.sup,
+          context,
           access.receiver,
           context.source,
           receiverProofs,
@@ -1811,6 +1817,7 @@ export async function emitFunctionBodyEdges(
         if (specialized?.skipsReceiverCall?.(context, access)) return;
         const receiverProof = classifyReceiver(
           context.sup,
+          context,
           access.receiver,
           context.source,
           receiverProofs,
@@ -1864,7 +1871,7 @@ export async function emitFunctionBodyEdges(
         }
         const javaConstructionType =
           context.sup.id === "java" && access.receiver.type === "object_creation_expression"
-            ? constructionTypeName(access.receiver, context.source, context.sup)
+            ? constructionTypeName(access.receiver, context.source, context.sup, context)
             : null;
         if (
           context.sup.id === "java" &&
@@ -1910,7 +1917,12 @@ export async function emitFunctionBodyEdges(
         resolveCallTarget(node, getCallTarget(node));
       }
       if (newNodeTypes[node.type]) {
-        const keyword = phpObjectCreationKeyword(node, context.source, context.sup);
+        const keyword = context.policy?.receiverResolution?.syntax?.keywordConstruction?.(
+          node,
+          context.source,
+          context.sup,
+          receiverSyntaxDeps,
+        );
         if (keyword) {
           const created = resolvePhpObjectCreationTarget(
             context.index,
@@ -1921,7 +1933,7 @@ export async function emitFunctionBodyEdges(
           );
           if (created) recordDefEdge(context, fromId, created, "instantiates", keyword.nameNode);
         } else {
-          const target = constructionTypeName(node, context.source, context.sup) ?? getNewTarget(node);
+          const target = constructionTypeName(node, context.source, context.sup, context) ?? getNewTarget(node);
           if (target) {
             if (recordTypeScriptNamespaceConstruction(context, node, target, fromId)) return true;
             const property = isMemberAccessNode(context.sup, target)

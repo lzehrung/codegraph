@@ -6,7 +6,8 @@ import {
   AMBIGUOUS_CPP_USING_DIRECTIVE_REASON,
   AMBIGUOUS_STAR_IMPORT_REASON,
 } from "../ambiguous-resolution.js";
-import { cppOutOfLineOwnerPath } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
+import { receiverSyntaxDeps } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
+import { cppOutOfLineOwnerPath } from "../member-lookup-policies/cpp-receiver.js";
 import {
   cppQualifiedNameThroughVisiblePrefix,
   cppStarImportClosure,
@@ -129,7 +130,7 @@ export const cppLookupPolicy: NameLookupPolicy = {
     const { node, scopeIndex } = use;
     const fileScopeOrUnbound =
       !closestBinding || scopeIndex.allScopes[0]?.map.get(closestBinding.canonicalName) === closestBinding;
-    const outOfLineBody = !!cppOutOfLineOwnerPath(node, use.parsed.source, use.parsed.sup);
+    const outOfLineBody = !!cppOutOfLineOwnerPath(node, use.parsed.source, use.parsed.sup, receiverSyntaxDeps);
     if (!fileScopeOrUnbound || !outOfLineBody || node.parent?.type !== "call_expression") return rest();
     return {
       status: "deferred",

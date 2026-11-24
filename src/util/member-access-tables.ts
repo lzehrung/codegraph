@@ -11,6 +11,10 @@
  * type from that language's pinned grammar.
  */
 
+import type { SyntaxNodeLike } from "../languages/types.js";
+import { javaQualifiedTypeSegments } from "./member-access/java-receiver.js";
+import { kotlinQualifiedTypeSegments } from "./member-access/kotlin-receiver.js";
+
 /** Receiver spellings that denote the type declaring the calling member, per language. */
 export type ReceiverKeywords = {
   /** Keywords naming the type that declares the calling member. */
@@ -19,6 +23,8 @@ export type ReceiverKeywords = {
   instanceOwn: readonly string[];
   /** Keywords naming a supertype of the declaring type. */
   supertype: readonly string[];
+  /** A supertype keyword can retain both member scopes (PHP late static binding). */
+  supertypeScope?: "instance" | "any";
 };
 
 /**
@@ -95,9 +101,24 @@ export type AnonymousOwnerForm = {
 export type QualifiedAccessShapes = Readonly<{
   containingTypes?: ReadonlySet<string>;
   parentFields?: Readonly<Record<string, string>>;
+  baseFields?: Readonly<Record<string, Readonly<{ owner: string; name: string }>>>;
   segmentTypes?: ReadonlySet<string>;
   unwrapNameTypes?: ReadonlySet<string>;
   quotedSegments?: boolean;
+  /** Keep the terminal declared type name instead of restoring its containing qualifier. */
+  declaredTypeName?: "terminal";
+  /** Type receiver capitalization reads identifier equality rather than the source prefix. */
+  staticReceiverSpelling?: "normalized";
+  /** A qualified type contains at least this many direct name segments. */
+  minimumSegments?: number;
+  /** Segment kinds allowed in constant-string lookup, in addition to plain identifiers. */
+  constantSegmentTypes?: ReadonlySet<string>;
+  /** These segments are literal member names even without a constant-string binding. */
+  literalSegmentTypes?: ReadonlySet<string>;
+  /** Expression shape whose selected property is a qualified-expression token. */
+  expressionType?: string;
+  /** Complex grammar-specific segment traversal, selected once by the caller. */
+  typeSegments?: (node: SyntaxNodeLike) => SyntaxNodeLike[] | null;
 }>;
 
 export type MemberAccessRow = {
@@ -179,6 +200,15 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   },
   css: { omittedReason: "Style language; no member-access concept." },
   csharp: {
+    qualifiedAccess: {
+      containingTypes: new Set(["qualified_name"]),
+      parentFields: { alias_qualified_name: "alias" },
+      unwrapNameTypes: new Set(["generic_name"]),
+      literalSegmentTypes: new Set(["identifier"]),
+      quotedSegments: true,
+      declaredTypeName: "terminal",
+      staticReceiverSpelling: "normalized",
+    },
     extraTraversalTypes: ["qualified_name", "alias_qualified_name"],
     extraMemberAccessTypes: ["alias_qualified_name"],
     memberAccessShapes: [
@@ -197,6 +227,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       "Extension methods are members; a free function is not called with member syntax.",
   },
   go: {
+    qualifiedAccess: { baseFields: { qualified_type: { owner: "package", name: "name" } } },
     extraTraversalTypes: ["qualified_type"],
     extraMemberAccessTypes: ["qualified_type"],
     memberAccessShapes: [{ nodeTypes: ["qualified_type"], object: { namedIndex: 0 }, property: { namedIndex: 1 } }],
@@ -222,6 +253,12 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   hbs: { omittedReason: "Handlebars document format; embedded scripts parse as their own language." },
   html: { omittedReason: "Document format; embedded scripts parse as their own language." },
   java: {
+    qualifiedAccess: {
+      containingTypes: new Set(["scoped_type_identifier"]),
+      constantSegmentTypes: new Set(["type_identifier"]),
+      literalSegmentTypes: new Set(["identifier", "type_identifier"]),
+      typeSegments: javaQualifiedTypeSegments,
+    },
     extraTraversalTypes: ["field_access", "scoped_identifier", "scoped_type_identifier"],
     memberAccessShapes: [
       {
@@ -256,6 +293,14 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
       "Member syntax names an object property; a free function is not called that way.",
   },
   kotlin: {
+    qualifiedAccess: {
+      containingTypes: new Set(["user_type"]),
+      segmentTypes: new Set(["identifier"]),
+      minimumSegments: 2,
+      expressionType: "navigation_expression",
+      typeSegments: kotlinQualifiedTypeSegments,
+      quotedSegments: true,
+    },
     memberAccessShapes: [
       { nodeTypes: ["navigation_expression"], object: { namedIndex: 0 }, property: { navigation: true } },
     ],
@@ -295,7 +340,12 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
         property: { namedIndex: 1 },
       },
     ],
-    receiverKeywords: { own: ["$this", "self", "static"], instanceOwn: ["$this"], supertype: ["parent"] },
+    receiverKeywords: {
+      own: ["$this", "self", "static"],
+      instanceOwn: ["$this"],
+      supertype: ["parent"],
+      supertypeScope: "any",
+    },
     receiverAncestry: {
       clauses: [
         { nodeType: "base_clause", relation: "extends", supertype: "all" },
@@ -319,6 +369,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
   },
   rst: { omittedReason: "reStructuredText document format; embedded code blocks parse as their own language." },
   ruby: {
+    qualifiedAccess: { literalSegmentTypes: new Set(["identifier"]) },
     memberExpressionType: "call",
     memberAccessShapes: [
       {
@@ -337,6 +388,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberCallNamesFreeFunctionOmittedReason: "A call with a receiver names a method, not a free function.",
   },
   rust: {
+    qualifiedAccess: { literalSegmentTypes: new Set(["identifier"]) },
     extraTraversalTypes: ["scoped_identifier"],
     memberAccessShapes: [
       {

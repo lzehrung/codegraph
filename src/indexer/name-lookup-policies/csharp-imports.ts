@@ -1,7 +1,7 @@
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { phpNamedImportRole } from "../import-types.js";
-import { coalesceEquivalentCsharpPartialExports } from "../shared-owner-identity.js";
+import { coalesceEquivalentCsharpPartialExports } from "../member-lookup-policies/csharp-owner.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportNameRules } from "../import-name-types.js";
 

@@ -1,0 +1,363 @@
+import fs from "node:fs";
+import { supportForFileWithoutHeaderSample, type LanguageExtensionMap } from "../../languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import { getNativeSyntaxTreeExecution } from "../../native/tree-sitter-native.js";
+import { ProjectedSyntaxTree } from "../../native/projected-tree.js";
+import type { Range } from "../../types.js";
+import { sliceText } from "../../util/ast.js";
+import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../../util/identifiers.js";
+import { csharpGenericArity, csharpTypeNameWithArity } from "../../util/csharp-tree.js";
+import { fileIdentityKey } from "../../util/paths.js";
+import type { ParsedFileContext } from "../parse-context.js";
+import {
+  cachedParsedContextForIndexSync,
+  readQuerySourceForIndexSync,
+  retainParsedContextForIndexSync,
+} from "../parsed-cache.js";
+import { SymbolKind, type ProjectIndex, type SymbolDef } from "../types.js";
+import { definitionIdentityKey } from "../reference-context.js";
+import { toTreeSitterPosition } from "../shared.js";
+import type { SharedOwnerIdentity, SharedOwnerRules } from "./owner-identity-types.js";
+export const CSHARP_PARTIAL_CONTAINER_TYPES = new Set([
+  "class_declaration",
+  "struct_declaration",
+  "record_declaration",
+  "interface_declaration",
+]);
+
+function csharpModifierHas(node: SyntaxNodeLike, source: string, keyword: string): boolean {
+  const text = sliceText(node, source).trim();
+  return text === keyword || text.split(/\s+/).includes(keyword);
+}
+
+/** True when the declaration's own modifier list (not its body or bases) contains `keyword`. */
+function csharpContainerHasModifier(container: SyntaxNodeLike, source: string, keyword: string): boolean {
+  const body = container.childForFieldName("body");
+  for (const child of container.namedChildren ?? []) {
+    if (body && child.id === body.id) continue;
+    if (child.type === "declaration_list" || child.type === "class_body" || child.type === "base_list") {
+      continue;
+    }
+    if (child.type === "modifier" && csharpModifierHas(child, source, keyword)) return true;
+    if (child.type === "modifiers") {
+      for (const nested of child.namedChildren ?? []) {
+        if (nested.type === "modifier" && csharpModifierHas(nested, source, keyword)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isCSharpPartialContainer(container: SyntaxNodeLike, source: string): boolean {
+  return CSHARP_PARTIAL_CONTAINER_TYPES.has(container.type) && csharpContainerHasModifier(container, source, "partial");
+}
+
+/** A `file` modifier on the type or any enclosing type makes the owner file-local. */
+function csharpOwnerIsFileLocal(container: SyntaxNodeLike, source: string): boolean {
+  for (let current: SyntaxNodeLike | null = container; current; current = current.parent) {
+    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type) && csharpContainerHasModifier(current, source, "file")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Declared C# name with verbatim `@` and formatting characters removed, per identifier equality. */
+function csharpNameText(node: SyntaxNodeLike | null, source: string): string {
+  if (!node) return "";
+  return normalizeCsharpQualifiedName(sliceText(node, source));
+}
+
+const CSHARP_CONDITIONAL_WRAPPERS: Record<string, true> = { preproc_if: true, preproc_elif: true, preproc_else: true };
+
+/**
+ * The file-scoped `namespace N;` that governs `container`, or `""`. It is a sibling that precedes the
+ * declarations it governs, not their ancestor, so a walk up the tree never meets it.
+ */
+function csharpFileScopedNamespace(container: SyntaxNodeLike, source: string): string {
+  let root: SyntaxNodeLike = container;
+  while (root.parent) root = root.parent;
+  const find = (nodes: readonly SyntaxNodeLike[]): string => {
+    for (const node of nodes) {
+      if (node.startIndex >= container.startIndex) break;
+      if (node.type === "file_scoped_namespace_declaration") {
+        const nsNode =
+          node.childForFieldName("name") ??
+          node.namedChildren.find((child) => child.type === "identifier" || child.type === "qualified_name");
+        return csharpNameText(nsNode ?? null, source);
+      }
+      const wrapped = CSHARP_CONDITIONAL_WRAPPERS[node.type] ? find(node.namedChildren) : "";
+      if (wrapped) return wrapped;
+    }
+    return "";
+  };
+  return find(root.namedChildren);
+}
+/**
+ * Namespace + enclosing type names (each carrying its generic arity) + the
+ * type name. The container's own arity is stored on
+ * {@link SharedOwnerIdentity} instead of encoding it into this path.
+ */
+function getCSharpFullPath(container: SyntaxNodeLike, source: string): string | null {
+  const nameNode = container.childForFieldName("name");
+  const typeName = csharpNameText(nameNode, source);
+  if (!typeName) return null;
+  const outer: string[] = [];
+  const namespaces: string[] = [];
+  let current = container.parent;
+  while (current) {
+    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) {
+      const outerName = csharpNameText(current.childForFieldName("name"), source);
+      if (outerName) outer.push(csharpTypeNameWithArity(outerName, csharpGenericArity(current)));
+    }
+    if (current.type === "namespace_declaration" || current.type === "file_scoped_namespace_declaration") {
+      const nsNode =
+        current.childForFieldName("name") ??
+        (current.namedChildren ?? []).find((child) => child.type === "identifier" || child.type === "qualified_name");
+      const nsText = csharpNameText(nsNode ?? null, source);
+      if (nsText) namespaces.push(nsText);
+    }
+    current = current.parent;
+  }
+  outer.reverse();
+  namespaces.reverse();
+  const fileScoped = csharpFileScopedNamespace(container, source);
+  const parts = [...(fileScoped ? [fileScoped] : []), ...namespaces, ...outer, typeName];
+  return parts.join(".");
+}
+function sharedOwnerIdentityKey(identity: SharedOwnerIdentity): string {
+  return `${identity.languageId}\0${identity.fullPath}\0${identity.declarationKind ?? ""}\0${identity.genericArity ?? 0}\0${identity.fileLocalTo ?? ""}`;
+}
+function parsedContextForIdentity(index: ProjectIndex, file: string): ParsedFileContext | null {
+  const retained = cachedParsedContextForIndexSync(index, file);
+  if (retained) return retained;
+
+  const source = readQuerySourceForIndexSync(index, file);
+  const sup = supportForFileWithoutHeaderSample(file, index.languageExtensions);
+  if (source === null || !sup || sup.id !== "csharp") return null;
+  const execution = getNativeSyntaxTreeExecution(source, sup);
+  if (!execution.tree) return null;
+  const context: ParsedFileContext = {
+    source,
+    tree: new ProjectedSyntaxTree(source, execution.tree),
+    sup,
+    nativeQueries: null,
+  };
+  retainParsedContextForIndexSync(index, file, context);
+  return context;
+}
+
+function csharpContainerAtRange(tree: SyntaxTreeLike, range: Range): SyntaxNodeLike | null {
+  const root = tree.rootNode;
+  const startIndex = range.start.index;
+  const node =
+    typeof startIndex === "number"
+      ? root.descendantForIndex(startIndex, range.end.index ?? startIndex)
+      : root.descendantForPosition(toTreeSitterPosition(range.start), toTreeSitterPosition(range.start));
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (CSHARP_PARTIAL_CONTAINER_TYPES.has(current.type)) return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+const partialExportIdentities = new WeakMap<ProjectIndex, Map<string, SharedOwnerIdentity | null>>();
+
+function csharpPartialExportIdentity(index: ProjectIndex, def: SymbolDef): SharedOwnerIdentity | null {
+  const cacheKey = definitionIdentityKey(def);
+  let cache = partialExportIdentities.get(index);
+  if (!cache) {
+    cache = new Map();
+    partialExportIdentities.set(index, cache);
+  }
+  if (cache.has(cacheKey)) return cache.get(cacheKey) ?? null;
+
+  const languageId = supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id;
+  if (languageId !== "csharp") {
+    cache.set(cacheKey, null);
+    return null;
+  }
+  const context = parsedContextForIdentity(index, def.file);
+  if (!context) {
+    cache.set(cacheKey, null);
+    return null;
+  }
+  const container = csharpContainerAtRange(context.tree, def.range);
+  const identity = container ? csharpOwnerIdentity(container, context.source, def.file) : null;
+  cache.set(cacheKey, identity);
+  return identity;
+}
+
+function compareSymbolDefsDeterministic(left: SymbolDef, right: SymbolDef): number {
+  const leftFile = fileIdentityKey(left.file);
+  const rightFile = fileIdentityKey(right.file);
+  if (leftFile !== rightFile) return leftFile < rightFile ? -1 : 1;
+  const leftIndex = left.range.start.index;
+  const rightIndex = right.range.start.index;
+  if (typeof leftIndex === "number" && typeof rightIndex === "number" && leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+  if (left.range.start.line !== right.range.start.line) return left.range.start.line - right.range.start.line;
+  return left.range.start.column - right.range.start.column;
+}
+
+/** Deterministic representative among proven-equivalent C# partial type parts. */
+export function selectCsharpPartialRepresentative(group: readonly SymbolDef[]): SymbolDef {
+  let best = group[0]!;
+  for (let i = 1; i < group.length; i += 1) {
+    const candidate = group[i]!;
+    if (compareSymbolDefsDeterministic(candidate, best) < 0) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * Collapse proven-equivalent C# `partial` type declarations to one representative
+ * before implicit-unit uniqueness is judged. Non-partial same-name types, other
+ * kinds, other generic arities, and other enclosing owners stay distinct.
+ * Lookup stays on the candidate list already collected from compilation-unit peers.
+ */
+export function coalesceEquivalentCsharpPartialExports(
+  index: ProjectIndex,
+  matches: readonly SymbolDef[],
+): SymbolDef[] {
+  if (matches.length <= 1) return [...matches];
+
+  const grouped = new Map<string, SymbolDef[]>();
+  const unmatched: SymbolDef[] = [];
+  for (const match of matches) {
+    const identity = csharpPartialExportIdentity(index, match);
+    if (!identity) {
+      unmatched.push(match);
+      continue;
+    }
+    const key = sharedOwnerIdentityKey(identity);
+    const group = grouped.get(key);
+    if (group) group.push(match);
+    else grouped.set(key, [match]);
+  }
+
+  const coalesced = [...unmatched];
+  for (const group of grouped.values()) {
+    coalesced.push(selectCsharpPartialRepresentative(group));
+  }
+  return coalesced;
+}
+
+const CSHARP_NAMESPACE_TYPE_NODES = new Set<string>([
+  ...CSHARP_PARTIAL_CONTAINER_TYPES,
+  "enum_declaration",
+  "delegate_declaration",
+]);
+
+function collectCsharpTypeContainers(node: SyntaxNodeLike, out: SyntaxNodeLike[]): void {
+  if (CSHARP_NAMESPACE_TYPE_NODES.has(node.type)) out.push(node);
+  for (const child of node.namedChildren ?? []) collectCsharpTypeContainers(child, out);
+}
+
+function syntaxNodeRange(node: SyntaxNodeLike): Range {
+  return {
+    start: { line: node.startPosition.row + 1, column: node.startPosition.column + 1, index: node.startIndex },
+    end: { line: node.endPosition.row + 1, column: node.endPosition.column + 1, index: node.endIndex },
+  };
+}
+
+function parseCsharpOwnerFile(
+  file: string,
+  languageExtensions: LanguageExtensionMap | undefined,
+  parsedFiles: ReadonlyMap<string, ParsedFileContext> | undefined,
+): ParsedFileContext | null {
+  const retained = parsedFiles?.get(fileIdentityKey(file));
+  if (retained?.sup?.id === "csharp") return retained;
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  if (source.charCodeAt(0) === 0xfeff) source = source.slice(1);
+  const sup = supportForFileWithoutHeaderSample(file, languageExtensions);
+  if (!sup || sup.id !== "csharp") return null;
+  const execution = getNativeSyntaxTreeExecution(source, sup);
+  if (!execution.tree) return null;
+  return { source, tree: new ProjectedSyntaxTree(source, execution.tree), sup, nativeQueries: null };
+}
+
+/**
+ * Among files that each declare namespaceName.typeName, keep a file only when every
+ * matching declaration is one type. Proven-equivalent partial parts collapse through
+ * coalesceEquivalentCsharpPartialExports; anything still distinct is ambiguous.
+ * A file that cannot be parsed makes the set partial so callers do not guess.
+ */
+export function selectUniqueCsharpNamespaceTypeFile(
+  files: readonly string[],
+  namespaceName: string,
+  typeName: string,
+  languageExtensions?: LanguageExtensionMap,
+  parsedFiles?: ReadonlyMap<string, ParsedFileContext>,
+): { status: "found"; file: string } | { status: "not_found" } | { status: "ambiguous" } | { status: "partial" } {
+  const expectedPath = namespaceName ? namespaceName + "." + typeName : typeName;
+  const parsed = new Map<string, ParsedFileContext>();
+  const matches: SymbolDef[] = [];
+  let unreadable = false;
+
+  for (const file of files) {
+    const context = parseCsharpOwnerFile(file, languageExtensions, parsedFiles);
+    if (!context) {
+      unreadable = true;
+      continue;
+    }
+    parsed.set(fileIdentityKey(file), context);
+    const containers: SyntaxNodeLike[] = [];
+    collectCsharpTypeContainers(context.tree.rootNode, containers);
+    for (const container of containers) {
+      if (getCSharpFullPath(container, context.source) !== expectedPath) continue;
+      const nameNode = container.childForFieldName("name");
+      if (!nameNode) continue;
+      matches.push({
+        file,
+        localName: typeName,
+        kind: SymbolKind.Class,
+        range: syntaxNodeRange(nameNode),
+      });
+    }
+  }
+
+  if (unreadable) return { status: "partial" };
+  if (matches.length === 0) return { status: "not_found" };
+  if (matches.length === 1) return { status: "found", file: matches[0]!.file };
+
+  const unique = coalesceEquivalentCsharpPartialExports(
+    { parsed, ...(languageExtensions ? { languageExtensions } : {}) } as ProjectIndex,
+    matches,
+  );
+  if (unique.length === 1) return { status: "found", file: unique[0]!.file };
+  return { status: "ambiguous" };
+}
+
+/** Partial C# parts share only their exact namespace, enclosing owner, kind, arity, and file scope. */
+export function csharpOwnerIdentity(
+  container: SyntaxNodeLike,
+  source: string,
+  file: string,
+): SharedOwnerIdentity | null {
+  if (!isCSharpPartialContainer(container, source)) return null;
+  const fullPath = getCSharpFullPath(container, source);
+  if (!fullPath) return null;
+  return {
+    languageId: "csharp",
+    fullPath,
+    declarationKind: container.type,
+    genericArity: csharpGenericArity(container),
+    ...(csharpOwnerIsFileLocal(container, source) ? { fileLocalTo: fileIdentityKey(file) } : {}),
+  };
+}
+
+export const csharpSharedOwnerRules: SharedOwnerRules = {
+  containerTypes: CSHARP_PARTIAL_CONTAINER_TYPES,
+  identity: csharpOwnerIdentity,
+  peerNameKey: normalizeCsharpIdentifier,
+  unitOptions: { csharpQualifiedName: true },
+  declarationsAreEquivalent: true,
+};

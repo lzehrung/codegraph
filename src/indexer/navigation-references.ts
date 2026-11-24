@@ -11,7 +11,8 @@ import { isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN, normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
-import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
+import { MEMBER_LOOKUP_POLICIES, memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import type { ParameterReferenceScanFilter } from "./member-lookup-policies/types.js";
 import {
   classifyReceiver,
@@ -438,7 +439,10 @@ async function phpCaseInsensitiveReceiverMemberMatch(
     return exactSpelling ? "skip" : "unverified";
   }
 
-  const constructor = receiverConstructorExpression(access.object, parsed.source, parsed.sup);
+  const constructor = receiverConstructorExpression(access.object, parsed.source, parsed.sup, {
+    policy: MEMBER_LOOKUP_POLICIES[parsed.sup.id],
+    access: MEMBER_ACCESS_ROWS[parsed.sup.id],
+  });
   const typeNode = constructor ?? (access.parent.type === "scoped_call_expression" ? access.object : null);
   if (!typeNode) return exactSpelling ? "skip" : "unverified";
 
@@ -715,6 +719,7 @@ async function receiverProofUnavailable(
   expectedDef: SymbolDef,
   methodMayReference = false,
 ): Promise<boolean> {
+  const syntax = { policy: MEMBER_LOOKUP_POLICIES[parsed.sup.id], access: MEMBER_ACCESS_ROWS[parsed.sup.id] };
   const position = {
     row: range.start.line - 1,
     column: range.start.column - 1,
@@ -730,6 +735,7 @@ async function receiverProofUnavailable(
       const getScope = (): ScopeIndex => getCachedScope(index, fileId, mod, parsed);
       const receiver = classifyReceiver(
         parsed.sup,
+        syntax,
         object,
         parsed.source,
         new Map(),

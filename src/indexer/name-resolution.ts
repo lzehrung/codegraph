@@ -17,10 +17,10 @@ import {
   collectMemberAccessChain,
   isReceiverNameNode,
   isQualifiedTypeSuffix,
-  jvmQualifiedTypeSegments,
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
 import { isJvmLanguage, type JvmLanguageId } from "../util/syntax-tree.js";
+import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import { swiftShorthandContextType } from "./swift-enum.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -178,9 +178,11 @@ export function resolveBareName(
   const { index, mod, file, parsed, scopeIndex, node } = use;
   const { sup, source, tree } = parsed;
   if (isJvmLanguage(sup.id)) {
-    const qualifiedSuffix = isQualifiedTypeSuffix(sup, node);
+    const access = MEMBER_ACCESS_ROWS[sup.id];
+    const qualifiedSuffix = isQualifiedTypeSuffix(access?.qualifiedAccess, node);
     const qualifiedContainer = node.type === "user_type" || node.type === "scoped_type_identifier";
-    const segments = qualifiedSuffix || qualifiedContainer ? jvmQualifiedTypeSegments(sup, node) : null;
+    const segments =
+      qualifiedSuffix || qualifiedContainer ? (access?.qualifiedAccess?.typeSegments?.(node) ?? null) : null;
     if (segments) {
       const parts = segments.map((segment) => sliceText(segment, source));
       const target = resolveQualifiedJvmName(use, segments[0]!, parts, true, sup.id);
@@ -191,7 +193,7 @@ export function resolveBareName(
     if (qualifiedSuffix) {
       return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     }
-    const expression = skipKotlinQualifiedExpression ? null : kotlinQualifiedExpression(sup, node);
+    const expression = skipKotlinQualifiedExpression ? null : kotlinQualifiedExpression(sup, access, node);
     if (expression) {
       const chain = collectMemberAccessChain({ sup, source, chainNode: expression });
       if (!chain || !isReceiverNameNode(sup, chain.base.type)) {

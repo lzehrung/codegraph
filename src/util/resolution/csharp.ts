@@ -8,7 +8,7 @@ import {
 import { confineResolvedPath, fileIdentityKey, stripBom } from "../paths.js";
 import { normalizeCsharpIdentifier, normalizeCsharpQualifiedName } from "../identifiers.js";
 import { getImportableLanguageGlobs } from "../resolution-candidates.js";
-import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/shared-owner-identity.js";
+import { selectUniqueCsharpNamespaceTypeFile } from "../../indexer/member-lookup-policies/csharp-owner.js";
 import { CSHARP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import {
   buildDeclaredContainerIndex,

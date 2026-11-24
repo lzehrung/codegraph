@@ -21,6 +21,8 @@ import { SymbolKind, type SymbolDef } from "../types.js";
 import type { MemberLookupPolicy } from "./types.js";
 import { csharpRecordProperty } from "./csharp-record-property.js";
 import { csharpInterfaceRenameCompanions } from "./csharp-rename.js";
+import { csharpSharedOwnerRules } from "./csharp-owner.js";
+import { csharpImplicitReceiverRules, csharpMemberUseSyntax } from "./csharp-receiver.js";
 
 /** Method and local-function names bound call candidates; constructors can be written through type aliases. */
 function callableParameterName(definition: SymbolDef, context: ParsedFileContext): string | null {
@@ -79,6 +81,13 @@ function unprovenMemberReference(
 }
 
 export const csharpMemberLookupPolicy: MemberLookupPolicy = {
+  selection: { inheritOverloads: true },
+  ownerResolution: {
+    shared: csharpSharedOwnerRules,
+    lookup: { hierarchy: true },
+    parameterTypeScope: "namespace-region",
+  },
+  receiverResolution: { implicit: csharpImplicitReceiverRules, memberUse: csharpMemberUseSyntax },
   declaredReceiverUsesNameLookup: true,
   receiverDeclaratorTypeParent: "variable_declaration",
   receiverDeclaredTypeSurvivesAssignment: true,
