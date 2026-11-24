@@ -4,12 +4,13 @@
  */
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import type { FileId } from "../types.js";
+import type { FileId, Range } from "../types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { ParsedFileProvider } from "./parsed-cache.js";
 import type { Binding, ScopeIndex } from "./scope-types.js";
 import type { GoToResult, ImportBinding, ModuleIndex, ProjectIndex, ReferenceCoverage, SymbolDef } from "./types.js";
 import type { ImportNameRules } from "./import-name-types.js";
+import type { ParameterReferenceScanFilter } from "./reference-scan-types.js";
 
 /** A lookup step that needs async member resolution before its answer is known. */
 export type DeferredNameRequest =
@@ -132,8 +133,47 @@ export type ReferencePlanContext = Readonly<{
   scopeIndex?: ScopeIndex;
 }>;
 
+/** The already-owned sink for one file's named-node reference scan. */
+export type NamedNodeReferenceCollection = {
+  matched: Array<{ range: Range; node: SyntaxNodeLike }>;
+  parsed: ParsedFileContext;
+  nameEquivalenceUnavailable: boolean;
+};
+
 /** Additional equivalents, candidates, and coverage for a references query. */
 export type ReferenceHooks = Readonly<{
+  /** Select the complete specialized visitor once, rather than dispatching on every identifier. */
+  namedNodeVisitor?: (
+    parsed: ParsedFileContext,
+    canonicalName: string,
+    symbolKind: string | undefined,
+    filter: ParameterReferenceScanFilter | undefined,
+    importDeclarationKeys: ReadonlySet<string>,
+    collection: NamedNodeReferenceCollection,
+    rangeKey: (range: Range) => string,
+  ) => (node: SyntaxNodeLike) => void;
+  /** A namespace-wide spelling scan and its candidate-file partition. */
+  globalNameStrategy?: "php_qualified_name";
+  /** Imported candidate names may use another language's quoted identifier syntax. */
+  candidateName?: (name: string) => string;
+  unitPeerOptions?: Readonly<{ csharpQualifiedName: true }>;
+  namespaceBindingScope?: "effective-import" | "lexical-alias";
+  exportedNameSeparator?: string;
+  unprobeableNameScan?: "always" | "non-token";
+  parseErrorCoverage?: "ignore";
+  callableVerification?: "all" | "overloads" | "binding-collisions";
+  callableEquivalence?: Readonly<{
+    links: "includes" | "qualified-owners";
+  }>;
+  includedCallableMissReason?: string;
+  extensionDeclaration?: Readonly<{
+    receiverType: (node: SyntaxNodeLike) => SyntaxNodeLike | null;
+    wrapperType: string;
+  }>;
+  memberDefinition?: Readonly<{
+    functionType: string;
+    containerTypes: Readonly<Record<string, true>>;
+  }>;
   equivalentDefinitions?: (context: ReferencePlanContext) => Promise<readonly SymbolDef[] | undefined>;
   candidateFiles?: (context: ReferencePlanContext) => Promise<readonly FileId[] | undefined>;
   coverage?: (context: ReferencePlanContext, current: ReferenceCoverage) => ReferenceCoverage | undefined;

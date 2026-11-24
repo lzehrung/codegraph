@@ -1,8 +1,11 @@
 import type { LanguageSupport } from "../../languages.js";
+import { CALLABLE_ARITY_LANGUAGE_PROFILES } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
 import type { CppOutOfLineMemberDeclaration } from "./receiver-operation-types.js";
 import type { OwnerHooks, ReceiverSyntaxDeps } from "./types.js";
+
+const CPP_GRAPH_PARAMETERS = CALLABLE_ARITY_LANGUAGE_PROFILES.cpp.graphDeclarationParameters;
 
 /** Exact namespace/type path qualifying an out-of-line C++ definition. */
 export function cppOutOfLineOwnerPath(
@@ -91,7 +94,7 @@ export function cppOutOfLineMemberName(
 
 function memberArity(node: SyntaxNodeLike, deps: ReceiverSyntaxDeps): number | undefined {
   for (let current: SyntaxNodeLike | null = node; current; current = current.parent) {
-    const arity = deps.declarationMemberArity(current, "cpp");
+    const arity = deps.declarationMemberArity(current, CPP_GRAPH_PARAMETERS);
     if (arity !== undefined) return arity;
   }
   return undefined;
@@ -112,7 +115,7 @@ function collectDeclarations(
     const nameNode = declaratorName(node, sup, deps);
     if (!nameNode) return;
     if (sup.normalizeIdentifier(sliceText(nameNode, source)) !== sup.normalizeIdentifier(localName)) return;
-    if (deps.declarationMemberArity(node, sup.id) !== expectedArity) return;
+    if (deps.declarationMemberArity(node, CPP_GRAPH_PARAMETERS) !== expectedArity) return;
     out.push({ node, nameNode });
     return;
   }

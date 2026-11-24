@@ -337,7 +337,7 @@ describe("reference candidate selection", () => {
 
     expect(candidates).toEqual(["src/a-consumer.php", "src/b-service.php"]);
     expect(getCachedReferenceCandidateFiles(index, def, ["Service"], true, "php")).toBe(
-      referenceModuleTable(index).phpFiles,
+      referenceModuleTable(index).globalNameFiles,
     );
   });
 });

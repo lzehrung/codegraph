@@ -7,6 +7,7 @@ import { findClosestScopeBinding } from "../indexer/scope-lookup.js";
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { getCachedReferenceCandidateFiles } from "../indexer/navigation-references.js";
 import type { Binding } from "../indexer/scope-types.js";
+import { referenceRulesFor } from "../indexer/name-lookup-policies/reference-rules.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import {
@@ -251,7 +252,6 @@ function changedCppCallableBinding(
   changedSymbol: ChangedSymbol,
   parsed: ParsedFileContext,
 ): Binding | undefined {
-  if (parsed.sup.id !== "cpp") return undefined;
   const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
   if (!module) return undefined;
   const scope = getOrBuildScopeIndex(index, module.file, parsed.source, parsed.sup, module, parsed.tree);
@@ -428,15 +428,16 @@ function cppUnqualifiedCallTarget(
   file: string,
   parsed: ParsedFileContext,
   target: SyntaxNodeLike,
+  equivalentCallableBindings: typeof cppEquivalentCallableBindings | undefined,
 ): SymbolDef | null {
-  if (parsed.sup.id !== "cpp" || target.type !== "identifier") return null;
+  if (!equivalentCallableBindings || target.type !== "identifier") return null;
   const module = index.byFile.get(fileIdentityKey(file));
   if (!module) return null;
   const name = sliceText(target, parsed.source);
   const scope = getOrBuildScopeIndex(index, file, parsed.source, parsed.sup, module, parsed.tree);
   const binding = findClosestScopeBinding(scope, name, target, parsed.sup);
   if (binding?.kind === "function") {
-    const equivalents = cppEquivalentCallableBindings(binding);
+    const equivalents = equivalentCallableBindings(binding);
     if (equivalents.length !== (binding.sameScopeFunctionBindings?.length ?? 1)) return null;
     const canonical = equivalents.find((candidate) => candidate.callable?.definition) ?? equivalents[0];
     const range = canonical?.def;
@@ -475,9 +476,10 @@ type VerifiedSweepState = {
 
 function startVerifiedSweep(index: ProjectIndex, sweep: VerifiedCallsiteSweep): VerifiedSweepState {
   const { changedSymbol, languageId, equivalentDefinitions } = sweep;
+  const callableEquivalence = referenceRulesFor(languageId).callableEquivalence;
   const def = changedSymbolToDef(changedSymbol);
   let candidateFiles: Set<string> | undefined;
-  if ((languageId === "c" || languageId === "cpp") && changedSymbol.kind === SymbolKind.Function) {
+  if (callableEquivalence && changedSymbol.kind === SymbolKind.Function) {
     candidateFiles = new Set<string>();
     for (const definition of equivalentDefinitions ?? [def]) {
       const module = index.byFile.get(fileIdentityKey(definition.file));
@@ -525,6 +527,9 @@ async function sweepParsedFile(
   parsed: ParsedFileContext,
   states: readonly VerifiedSweepState[],
 ): Promise<void> {
+  const callableLinkMode = referenceRulesFor(parsed.sup.id).callableEquivalence?.links;
+  const equivalentCallableBindings =
+    callableLinkMode === "qualified-owners" ? cppEquivalentCallableBindings : undefined;
   const statesByName = new Map<string, VerifiedSweepState[]>();
   for (const state of states) {
     const name = state.sweep.changedSymbol.name;
@@ -560,7 +565,9 @@ async function sweepParsedFile(
         // Navigation rejects invalid C++ arity. Compatibility diagnostics need
         // the unique lexical/import binding before judging the argument count.
         const definition =
-          result.status === "ok" ? result.definition : cppUnqualifiedCallTarget(index, file, parsed, target);
+          result.status === "ok"
+            ? result.definition
+            : cppUnqualifiedCallTarget(index, file, parsed, target, equivalentCallableBindings);
         if (!definition) {
           continue;
         }
@@ -958,7 +965,11 @@ export async function attachCallCompatibilityHints(
       (unboundSignature.minArgs !== signature.minArgs || unboundSignature.maxArgs !== signature.maxArgs);
     const arityTargets: CallableSignature[] =
       hasDistinctUnboundForm && unboundSignature ? [signature, unboundSignature] : [signature];
-    const cppBinding = changedCppCallableBinding(index, changedSymbol, parsedDefinition);
+    const callableEquivalence = referenceRulesFor(parsedDefinition.sup.id).callableEquivalence;
+    const cppBinding =
+      callableEquivalence?.links === "qualified-owners"
+        ? changedCppCallableBinding(index, changedSymbol, parsedDefinition)
+        : undefined;
     const equivalentBindings = cppBinding ? cppEquivalentCallableBindings(cppBinding) : undefined;
     const hasOverloads =
       cppBinding && equivalentBindings
@@ -969,7 +980,7 @@ export async function attachCallCompatibilityHints(
       continue;
     }
     const equivalentDefinitions =
-      parsedDefinition.sup.id === "cpp"
+      callableEquivalence?.links === "qualified-owners"
         ? await getCppEquivalentCallableDefinitions(index, referenceDef, parsedDefinition)
         : undefined;
     // Default arguments can live on a prototype rather than its definition.
@@ -1053,10 +1064,7 @@ export async function attachCallCompatibilityHints(
 
     const shouldRunVerifiedScan =
       consideredCallsites < options.maxRefs &&
-      (parsedDefinition.sup.id === "c" ||
-        parsedDefinition.sup.id === "cpp" ||
-        referenceResult.status !== "ok" ||
-        !consideredCallsites);
+      (callableEquivalence || referenceResult.status !== "ok" || !consideredCallsites);
     const verifiedScanLimit = shouldRunVerifiedScan
       ? Math.max(0, Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites))
       : 0;

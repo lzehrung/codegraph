@@ -30,7 +30,7 @@
  */
 import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
-import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
+import { kotlinExtensionReceiverType } from "../languages/kotlin-graph.js";
 import {
   memberContainerDef,
   nearestMemberContainer,

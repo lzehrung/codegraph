@@ -33,13 +33,8 @@ import {
   receiverKeywordText,
 } from "../../util/member-access.js";
 import type { SymbolGraph } from "../symbol-graph.js";
-import {
-  declarationMemberArity,
-  findFirstNodeByType,
-  isIdentifierType,
-  kotlinExtensionReceiverType,
-  PARAMETER_LIST_NODE_TYPES,
-} from "./ast.js";
+import { kotlinExtensionReceiverType } from "../../languages/kotlin-graph.js";
+import { declarationMemberArity, findFirstNodeByType, isIdentifierType, PARAMETER_LIST_NODE_TYPES } from "./ast.js";
 import type { ReceiverBinding, ReceiverMemberScope } from "./receiver-types.js";
 
 const GO_MEMBER_NAME_PATTERN = GO_SUPPORT.exportedNamePattern;

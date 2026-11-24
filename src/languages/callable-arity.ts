@@ -140,6 +140,7 @@ const CALL_NODE_TYPES: Record<string, true> = {
 /** Parameter shapes used when collecting detailed-graph declaration arity. */
 export type GraphParameterShapes = Readonly<{
   directParameterChildType?: string;
+  positionalParameterChildType?: string;
   ignoredParameterTypes?: ReadonlySet<string>;
   defaultValueSiblingTypes?: ReadonlySet<string>;
   variadicMarkerTypes?: ReadonlySet<string>;
@@ -268,6 +269,10 @@ const GENERIC_PROFILE: CallableArityLanguageProfile = {
 /** C-family rows: a bare `void` parameter list occupies zero slots. */
 const cFamilyProfile: CallableArityLanguageProfile = {
   ...GENERIC_PROFILE,
+  graphDeclarationParameters: {
+    variadicMarkerTypes: new Set(["variadic_parameter", "variadic_parameter_declaration"]),
+    soleVoidMeansEmpty: true,
+  },
   zeroSlotParameters: ["void"],
   parameterNodeTypes: [
     "parameter_declaration",
@@ -425,6 +430,7 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   // `receiver_parameter` nodes are explicit receivers; `spread_parameter` nodes are variadic.
   java: {
     ...GENERIC_PROFILE,
+    graphDeclarationParameters: { ignoredParameterTypes: new Set(["receiver_parameter"]) },
     receiver: { ...GENERIC_PROFILE.receiver, nodeTypes: ["receiver_parameter"] },
     parameterNodeTypes: ["formal_parameter", "receiver_parameter", "spread_parameter"],
     restNodeTypes: ["spread_parameter"],
@@ -435,6 +441,7 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   // `vararg` rides a parameter_modifiers sibling; spread calls (`*values`) are uncountable.
   kotlin: {
     ...GENERIC_PROFILE,
+    graphDeclarationParameters: { positionalParameterChildType: "parameter" },
     parameterNodeTypes: ["parameter"],
     modifierNodeTypes: ["parameter_modifiers", "parameter_modifier"],
     // Named arguments and a trailing lambda can skip defaults before a required parameter.
@@ -458,6 +465,7 @@ export const CALLABLE_ARITY_LANGUAGE_PROFILES: Record<CallableArityLanguageId, C
   // trailing closure can skip defaults before a required parameter, so every parameter is its own `name: Type` slot.
   swift: {
     ...GENERIC_PROFILE,
+    graphDeclarationParameters: { directParameterChildType: "parameter" },
     directParameterChildType: "parameter",
     keywordParameterPattern: /:/,
     trailingClosureNodeTypes: ["lambda_literal"],

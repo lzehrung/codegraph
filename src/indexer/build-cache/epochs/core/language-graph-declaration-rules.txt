@@ -1,0 +1,1 @@
+Detailed graph declaration shapes and parameter metadata now come from language-owned policy data.

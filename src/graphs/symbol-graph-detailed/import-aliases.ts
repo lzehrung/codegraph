@@ -22,6 +22,7 @@ import { isJsTsLanguage } from "../../languages/js-family.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "../../indexer/python-dotted-imports.js";
 import { normalizeKotlinIdentifier } from "../../util/identifiers.js";
+import { graphImportRulesFor } from "../../indexer/name-lookup-policies/reference-rules.js";
 
 export type ImportAliasMaps = {
   aliasToTargetDef: Map<string, SymbolDef>;
@@ -81,12 +82,11 @@ export function buildImportAliasMaps(
   const aliasToTargetModule = new Map<string, string>();
   const languageSupport = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
   const languageId = languageSupport?.id ?? "";
-  // Preserve other languages' key conventions; C# verbatim, Kotlin, and Swift quoted aliases change identity here.
-  const normalizesAliasKey = languageId === "csharp" || languageId === "kotlin" || languageId === "swift";
-  const aliasKey =
-    languageSupport && normalizesAliasKey ? languageSupport.normalizeIdentifier : (name: string): string => name;
+  const aliasKey = graphImportRulesFor(languageId).aliasKey ?? ((name: string): string => name);
+  const precedence = starImportPrecedence(languageId);
+  const sourceOrderedBindings = precedence === "last-wins";
   const pythonLocalStartIndexes = new Map<string, number>();
-  if (languageId === "python") {
+  if (sourceOrderedBindings) {
     for (const binding of scopeIndex.allScopes[0]?.map.values() ?? []) {
       for (let current: Binding | undefined = binding; current; current = current.earlierSameScope) {
         const startIndex = current.def?.start.index;
@@ -130,7 +130,7 @@ export function buildImportAliasMaps(
     const bindingName = explicitBindingLocalName(imp);
     // C# `@B` and `B` are one binding name, so both reach the same entry; see `aliasKey`.
     const key = bindingName === undefined ? undefined : aliasKey(bindingName);
-    if (languageId === "python" && bindingName) {
+    if (sourceOrderedBindings && bindingName) {
       const effectiveBinding = effectiveExplicitOrLocalBinding(
         moduleEntry.imports,
         languageId,
@@ -222,7 +222,6 @@ export function buildImportAliasMaps(
 
   // Star-only names use the same explicit/local winner as navigation. A missing effective
   // explicit binding blocks an earlier star rather than leaving a stale alias target behind.
-  const precedence = starImportPrecedence(languageId);
   for (const name of starReachableNames(moduleEntry)) {
     const decision = resolveStarImportedName(index, moduleEntry, languageId, name);
     if (decision.status !== "resolved") continue;

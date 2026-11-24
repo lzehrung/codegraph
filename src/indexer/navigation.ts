@@ -1,6 +1,7 @@
 import { isGeneratedMember } from "../languages/generated-members.js";
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import { MEMBER_LOOKUP_POLICIES, memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import { referenceRulesFor } from "./name-lookup-policies/reference-rules.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
@@ -42,7 +43,7 @@ import { findClosestBinding, findDeclarationNameNode, getOrBuildScopeIndex, toMo
 import { findClosestScopeBinding } from "./scope-lookup.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { headerParameterOwner, isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
-import { AMBIGUOUS_CPP_OVERLOAD_REASON, AMBIGUOUS_RECEIVER_MEMBER_REASON } from "./ambiguous-resolution.js";
+import { AMBIGUOUS_RECEIVER_MEMBER_REASON } from "./ambiguous-resolution.js";
 import { resolveEcmaPrivateName } from "./member-selection.js";
 import {
   findRubyReopenedConstantParts,
@@ -113,7 +114,6 @@ import {
   isMemberReferencePropertyIdentifier,
   isReceiverNameNode,
 } from "../util/member-access.js";
-import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
 import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
   cppOutOfLineOwnerPath,
@@ -633,6 +633,8 @@ export async function recoverIncludedCallableStar(
   node: SyntaxNodeLike,
   source: string,
 ): Promise<GoToResult | null> {
+  const missReason =
+    referenceRulesFor(languageId).includedCallableMissReason ?? "No matching local or imported definition";
   const candidates: Array<{ imp: Extract<ImportBinding, { kind: "star" }>; def: SymbolDef }> = [];
   for (const imp of mod.imports) {
     if (isExpandedStarBinding(imp, mod.imports) || imp.kind !== "star") continue;
@@ -677,9 +679,7 @@ export async function recoverIncludedCallableStar(
       parsedByFile.set(key, await ensureParsedContextForIndex(index, candidate.def.file));
     } catch (error) {
       rethrowStaleQuerySource(error);
-      return languageId === "cpp"
-        ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
-        : { status: "not_found", reason: "No matching local or imported definition" };
+      return { status: "not_found", reason: missReason };
     }
   }
   const selected = resolveCppExportedCallables(
@@ -692,9 +692,7 @@ export async function recoverIncludedCallableStar(
   if (selected) {
     return okGoToResult(index, selected, { resolution: "exact", confidence: "high" });
   }
-  return languageId === "cpp"
-    ? { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON }
-    : { status: "not_found", reason: "No matching local or imported definition" };
+  return { status: "not_found", reason: missReason };
 }
 
 export async function getCppEquivalentCallableDefinitions(
@@ -901,6 +899,12 @@ async function findReferencesInternal(
     }
     throw error;
   }
+  const referenceRules = referenceRulesFor(parsedContext.sup.id);
+  const unitPeerOptions = referenceRules.unitPeerOptions;
+  const callableVerification = referenceRules.callableVerification;
+  const exportedNameSeparator = referenceRules.exportedNameSeparator;
+  const unprobeableNameScan = referenceRules.unprobeableNameScan;
+  const callableLinkMode = referenceRules.callableEquivalence?.links;
   let cNamespace: "tag" | "ordinary" | undefined;
   if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
@@ -1089,9 +1093,9 @@ async function findReferencesInternal(
     (definition.kind === SymbolKind.Class ||
       definition.kind === SymbolKind.Interface ||
       definition.kind === SymbolKind.TypeAlias);
-  let requiresTypeScriptOverloadVerifiedScan = false;
+  let requiresOverloadVerifiedScan = false;
   if (
-    (parsedContext.sup.id === "ts" || parsedContext.sup.id === "tsx") &&
+    callableVerification === "overloads" &&
     definition.kind === SymbolKind.Function &&
     !receiverMemberDefinition &&
     localBinding?.sameScopeFunctionBindings
@@ -1101,7 +1105,7 @@ async function findReferencesInternal(
       (binding) => binding.callable,
       definition.callable?.key,
     );
-    requiresTypeScriptOverloadVerifiedScan = overloadBindings.length > 1;
+    requiresOverloadVerifiedScan = overloadBindings.length > 1;
   }
   // Scope occurrences do not select between a module declaration and a later import.
   // Reuse goto's shared source-order/runtime-binding decision for these collisions.
@@ -1114,24 +1118,27 @@ async function findReferencesInternal(
       }
     }
   }
-  const kotlinExtension = isKotlinExtensionDeclaration(parsedContext, definition);
+  const extensionShape = referenceRules.extensionDeclaration;
+  const extensionNeedsReceiverProof =
+    !!extensionShape &&
+    isExtensionDeclaration(parsedContext, definition, extensionShape.receiverType, extensionShape.wrapperType);
   // A same-scope property can own all lexical occurrences of a callable's name. Goto selects by callability and
   // arity instead, so references of the hidden function need the same verified scan as extension declarations.
-  const kotlinFileCallable =
-    parsedContext.sup.id === "kotlin" && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
-  const kotlinFileBinding = kotlinFileCallable
+  const bindingCollisionCallable =
+    callableVerification === "binding-collisions" &&
+    definition.kind === SymbolKind.Function &&
+    !receiverMemberDefinition;
+  const fileCallableBinding = bindingCollisionCallable
     ? getCachedScope(index, definitionFile, mod, parsedContext).allScopes[0]?.map.get(
         parsedContext.sup.normalizeIdentifier(definition.localName),
       )
     : undefined;
-  const kotlinCallableCollision = !!kotlinFileBinding?.earlierSameScope;
+  const callableBindingCollision = !!fileCallableBinding?.earlierSameScope;
 
-  const cFamilyCallable =
-    (parsedContext.sup.id === "c" || parsedContext.sup.id === "cpp") &&
-    definition.kind === SymbolKind.Function &&
-    !receiverMemberDefinition;
-  // Swift overload labels, including overloads in another unit peer, require goto verification.
-  const swiftCallable =
+  const alwaysVerifyFreeCallable =
+    callableVerification === "all" && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
+  // A language may also require verification across overloads in another unit peer.
+  const policyVerifiedCallable =
     memberLookupPolicyFor(parsedContext.sup.id).verifiesCallableReferences &&
     definition.kind === SymbolKind.Function &&
     !receiverMemberDefinition;
@@ -1140,18 +1147,18 @@ async function findReferencesInternal(
   const requiresHeaderParameterVerifiedScan =
     !!localBinding?.node && !!headerParameterOwner(parsedContext.sup.id, localBinding.node);
   const bindingNeedsVerifiedScan =
-    requiresTypeScriptOverloadVerifiedScan ||
+    requiresOverloadVerifiedScan ||
     requiresRuntimeBindingVerifiedScan ||
     requiresHeaderParameterVerifiedScan ||
     localBinding?.occurrencesComplete === false;
-  const kotlinNeedsVerifiedScan = kotlinExtension || kotlinCallableCollision;
+  const receiverProofNeedsVerifiedScan = extensionNeedsReceiverProof || callableBindingCollision;
   const requiresSameFileVerifiedScan =
     privateName ||
-    cFamilyCallable ||
-    swiftCallable ||
+    alwaysVerifyFreeCallable ||
+    policyVerifiedCallable ||
     scansNamespaceReferences ||
     bindingNeedsVerifiedScan ||
-    kotlinNeedsVerifiedScan;
+    receiverProofNeedsVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
   if (memberLookupPolicyFor(parsedContext.sup.id).referenceFamilyUnproven?.(referenceDefinitionName)) {
@@ -1163,7 +1170,7 @@ async function findReferencesInternal(
     localBinding.occurrencesComplete !== false &&
     !requiresSameFileVerifiedScan &&
     !scansReceiverReferences &&
-    !requiresTypeScriptOverloadVerifiedScan
+    !requiresOverloadVerifiedScan
   ) {
     const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
     for (const occurrence of localBinding.occurrences) {
@@ -1257,11 +1264,7 @@ async function findReferencesInternal(
   // them as bare-name reference sources in addition to the import-derived branches.
   const unitPeerKeys = new Set<string>();
   for (const candidate of [referenceDef, ...equivalentDefinitions]) {
-    for (const unitPeer of getCompilationUnitPeers(
-      index,
-      candidate.file,
-      parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
-    ).files) {
+    for (const unitPeer of getCompilationUnitPeers(index, candidate.file, unitPeerOptions).files) {
       unitPeerKeys.add(fileIdentityKey(unitPeer));
     }
     if (parsedContext.sup.id === "csharp") {
@@ -1686,9 +1689,7 @@ async function findReferencesInternal(
             const ranges = await collectVerifiedNamedNodeReferences(
               index,
               fileId,
-              parsedContext.sup.id === "cpp" || parsedContext.sup.id === "ruby"
-                ? (exportedName.split("::").pop() ?? exportedName)
-                : exportedName,
+              exportedNameSeparator ? (exportedName.split(exportedNameSeparator).pop() ?? exportedName) : exportedName,
               definition,
               referenceDefinitionName,
               (params, parsed) => goToDefinition(index, params, parsed),
@@ -1893,14 +1894,16 @@ async function findReferencesInternal(
               });
             }
           }
-          const scansQualifiedCppImport =
-            parsedContext.sup.id === "cpp" && imp.kind === "named" && imp.local.includes("::");
+          const scansQualifiedOwnerImport =
+            callableLinkMode === "qualified-owners" && imp.kind === "named" && imp.local.includes("::");
           if (imp.kind === "named" || fileIdentityKey(targetFile) !== fileIdentityKey(definitionFile)) {
             const remainingReferences = remainingCollectionSlots();
             const ranges = await collectVerifiedNamedNodeReferences(
               index,
               fileId,
-              scansQualifiedCppImport ? (importedLocalName.split("::").pop() ?? importedLocalName) : importedLocalName,
+              scansQualifiedOwnerImport
+                ? (importedLocalName.split("::").pop() ?? importedLocalName)
+                : importedLocalName,
               definition,
               referenceDefinitionName,
               (params, parsed) => goToDefinition(index, params, parsed),
@@ -2028,10 +2031,10 @@ async function findReferencesInternal(
   let receiverScannedFileCount = 0;
   if (scansReceiverReferences) {
     // A Swift name that splits into Bloom tokens (including quoted names with spaces) needs a full scan.
-    const swiftNameRequiresFullScan =
-      parsedContext.sup.id === "swift" &&
+    const nonTokenNameRequiresFullScan =
+      unprobeableNameScan === "non-token" &&
       !isBloomIdentifierToken(parsedContext.sup.normalizeIdentifier(referenceDef.localName));
-    const mayHaveUnprobeableName = parsedContext.sup.id === "kotlin" || swiftNameRequiresFullScan;
+    const mayHaveUnprobeableName = unprobeableNameScan === "always" || nonTokenNameRequiresFullScan;
     const parameterFileKey = parameterFilter ? fileIdentityKey(definitionFile) : undefined;
     const canonicalNames = new Map<LanguageSupport | undefined, string>();
     for (const entry of referenceModuleTable(index).entries) {
@@ -2212,11 +2215,7 @@ async function findReferencesInternal(
   // by the source-unit relation; an unproven boundary leaves their reference set partial.
   const implicitUnitComplete =
     !definition.isMember && IMPLICIT_UNIT_LANGUAGES[parsedContext.sup.id]
-      ? getCompilationUnitPeers(
-          index,
-          definitionFile,
-          parsedContext.sup.id === "csharp" ? { csharpQualifiedName: true } : undefined,
-        ).complete
+      ? getCompilationUnitPeers(index, definitionFile, unitPeerOptions).complete
       : await sharedOwnerMemberUnitComplete(index, definition);
   const strategyUnavailableFiles = [
     ...receiverProofUnavailableFiles.values(),
@@ -2326,12 +2325,16 @@ function syntaxNodeForDefinition(parsedContext: ParsedFileContext, def: SymbolDe
   return parsedContext.tree.rootNode.descendantForPosition(position, position);
 }
 
-/** A Kotlin extension declaration: a bare name reaches it only through a matching implicit receiver. */
-function isKotlinExtensionDeclaration(parsedContext: ParsedFileContext, def: SymbolDef): boolean {
-  if (parsedContext.sup.id !== "kotlin") return false;
+/** An extension declaration whose bare name needs a matching implicit receiver. */
+function isExtensionDeclaration(
+  parsedContext: ParsedFileContext,
+  def: SymbolDef,
+  receiverType: (node: SyntaxNodeLike) => SyntaxNodeLike | null,
+  wrapperType: string,
+): boolean {
   let declaration = syntaxNodeForDefinition(parsedContext, def).parent;
-  if (declaration?.type === "variable_declaration") declaration = declaration.parent;
-  return !!declaration && !!kotlinExtensionReceiverType(declaration);
+  if (declaration?.type === wrapperType) declaration = declaration.parent;
+  return !!declaration && !!receiverType(declaration);
 }
 
 /** A scope occurrence that is a bare Kotlin call under a lambda or extension body, which an implicit receiver may claim. */
@@ -2502,8 +2505,16 @@ async function cppEquivalentCallableFamily(
     return { definition, referenceDef: definition, receiverOwner: null, localBinding: undefined, equivalents: [] };
   }
   const context = parsedContext ?? (await ensureParsedContextForIndex(index, definition.file));
+  const callableLinkMode = referenceRulesFor(context.sup.id).callableEquivalence?.links;
   const definitionNameNode = syntaxNodeForDefinition(context, definition);
-  const receiverOwner = await cppOutOfLineReceiverOwner(index, mod, definition, context, definitionNameNode);
+  const receiverOwner = await cppOutOfLineReceiverOwner(
+    index,
+    mod,
+    definition,
+    context,
+    definitionNameNode,
+    callableLinkMode,
+  );
   const memberName = receiverOwner
     ? cppOutOfLineMemberName(definitionNameNode, context.source, context.sup, receiverSyntaxDeps)
     : null;
@@ -2516,11 +2527,11 @@ async function cppEquivalentCallableFamily(
     (binding) => binding.def && binding.def.start.index === definition.range.start.index,
   );
   let sameFileFunctionBindings: readonly Binding[] = localBindings;
-  if (context.sup.id === "cpp") {
+  if (callableLinkMode === "qualified-owners") {
     sameFileFunctionBindings = localBinding ? cppEquivalentCallableBindings(localBinding) : [];
   }
   const sameFileFunctionEquivalentDefinitions =
-    (context.sup.id === "c" || context.sup.id === "cpp") && definition.kind === SymbolKind.Function
+    callableLinkMode && definition.kind === SymbolKind.Function
       ? sameFileFunctionBindings.flatMap((binding) => {
           const bindingRange = binding.def;
           if (!bindingRange || bindingRange.start.index === definition.range.start.index) return [];
@@ -2543,14 +2554,14 @@ async function cppEquivalentCallableFamily(
       definitionNameNode,
       receiverOwner,
     );
-  } else if (definition.isMember && context.sup.id === "cpp") {
+  } else if (definition.isMember && callableLinkMode === "qualified-owners") {
     equivalents = await cppInClassMemberEquivalentDefinitions(index, definition, context, definitionNameNode);
-  } else if (context.sup.id === "cpp") {
+  } else if (callableLinkMode === "qualified-owners") {
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
       ...cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode),
     ];
-  } else if (context.sup.id === "c" && definition.kind === SymbolKind.Function && !definition.cTag) {
+  } else if (callableLinkMode === "includes" && definition.kind === SymbolKind.Function && !definition.cTag) {
     const linked = await cIncludeLinkedCallableEquivalents(index, definition);
     const seen = new Set(sameFileFunctionEquivalentDefinitions.map((item) => referenceSiteKey(item.file, item.range)));
     equivalents = [
@@ -2569,8 +2580,9 @@ async function cppOutOfLineReceiverOwner(
   def: SymbolDef,
   parsedContext: ParsedFileContext,
   definitionNameNode: SyntaxNodeLike,
+  callableLinkMode: "includes" | "qualified-owners" | undefined,
 ): Promise<SymbolDef | null> {
-  if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return null;
+  if (callableLinkMode !== "qualified-owners" || def.kind !== SymbolKind.Function) return null;
   const ownerPath = cppOutOfLineOwnerPath(
     definitionNameNode,
     parsedContext.source,
@@ -2677,7 +2689,7 @@ function cppNamespaceFunctionEquivalentDefinitions(
   parsedContext: ParsedFileContext,
   definitionNameNode: SyntaxNodeLike,
 ): SymbolDef[] {
-  if (parsedContext.sup.id !== "cpp" || def.kind !== SymbolKind.Function) return [];
+  if (def.kind !== SymbolKind.Function) return [];
   const ownerPath = cppOutOfLineOwnerPath(
     definitionNameNode,
     parsedContext.source,
@@ -2730,8 +2742,10 @@ function isReceiverMemberDefinition(
   }
   if (def.kind !== SymbolKind.Function) return false;
   let current: SyntaxNodeLike | null = syntaxNodeForDefinition(parsedContext, def);
-  let sawCppFunction = false;
-  let sawRustImplFunction = false;
+  const memberDefinition = referenceRulesFor(parsedContext.sup.id).memberDefinition;
+  const memberFunctionType = memberDefinition?.functionType;
+  const memberContainerTypes = memberDefinition?.containerTypes;
+  let sawMemberFunction = false;
   if (isGeneratedMember(parsedContext.sup, parsedContext.tree, def)) return true;
   while (current) {
     if (
@@ -2743,14 +2757,8 @@ function isReceiverMemberDefinition(
     ) {
       return true;
     }
-    if (parsedContext.sup.id === "cpp") {
-      if (current.type === "function_definition") sawCppFunction = true;
-      if (sawCppFunction && CPP_MEMBER_CONTAINER_TYPES.has(current.type)) return true;
-    }
-    if (parsedContext.sup.id === "rust" && current.type === "function_item") {
-      sawRustImplFunction = true;
-    }
-    if (sawRustImplFunction && current.type === "impl_item") return true;
+    if (memberFunctionType && current.type === memberFunctionType) sawMemberFunction = true;
+    if (sawMemberFunction && memberContainerTypes?.[current.type]) return true;
     if (current.type === "function_declaration" || current.type === "program") return false;
     current = current.parent;
   }
@@ -2779,6 +2787,7 @@ export async function collectNamespaceMemberRefs(
   const normalizedNs = normalize(ns);
   const namespaceSegments = normalizedNs.includes(".") ? normalizedNs.split(".") : undefined;
   const normalizedMember = normalize(member);
+  const namespaceBindingScope = referenceRulesFor(sup.id).namespaceBindingScope;
   const walk = (node: SyntaxNodeLike): void => {
     if (isMemberAccessNode(sup, node)) {
       const { object: obj, property: prop } = getMemberAccessParts(sup, node);
@@ -2814,11 +2823,11 @@ export async function collectNamespaceMemberRefs(
               : null;
           const aliasQualified = isCsharpAliasQualifier(receiver, memberAccess);
           const inFileScope =
-            sup.id === "python"
+            namespaceBindingScope === "effective-import"
               ? !closest || !!closest.import
               : aliasQualified || !scopeIndex || fileBindingIsUnshadowed(scopeIndex, closest, importBinding?.from);
           const inAliasScope =
-            sup.id !== "csharp" ||
+            namespaceBindingScope !== "lexical-alias" ||
             !importBinding ||
             !imports ||
             importBinding.kind !== "namespace" ||
