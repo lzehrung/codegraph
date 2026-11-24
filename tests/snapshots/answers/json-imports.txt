@@ -19,6 +19,6 @@ goto src/index.js:8:24 "configName" -> not_found "No matching local or imported 
 project tests/samples/json-imports files=3 goto=12 declarations=3 referenceTargets=3
 ref src/index.js:4:17-4:31 function "getProjectName" -> src/index.js:4:17-4:31 order=0
 ref src/index.js:8:14-8:21 variable "invalid" -> src/index.js:8:14-8:21 order=0
-refs src/data.json:1:1-1:1 default "default" -> unsupported UnsupportedParserInputError "Unsupported file extension: src/data.json"
+refs src/data.json:1:1-1:1 default "default" -> not_found "Reference collection is unavailable for non-code targets"
 refs src/index.js:4:17-4:31 function "getProjectName" -> ok src/index.js:4:17-4:31 function "getProjectName" coverage=partial scope=indexed_candidates reasons=["parse_error"] affected=["src/index.js"] count=1 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs src/index.js:8:14-8:21 variable "invalid" -> ok src/index.js:8:14-8:21 variable "invalid" coverage=partial scope=indexed_candidates reasons=["parse_error"] affected=["src/index.js"] count=1 prov={"backend":"native","confidence":"high","resolution":"exact"}

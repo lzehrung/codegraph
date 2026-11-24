@@ -35,6 +35,7 @@ MCP takes separate `file`, `line`, `column` fields, or `handle`; do not mix form
 Use `codegraph refs <file>` to check every definition in a file.
 For absence claims, require `referenceCoverage.state: complete`; `strategy_unavailable` means an applicable reference strategy could not prove all candidate sites, `name_equivalence_unavailable` means language-specific name equivalence could not be verified, and `unindexed_trait` means a PHP class composes a trait the index does not hold. Coverage covers indexed candidates, not unknown dynamic imports. CLI and library import declaration hits label source and alias/default tokens in `via.importBinding`; MCP `refs` flattens this role to top-level `importBinding`.
 `parse_error`: for a non-SCSS definition, any ERROR or MISSING region in a candidate or scanned file makes coverage partial, regardless of its contents.
+Non-code module targets such as JSON default exports return `not_found` from CLI `refs` (exit 1) and a normal empty MCP `refs` result; `goto` can still resolve that module identity.
 Implicit peer lookup uses same-directory package/namespace facts, not compiler build targets. Wider JVM/C# units and Swift files in other directories can make coverage partial; do not treat unresolved peers as proof that a symbol is unused.
 `deps`, `rdeps`, and `file_deps` accept symbol handles but traverse the declaring file.
 

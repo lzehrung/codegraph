@@ -3,6 +3,7 @@ import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
+import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { pythonPropertyDecorator } from "./python-property-decorator.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -807,6 +808,11 @@ async function findReferencesInternal(
           provenance = gotoResult.provenance;
         }
       } catch (error) {
+        const unsupportedQueryFile =
+          isUnsupportedParserInputError(error) && fileIdentityKey(error.file) === fileIdentityKey(req.file);
+        if (unsupportedQueryFile) {
+          return { status: "not_found", reason: "Reference collection is unavailable for non-code targets" };
+        }
         if (isSyntaxProjectionLimitError(error)) {
           return { status: "not_found", reason: syntaxTreeUnavailablePublicReason(error) };
         }
@@ -885,6 +891,11 @@ async function findReferencesInternal(
   try {
     parsedContext = await ensureParsedContextForIndex(index, definitionFile);
   } catch (error) {
+    const unsupportedTargetFile =
+      isUnsupportedParserInputError(error) && fileIdentityKey(error.file) === fileIdentityKey(definitionFile);
+    if (unsupportedTargetFile) {
+      return { status: "not_found", reason: "Reference collection is unavailable for non-code targets" };
+    }
     if (isSyntaxProjectionLimitError(error)) {
       return { status: "not_found", reason: syntaxTreeUnavailablePublicReason(error) };
     }

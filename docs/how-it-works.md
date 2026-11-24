@@ -92,6 +92,8 @@ References choose the files they verify from the importers of each file, which e
 
 An unresolved import slot may require verifying every occurrence of the requested name in its file. `findReferences` reuses that scan for other unresolved slots within the same file and query, preserving the first import attribution and reference coverage. `findRenameReferences` and `rename_preview` separately check bindings whose aliases must stay unchanged.
 
+`findReferences` and `findRenameReferences` return `not_found` with a reason for non-code targets, including synthetic JSON default exports. The JSON module identity supports import resolution and `goToDefinition`, but has no syntax tree for reference collection; these queries do not parse JSON as source code.
+
 Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
