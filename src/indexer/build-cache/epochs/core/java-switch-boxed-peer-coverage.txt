@@ -1,0 +1,1 @@
+Preserve declared boxed switch constants and propagate unresolved label uncertainty to Java package peers.

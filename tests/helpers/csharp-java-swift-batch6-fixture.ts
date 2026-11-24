@@ -20,6 +20,23 @@ import {
   type Place,
   type Sources,
 } from "./csharp-java-batch3-fixture.js";
+import {
+  expectJavaSwitchLabels,
+  JAVA_SWITCH_LABEL_SOURCES,
+  JAVA_SWITCH_ENUM,
+  JAVA_SWITCH_ENUM_LABELS,
+  JAVA_SWITCH_FIELD,
+  JAVA_SWITCH_FIELD_READS,
+  expectJavaBoxedSwitches,
+  expectJavaPeerSwitchCoverage,
+  JAVA_BOXED_SWITCH_SOURCES,
+  JAVA_BOXED_SWITCH_RENAME_ROWS,
+  JAVA_PEER_SWITCH_SOURCES,
+  JAVA_PEER_SWITCH_RENAME_ROWS,
+  expectJavaUnrelatedSwitchConstants,
+  JAVA_UNRELATED_SWITCH_SOURCES,
+  JAVA_UNRELATED_SWITCH_RENAME_ROWS,
+} from "./java-switch-label-fixture.js";
 
 // Expected bindings checked with Roslyn, javac 21, and swiftc 5.10.
 export const CSHARP_BATCH6_SOURCES: Sources = {
@@ -365,6 +382,14 @@ export const SWIFT_BATCH6_SOURCES: Sources = {
     "  guard case .item(title: let it, value: let iv) = payload else { return title }",
     "  return title + it + iv",
     "}",
+    "func repeated(_ title: Int, _ pair: (title: Int, value: Int), _ payload: Item) -> Int {",
+    "  var result = title",
+    "  for case let (title: t, value: v) in [pair] { result += t + v }",
+    "  for case .item(title: let t, value: let v) in [payload] { result += t + v }",
+    "  while case (title: let t, value: let v) = pair { result += t + v; break }",
+    "  guard case (title: let t, value: let v) = pair else { return title }",
+    "  return result + title + t + v",
+    "}",
     "",
   ].join("\n"),
 };
@@ -380,6 +405,38 @@ export const BATCH6_RENAME_ROWS: readonly {
   coverage?: "partial";
   unsafe?: boolean;
 }[] = [
+  ...JAVA_BOXED_SWITCH_RENAME_ROWS,
+  ...JAVA_PEER_SWITCH_RENAME_ROWS,
+  ...JAVA_UNRELATED_SWITCH_RENAME_ROWS,
+  {
+    sources: JAVA_SWITCH_LABEL_SOURCES,
+    declaration: JAVA_SWITCH_ENUM,
+    references: [
+      JAVA_SWITCH_ENUM,
+      ...JAVA_SWITCH_ENUM_LABELS,
+      at("app/Imported.java", 5, "STARTED"),
+      at("app/StaticOnly.java", 2, "STARTED"),
+    ],
+    coverage: "partial",
+    unsafe: true,
+  },
+  {
+    sources: JAVA_SWITCH_LABEL_SOURCES,
+    declaration: JAVA_SWITCH_FIELD,
+    references: [JAVA_SWITCH_FIELD, ...JAVA_SWITCH_FIELD_READS],
+    coverage: "partial",
+    unsafe: true,
+  },
+  {
+    sources: SWIFT_BATCH6_SOURCES,
+    declaration: at("main.swift", 23, "title"),
+    references: [
+      at("main.swift", 23, "title"),
+      at("main.swift", 24, "title"),
+      at("main.swift", 28, "title", 2),
+      at("main.swift", 29, "title"),
+    ],
+  },
   ...[5, 6, 7, 8, 9, 10].map((line) => ({
     sources: CSHARP_BATCH6_SOURCES,
     declaration: at("Scopes.cs", line, "x"),
@@ -654,7 +711,7 @@ export async function expectJavaBatch6(fixture: Batch3Fixture, index: ProjectInd
 
 export async function expectSwiftBatch6(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
   await expectRows(fixture, index);
-  for (const line of [3, 4, 6, 7, 8, 9, 10, 15, 16, 20]) {
+  for (const line of [3, 4, 6, 7, 8, 9, 10, 15, 16, 20, 25, 26, 27, 28]) {
     await expectGoto(fixture, index, at("main.swift", line, "title"), "not_found");
   }
 }
@@ -805,6 +862,34 @@ export const BATCH6_CASES = [
     check: expectJavaBatch6,
   },
   {
+    name: "unproven switch subject enum and field collisions",
+    language: "java",
+    references: true,
+    sources: JAVA_SWITCH_LABEL_SOURCES,
+    check: expectJavaSwitchLabels,
+  },
+  {
+    name: "boxed integral switch selectors",
+    language: "java",
+    references: true,
+    sources: JAVA_BOXED_SWITCH_SOURCES,
+    check: expectJavaBoxedSwitches,
+  },
+  {
+    name: "same-package enum label uncertainty",
+    language: "java",
+    references: true,
+    sources: JAVA_PEER_SWITCH_SOURCES,
+    check: expectJavaPeerSwitchCoverage,
+  },
+  {
+    name: "unrelated switch label constants",
+    language: "java",
+    references: true,
+    sources: JAVA_UNRELATED_SWITCH_SOURCES,
+    check: expectJavaUnrelatedSwitchConstants,
+  },
+  {
     name: "tuple and enum payload pattern labels",
     language: "swift",
     references: true,
@@ -820,7 +905,7 @@ export async function expectBatch6CacheTransitions(
 ): Promise<void> {
   const name = Object.keys(fixture.sources)[0]!;
   const original = fixture.files[name]!;
-  const renamed = path.join(fixture.root, `Renamed${path.extname(original)}`);
+  const renamed = path.join(path.dirname(original), `Renamed${path.extname(original)}`);
   const source = fixture.sources[name]!;
   let deleted = false;
   const sites = BATCH6_RENAME_ROWS.filter((row) => row.sources === fixture.sources).flatMap((row) => row.references);

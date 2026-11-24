@@ -193,6 +193,14 @@ function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup |
   return moduleNameLookupsFor(index).byFile.get(fileIdentityKey(file));
 }
 
+const NO_LOCAL_DEFINITIONS: readonly SymbolDef[] = [];
+
+/** Own declarations of this normalized name, without copying or applying visibility/owner selection. */
+export function moduleLocalDefinitionsNamed(index: ProjectIndex, file: FileId, name: string): readonly SymbolDef[] {
+  const names = moduleNameLookup(index, file);
+  return names?.locals.get(names.normalizeIdentifier(name)) ?? NO_LOCAL_DEFINITIONS;
+}
+
 /**
  * Whether any module of the index has `export * as name from`. Without one, no `resolveExport`
  * answer is a namespace, so a caller that only collects namespace answers has nothing to find.

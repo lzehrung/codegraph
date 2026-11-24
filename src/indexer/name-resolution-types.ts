@@ -25,8 +25,8 @@ export type DeferredNameRequest =
   | { kind: "csharp-alias-member"; lookupName: string }
   /** A C# named argument selects a parameter of its uniquely resolved callable. */
   | { kind: "csharp-named-argument"; call: SyntaxNodeLike }
-  /** A Java switch subject selects a field whose declared enum type owns its labels. */
-  | { kind: "java-switch-field"; subject: SyntaxNodeLike }
+  /** A Java switch subject proves an enum owner, or leaves a potentially colliding constant unproven. */
+  | { kind: "java-switch-case"; subject: SyntaxNodeLike | null; declaredType: SyntaxNodeLike | null }
   /** A C# initializer/pattern or Java annotation element names a member of an explicit type. */
   | {
       kind: "contextual-member";

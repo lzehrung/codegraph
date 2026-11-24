@@ -1,0 +1,1 @@
+Java switch labels reject enum/constant-field collisions for subjects without a proven type.

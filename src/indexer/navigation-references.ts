@@ -849,7 +849,12 @@ export async function collectVerifiedNamedNodeReferences(
         closure.has(fileIdentityKey(definition.file)),
       );
       if (!definitionVisible && policy.visibleThroughUnit) {
-        definitionVisible = policy.visibleThroughUnit(index, fileId, [expectedDef, ...equivalentDefinitions]);
+        definitionVisible = policy.visibleThroughUnit(
+          index,
+          fileId,
+          [expectedDef, ...equivalentDefinitions],
+          expectedNameNode,
+        );
       }
     }
     return definitionVisible;

@@ -1,0 +1,1 @@
+Java reference visibility includes proven compilation-unit peers for ambiguous switch labels.

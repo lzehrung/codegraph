@@ -69,7 +69,7 @@ import { createLoadingParsedFileProvider, ensureParsedContextForIndex, withParse
 import { nameLookupPolicyFor } from "./name-lookup-policies/index.js";
 import { rejectsLexicalBindingAtSelector, scopeNodesFor } from "./scope-nodes.js";
 import { resolveCsharpNamedArgument } from "./name-lookup-policies/csharp-named-arguments.js";
-import { settleJavaSwitchField } from "./name-lookup-policies/java-switch-cases.js";
+import { settleJavaSwitchCase } from "./name-lookup-policies/java-switch-cases.js";
 import type {
   BareNameUse,
   DeferredNameRequest,
@@ -513,11 +513,15 @@ export async function settleNameResolution(
         resolveJvmTypeName,
       );
       if (parameter) return okGoToResult(index, parameter, { resolution: "exact", confidence: "high" });
-    } else if (request.kind === "java-switch-field") {
-      const member = await settleJavaSwitchField(use, request.subject, resolveJvmTypeName, (typeUse) =>
-        settleNameResolution(typeUse, resolveBareName(typeUse, true), options),
+    } else if (request.kind === "java-switch-case") {
+      return settleJavaSwitchCase(
+        use,
+        request.subject,
+        request.declaredType,
+        resolveJvmTypeName,
+        (subjectUse, typeOnly) => settleNameResolution(subjectUse, resolveBareName(subjectUse, typeOnly), options),
+        () => settleNameResolution(use, fallback, options),
       );
-      if (member) return member;
     } else if (request.kind === "contextual-member") {
       const ownerUse = { ...use, node: request.owner, name: sliceText(request.owner, parsed.source) };
       const ownerResolution = resolveBareName(ownerUse, request.jvmTypeOnly);
