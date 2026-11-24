@@ -23,6 +23,39 @@ function inventory(root: string): Inventory {
   return JSON.parse(result.stdout) as Inventory;
 }
 
+function runMode(root: string, mode: "--check" | "--write-baseline") {
+  return spawnSync(process.execPath, [script, "--root", root, mode], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+}
+
+function withBaseline(test: (root: string, source: string) => void) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-language-ratchet-"));
+  const source = path.join(root, "src/indexer/navigation.ts");
+  try {
+    fs.mkdirSync(path.join(root, "src/languages/definitions"), { recursive: true });
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "src/languages/definitions/sample.ts"),
+      'const python = { id: "python" }; const rust = { id: "rust" };',
+    );
+    fs.writeFileSync(
+      source,
+      [
+        'function first(sup) { if (sup.id === "python") return 1; }',
+        'function second(sup) { return sup.id !== "python"; }',
+      ].join("\n"),
+    );
+    const generated = runMode(root, "--write-baseline");
+    expect(generated.status, generated.stderr).toBe(0);
+    test(root, source);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("language check inventory", () => {
   it("finds language comparisons, aliases, memberships and switches without treating node IDs as languages", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-language-checks-"));
@@ -78,5 +111,104 @@ describe("language check inventory", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects a new shared check and refuses to regenerate it into the baseline", () => {
+    withBaseline((root, source) => {
+      fs.appendFileSync(source, '\nfunction added(sup) { if (sup.id === "rust") return 3; }');
+      for (const mode of ["--check", "--write-baseline"] as const) {
+        const result = runMode(root, mode);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("New non-exempt inline language checks:");
+        expect(result.stderr).toContain("src/indexer/navigation.ts:3");
+        expect(result.stderr).toContain('sup . id === "rust"');
+        expect(result.stderr).toContain("do not baseline new checks");
+      }
+    });
+  });
+
+  it("preserves identities across reordering, line moves, comments, whitespace and quote changes", () => {
+    withBaseline((root, source) => {
+      fs.writeFileSync(
+        source,
+        [
+          "// Unrelated lines and reordered functions do not change site identity.",
+          "",
+          "function second(sup) { return sup.id !== 'python'; }",
+          "",
+          "function first(sup) {",
+          "  if (sup.id /* grammar */ ===",
+          "      'python') return 1;",
+          "}",
+        ].join("\n"),
+      );
+      const result = runMode(root, "--check");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("2 sites, 2 fingerprints");
+    });
+  });
+
+  it("requires regeneration for removed sites and writes only the remaining sites", () => {
+    withBaseline((root, source) => {
+      fs.writeFileSync(source, 'function first(sup) { if (sup.id === "python") return 1; }');
+      const stale = runMode(root, "--check");
+      expect(stale.status).toBe(1);
+      expect(stale.stderr).toContain("Retired language-check baseline entries:");
+      expect(stale.stderr).toContain("node scripts/language-check-inventory.mjs --write-baseline");
+      expect(runMode(root, "--write-baseline").status).toBe(0);
+      const result = runMode(root, "--check");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("1 sites, 1 fingerprints");
+    });
+  });
+
+  it("allows exempt family calls and exact parser guards, not unrelated checks in exempt files", () => {
+    withBaseline((root, source) => {
+      fs.appendFileSync(
+        source,
+        '\nimport { isJsTsLanguage } from "../languages/js-family.js";\nfunction family(sup) { return isJsTsLanguage(sup.id); }',
+      );
+      const policy = path.join(root, "src/indexer/member-lookup-policies/cpp-receiver.ts");
+      fs.mkdirSync(path.dirname(policy), { recursive: true });
+      fs.writeFileSync(policy, 'function cppOutOfLineOwnerPath(support) { if (support.id !== "cpp") return null; }');
+      const definitions = path.join(root, "src/languages/definitions/sample.ts");
+      fs.appendFileSync(definitions, 'const cpp = { id: "cpp" };');
+      const result = runMode(root, "--check");
+      expect(result.status, result.stderr).toBe(0);
+      fs.appendFileSync(policy, '\nfunction other(sup) { return sup.id === "rust"; }');
+      const unrelated = runMode(root, "--check");
+      expect(unrelated.status).toBe(1);
+      expect(unrelated.stderr).toContain("src/indexer/member-lookup-policies/cpp-receiver.ts:2");
+    });
+  });
+
+  it("counts identical occurrences instead of allowing duplicate checks through a set", () => {
+    withBaseline((root, source) => {
+      const original = fs.readFileSync(source, "utf8");
+      fs.writeFileSync(
+        source,
+        original.replace(
+          'if (sup.id === "python") return 1;',
+          'if (sup.id === "python") return 1; if (sup.id === "python") return 2;',
+        ),
+      );
+      const result = runMode(root, "--check");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("1 new site(s)");
+    });
+  });
+
+  it("fingerprints the whole enclosing condition without the inventory display truncation", () => {
+    withBaseline((root, source) => {
+      // Start a separate initial baseline for a deliberately long condition.
+      fs.rmSync(path.join(root, "scripts/language-check-baseline.json"));
+      const prefix = Array.from({ length: 100 }, (_, i) => `guard${i}`).join(" && ");
+      fs.writeFileSync(source, `function first(sup) { if (${prefix} && sup.id === "python") return 1; }`);
+      expect(runMode(root, "--write-baseline").status).toBe(0);
+      fs.writeFileSync(source, `function first(sup) { if (${prefix} && sup.id === "rust") return 1; }`);
+      const result = runMode(root, "--check");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('sup . id === "rust"');
+    });
   });
 });

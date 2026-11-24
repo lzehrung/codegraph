@@ -96,6 +96,11 @@ using syntax and facts proven from source. It must not emulate the full language
 - Regenerate `tests/snapshots/answers` with `npm run answers:snapshot` when goto/reference answers
   change. Classify every changed answer as fix, regression, conservative-loss, or unclear using
   base/head evidence; never regenerate to bless an unintended change.
+- `npm run language-checks:check` (first in `npm run check`) rejects new inline language-identity
+  checks and stale entries in `scripts/language-check-baseline.json`. Move the language-specific
+  operation into an existing language-owned row or policy, not a new identity wrapper or flag.
+  After removing sites, run `node scripts/language-check-inventory.mjs --write-baseline`; it only
+  shrinks an existing baseline. Preserve the plan's exact per-site exemptions.
 
 - Required in every language that claims a capability:
   - Resolve common forms: imports and aliases; same-package, module, or namespace peers; members
