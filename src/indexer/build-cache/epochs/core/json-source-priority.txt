@@ -1,0 +1,1 @@
+Invalidate JSON candidate records lacking higher-priority source paths and Ruby local occurrences obscured by same-named methods.

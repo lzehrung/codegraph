@@ -20,6 +20,7 @@ import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName, isSwiftPatternLabel } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
+import { rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby-tree.js";
 import {
   csharpDeclarationOutsideQuery,
   csharpQueryBindingVisibleAt,
@@ -927,6 +928,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     localScopeGateTypes: new Set(["method", "singleton_method", "class", "module", "singleton_class"]),
     localOnlyScopeTypes: new Set(["class", "module", "singleton_class"]),
     localVariableNameTypes: new Set(["identifier"]),
+    referenceNeedsVerification: rubyLambdaParameterShadows,
+    namespaceHidesBinding: (_row, binding, use) => {
+      if (binding.kind !== "function") return false;
+      let earlier = binding.earlierSameScope;
+      while (earlier && earlier.kind !== "local" && earlier.kind !== "param") earlier = earlier.earlierSameScope;
+      return !!earlier && rubyNamesLocalVariable(use);
+    },
     outerEvaluatedFields: { singleton_method: "object" },
     memberSelectorFields: { call: "method" },
     memberSelectorReceiverFields: { call: "receiver" },

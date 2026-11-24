@@ -143,7 +143,7 @@ export type IndexManifest = {
    * relocated project root does not spuriously invalidate.
    */
   declaredContainers?: Record<string, string[]>;
-  /** Relative JSON candidates and the importers that depend on their existence or metadata. */
+  /** Relative JSON resolution candidates, including higher-priority source files, and their importers. */
   jsonCandidates?: JsonCandidateRecord[];
   /**
    * Files added only for a caller-scoped build. Missing on older manifests and treated

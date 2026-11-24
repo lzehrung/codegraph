@@ -987,6 +987,19 @@ describe("Ruby generated methods across cache states", () => {
     });
   });
 
+  it("keeps conservative lambda shadowing equal across cold, memory, disk, and reopened builds", async () => {
+    const source = ["total = 1", "def total; 42; end", "puts ->(total) { total }.call(7)", "puts total", ""].join("\n");
+    await replayAcrossCacheStates({ "lambda.rb": source }, async ({ edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("lambda shadows local");
+      expect(baseline.some((line) => line.startsWith("lambda.rb:3:18 total goto=not_found "))).toBe(true);
+      await edit("lambda.rb", "->(total)", "->(other)");
+      const captured = await answersAt("lambda captures local");
+      expect(captured.some((line) => line.startsWith("lambda.rb:3:18 total goto=lambda.rb:1:total "))).toBe(true);
+      await edit("lambda.rb", "->(other)", "->(total)");
+      await restoredAt("lambda parameter restored", baseline);
+    });
+  });
+
   it("keeps cold, memory, disk, and reopened builds equal while a visibility call and a scope gate change", async () => {
     await replayAcrossCacheStates(sourcesOf("gates"), async ({ edit, answersAt, restoredAt }) => {
       const baseline = await answersAt("cold");
@@ -1024,5 +1037,446 @@ describe("Ruby scope index facts", () => {
   it("records whether a file can generate methods, so a file without attr_ pays nothing for them", async () => {
     expect((await scopeOf("class A\n  attr_reader :v\nend\n")).hasGeneratedMembers).toBe(true);
     expect((await scopeOf("class A\n  def v; end\nend\n")).hasGeneratedMembers).toBe(false);
+  });
+});
+
+describe("Ruby locals sharing method names", () => {
+  it("keeps local reads and method calls in separate reference and rename families", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-local-method-"));
+    const file = path.join(root, "collision.rb");
+    // Ruby 3.3 prints 1,1,1,1,42,42, then 73,7, then 13,13,88 for this exact program.
+    const source = [
+      "total = 1",
+      "def total",
+      "  42",
+      "end",
+      "after = total",
+      "from_block = [1].map { total }.first",
+      "from_lambda = -> { total }.call",
+      "define_singleton_method(:captured_total) { total }",
+      "def read_total",
+      "  total",
+      "end",
+      "explicit = total()",
+      'puts [after, from_block, from_lambda, captured_total, read_total, explicit].join(",")',
+      "def second",
+      "  73",
+      "end",
+      "before_second = second",
+      "second = 7",
+      "after_second = second",
+      'puts [before_second, after_second].join(",")',
+      "amount = 13",
+      "before_amount = amount",
+      "def amount",
+      "  88",
+      "end",
+      "after_amount = amount",
+      'puts [before_amount, after_amount, amount()].join(",")',
+      "",
+    ].join("\n");
+    const request = (line: number, name = "total") => ({
+      file,
+      line,
+      column: source.split("\n")[line - 1]!.lastIndexOf(name) + 1,
+    });
+    try {
+      await fsp.writeFile(file, source);
+      const options = { cache: "off" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const index = await buildProjectIndex(root, options);
+      for (const [line, target, name] of [
+        [5, 1, "total"],
+        [6, 1, "total"],
+        [7, 1, "total"],
+        [8, 1, "total"],
+        [10, 2, "total"],
+        [12, 2, "total"],
+        [17, 14, "second"],
+        [19, 18, "second"],
+        [22, 21, "amount"],
+        [26, 21, "amount"],
+        [27, 23, "amount"],
+      ] as const) {
+        const result = await goToDefinition(index, request(line, name));
+        expect(result.status, `line ${line}`).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing definition at ${line}`);
+        expect(result.definition.range.start.line).toBe(target);
+      }
+      for (const [declaration, name, expected] of [
+        [1, "total", [1, 5, 6, 7, 8]],
+        [2, "total", [2, 10, 12]],
+        [14, "second", [14, 17]],
+        [18, "second", [18, 19]],
+        [21, "amount", [21, 22, 26]],
+        [23, "amount", [23, 27]],
+      ] as const) {
+        const result = await findReferences(index, request(declaration, name));
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing references for ${declaration}`);
+        expect(result.referenceCoverage.state).toBe("complete");
+        expect(result.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual(
+          expected,
+        );
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      const caller = [...graph.nodes.values()].find((node) => node.name === "read_total");
+      const method = [...graph.nodes.values()].find((node) => node.name === "total" && node.kind === "function");
+      expect(caller).toBeDefined();
+      expect(method).toBeDefined();
+      expect(
+        graph.edges.filter((edge) => edge.from === caller?.id && edge.label === "calls").map((edge) => edge.to),
+      ).toEqual([method?.id]);
+      const session = createAgentSession({
+        root,
+        useConfig: false,
+        buildOptions: options,
+        freshness: { policy: "check" },
+      });
+      for (const [name, declaration, expected] of [
+        ["total", 1, [1, 5, 6, 7, 8]],
+        ["total", 2, [2, 10, 12]],
+        ["amount", 21, [21, 22, 26]],
+        ["amount", 23, [23, 27]],
+      ] as const) {
+        const symbols = await workspaceSymbolsWithSession(session, { root, query: name });
+        const symbol = symbols.symbols.find(
+          (entry) => entry.name === name && entry.location.range.start.line === declaration,
+        );
+        if (!symbol) throw new Error(`Missing symbol at ${declaration}`);
+        const preview = await previewRenameWithSession(session, { root, handle: symbol.handle, newName: "sum" });
+        expect(preview.safe).toBe(true);
+        expect(preview.edits.map((edit) => edit.range.start.line).sort((a, b) => a - b)).toEqual(expected);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Ruby block and lambda parameter shadowing", () => {
+  it("keeps shadowing binders out of an outer local's references and marks incomplete renames unsafe", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-lambda-shadow-"));
+    const file = path.join(root, "shadowing.rb");
+    // Ruby 3.3 prints 7, 8, 9, 10, 11, 1, 1, 1, 12, 99, 13, 3, 42, 14, 1, 42, 42, 15, 42, 42.
+    const lines = [
+      "total = 1",
+      "def total; 42; end",
+      "puts ->(total) { total }.call(7)",
+      "puts lambda { |total| total }.call(8)",
+      "puts proc { |total| total }.call(9)",
+      "puts [10].map { |total| total }.first",
+      "puts [0].map { |;total| total || 11 }.first",
+      "puts ->(value = total) { value }.call",
+      "puts -> { total }.call",
+      "puts total",
+      "puts [12].map { _1 }.first",
+      "it = 13",
+      "def it; 42; end",
+      "puts [99].map { |it| it }.first",
+      "puts [99].map { it }.first",
+      "def check_local",
+      "  local = 3",
+      "  def local; 4; end",
+      "  [7].map { |local| local }",
+      "  ->(local) { local }.call(8)",
+      "  local",
+      "end",
+      "puts check_local",
+      "def read_method",
+      "  total",
+      "end",
+      "puts read_method",
+      "puts ->(total: 14) { total }.call",
+      "puts ->(value: total) { value }.call",
+      "puts ->(total) { total() }.call(17)",
+      "def explicit_lambda",
+      "  ->(total) { total() }.call(17)",
+      "end",
+      "puts explicit_lambda",
+      "puts [0].map { |;total| total = 15; total }.first",
+      "puts ->(total = 16) { total() }.call",
+      "puts ->(total: 17) { total() }.call",
+      "",
+    ];
+    const source = lines.join("\n");
+    const site = (line: number, name: string, occurrence = 0) => {
+      let column = -1;
+      for (let seen = 0; seen <= occurrence; seen += 1) column = lines[line - 1]!.indexOf(name, column + 1);
+      if (column < 0) throw new Error(`Missing ${name} on line ${line}`);
+      return { file, line, column: column + 1 };
+    };
+    try {
+      await fsp.writeFile(file, source);
+      const options = { cache: "off" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+      const index = await buildProjectIndex(root, options);
+      for (const [line, name] of [
+        [4, "total"],
+        [5, "total"],
+        [6, "total"],
+        [7, "total"],
+        [14, "it"],
+        [19, "local"],
+      ] as const) {
+        const declaration = site(line, name);
+        const use = site(line, name, 1);
+        for (const request of [declaration, use]) {
+          const result = await goToDefinition(index, request);
+          expect(result.status, `${line}:${request.column}`).toBe("ok");
+          if (result.status !== "ok") throw new Error(`Missing ${name} definition at ${line}:${request.column}`);
+          expect(result.definition.range.start.line).toBe(line);
+          expect(result.definition.range.start.column).toBe(declaration.column);
+        }
+        const references = await findReferences(index, declaration);
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error(`Missing ${name} references at ${line}`);
+        expect(references.referenceCoverage.state).toBe("complete");
+        expect(references.references.map((reference) => reference.range.start.column).sort((a, b) => a - b)).toEqual([
+          declaration.column,
+          use.column,
+        ]);
+      }
+      for (const [line, name] of [
+        [3, "total"],
+        [20, "local"],
+        [28, "total"],
+      ] as const) {
+        for (const occurrence of [0, 1]) {
+          expect((await goToDefinition(index, site(line, name, occurrence))).status).toBe("not_found");
+        }
+      }
+      for (const [name, declaration, uses] of [
+        ["total", 1, [8, 9, 10, 29]],
+        ["it", 12, [15]],
+      ] as const) {
+        for (const line of uses) {
+          const result = await goToDefinition(index, site(line, name));
+          expect(result.status).toBe("ok");
+          if (result.status !== "ok") throw new Error(`Missing outer ${name} at ${line}`);
+          expect(result.definition.range.start.line).toBe(declaration);
+        }
+        const references = await findReferences(index, site(declaration, name));
+        expect(references.status).toBe("ok");
+        if (references.status !== "ok") throw new Error(`Missing outer ${name} references`);
+        expect(references.referenceCoverage.state).toBe(name === "total" ? "partial" : "complete");
+        expect(references.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+          declaration,
+          ...uses,
+        ]);
+      }
+      for (const line of [30, 32, 36, 37]) {
+        const result = await goToDefinition(index, site(line, "total", 1));
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing explicit method at ${line}`);
+        expect(result.definition.range.start.line).toBe(2);
+      }
+      const methodReferences = await findReferences(index, site(2, "total"));
+      expect(methodReferences.status).toBe("ok");
+      if (methodReferences.status !== "ok") throw new Error("Missing total method references");
+      expect(methodReferences.referenceCoverage.state).toBe("partial");
+      expect(methodReferences.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+        2, 25, 30, 32, 36, 37,
+      ]);
+      for (const occurrence of [0, 1, 2]) {
+        const result = await goToDefinition(index, site(35, "total", occurrence));
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing block-local total at occurrence ${occurrence}`);
+        expect(result.definition.range.start.line).toBe(35);
+      }
+      expect((await goToDefinition(index, site(30, "total"))).status).toBe("not_found");
+      expect((await goToDefinition(index, site(11, "_1"))).status).toBe("not_found");
+      const graph = await buildSymbolGraphDetailed(index);
+      const callees = (name: string): Array<string | undefined> => {
+        const caller = [...graph.nodes.values()].find((node) => node.name === name);
+        return graph.edges
+          .filter((edge) => edge.from === caller?.id && edge.label === "calls")
+          .map((edge) => graph.nodes.get(edge.to)?.name);
+      };
+      expect(callees("check_local")).not.toContain("local");
+      expect(callees("read_method")).toContain("total");
+      expect(callees("explicit_lambda")).toContain("total");
+      const session = createAgentSession({
+        root,
+        useConfig: false,
+        buildOptions: options,
+        freshness: { policy: "check" },
+      });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "total" });
+      const local = symbols.symbols.find((entry) => entry.name === "total" && entry.location.range.start.line === 1);
+      if (!local) throw new Error("Missing outer total");
+      const preview = await previewRenameWithSession(session, { root, handle: local.handle, newName: "sum" });
+      expect(preview.safe).toBe(false);
+      expect(preview.edits.map((edit) => edit.range.start.line).sort((a, b) => a - b)).toEqual([1, 8, 9, 10, 29]);
+      let renamed = source;
+      for (const edit of [...preview.edits].sort((left, right) => right.range.start.index! - left.range.start.index!)) {
+        renamed = renamed.slice(0, edit.range.start.index) + edit.newText + renamed.slice(edit.range.end.index);
+      }
+      expect(renamed).toBe(
+        source
+          .replace("total = 1", "sum = 1")
+          .replace("value = total", "value = sum")
+          .replace("value: total", "value: sum")
+          .replace("-> { total }", "-> { sum }")
+          .replace("puts total\n", "puts sum\n"),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unmodeled lambda parameters apart from outer and nearer block locals", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-unmodeled-lambda-"));
+    const file = path.join(root, "locals.rb");
+    // Ruby 3.3 prints 22, 21, 32, 31, 43, 41, 51, 61.
+    const lines = [
+      "plain = 21",
+      "puts ->(plain) { plain }.call(22)",
+      "puts plain",
+      "value = 31",
+      "puts ->(value) { [32].map { |value| value }.first }.call(30)",
+      "puts value",
+      "first = 41",
+      "puts ->((first, second)) { first + second }.call([42, 1])",
+      "puts first",
+      "other = 51",
+      "puts ->(a = other) { other }.call",
+      "delta = 61",
+      "puts ->(fn = ->(delta) { delta }) { delta }.call",
+      "",
+    ];
+    const site = (line: number, name: string, occurrence = 0) => {
+      let column = -1;
+      for (let seen = 0; seen <= occurrence; seen += 1) column = lines[line - 1]!.indexOf(name, column + 1);
+      if (column < 0) throw new Error(`Missing ${name} on line ${line}`);
+      return { file, line, column: column + 1 };
+    };
+    try {
+      await fsp.writeFile(file, lines.join("\n"));
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      for (const [line, name] of [
+        [2, "plain"],
+        [8, "first"],
+        [13, "delta"],
+      ] as const) {
+        for (const occurrence of [0, 1]) {
+          expect((await goToDefinition(index, site(line, name, occurrence))).status).toBe("not_found");
+        }
+      }
+      for (const [line, name, occurrence, declaration] of [
+        [5, "value", 1, 5],
+        [5, "value", 2, 5],
+        [11, "other", 0, 10],
+        [11, "other", 1, 10],
+        [13, "delta", 2, 12],
+      ] as const) {
+        const result = await goToDefinition(index, site(line, name, occurrence));
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing ${name} at ${line}`);
+        expect(result.definition.range.start.line).toBe(declaration);
+        if (line === 5) expect(result.definition.range.start.column).toBe(site(5, "value", 1).column);
+      }
+      for (const [name, declaration, uses] of [
+        ["plain", 1, [3]],
+        ["value", 4, [6]],
+        ["first", 7, [9]],
+        ["delta", 12, [13]],
+      ] as const) {
+        const result = await findReferences(index, site(declaration, name));
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") throw new Error(`Missing ${name} references`);
+        expect(result.referenceCoverage.state).toBe("partial");
+        expect(result.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([
+          declaration,
+          ...uses,
+        ]);
+      }
+      const session = createAgentSession({
+        root,
+        useConfig: false,
+        buildOptions: { cache: "off", threads: 1, useNativeWorkers: false },
+        freshness: { policy: "check" },
+      });
+      const symbols = await workspaceSymbolsWithSession(session, { root, query: "plain" });
+      const local = symbols.symbols.find((symbol) => symbol.name === "plain" && symbol.location.range.start.line === 1);
+      if (!local) throw new Error("Missing plain local");
+      const preview = await previewRenameWithSession(session, { root, handle: local.handle, newName: "renamed" });
+      expect(preview.safe).toBe(false);
+      expect(preview.edits.map((edit) => edit.range.start.line).sort((a, b) => a - b)).toEqual([1, 3]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not bind a singleton-method receiver through a shadowed lambda parameter", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-singleton-lambda-"));
+    const file = path.join(root, "singleton.rb");
+    // Ruby 3.3 prints false and 7: the singleton method is installed on `other`, not `target`.
+    const source = [
+      "target = Object.new",
+      "other = Object.new",
+      "->(target) do",
+      "  def target.answer; 7; end",
+      "end.call(other)",
+      "puts target.respond_to?(:answer)",
+      "puts other.answer",
+      "",
+    ].join("\n");
+    try {
+      await fsp.writeFile(file, source);
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect((await goToDefinition(index, { file, line: 4, column: 7 })).status).toBe("not_found");
+      const refs = await findReferences(index, { file, line: 1, column: 1 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Missing target references");
+      expect(refs.referenceCoverage.state).toBe("partial");
+      expect(refs.references.map((reference) => reference.range.start.line).sort((a, b) => a - b)).toEqual([1, 6]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "block",
+      owner: "class Item\n  def touch; 42; end\nend\n",
+      line: 2,
+      call: "items.map { |a| a.touch }.first",
+      item: "Item",
+    },
+    {
+      label: "lambda",
+      owner: "class Item\n  def touch; 42; end\nend\n",
+      line: 2,
+      call: "->(a) { a.touch }.call(items.first)",
+      item: "Item",
+    },
+    {
+      label: "nested lambda",
+      owner: "module Outer\n  module Inner\n    class Item\n      def touch; 42; end\n    end\n  end\nend\n",
+      line: 4,
+      call: "->(a) { a.touch }.call(items.first)",
+      item: "Outer::Inner::Item",
+    },
+  ])("keeps receiver coverage partial for an untyped $label parameter", async ({ owner, line, call, item }) => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-untyped-receiver-"));
+    const declarationFile = path.join(root, "owner.rb");
+    const useFile = path.join(root, "use.rb");
+    try {
+      await fsp.writeFile(declarationFile, owner);
+      await fsp.writeFile(
+        useFile,
+        `require_relative "owner"\nclass Consumer\n  def run(items)\n    ${call}\n  end\nend\nputs Consumer.new.run([${item}.new])\n`,
+      );
+      const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      const column = owner.split("\n")[line - 1]!.indexOf("touch") + 1;
+      const result = await findReferences(index, { file: declarationFile, line, column });
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") throw new Error("Missing touch references");
+      expect(result.referenceCoverage.state).toBe("partial");
+      expect(result.referenceCoverage.reasons).toContain("strategy_unavailable");
+      expect(result.referenceCoverage.affectedFiles?.map(fileIdentityKey)).toContain(fileIdentityKey(useFile));
+      expect(result.references.map((reference) => reference.range.start.line)).toEqual([line]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
