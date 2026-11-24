@@ -501,6 +501,16 @@ const OPERATOR_OPERANDS: ReadonlySet<string> = new Set([
   "heredoc_beginning",
 ]);
 
+/** A receiverless command such as `name -x` can read a local; parentheses always make it a method call. */
+export function rubyCallMayReadLocal(use: SyntaxNodeLike): boolean {
+  const call = use.parent;
+  if (call?.type !== "call" || call.childForFieldName("receiver")) return false;
+  if (!sameNode(call.childForFieldName("method"), use)) return false;
+  const argumentsNode = call.childForFieldName("arguments");
+  const first = argumentsNode?.child(0);
+  return !!first && OPERATOR_OPERANDS.has(first.type);
+}
+
 /** Whether the text after `use` starts an argument that is an operator on a local when `use` is one: `c0&x`, `c0 -x`. */
 function operatorFollows(use: SyntaxNodeLike, source: string): boolean {
   let at = use.endIndex;
@@ -530,16 +540,18 @@ export function rubyReadsLocalAsOperand(use: SyntaxNodeLike, local: SyntaxNodeLi
 }
 
 /**
- * Whether a bare name at `use` can call a method that `attr_reader` and its siblings generate in `owner`: only inside
- * an instance method of that class or module, and only when that method has not bound a local of the same name before
- * the use (the conservative answer: a name the method binds anywhere above is treated as that local). Every class of a
- * file shares the file scope, so without this a reader would bind the same name in unrelated classes.
+ * Whether a bare name or explicit call at `use` can call a method that `attr_reader` and its siblings generate in
+ * `owner`: only inside an instance method of that class or module. A bare read bound as a local is not a method call,
+ * but an explicit call (`name()`, `self.name`) ignores same-named locals and parameters. Every class of a file shares
+ * the file scope, so without the owner check a reader would bind the same name in unrelated classes.
  */
 export function rubyGeneratedMemberVisibleAt(owner: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
   const enclosing = enclosingInstanceMethod(use);
   const isOwnersMethod =
     !!enclosing && enclosing.owner.startIndex === owner.startIndex && enclosing.owner.endIndex === owner.endIndex;
-  return isOwnersMethod && !bindsNameBefore(enclosing.method, use.text, use);
+  if (!isOwnersMethod) return false;
+  const readsLocalOperand = rubyCallMayReadLocal(use) && bindsNameBefore(localScopeOf(use), use.text, use);
+  return !readsLocalOperand && !rubyNamesLocalVariable(use);
 }
 
 /** The class or module a block builds for the constant it is assigned to: `Base = Struct.new(:a) do ... end`. */

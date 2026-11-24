@@ -1,0 +1,1 @@
+Ruby generatedMemberVisibleAt distinguishes explicit method calls from bare local reads.

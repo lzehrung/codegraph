@@ -6,6 +6,7 @@
  */
 import { csharpMemberLookupPolicy } from "./csharp.js";
 import { phpMemberLookupPolicy } from "./php.js";
+import { rubyMemberLookupPolicy } from "./ruby.js";
 import { swiftMemberLookupPolicy } from "./swift.js";
 import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
 import { fileIdentityKey } from "../../util/paths.js";
@@ -26,7 +27,7 @@ export type {
 
 const NO_POLICY: MemberLookupPolicy = {};
 
-const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
+export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
   csharp: csharpMemberLookupPolicy,
   java: {
     declaredReceiverUsesNameLookup: true,
@@ -45,14 +46,15 @@ const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
     },
   },
   php: phpMemberLookupPolicy,
+  ruby: rubyMemberLookupPolicy,
   swift: swiftMemberLookupPolicy,
 };
 
 export function memberLookupPolicyFor(languageId: string): MemberLookupPolicy {
-  return POLICIES[languageId] ?? NO_POLICY;
+  return MEMBER_LOOKUP_POLICIES[languageId] ?? NO_POLICY;
 }
 
 /** The language policy's superset key for normalized member names. */
 export function memberNameKeyFor(support: { readonly id: string }): MemberLookupPolicy["memberNameKey"] {
-  return POLICIES[support.id]?.memberNameKey;
+  return MEMBER_LOOKUP_POLICIES[support.id]?.memberNameKey;
 }

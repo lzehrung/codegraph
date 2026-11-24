@@ -1,0 +1,1 @@
+Ruby explicit receiver calls can name top-level Object methods and must retain unresolved reference coverage.

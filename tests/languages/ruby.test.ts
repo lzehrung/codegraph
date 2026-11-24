@@ -754,7 +754,7 @@ describe("Ruby method names, generated accessors, and writer calls", () => {
 describe("Ruby generated methods across cache states", () => {
   type Index = Awaited<ReturnType<typeof buildProjectIndex>>;
   const NAMES = new Set(
-    "v w later name count err ay dy z mode target label full? drain! full drain other k lv ev mv limit total item ax level kind reserve cap slot note reading pulse emit top_total cx mx area fill describe stamp entries notes stoke kindle beam gel around c0 c1 verify sap leaf drink wrap breeze frost make".split(
+    "v w later name count err ay dy z mode target label full? drain! full drain other k lv ev mv limit total item ax level kind reserve cap slot note reading pulse emit top_total cx mx area fill describe stamp entries notes stoke kindle beam gel around c0 c1 verify sap leaf drink wrap breeze frost make checkable_layout?".split(
       " ",
     ),
   );
@@ -767,6 +767,7 @@ describe("Ruby generated methods across cache states", () => {
     attrLines: ["scope.rb", "locals.rb", "order.rb", "receivers.rb", "blocks.rb"],
     declaringFile: ["device.rb", "decoy.rb", "operator.rb"],
     scopes: ["shadow.rb", "selfs.rb", "statics.rb", "use_statics.rb"],
+    memberCoverage: ["untyped_owner.rb", "untyped_use.rb"],
     gates: [
       "wrapped.rb",
       "nested.rb",
@@ -1017,6 +1018,53 @@ describe("Ruby generated methods across cache states", () => {
       expect(opened.some((line) => line.startsWith("gates.rb:3:3 top_total goto=gates.rb:1:top_total "))).toBe(true);
       await edit("gates.rb", "[1].each do\n  top_total\nend", "def uses_top_total\n  top_total\nend");
       await restoredAt("block became a def", baseline);
+    });
+  });
+  it("keeps explicit method namespaces equal through edits, file renames, deletion, and restoration", async () => {
+    const source = [
+      "def total; 42; end",
+      "def read(total); [total, total()]; end",
+      "class Reader",
+      "  attr_reader :level",
+      "  def read(level); [level, level(), self.level]; end",
+      "end",
+      "",
+    ].join("\n");
+    await replayAcrossCacheStates({ "explicit.rb": source }, async ({ file, edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("explicit calls beside parameters");
+      expect(baseline.some((line) => line.startsWith("explicit.rb:2:26 total goto=explicit.rb:1:total "))).toBe(true);
+      await edit("explicit.rb", "def read(total); [total, total()]", "def read(value); [value, total()]");
+      await answersAt("parameter renamed");
+      await edit("explicit.rb", "def read(value); [value, total()]", "def read(total); [total, total()]");
+      await restoredAt("parameter restored", baseline);
+      await fsp.rename(file("explicit.rb"), file("moved.rb"));
+      await answersAt("file renamed");
+      await fsp.rename(file("moved.rb"), file("explicit.rb"));
+      await restoredAt("file renamed back", baseline);
+      await fsp.rm(file("explicit.rb"));
+      await answersAt("file deleted");
+      await fsp.writeFile(file("explicit.rb"), source);
+      await restoredAt("file restored", baseline);
+    });
+  });
+
+  it("keeps nested module member coverage equal across edits and file lifecycle changes", async () => {
+    await replayAcrossCacheStates(sourcesOf("memberCoverage"), async ({ file, edit, answersAt, restoredAt }) => {
+      const baseline = await answersAt("untyped module receiver");
+      expect(baseline.some((line) => line.startsWith("untyped_owner.rb:3:9 checkable_layout? "))).toBe(true);
+      await edit("untyped_owner.rb", "def checkable_layout?", "def other");
+      await answersAt("method renamed");
+      await edit("untyped_owner.rb", "def other", "def checkable_layout?");
+      await restoredAt("method restored", baseline);
+      const owner = await fsp.readFile(file("untyped_owner.rb"), "utf8");
+      await fsp.rename(file("untyped_owner.rb"), file("moved.rb"));
+      await answersAt("module file moved");
+      await fsp.rename(file("moved.rb"), file("untyped_owner.rb"));
+      await restoredAt("module file moved back", baseline);
+      await fsp.rm(file("untyped_owner.rb"));
+      await answersAt("module file deleted");
+      await fsp.writeFile(file("untyped_owner.rb"), owner);
+      await restoredAt("module file restored", baseline);
     });
   });
 });
@@ -1456,7 +1504,16 @@ describe("Ruby block and lambda parameter shadowing", () => {
       call: "->(a) { a.touch }.call(items.first)",
       item: "Outer::Inner::Item",
     },
-  ])("keeps receiver coverage partial for an untyped $label parameter", async ({ owner, line, call, item }) => {
+    {
+      label: "nested module block",
+      owner:
+        "module Outer\n  module Inner\n    def touch; 42; end\n  end\nend\nclass Item\n  include Outer::Inner\nend\n",
+      line: 3,
+      call: "items.map { |a| a.touch }.first",
+      item: "Item",
+      member: false,
+    },
+  ])("keeps $label receiver coverage partial", async ({ owner, line, call, item, member = true }) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-untyped-receiver-"));
     const declarationFile = path.join(root, "owner.rb");
     const useFile = path.join(root, "use.rb");
@@ -1467,6 +1524,10 @@ describe("Ruby block and lambda parameter shadowing", () => {
         `require_relative "owner"\nclass Consumer\n  def run(items)\n    ${call}\n  end\nend\nputs Consumer.new.run([${item}.new])\n`,
       );
       const index = await buildProjectIndex(root, { cache: "off", threads: 1, useNativeWorkers: false });
+      expect(
+        !!index.byFile.get(fileIdentityKey(declarationFile))?.locals.find((local) => local.localName === "touch")
+          ?.isMember,
+      ).toBe(member);
       const column = owner.split("\n")[line - 1]!.indexOf("touch") + 1;
       const result = await findReferences(index, { file: declarationFile, line, column });
       expect(result.status).toBe("ok");
@@ -1475,8 +1536,221 @@ describe("Ruby block and lambda parameter shadowing", () => {
       expect(result.referenceCoverage.reasons).toContain("strategy_unavailable");
       expect(result.referenceCoverage.affectedFiles?.map(fileIdentityKey)).toContain(fileIdentityKey(useFile));
       expect(result.references.map((reference) => reference.range.start.line)).toEqual([line]);
+      const session = createAgentSession({
+        root,
+        useConfig: false,
+        buildOptions: { cache: "off", threads: 1, useNativeWorkers: false },
+      });
+      const renamed = await previewRenameWithSession(session, {
+        root,
+        handle: `owner.rb:${line}:${column}`,
+        newName: "touched",
+      });
+      expect(renamed.safe).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps explicit calls apart from method and block parameters and generated-reader locals", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-explicit-method-"));
+    const file = path.join(root, "explicit.rb");
+    const lines = [
+      "def total(value = 42); value; end",
+      "def read(total)",
+      "  [total, total(), total(7)]",
+      "end",
+      "def block_read",
+      "  [3].map { |total| [total, total(), total(8)] }",
+      "end",
+      "def operands(total, other)",
+      "  [total -other, total &other, total [other]]",
+      "end",
+      "class Reader",
+      "  attr_reader :amount",
+      "  def initialize; @amount = 43; end",
+      "  def read(amount)",
+      "    [amount, amount(), self.amount]",
+      "  end",
+      "  def local",
+      "    amount = 3",
+      "    [amount, amount(), self.amount]",
+      "  end",
+      "end",
+      "",
+    ];
+    const site = (line: number, name: string, occurrence = 0) => {
+      let offset = -1;
+      for (let seen = 0; seen <= occurrence; seen += 1) offset = lines[line - 1]!.indexOf(name, offset + 1);
+      if (offset < 0) throw new Error(`Missing ${name} on line ${line}`);
+      return { file, line, column: offset + 1 };
+    };
+    try {
+      await fsp.writeFile(file, lines.join("\n"));
+      const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
+      const index = await buildProjectIndex(root, options);
+      for (const [line, name, occurrence, target] of [
+        [3, "total", 0, 2],
+        [3, "total", 1, 1],
+        [3, "total", 2, 1],
+        [6, "total", 1, 6],
+        [6, "total", 2, 1],
+        [6, "total", 3, 1],
+        [9, "total", 0, 8],
+        [9, "total", 1, 8],
+        [9, "total", 2, 8],
+        [15, "amount", 0, 14],
+        [15, "amount", 1, 12],
+        [15, "amount", 2, 12],
+        [19, "amount", 0, 18],
+        [19, "amount", 1, 12],
+        [19, "amount", 2, 12],
+      ] as const) {
+        const found = await goToDefinition(index, site(line, name, occurrence));
+        expect(found.status, `${line}:${name}#${occurrence}`).toBe("ok");
+        if (found.status !== "ok") throw new Error(`Missing method namespace target at ${line}`);
+        expect(found.definition.range.start.line).toBe(target);
+      }
+      for (const [line, name, expected] of [
+        [1, "total", [1, 3, 3, 6, 6]],
+        [2, "total", [2, 3]],
+        [6, "total", [6, 6]],
+        [8, "total", [8, 9, 9, 9]],
+        [12, "amount", [12, 15, 15, 19, 19]],
+        [14, "amount", [14, 15]],
+        [18, "amount", [18, 19]],
+      ] as const) {
+        const refs = await findReferences(index, site(line, name));
+        expect(refs.status).toBe("ok");
+        if (refs.status !== "ok") throw new Error(`Missing references at ${line}`);
+        expect(refs.referenceCoverage.state).toBe("complete");
+        expect(refs.references.map((ref) => ref.range.start.line).sort((a, b) => a - b)).toEqual(expected);
+      }
+      const graph = await buildSymbolGraphDetailed(index);
+      for (const callerName of ["read", "block_read", "local"]) {
+        for (const caller of [...graph.nodes.values()].filter((node) => node.name === callerName)) {
+          const calls = graph.edges.filter((edge) => edge.from === caller.id && edge.label === "calls");
+          expect(calls).toHaveLength(2);
+          expect(calls.every((edge) => graph.nodes.get(edge.to)?.kind === "function")).toBe(true);
+        }
+      }
+      const operands = [...graph.nodes.values()].find((node) => node.name === "operands");
+      expect(graph.edges.filter((edge) => edge.from === operands?.id && edge.label === "calls")).toEqual([]);
+      const session = createAgentSession({ root, useConfig: false, buildOptions: options });
+      const renamed = await previewRenameWithSession(session, {
+        root,
+        handle: "explicit.rb:1:5",
+        newName: "sum",
+      });
+      expect(renamed.safe).toBe(true);
+      expect(renamed.edits.map((edit) => edit.range.start.line).sort((a, b) => a - b)).toEqual([1, 3, 3, 6, 6]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks unresolved explicit self calls to top-level Object methods partial and unsafe", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-object-method-"));
+    const file = path.join(root, "object.rb");
+    try {
+      await fsp.writeFile(file, "total = 1\ndef total; 42; end\nputs total\nputs self.total\n");
+      const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
+      const index = await buildProjectIndex(root, options);
+      expect((await goToDefinition(index, { file, line: 4, column: 11 })).status).toBe("not_found");
+      const refs = await findReferences(index, { file, line: 2, column: 5 });
+      expect(refs.status).toBe("ok");
+      if (refs.status !== "ok") throw new Error("Missing Object method references");
+      expect(refs.references.map((ref) => ref.range.start.line)).toEqual([2]);
+      expect(refs.referenceCoverage.state).toBe("partial");
+      expect(refs.referenceCoverage.affectedFiles?.map(fileIdentityKey)).toContain(fileIdentityKey(file));
+      const session = createAgentSession({ root, useConfig: false, buildOptions: options });
+      const preview = await previewRenameWithSession(session, { root, handle: "object.rb:2:5", newName: "sum" });
+      expect(preview.safe).toBe(false);
+      const local = await findReferences(index, { file, line: 1, column: 1 });
+      expect(local.status).toBe("ok");
+      if (local.status !== "ok") throw new Error("Missing local references");
+      expect(local.references.map((ref) => ref.range.start.line)).toEqual([1, 3]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["singleton_method", "singleton_class"])(
+    "never resolves a qualified %s call to a class-body local",
+    async (form) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-singleton-local-"));
+      const file = path.join(root, "singleton.rb");
+      const body =
+        form === "singleton_method"
+          ? ["  total = 3", "  def self.total; 42; end", "  puts total", "  def self.read; self.total; end"]
+          : ["  class << self", "    total = 3", "    def total; 42; end", "    puts total", "  end"];
+      const lines = ["class Box", ...body, "end", "puts Box.total", ""];
+      const declaration = form === "singleton_method" ? 2 : 3;
+      try {
+        await fsp.writeFile(file, lines.join("\n"));
+        const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
+        const index = await buildProjectIndex(root, options);
+        const useLine = lines.length - 1;
+        const selected = await goToDefinition(index, { file, line: useLine, column: 10 });
+        expect(selected.status).toBe("not_found");
+        const column = lines[declaration - 1]!.indexOf("total") + 1;
+        const local = await findReferences(index, { file, line: declaration, column });
+        expect(local.status).toBe("ok");
+        if (local.status !== "ok") throw new Error("Missing class-body local");
+        expect(local.referenceCoverage.state).toBe("complete");
+        expect(local.references.map((ref) => ref.range.start.line)).toEqual([declaration, declaration + 2]);
+        const methodLine = declaration + 1;
+        const method = await findReferences(index, {
+          file,
+          line: methodLine,
+          column: lines[methodLine - 1]!.indexOf("total") + 1,
+        });
+        expect(method.status).toBe("ok");
+        if (method.status !== "ok") throw new Error("Missing singleton method");
+        expect(method.referenceCoverage.state).toBe("partial");
+        expect(method.references.some((ref) => ref.range.start.line === useLine)).toBe(false);
+        const session = createAgentSession({ root, useConfig: false, buildOptions: options });
+        const renamed = await previewRenameWithSession(session, {
+          root,
+          handle: `singleton.rb:${declaration}:${column}`,
+          newName: "sum",
+        });
+        expect(renamed.safe).toBe(true);
+        expect(renamed.edits.map((edit) => edit.range.start.line)).toEqual([declaration, declaration + 2]);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+it("preserves an earlier singleton method's module-body references beside a later instance method", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-singleton-order-"));
+  const file = path.join(root, "order.rb");
+  const source = [
+    "module Named",
+    "  def self.prefixed(*names); puts names.first; end",
+    "  prefixed :before",
+    "  def prefixed(name); name; end",
+    "end",
+    "",
+  ].join("\n");
+  try {
+    await fsp.writeFile(file, source);
+    const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
+    const index = await buildProjectIndex(root, options);
+    const refs = await findReferences(index, { file, line: 2, column: 12 });
+    expect(refs.status).toBe("ok");
+    if (refs.status !== "ok") throw new Error("Missing singleton method references");
+    expect(refs.references.map((ref) => ref.range.start.line)).toEqual([2, 3]);
+    expect(refs.referenceCoverage.state).toBe("complete");
+    const session = createAgentSession({ root, useConfig: false, buildOptions: options });
+    const renamed = await previewRenameWithSession(session, { root, handle: "order.rb:2:12", newName: "renamed" });
+    // A same-named static/instance pair keeps rename linkage conservative.
+    expect(renamed.safe).toBe(false);
+    expect(renamed.unsafeSites.some((site) => site.reason === "ambiguous_target")).toBe(true);
+    expect(renamed.edits.map((edit) => edit.range.start.line)).toEqual([2, 3]);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });

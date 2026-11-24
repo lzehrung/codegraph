@@ -30,6 +30,7 @@ import {
 } from "../util/csharp-tree.js";
 import { callableFactsDiffer } from "./callable-identity.js";
 import {
+  MEMBER_LOOKUP_POLICIES,
   memberLookupPolicyFor,
   memberNameKeyFor,
   type MemberLookupDeps,
@@ -1746,6 +1747,7 @@ export async function resolveMemberAccessDefinition(params: {
       if (aliasQualified || !closest || closest.import) return { status: "not_found", reason };
     }
   }
+  const lookupPolicy = MEMBER_LOOKUP_POLICIES[sup.id];
   const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
@@ -2022,12 +2024,7 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          const nestedMember = await memberLookupPolicyFor(sup.id).nestedMember?.(
-            index,
-            base.def,
-            memberName,
-            memberLookupDeps,
-          );
+          const nestedMember = await lookupPolicy?.nestedMember?.(index, base.def, memberName, memberLookupDeps);
           if (nestedMember) return { kind: "resolved", def: nestedMember };
           if (sup.id === "go") {
             const receiver = await resolveReceiverDefinition(
@@ -2056,7 +2053,7 @@ export async function resolveMemberAccessDefinition(params: {
               }
             }
           }
-          if (memberLookupPolicyFor(sup.id).membersBeforeFileExports && declaresMembers(base.def)) {
+          if (lookupPolicy?.membersBeforeFileExports && declaresMembers(base.def)) {
             const memberDef = await resolveMemberDefinitionForBase(
               index,
               base.def,
@@ -2153,6 +2150,22 @@ export async function resolveMemberAccessDefinition(params: {
   }
   if (chain && prop && node.id === prop.id) {
     if (chain.kind === "resolved" && !pythonInstanceReceiver) {
+      if (chain.def.kind === SymbolKind.Variable) {
+        const accessRules = lookupPolicy?.memberAccessRules?.({
+          memberNode,
+          receiverIsStaticType: receiverProof?.kind === "named-type" && receiverProof.proof === "static-type",
+          receiver: resolvedReceiver?.kind === "resolved" ? resolvedReceiver.def : chain.def,
+        });
+        if (accessRules) {
+          const context = await ensureParsedContextForIndex(index, chain.def.file);
+          const declaration = nameNodeForDef(context, chain.def);
+          const container = (declaration && nearestMemberContainer(declaration)) ?? context.tree.rootNode;
+          const reason = accessRules.unnameableMember(chain.def, () =>
+            hasStaticModifier(chain.def, context, container),
+          );
+          if (reason) return { status: "not_found", reason };
+        }
+      }
       return okGoToResult(index, chain.def, {
         via: { exportedName: sliceText(prop, source) },
         resolution: "member-access",
@@ -2345,7 +2358,7 @@ export async function resolveMemberAccessDefinition(params: {
         receiverProof?.kind === "named-type" &&
         receiverProof.proof === "static-type" &&
         navigationUsesDoubleColon(memberNode);
-      const accessRules = memberLookupPolicyFor(sup.id).memberAccessRules?.({
+      const accessRules = lookupPolicy?.memberAccessRules?.({
         memberNode,
         receiverIsStaticType: receiverProof?.kind === "named-type" && receiverProof.proof === "static-type",
         receiver: objDef,

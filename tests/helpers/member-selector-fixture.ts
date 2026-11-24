@@ -71,9 +71,9 @@ export const MEMBER_SELECTOR_FIXTURES: readonly MemberSelectorFixture[] = [
     ],
     members: [
       { use: [5, "name"] },
-      { use: [6, "name"] },
+      { use: [6, "name"], declaration: [2, "name"] },
       { use: [13, "name"] },
-      { use: [14, "name"] },
+      { use: [14, "name"], declaration: [2, "name"] },
       { use: [18, "name"], declaration: [2, "name"] },
     ],
   },

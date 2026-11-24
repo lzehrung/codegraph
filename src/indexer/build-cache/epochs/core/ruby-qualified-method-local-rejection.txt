@@ -1,0 +1,1 @@
+Ruby qualified method selection rejects local variables and preserves uncertainty for unproven method targets.

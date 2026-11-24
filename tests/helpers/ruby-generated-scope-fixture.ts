@@ -677,6 +677,26 @@ export const RUBY_SCOPE_LINES: Record<string, string[]> = {
     "end",
     "",
   ],
+  "untyped_owner.rb": [
+    "module OuterAlignment",
+    "  module Strategy",
+    "    def checkable_layout?(node); node; end",
+    "  end",
+    "  class Item",
+    "    include Strategy",
+    "  end",
+    "end",
+    "",
+  ],
+  "untyped_use.rb": [
+    'require_relative "untyped_owner"',
+    "class AlignmentConsumer",
+    "  def run(items, node)",
+    "    items.map { |a| a.checkable_layout?(node) }",
+    "  end",
+    "end",
+    "",
+  ],
 };
 
 export const RUBY_SCOPE_SOURCES: Record<string, string> = Object.fromEntries(
@@ -1201,6 +1221,7 @@ export const RUBY_SCOPE_GOTO: ReadonlyArray<readonly [use: RubyScopeSite, target
     ["locals_ops.rb", 6, "c0"],
     ["locals_ops.rb", 2, "c0"],
   ],
+  [["untyped_use.rb", 4, "checkable_layout?"], null],
 ];
 
 type Coverage = "complete" | "partial";
@@ -1291,10 +1312,10 @@ export const RUBY_SCOPE_REFERENCES: ReadonlyArray<
     ],
     "complete",
   ],
-  // Receiver sites are not listed; a generated method reports the coverage a `def` of the same shape does.
-  [["receivers.rb", 2, ":shut"], [["receivers.rb", 2, ":shut"]], "complete"],
-  [["receivers.rb", 6, "lock"], [["receivers.rb", 6, "lock"]], "complete"],
-  [["receivers.rb", 7, "lock"], [["receivers.rb", 7, "lock"]], "complete"],
+  // Untyped extension-hook receivers can name both module accessors and ordinary module methods.
+  [["receivers.rb", 2, ":shut"], [["receivers.rb", 2, ":shut"]], "partial"],
+  [["receivers.rb", 6, "lock"], [["receivers.rb", 6, "lock"]], "partial"],
+  [["receivers.rb", 7, "lock"], [["receivers.rb", 7, "lock"]], "partial"],
   [["receivers.rb", 11, ":seal"], [["receivers.rb", 11, ":seal"]], "partial"],
   [["receivers.rb", 15, "latch"], [["receivers.rb", 15, "latch"]], "partial"],
   [["receivers.rb", 16, "latch"], [["receivers.rb", 16, "latch"]], "partial"],
@@ -1604,6 +1625,7 @@ export const RUBY_SCOPE_REFERENCES: ReadonlyArray<
   ],
   [["chains.rb", 9, "entries"], [["chains.rb", 9, "entries"]], "complete"],
   [["chains.rb", 10, "notes"], [["chains.rb", 10, "notes"]], "complete"],
+  [["untyped_owner.rb", 3, "checkable_layout?"], [["untyped_owner.rb", 3, "checkable_layout?"]], "partial"],
 ];
 
 /**
@@ -1719,6 +1741,7 @@ export const RUBY_SCOPE_CALLS: ReadonlyArray<readonly [file: string, caller: str
   ["inclusion.rb", "window", ["inclusion.rb:breeze"]],
   ["nodraft.rb", "pane", []],
   ["locals_ops.rb", "mask_bits", []],
+  ["untyped_use.rb", "run", []],
 ];
 
 const locate = (site: { file: string; line: number; column: number }): string =>

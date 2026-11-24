@@ -1,0 +1,1 @@
+Ruby optional and keyword parameter defaults contain reads, not additional parameter declarations.
