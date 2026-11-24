@@ -6,6 +6,7 @@ import {
   type LanguageExtensionMap,
   type LanguageSupport,
 } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { stringifyUnknown } from "../util/strings.js";
 import { readConfinedUtf8File } from "../util/confined-file.js";
 import { hasExplicitWorkerThreadCount } from "../util/worker-threads.js";
@@ -16,7 +17,6 @@ import {
   isNativeTreeSitterAvailable,
 } from "../native/tree-sitter-native.js";
 import type {
-  NativeBloomFilterPayload,
   NativeExtractBatchResult,
   NativeExtractResult,
   NativeExtractTask,
@@ -24,21 +24,18 @@ import type {
 import { NATIVE_WORKER_BATCH_SIZE } from "../worker/native-extract-worker.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import { collectProjectFileFacts, type ProjectFileFacts } from "../util/project-file-facts.js";
+import { collectProjectFileFacts } from "../util/project-file-facts.js";
+import type { ProjectFileFacts } from "../util/project-file-facts-types.js";
 import { parseSyntaxTree, readsSyntaxTree } from "../util/syntax-tree.js";
-import {
-  attemptParsePreparedFileContext,
-  prepareFileForIndexing,
-  type PreparedFileContext,
-  type PreparedFileParseAttempt,
-} from "./parse-context.js";
-import {
-  decodeModuleRecord,
-  isModuleRecordLanguage,
-  type ModuleRecord,
-  type ModuleRecordFallback,
-  type ModuleRecordTask,
-} from "./module-record.js";
+import { indexLanguagePolicyFor } from "./index-language-policies/index.js";
+import { attemptParsePreparedFileContext, prepareFileForIndexing, type PreparedFileContext } from "./parse-context.js";
+import { decodeModuleRecord, isModuleRecordLanguage } from "./module-record.js";
+import type { ModuleRecordTask } from "./module-record-types.js";
+import type {
+  PreparedBuildFile,
+  PreparedFileContextWithWorkerBloomFilter,
+  PreparedModuleRecordFile,
+} from "./build-file-types.js";
 import type { BuildOptions, BuildReport, ModuleIndex, WorkerPoolReport } from "./types.js";
 
 /**
@@ -146,28 +143,6 @@ function buildWorkerTask(
     ...(moduleRecord && isModuleRecordLanguage(sup.id) ? { moduleRecord } : {}),
   };
 }
-
-export type PreparedFileContextWithWorkerBloomFilter = PreparedFileContext & {
-  workerBloomFilter?: NativeBloomFilterPayload;
-  projectFacts?: ProjectFileFacts;
-  /** A whole-tree fallback needed before facts can be primed; the module builder reuses its outcome. */
-  projectFactsParse?: PreparedFileParseAttempt;
-  /** PHP locals/exports extracted before imports resolve; the module builder finishes this same module. */
-  phpModule?: ModuleIndex;
-  moduleRecord?: undefined;
-  /** Why a worker that was asked for the file's module record returned the extraction instead. */
-  moduleRecordFallback?: ModuleRecordFallback;
-};
-
-/** A file a worker indexed into a module record: the main thread finishes the record with `finishModuleRecord`. */
-export type PreparedModuleRecordFile = {
-  file: string;
-  sup: LanguageSupport;
-  moduleRecord: ModuleRecord;
-  workerBloomFilter?: NativeBloomFilterPayload;
-};
-
-export type PreparedBuildFile = PreparedFileContextWithWorkerBloomFilter | PreparedModuleRecordFile;
 
 function workerResultToPrepared(
   result: NativeExtractResult,
@@ -373,9 +348,7 @@ export async function prepareFileContextForBuild(
         recordNativeExecutionOutcome(report, { file, support, languageId: support.id, results: recorded.moduleRecord });
         return recorded;
       }
-      const needsFrameworkSource =
-        workerResult.fallbackReason === "sourceTooLarge" &&
-        (support.id === "js" || support.id === "ts" || support.id === "tsx");
+      const needsFrameworkSource = workerResult.fallbackReason === "sourceTooLarge" && isJsTsLanguage(support.id);
       if (needsFrameworkSource) {
         // The worker omits oversized source; the main-thread fallback still needs it for regex-only framework facts.
         prepared = await prepareFileForIndexing(file, opts?.languageExtensions, source, support);
@@ -432,6 +405,7 @@ export async function readProjectFileFactsWithWorker(
 ): Promise<ProjectFileFacts | undefined> {
   const support = supportById(languageId);
   if (!support || !setup.pool) throw new Error("Project facts require an active native worker pool.");
+  const degradationFact = indexLanguagePolicyFor(languageId).module?.projectFacts?.degradationFact;
   let result: NativeExtractResult | undefined;
   if (setup.report) setup.report.tasksSubmitted++;
   try {
@@ -452,7 +426,7 @@ export async function readProjectFileFactsWithWorker(
   if (!result || result.fallbackReason === "unavailable" || result.fallbackReason === "unsupportedLanguage") {
     const prepared = await prepareFileForIndexing(file, undefined, undefined, support);
     const facts = preparedProjectFileFacts(prepared);
-    if (languageId === "csharp" && !facts?.csharpNamespaceFacts) {
+    if (degradationFact && !facts?.[degradationFact]) {
       recordParserBackendDegradation(report, {
         file,
         languageId,
@@ -462,7 +436,7 @@ export async function readProjectFileFactsWithWorker(
     }
     return facts;
   }
-  if (languageId === "csharp" && !result.projectFacts?.csharpNamespaceFacts) {
+  if (degradationFact && !result.projectFacts?.[degradationFact]) {
     recordParserBackendDegradation(report, {
       file,
       languageId,

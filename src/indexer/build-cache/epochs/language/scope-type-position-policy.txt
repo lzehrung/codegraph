@@ -1,0 +1,1 @@
+Select specialized scope type-position predicates from language scope rows.

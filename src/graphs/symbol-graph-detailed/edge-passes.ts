@@ -6,7 +6,6 @@ import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from 
 import { getCompilationUnitPeers } from "../../indexer/compilation-units.js";
 import {
   isExportedDeclaration,
-  isGoExportedMemberName,
   isSwiftCrossFileHiddenSharedOwnerMember,
   isSwiftFileHiddenSharedOwnerMember,
 } from "../../indexer/declaration-visibility.js";
@@ -133,6 +132,7 @@ import type { ReceiverBinding, ReceiverMemberScope } from "./receiver-types.js";
 type EdgePassContext = {
   index: ProjectIndex;
   sup: LanguageSupport;
+  memberNamePattern: RegExp | undefined;
   source: string;
   tree: SyntaxTreeLike;
   moduleEntry: ModuleIndex;
@@ -1334,6 +1334,7 @@ export async function emitFunctionBodyEdges(
   functionNodes: DetailedFunctionNode[],
 ): Promise<void> {
   const specialized = SPECIALIZED_EDGE_PASSES[context.sup.id];
+  const memberNamePattern = context.memberNamePattern;
   let deferredSpecializedCalls: Array<() => Promise<void>> | undefined;
   const qualifiedConstructionTargets: Array<{
     fromId: string;
@@ -1533,7 +1534,7 @@ export async function emitFunctionBodyEdges(
             context.aliasToTargetModule.has(`${nameKey}.${exportedName}`);
           if (exportedName && !namesDottedModule) {
             target = context.resolveExportFrom(modFile, exportedName);
-            if (!target && (context.sup.id !== "go" || isGoExportedMemberName(context.sup.id, exportedName))) {
+            if (!target && (context.sup.id !== "go" || !memberNamePattern || memberNamePattern.test(exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
               target = (targetModule?.locals ?? []).find((local) => local.localName === exportedName) ?? null;
             }
@@ -1638,7 +1639,7 @@ export async function emitFunctionBodyEdges(
             : {}),
           memberScope: forcedMemberScope ?? binding.memberScope,
           ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
-          ...(context.sup.id === "go" && !isGoExportedMemberName(context.sup.id, memberName)
+          ...(context.sup.id === "go" && memberNamePattern && !memberNamePattern.test(memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
           caseInsensitiveMemberName: phpCaseInsensitive,

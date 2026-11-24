@@ -1,0 +1,1 @@
+Select split-method declaration recovery from the file's declaration policy.

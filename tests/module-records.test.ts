@@ -21,10 +21,8 @@ import {
   decodeModuleRecord,
   encodeModuleRecord,
   finishModuleRecord,
-  type ModuleRecord,
-  type ModuleRecordInput,
-  type ModuleRecordPayload,
 } from "../src/indexer/module-record.js";
+import type { ModuleRecord, ModuleRecordInput, ModuleRecordPayload } from "../src/indexer/module-record-types.js";
 import * as parseErrors from "../src/indexer/parse-errors.js";
 import {
   PendingImportResolutionError,

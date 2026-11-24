@@ -1,0 +1,1 @@
+Select scope binding and type-position rules from language-owned scope rows.

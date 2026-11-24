@@ -73,6 +73,8 @@ import { SymbolKind, type GoToResult, type SymbolDef } from "../types.js";
 import {
   isSwiftExtensionTypeName,
   isSwiftQualifiedExtensionSuffix,
+  isSwiftQualifiedTypeSuffix,
+  swiftQualifiedTypeSegments,
   isSwiftShorthandCase,
 } from "../../util/swift-tree.js";
 import { fileBindingIsUnshadowed } from "../scope.js";
@@ -122,15 +124,7 @@ const isImplicitSelfCall = ({ use }: NameLookupState): boolean => namesCallee(us
 
 /** A Kotlin callable reference can name either a member function or a property. */
 const namesKotlinMemberReference = (use: BareNameUse): boolean =>
-  use.parsed.sup.id === "kotlin" &&
-  use.node.parent?.type === "callable_reference" &&
-  use.node.parent.namedChildren.at(-1)?.id === use.node.id;
-
-/** A plain read: not a call, a callable reference, or a declaration name. */
-const namesValue = (use: BareNameUse): boolean =>
-  !use.parsed.sup.isDeclarationName(use.node) &&
-  !namesKotlinMemberReference(use) &&
-  use.node.parent?.type !== "method_reference";
+  use.node.parent?.type === "callable_reference" && use.node.parent.namedChildren.at(-1)?.id === use.node.id;
 
 /** Whether the same scope declared a variable, field, or property before this function binding. */
 function hasEarlierValueBinding(binding: Binding): boolean {
@@ -173,7 +167,20 @@ function extensionOwnerTypeOnly(resolved: GoToResult | null): GoToResult | null 
 }
 
 export const swiftLookupPolicy: NameLookupPolicy = {
-  beforeLexical(use) {
+  beforeLexical(use, _lookupName, resolveName) {
+    const { node, parsed } = use;
+    if (isSwiftQualifiedTypeSuffix(node)) {
+      const unproven: NameResolution = { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
+      const segments = swiftQualifiedTypeSegments(node);
+      if (!segments) return unproven;
+      const root = segments[0]!;
+      let rootResult = resolveName({ ...use, node: root, name: sliceText(root, parsed.source) });
+      while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
+      const owner = rootResult?.status === "ok" ? rootResult.definition : null;
+      if (!owner || !declaresMembers(owner)) return unproven;
+      const names = segments.slice(1).map((segment) => sliceText(segment, parsed.source));
+      return { status: "deferred", request: { kind: "swift-nested-type", owner, names }, fallback: unproven };
+    }
     // A later segment of a dotted owner (`Inner` in `extension Outer.Inner`) is a member of the segment before it.
     // No Swift nested-type lookup proves it, and a bare lookup of its own spelling would match any other `Inner`.
     if (isSwiftQualifiedExtensionSuffix(use.node)) {
@@ -430,21 +437,8 @@ export const csharpLookupPolicy: NameLookupPolicy = {
  * declaration, or an import.
  */
 export const jvmLookupPolicy: NameLookupPolicy = {
-  // Java methods and variables are separate namespaces: `int hit = 0; hit();` still calls the
-  // method. A Kotlin local holding a function is callable, so Kotlin keeps the binding.
-  ignoresBinding: (use, binding) => {
-    if (namesCallee(use)) return use.parsed.sup.id === "java" && binding.kind !== "function";
-    // A plain read names the variable, not a method declared after it (`delegate != null` beside `delegate()`).
-    return binding.kind === "function" && namesValue(use) && hasEarlierValueBinding(binding);
-  },
   fromClosestBinding: ownOverloadDeclaration,
   onLocal(state, local) {
-    if (state.use.parsed.sup.id === "kotlin" && (namesCallee(state.use) || namesKotlinMemberReference(state.use))) {
-      const declaration = state.closestBinding?.node?.parent;
-      const container = declaration ? nearestMemberContainer(declaration) : null;
-      if (declaration && container && isDirectKeywordMemberDeclaration(declaration, container))
-        return implicitSelf(state, lexical(state, local));
-    }
     if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;
     if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;
     return implicitSelf(state, lexical(state, local));
@@ -455,6 +449,13 @@ export const jvmLookupPolicy: NameLookupPolicy = {
 /** Java: a record component binds in its record's scope, except where a pattern variable or annotation element may own the name. */
 export const javaLookupPolicy: NameLookupPolicy = {
   ...jvmLookupPolicy,
+  // Java methods and variables occupy separate namespaces, including at an unqualified call.
+  ignoresBinding(use, binding) {
+    if (namesCallee(use)) return binding.kind !== "function";
+    if (binding.kind !== "function" || use.parsed.sup.isDeclarationName(use.node)) return false;
+    if (use.node.parent?.type === "method_reference") return false;
+    return hasEarlierValueBinding(binding);
+  },
   beforeLexical(use) {
     if (!isJavaAnnotationElementName(use.node)) return undefined;
     const fallback = { status: "not_found", reason: UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON } as const;
@@ -506,6 +507,24 @@ function bindsBelowLambdaReceivers({ closestBinding }: NameLookupState): boolean
  */
 export const kotlinLookupPolicy: NameLookupPolicy = {
   ...jvmLookupPolicy,
+  // A Kotlin local holding a function is callable; callable references are not plain value reads.
+  ignoresBinding(use, binding) {
+    if (namesCallee(use)) return false;
+    if (binding.kind !== "function" || use.parsed.sup.isDeclarationName(use.node)) return false;
+    if (namesKotlinMemberReference(use) || use.node.parent?.type === "method_reference") return false;
+    return hasEarlierValueBinding(binding);
+  },
+  onLocal(state, local) {
+    if (namesCallee(state.use) || namesKotlinMemberReference(state.use)) {
+      const declaration = state.closestBinding?.node?.parent;
+      const container = declaration ? nearestMemberContainer(declaration) : null;
+      if (declaration && container && isDirectKeywordMemberDeclaration(declaration, container))
+        return implicitSelf(state, lexical(state, local));
+    }
+    if (state.closestBinding?.kind !== "function" || !isImplicitSelfCall(state)) return undefined;
+    if (!bindsAtFileScope(state) && !bindsTypeMethod(state)) return undefined;
+    return implicitSelf(state, lexical(state, local));
+  },
   wrapRest(state, rest) {
     if (!isImplicitSelfCall(state) || !bindsBelowLambdaReceivers(state)) return rest();
     const receivers = enclosingReceiverScopes(state.use.node);

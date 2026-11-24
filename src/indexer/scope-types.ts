@@ -1,3 +1,4 @@
+import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
@@ -10,6 +11,59 @@ export type ScopeBindingRules = Readonly<{
   qualifiedFunctionNames?: boolean;
   variablePrefix?: string;
   implicitReceiverName?: string;
+  /** Pattern nodes whose name alone binds, while all other children are reads. */
+  nameOnlyPatternTypes?: ReadonlySet<string>;
+  /** Function declarations under these parents bind outside the type-parameter scope. */
+  functionOutsideTypeScopeParents?: ReadonlySet<string>;
+  /** Nested type scopes keyed by node type and constrained by their parent's node type. */
+  nestedTypeScopeParents?: Readonly<Record<string, string>>;
+  /** A declaration-shaped name that is instead a use. */
+  declarationNameIsUse?: (node: SyntaxNodeLike) => boolean;
+  /** Member-access property names do not bind lexically. */
+  nonLexicalMemberAccess?: true;
+  /** A special use that bypasses lexical lookup. */
+  nonLexicalUse?: (node: SyntaxNodeLike) => boolean;
+  /** Class declarations carrying this keyword do not declare a new class binding. */
+  classNameExclusion?: { field: string; keyword: string };
+  /** Syntax of an implicit receiver's property name. */
+  receiverProperty?: {
+    accessType: string;
+    nameField: string;
+    fallbackNameType: string;
+    receiverField: string;
+  };
+  /** Extra names promoted to bindings in a containing declaration. */
+  promotedBindings?: {
+    containerTypes: ReadonlySet<string>;
+    collect: (container: SyntaxNodeLike, source: string) => readonly SyntaxNodeLike[];
+  };
+  /** Resolve a qualified lexical name through nested owner scopes. */
+  qualifiedNameBinding?: (
+    index: ScopeIndex,
+    name: string,
+    node: SyntaxNodeLike,
+    support: LanguageSupport,
+    resolve: (index: ScopeIndex, name: string, node: SyntaxNodeLike, support: LanguageSupport) => Binding | null,
+    qualifiedNameNode: (node: SyntaxNodeLike) => SyntaxNodeLike | null,
+  ) => Binding | null;
+  /** Type-argument arity and a specialized binding rejection for the current use. */
+  typeArgumentArity?: (node: SyntaxNodeLike) => number;
+  rejectsTypeArity?: (binding: Binding, use: SyntaxNodeLike, arity: number) => boolean;
+  /** Choose the effective module binding after lexical and import candidates are collected. */
+  effectiveModuleBinding?: (
+    binding: Binding,
+    use: SyntaxNodeLike,
+    runtime: boolean,
+    pendingInDefault: (start: number | undefined, use: SyntaxNodeLike) => boolean,
+    selectExplicitOrLocal: (
+      imports: readonly ImportBinding[],
+      languageId: string,
+      matches: (binding: ImportBinding) => boolean,
+      localStartIndex?: number,
+      referenceIndex?: number,
+      includeLaterModuleBindings?: boolean,
+    ) => { kind: "explicit"; binding: ImportBinding } | { kind: "local" } | undefined,
+  ) => Binding | null;
   /** Return true when the specialized operation handled the binding, or undefined to continue. */
   specialBinding?: (scope: Scope, binding: Binding, node: SyntaxNodeLike) => true | undefined;
 }>;

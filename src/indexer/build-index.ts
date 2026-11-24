@@ -9,6 +9,7 @@ import {
   supportForFileWithoutHeaderSample,
   type LanguageSupport,
 } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { DECLARATION_RESOLVED_IMPORT_LANGUAGES } from "./import-resolution-tables.js";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../util/workspace.js";
 import {
@@ -27,14 +28,13 @@ import {
   resolveSpecifier,
   type MatchPathFn,
 } from "../util/resolution.js";
-import { collectCppDeclaredModules, isCppNamedModuleSpecifier } from "../util/resolution/cpp.js";
-import { collectCsharpNamespaceFacts } from "../util/csharp-tree.js";
 import { collectJvmFileFacts } from "../util/jvm-tree.js";
 import { projectFactsSlot } from "../util/project-file-facts.js";
 import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
+import { indexLanguagePolicyFor } from "./index-language-policies/index.js";
 import { primeCsharpNamespaceFacts, setCsharpNamespaceFactsReader } from "../util/resolution/csharp.js";
 import { primeJvmFileFacts, resolveJvmPackageImportPaths, setJvmFileFactsReader } from "../util/resolution/jvm.js";
-import { primePhpModuleImportNames, setPhpModuleImportNamesReader } from "../util/resolution/php.js";
+import { primePhpModuleImportNames, setPhpModuleImportNamesReader } from "../util/resolution/php-module-facts-cache.js";
 import { loadTsconfigResolutionInputsFor } from "../util/resolution/tsconfig.js";
 import { resolveModuleSpecifierEdges } from "../graphs/edge-resolution.js";
 import { resolveSpecifierTargets } from "../util/resolution/specifier-targets.js";
@@ -68,26 +68,21 @@ import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import type { ImportDegradedHook } from "./imports/context.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
-import {
-  collectPhpModuleImportNames,
-  phpDeclarationImportNames,
-  phpModuleImportNamesFromDeclarations,
-  type PhpModuleImportNames,
-} from "./php-namespace-symbols.js";
+import { phpModuleImportNamesFromDeclarations } from "./php-namespace-symbols.js";
+import type { PhpModuleImportNames } from "./php-module-facts-types.js";
 import {
   buildModuleRecord,
   collectJsonDependencies,
   finishModuleRecord,
   isModuleRecordLanguage,
   resolveCrossModuleSymbolExports,
-  type ModuleRecord,
-  type ModuleRecordTask,
 } from "./module-record.js";
+import type { ModuleRecord, ModuleRecordTask } from "./module-record-types.js";
 import { collectParseErrorRanges } from "./parse-errors.js";
 import { expandStarImports } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource, type BloomFilterCache } from "../util/bloom-filter.js";
-import type { NativeBloomFilterPayload } from "../worker/native-extract-worker.js";
+import type { NativeBloomFilterPayload } from "../worker/native-bloom-types.js";
 import { initNativeBackendReport, recordParserBackendDegradation } from "../native/native-backend-report.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "../native/tree-sitter-native.js";
@@ -168,7 +163,7 @@ import {
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
 
 import { isSqlFilePath } from "../sql/classify-sql-file.js";
-import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
+import { buildSqlFactCache, sqlCorpusSignature, type SqlFactCache } from "../sql/source-graph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
 import {
@@ -182,8 +177,8 @@ import {
   type WorkerPoolSetupResult,
   preparedProjectFileFacts,
   readProjectFileFactsWithWorker,
-  type PreparedFileContextWithWorkerBloomFilter,
 } from "./build-workers.js";
+import type { PreparedFileContextWithWorkerBloomFilter } from "./build-file-types.js";
 import {
   buildIncrementalGitDiffOptions,
   canUseIncrementalDiscoveryFastPath,
@@ -219,8 +214,8 @@ import {
   publicSurfaceKind,
   publicSurfaceSignature,
   recordDeclarationNameChanges,
-  type DeclarationNameChanges,
 } from "./public-surface.js";
+import type { DeclarationNameChanges } from "./public-surface-types.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
 type IndexedFileModuleResult = {
@@ -261,30 +256,6 @@ type IndexedFileBuildArgs = {
 
 type ProjectFileExtraction = { prepared: PreparedFileContextWithWorkerBloomFilter } | { error: unknown };
 
-function primePreparedPhpModule(
-  prepared: PreparedFileContextWithWorkerBloomFilter,
-  opts: BuildOptions | undefined,
-): PhpModuleImportNames | null {
-  const attempt = attemptParsePreparedFileContext(prepared);
-  prepared.projectFactsParse = attempt;
-  const parsed = attempt.parsed;
-  if (!parsed || !prepared.nativeQueries) {
-    primePhpModuleImportNames(prepared.file, null);
-    return null;
-  }
-  const module = collectLocalsAndExportsFromSource(prepared.file, prepared.source, prepared.sup, [], {
-    tree: parsed.tree,
-    nativeQueries: prepared.nativeQueries,
-    ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-  });
-  if (parsed.tree instanceof ProjectedSyntaxTree) module.parseErrorRanges = collectParseErrorRanges(parsed.tree);
-  const names = collectPhpModuleImportNames(module, parsed);
-  module.phpDeclarationNames = phpDeclarationImportNames(names);
-  prepared.phpModule = module;
-  primePhpModuleImportNames(prepared.file, names);
-  return names;
-}
-
 /** PHP proof and module construction share one extraction without a project-wide preparation barrier. */
 function installPhpProjectFileReader(args: {
   files: Iterable<string>;
@@ -297,7 +268,8 @@ function installPhpProjectFileReader(args: {
 }): (file: string) => Promise<PreparedFileContextWithWorkerBloomFilter> {
   const phpFiles = new Map<string, string>();
   for (const file of args.files) {
-    if (supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "php") {
+    const support = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions);
+    if (support && indexLanguagePolicyFor(support.id).module?.prepare) {
       phpFiles.set(fileIdentityKey(file), file);
     }
   }
@@ -312,9 +284,11 @@ function installPhpProjectFileReader(args: {
     let extraction = pending.get(key);
     if (!extraction) {
       extraction = (async () => {
+        const support = supportForFileWithoutHeaderSample(indexedFile, args.opts?.languageExtensions)!;
+        const prepareModule = indexLanguagePolicyFor(support.id).module!.prepare!;
         const prepared = await prepareFileContextForBuild(
           indexedFile,
-          supportForFileWithoutHeaderSample(indexedFile, args.opts?.languageExtensions)!,
+          support,
           args.opts,
           args.workerSetup(),
           args.report,
@@ -323,8 +297,8 @@ function installPhpProjectFileReader(args: {
           args.trustedSources?.get(indexedFile),
           args.opts?.useBloomFilters ?? true,
         );
-        const names = primePreparedPhpModule(prepared, args.opts);
-        return { prepared, names };
+        prepareModule(prepared, args.opts, collectLocalsAndExportsFromSource);
+        return { prepared, names: prepared.phpModuleImportNames ?? null };
       })();
       pending.set(key, extraction);
     }
@@ -359,6 +333,7 @@ async function extractProjectFilesBeforeResolution(args: {
   );
   const extracted = await mapLimit(candidates, args.concurrency, async (file) => {
     const support = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)!;
+    const factPolicy = indexLanguagePolicyFor(support.id).module!.projectFacts!;
     try {
       const prepared = await prepareFileContextForBuild(
         file,
@@ -372,17 +347,12 @@ async function extractProjectFilesBeforeResolution(args: {
         args.opts?.useBloomFilters ?? true,
       );
       const facts = preparedProjectFileFacts(prepared);
-      if (support.id === "csharp") {
-        primeCsharpNamespaceFacts(file, facts?.csharpNamespaceFacts ?? null, args.opts?.languageExtensions);
-      } else {
-        primeJvmFileFacts(file, facts?.jvmFacts ?? null);
-      }
+      factPolicy.prime(file, facts, args.opts?.languageExtensions, primeCsharpNamespaceFacts, primeJvmFileFacts);
       return [file, { prepared }] as const;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
       if (isConfinedFileReadError(error)) throw error;
-      if (support.id === "csharp") primeCsharpNamespaceFacts(file, null, args.opts?.languageExtensions);
-      else primeJvmFileFacts(file, null);
+      factPolicy.prime(file, undefined, args.opts?.languageExtensions, primeCsharpNamespaceFacts, primeJvmFileFacts);
       return [file, { error }] as const;
     }
   });
@@ -498,14 +468,13 @@ function manifestDeclaredContainerIndex(manifest: IndexManifest | null): Map<str
 }
 
 /**
- * Declared C++ modules of added or changed files. The cache cannot supply them.
- * A regex over the source finds them without a parse.
- * Without them, a second file that declares an existing module name goes unnoticed,
- * and the importer keeps its old target.
+ * Declarations in added or changed files, which the cache cannot supply. A file's policy
+ * extracts its own names without a parse so a second declarer is not missed.
  */
-async function collectCppMissDeclaredContainers(
+async function collectMissDeclaredContainers(
   files: readonly string[],
   concurrency: number,
+  languageExtensions: BuildOptions["languageExtensions"],
   confined?: {
     confinedRoot?: string;
     projectRoot?: string;
@@ -514,6 +483,9 @@ async function collectCppMissDeclaredContainers(
 ): Promise<Map<string, string[]>> {
   const byName = new Map<string, Set<string>>();
   await mapLimit([...files], concurrency, async (file) => {
+    const languageId = supportForFileWithoutHeaderSample(file, languageExtensions)?.id;
+    const collect = languageId ? indexLanguagePolicyFor(languageId).module?.declaredContainers : undefined;
+    if (!collect) return;
     let source: string | undefined = confined?.trustedSources?.get(file);
     if (source === undefined) {
       try {
@@ -525,7 +497,7 @@ async function collectCppMissDeclaredContainers(
         return;
       }
     }
-    for (const name of collectCppDeclaredModules(source)) {
+    for (const name of collect(source)) {
       let bucket = byName.get(name);
       if (!bucket) byName.set(name, (bucket = new Set()));
       bucket.add(normalizePath(file));
@@ -731,6 +703,8 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     return await finishModuleRecordForBuild(args, prepared.moduleRecord, prepared.sup);
   }
   const { source, sup, nativeQueries, embeddedBlocks } = prepared;
+  const modulePolicy = indexLanguagePolicyFor(sup.id).module;
+  const sourceModule = modulePolicy?.sourceModule;
   let tree: SyntaxTreeLike | undefined;
   // Every degradation recorded below also marks the module, including a failed import extraction of the file's source
   // or of one of its embedded blocks. A later build that reuses the module from a cache has no report of this one, and
@@ -763,7 +737,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       },
       args.parsedCacheMaxEntries,
     );
-  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql" && !nativeSourceLimitSkip) {
+  } else if (!nativeQueries && !graphOnlyLanguage && !sourceModule && !nativeSourceLimitSkip) {
     const parseAttempt = prepared.projectFactsParse ?? attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -778,7 +752,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
         ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
       });
     }
-  } else if (nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
+  } else if (nativeQueries && !graphOnlyLanguage && !sourceModule) {
     // A native query without a transferred tree can still use the native syntax tree.
     const parseAttempt = prepared.projectFactsParse ?? attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
@@ -794,7 +768,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       });
     }
   }
-  if (sup.id === "sql" && !tree) {
+  if (sourceModule && !tree) {
     recordTreeUnavailable({
       file: args.file,
       languageId: sup.id,
@@ -809,10 +783,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   const preparedJvmFacts = jvmLanguageId ? prepared.projectFacts?.jvmFacts : undefined;
   const jvmFacts =
     jvmLanguageId && tree ? (preparedJvmFacts ?? collectJvmFileFacts(tree, jvmLanguageId)) : preparedJvmFacts;
-  const csharpFacts =
-    sup.id === "csharp" && tree
-      ? (prepared.projectFacts?.csharpNamespaceFacts ?? collectCsharpNamespaceFacts(tree))
-      : undefined;
+  const csharpFacts = tree ? modulePolicy?.projectFacts?.namespaceFacts?.(tree, prepared.projectFacts) : undefined;
   if (jvmFacts) primeJvmFileFacts(args.file, jvmFacts);
   if (csharpFacts) primeCsharpNamespaceFacts(args.file, csharpFacts, args.opts?.languageExtensions);
 
@@ -864,7 +835,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     onDegraded,
   };
   const imports =
-    nativeSourceLimitSkip || sup.id === "sql"
+    nativeSourceLimitSkip || sourceModule
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
@@ -887,8 +858,8 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
   }
   collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
-  if (sup.id === "sql") {
-    mod = buildSqlModuleIndex(args.file, source);
+  if (sourceModule) {
+    mod = sourceModule(args.file, source);
   } else if (prepared.phpModule) {
     mod = prepared.phpModule;
   } else if (lacksParserContext) {
@@ -900,7 +871,7 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     });
   }
-  if (sup.id === "js" || sup.id === "ts" || sup.id === "tsx") {
+  if (isJsTsLanguage(sup.id)) {
     const angularJsFacts = extractAngularJsFileFacts(source, tree);
     if (angularJsFacts) mod.angularJsFacts = angularJsFacts;
   }
@@ -918,20 +889,14 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
     mod.syntaxTreeUnavailableFingerprint = sourceContentFingerprint(prepared.originalSource ?? source);
   }
   if (importLookupIncomplete) mod.importLookupIncomplete = true;
-  if (sup.id === "cpp") {
-    const declaredContainers = collectCppDeclaredModules(source);
+  const collectDeclaredContainers = modulePolicy?.declaredContainers;
+  if (collectDeclaredContainers) {
+    const declaredContainers = collectDeclaredContainers(source);
     if (declaredContainers.length) mod.declaredContainers = declaredContainers;
   }
   if (csharpFacts) mod.csharpNamespaceFacts = csharpFacts;
   if (jvmFacts) mod.jvmFacts = jvmFacts;
-  if (sup.id === "php" && tree && nativeQueries && !mod.phpDeclarationNames) {
-    mod.phpDeclarationNames = phpDeclarationImportNames(collectPhpModuleImportNames(mod, { source, tree, sup }));
-  }
-  if (sup.id === "php" && mod.phpDeclarationNames && mod.parserDegraded) {
-    const names = phpModuleImportNamesFromDeclarations(mod.phpDeclarationNames, mod);
-    mod.phpDeclarationNames = phpDeclarationImportNames(names);
-    primePhpModuleImportNames(args.file, names);
-  }
+  modulePolicy?.collectFacts?.(args.file, source, tree, sup, nativeQueries, mod);
   await resolveCrossModuleSymbolExports(
     args.file,
     mod,
@@ -1028,6 +993,8 @@ async function specifierResolutionChanged(
     supportForFileWithoutHeaderSample(file, languageExtensions)?.id;
   const specifierEdges = entry.edges;
   if (!specifierEdges.length) return false;
+  const modulePolicy = indexLanguagePolicyFor(support.id).module;
+  const usesTsconfigPaths = modulePolicy?.tsconfigPaths;
 
   const specifierOf = (edge: Edge): string => (edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw);
   const matching: Edge[] = [];
@@ -1039,7 +1006,7 @@ async function specifierResolutionChanged(
       continue;
     }
     const relative = specifier.startsWith(".") || specifier.startsWith("/") || /^[A-Za-z]:[\\/]/.test(specifier);
-    if ((support.id === "ts" || support.id === "tsx") && specifier && !relative) needsAlias.push(edge);
+    if (usesTsconfigPaths && specifier && !relative) needsAlias.push(edge);
   }
   if (needsAlias.length) {
     const paths = await loadTsconfigPaths(file);
@@ -1066,14 +1033,9 @@ async function specifierResolutionChanged(
   // Stylesheet, document, and other unstored per-occurrence inputs cannot be
   // re-resolved from the edge. The caller only reaches this on an add.
   if (!PRECISE_SPECIFIER_RESOLUTION_LANGUAGES[support.id]) return true;
-  if (
-    (support.id === "c" || support.id === "cpp") &&
-    matching.some((edge) => edge.includeForm === undefined && !isCppNamedModuleSpecifier(edge.raw))
-  ) {
-    return true;
-  }
+  if (modulePolicy?.specifierNeedsSource && matching.some(modulePolicy.specifierNeedsSource)) return true;
 
-  const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPath(file) : undefined;
+  const matchPath = usesTsconfigPaths ? await loadMatchPath(file) : undefined;
   const groups = new Map<string, Edge[]>();
   for (const edge of matching) {
     const key = `${edge.raw}\0${edge.includeForm ?? ""}\0${edge.typeOnly ? 1 : 0}`;
@@ -1533,14 +1495,20 @@ async function collectStaleCachedModules(args: {
     const nextDeclaredContainers = declaredContainerIndexFromModules(
       [...cachedModules.values()].map((cached) => cached.mod),
     );
-    const cppMisses = [...new Set([...added, ...changed])].filter(
-      (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
-    );
-    if (cppMisses.length) {
-      const missDeclaredContainers = await collectCppMissDeclaredContainers(cppMisses, args.concurrency, {
-        ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
-        ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
-      });
+    const declarationMisses = [...new Set([...added, ...changed])].filter((file) => {
+      const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+      return !!languageId && !!indexLanguagePolicyFor(languageId).module?.declaredContainers;
+    });
+    if (declarationMisses.length) {
+      const missDeclaredContainers = await collectMissDeclaredContainers(
+        declarationMisses,
+        args.concurrency,
+        args.opts?.languageExtensions,
+        {
+          ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
+          ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
+        },
+      );
       for (const [name, declaringFiles] of missDeclaredContainers) {
         const merged = new Set([...(nextDeclaredContainers.get(name) ?? []), ...declaringFiles]);
         nextDeclaredContainers.set(
@@ -1608,7 +1576,9 @@ async function collectStaleCachedModules(args: {
         const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "default";
         let stems = stemsByLanguage.get(languageId);
         if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(added, languageId)));
-        const tsconfigPaths = languageId === "ts" || languageId === "tsx" ? await loadTsconfigPaths(file) : undefined;
+        const tsconfigPaths = indexLanguagePolicyFor(languageId).module?.tsconfigPaths
+          ? await loadTsconfigPaths(file)
+          : undefined;
         const addedCanSatisfy = cachedModuleSpecifiers(mod).some((specifier) =>
           externalSpecifierMatchesAddedStem(
             specifier,
@@ -1636,7 +1606,9 @@ async function collectStaleCachedModules(args: {
     const cppPrevious = previousCppDeclaredContainers(args.previousModules);
     const unknownDeclarationLanguages = new Set<string>();
     for (const deleted of deletedRows) {
-      if (deleted.languageId === "cpp" && deleted.mod && deleted.mod.declaredContainers) {
+      const canCollectDeclarations =
+        deleted.languageId && indexLanguagePolicyFor(deleted.languageId).module?.declaredContainers;
+      if (canCollectDeclarations && deleted.mod?.declaredContainers) {
         mergeDeclaredContainers(cppPrevious, deleted.file, deleted.mod.declaredContainers);
       } else if (deleted.languageId && DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(deleted.languageId)) {
         unknownDeclarationLanguages.add(declarationLanguageGroup(deleted.languageId));
@@ -1666,11 +1638,12 @@ async function collectStaleCachedModules(args: {
         if (unknownDeclarationHistory.has(declarationLanguageGroup(languageId))) stale.add(file);
       }
     }
-    const cppAdded = added.filter(
-      (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id === "cpp",
-    );
-    const missDeclaredContainers = cppAdded.length
-      ? await collectCppMissDeclaredContainers(cppAdded, args.concurrency, {
+    const declarationAdded = added.filter((file) => {
+      const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
+      return !!languageId && !!indexLanguagePolicyFor(languageId).module?.declaredContainers;
+    });
+    const missDeclaredContainers = declarationAdded.length
+      ? await collectMissDeclaredContainers(declarationAdded, args.concurrency, args.opts?.languageExtensions, {
           ...(args.confinedRoot ? { confinedRoot: args.confinedRoot, projectRoot: args.projectRoot } : {}),
           ...(args.trustedSources ? { trustedSources: args.trustedSources } : {}),
         })
@@ -1722,7 +1695,7 @@ async function collectStaleCachedModules(args: {
   // wildcard (`import p.C.*` naming class `p.C`) turns into a package star once package `p.C` exists.
   const isJvmFile = (file: string): boolean => {
     const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id;
-    return languageId === "java" || languageId === "kotlin";
+    return isJvmLanguage(languageId);
   };
   const dependsOnJvmPackage = (imp: ImportBinding): boolean =>
     imp.kind === "star" && (!!imp.jvmPackageFiles || !!imp.jvmTypeWildcardName || typeof imp.resolved !== "string");
@@ -2438,13 +2411,14 @@ async function buildIndexFromFileListInProbeCache(
         ensureBuildProgressStarted();
         let graphContext: FileEdgeSource | undefined;
         let cacheWrite = recoveredJsonWrites.get(file);
-        const matchPath = support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
+        const modulePolicy = indexLanguagePolicyFor(support.id).module;
+        const matchPath = modulePolicy?.tsconfigPaths ? await loadMatchPathForFile(file) : undefined;
         if (!mod) {
           const extraction = projectFileExtractions.get(file);
           projectFileExtractions.delete(file);
           if (extraction && "error" in extraction) throw extraction.error;
           let preparedFile = extraction && "prepared" in extraction ? extraction.prepared : undefined;
-          if (support.id === "php") preparedFile = await preparePhpFile(file);
+          if (modulePolicy?.prepare) preparedFile = await preparePhpFile(file);
           const built = await buildIndexedModuleForFile({
             file,
             support,
@@ -3907,13 +3881,13 @@ async function buildProjectIndexIncrementalInProbeCache(
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
             const support = supportForFile(file, opts?.languageExtensions);
             if (!support) return [file, unparsedModuleIndex(file)] as const;
-            const matchPath =
-              support.id === "ts" || support.id === "tsx" ? await loadMatchPathForFile(file) : undefined;
+            const modulePolicy = indexLanguagePolicyFor(support.id).module;
+            const matchPath = modulePolicy?.tsconfigPaths ? await loadMatchPathForFile(file) : undefined;
             const extraction = projectFileExtractions.get(file);
             projectFileExtractions.delete(file);
             if (extraction && "error" in extraction) throw extraction.error;
             let preparedFile = extraction && "prepared" in extraction ? extraction.prepared : undefined;
-            if (support.id === "php") preparedFile = await preparePhpFile(file);
+            if (modulePolicy?.prepare) preparedFile = await preparePhpFile(file);
             const built = await buildIndexedModuleForFile({
               file,
               support,

@@ -8,6 +8,7 @@ import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageSupport } from "../languages.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
 import { csharpNamespaceAt, IMPLICIT_UNIT_LANGUAGES } from "./compilation-units.js";
 import { csharpNamespaceImportDirectories, resolveImported } from "./navigation-resolve.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
@@ -107,7 +108,7 @@ export const jvmModuleEntries = perIndexCache((index): readonly JvmModuleEntry[]
   const entries: JvmModuleEntry[] = [];
   for (const module of index.byFile.values()) {
     const support = supportForFileWithoutHeaderSample(module.file, index.languageExtensions);
-    if (support?.id !== "java" && support?.id !== "kotlin") continue;
+    if (!support || !isJvmLanguage(support.id)) continue;
     entries.push({ file: module.file, key: fileIdentityKey(module.file), languageId: support.id, support });
   }
   return entries;

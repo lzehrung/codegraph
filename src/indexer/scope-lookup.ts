@@ -1,8 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import { cScopeName, cTagRole } from "../languages/definitions/c.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
-import { csharpGenericArity, csharpTypeArgumentArity } from "../util/csharp-tree.js";
-import type { ImportBinding } from "./import-types.js";
 import {
   bindingCoversUse,
   bindingHiddenFromUse,
@@ -54,59 +52,6 @@ function pythonModuleLookupUsesRuntimeBindings(scope: Scope | undefined, node: S
   return false;
 }
 
-function effectivePythonModuleScopeBinding(
-  binding: Binding,
-  useNode: SyntaxNodeLike,
-  moduleLookupAtRuntime: boolean,
-): Binding | null {
-  const useStartIndex = useNode.startIndex;
-  let importBinding: ImportBinding | undefined;
-  let importSource: Binding | undefined;
-  let localBinding: Binding | undefined;
-  let latestLocalStart = -1;
-  for (let candidate: Binding | undefined = binding; candidate; candidate = candidate.earlierSameScope) {
-    const localStart = candidate.def?.start.index;
-    const pendingFunction =
-      candidate.kind === "function" && pythonFunctionPendingInDefault(candidate.def?.start.index, useNode);
-    if (
-      !pendingFunction &&
-      localStart !== undefined &&
-      (moduleLookupAtRuntime || localStart <= useStartIndex) &&
-      localStart > latestLocalStart
-    ) {
-      localBinding = candidate;
-      latestLocalStart = localStart;
-    }
-    if (!importBinding && candidate.import) {
-      importBinding = candidate.import;
-      importSource = candidate;
-    }
-  }
-  const imports = importBinding ? [importBinding] : [];
-  const effective = effectiveExplicitOrLocalBinding(
-    imports,
-    "python",
-    () => true,
-    localBinding?.def?.start.index,
-    useStartIndex,
-    moduleLookupAtRuntime,
-  );
-  if (effective?.kind === "local") return localBinding ?? null;
-  if (effective?.kind === "explicit") return importSource ?? null;
-  return null;
-}
-
-/** A C# type name includes its syntactic arity; imports and declaration tokens keep their own binding. */
-function wrongCsharpTypeArity(binding: Binding, use: SyntaxNodeLike, arity: number): boolean {
-  if (binding.import || !binding.node?.parent || binding.node.id === use.id) return false;
-  if (binding.kind !== "class" && binding.kind !== "type") return false;
-  const declaration = use.parent;
-  const constructorName =
-    declaration?.type === "constructor_declaration" || declaration?.type === "destructor_declaration";
-  if (constructorName) return declaration.parent?.parent?.childForFieldName("name")?.id !== binding.node.id;
-  return csharpGenericArity(binding.node.parent) !== arity;
-}
-
 export function findClosestScopeBinding(
   scopeIndex: ScopeIndex,
   bindingName: string,
@@ -115,39 +60,30 @@ export function findClosestScopeBinding(
   jvmTypeOnly = false,
   skipFunctionScope = false,
 ): Binding | null {
-  if (support.id === "csharp" && bindingName.includes(".")) {
-    const names = bindingName.split(".");
-    const first = names.shift()!;
-    // Each qualifier has its own arity; the leaf's type arguments must not hide a non-generic owner.
-    let rootNode = csharpQualifiedNameNode(currentNode) ?? currentNode;
-    while (rootNode.type === "qualified_name" || rootNode.type === "alias_qualified_name") {
-      const qualifier = rootNode.childForFieldName("qualifier") ?? rootNode.childForFieldName("alias");
-      if (!qualifier) return null;
-      rootNode = qualifier;
-    }
-    let owner = findClosestScopeBinding(scopeIndex, first, rootNode, support);
-    for (let index = 0; index < names.length; index += 1) {
-      const name = names[index]!;
-      if (owner?.kind !== "class") return null;
-      const body = owner.node?.parent?.childForFieldName("body");
-      if (!body) return null;
-      const bodyScope = scopeIndex.allScopes.find((scope) => scope.node.id === body.id);
-      let nested = bodyScope?.map.get(support.normalizeIdentifier(name));
-      const arity = index === names.length - 1 ? csharpTypeArgumentArity(currentNode) : 0;
-      while (nested && wrongCsharpTypeArity(nested, currentNode, arity)) nested = nested.earlierSameScope;
-      owner = nested ?? null;
-    }
-    return owner;
-  }
   const row = scopeNodesFor(support.id);
+  const bindingRules = row.bindingRules;
+  const qualifiedNameBinding = bindingRules?.qualifiedNameBinding;
+  if (qualifiedNameBinding && bindingName.includes(".")) {
+    return qualifiedNameBinding(
+      scopeIndex,
+      bindingName,
+      currentNode,
+      support,
+      findClosestScopeBinding,
+      csharpQualifiedNameNode,
+    );
+  }
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
-  const normalizedName = support.id === "c" && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
+  const normalizedName =
+    row.bindingRules?.usesTagNamespace && cTagRole(currentNode) ? cScopeName(canonicalName, "tag") : canonicalName;
   let currentScope = closestContainingScope(scopeIndex, currentNode);
   if (skipFunctionScope && currentScope?.kind === "function") currentScope = currentScope.parent;
 
   const methodCall = isExplicitMethodCall(row, currentNode);
-  const typeOnly = jvmTypeOnly || typeOnlyName(support.id, currentNode);
-  const csharpArity = support.id === "csharp" ? csharpTypeArgumentArity(currentNode) : 0;
+  const typeOnly = jvmTypeOnly || typeOnlyName(row, currentNode);
+  const typeArity = bindingRules?.typeArgumentArity?.(currentNode) ?? 0;
+  const rejectsTypeArity = bindingRules?.rejectsTypeArity;
+  const effectiveModuleBinding = bindingRules?.effectiveModuleBinding;
   const pythonModuleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime && pythonModuleLookupUsesRuntimeBindings(currentScope, currentNode);
   // A gate between the use and a scope hides that scope's local variables.
@@ -174,8 +110,8 @@ export function findClosestScopeBinding(
           crossedGate,
           support.normalizeIdentifier,
         );
-        const wrongCsharpArity = support.id === "csharp" && wrongCsharpTypeArity(binding, currentNode, csharpArity);
-        if (!wrongNamespace && !wrongCsharpArity) {
+        const wrongTypeArity = rejectsTypeArity?.(binding, currentNode, typeArity);
+        if (!wrongNamespace && !wrongTypeArity) {
           const atModuleRuntime = pythonModuleLookupAtRuntime && currentScope.kind === "module";
           if (
             atModuleRuntime ||
@@ -187,8 +123,14 @@ export function findClosestScopeBinding(
         binding = binding.earlierSameScope;
       }
     }
-    if (support.id === "python" && currentScope.kind === "module" && binding) {
-      const effectiveBinding = effectivePythonModuleScopeBinding(binding, currentNode, pythonModuleLookupAtRuntime);
+    if (effectiveModuleBinding && currentScope.kind === "module" && binding) {
+      const effectiveBinding = effectiveModuleBinding(
+        binding,
+        currentNode,
+        pythonModuleLookupAtRuntime,
+        pythonFunctionPendingInDefault,
+        effectiveExplicitOrLocalBinding,
+      );
       if (effectiveBinding) return effectiveBinding;
       currentScope = currentScope.parent;
       continue;

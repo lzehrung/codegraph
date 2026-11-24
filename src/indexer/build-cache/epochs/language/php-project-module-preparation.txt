@@ -1,0 +1,1 @@
+Prepare PHP declaration identities and prime project lookup through the module policy.

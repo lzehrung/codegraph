@@ -1,0 +1,1 @@
+Build SQL modules with the direct source extraction policy.

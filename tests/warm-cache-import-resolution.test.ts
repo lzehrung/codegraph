@@ -642,7 +642,7 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
     }
   });
 
-  it("resolves a tsconfig path alias once the target file is added, and unresolves it again once deleted", async () => {
+  it.each(["ts", "tsx"])("resolves %s tsconfig aliases as targets change", async (extension) => {
     const root = await mkTmpDir("cg-ts-alias-");
     try {
       await fsp.writeFile(
@@ -650,7 +650,7 @@ describe("warm disk-cache build reacts when a file starts or stops resolving an 
         JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["lib/*"] } } }, null, 2),
         "utf8",
       );
-      const main = path.join(root, "main.ts");
+      const main = path.join(root, `main.${extension}`);
       const util = path.join(root, "lib", "util.ts");
       const otherUtil = path.join(root, "other", "util.ts");
       const mainLines = [

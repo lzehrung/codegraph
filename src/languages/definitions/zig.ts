@@ -15,6 +15,7 @@ const ZIG_TYPE_INITIALIZER_TYPES = new Set([
 export const ZIG_DEF: LanguageDefinition = {
   id: "zig",
   extensions: [".zig"],
+  capturesDocstrings: true,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

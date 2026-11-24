@@ -1,4 +1,3 @@
-import { cTagRole } from "../languages/definitions/c.js";
 import type { LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../document-links.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/query-results.js";
@@ -14,22 +13,18 @@ import {
 } from "../native/tree-sitter-native.js";
 import { maskJsLikeCommentsAndStrings, maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
-import { replaceContents } from "../util/collections.js";
-import { swiftExtensionOwnerType } from "../util/swift-tree.js";
-import { csharpGenericArity } from "../util/csharp-tree.js";
-import {
-  callableIdentityForDeclaration,
-  callableIdentityForGeneratedMember,
-  propagateCppInternalLinkage,
-} from "./callable-identity.js";
+import { callableIdentityForDeclaration, callableIdentityForGeneratedMember } from "./callable-identity.js";
+import { indexLanguagePolicyFor } from "./index-language-policies/index.js";
+import type { DeclarationHooks } from "./language-hook-types.js";
+import { callableIdentityPolicyFor } from "./callable-identity-policies/index.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { isTypeParameterBinding, isTypeParameterName, scopeNodesFor } from "./scope-nodes.js";
 import { findClosestScopeBinding } from "./scope-lookup.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";
-import { phpConstructorPromotedVariable, phpPropertyPromotionParameter } from "./navigation-php.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { importCapture } from "../languages/graph-captures.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
@@ -38,29 +33,7 @@ import type { CallableIdentity } from "../languages/callable-arity.js";
 import type { Range } from "../types.js";
 
 import { ECMASCRIPT_IDENTIFIER_SOURCE, XID_IDENTIFIER_SOURCE } from "../util/identifiers.js";
-import {
-  isExportedDeclaration,
-  isJavaProtectedDeclaration,
-  isJavaPublicDeclaration,
-} from "./declaration-visibility.js";
-import { cppQualifiedNameSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import { typescriptCollapsedOverloadTarget, typescriptSplitMethodName } from "./ts-callables.js";
-
-// Missing captured comments prove missing documentation only for these languages.
-// Python captures # comments but not triple-quoted function/class docstrings.
-/** Languages whose parsers capture docstrings onto local definitions. */
-export const DOCSTRING_CAPTURE_LANGUAGES: ReadonlySet<string> = new Set([
-  "ts",
-  "tsx",
-  "js",
-  "go",
-  "java",
-  "csharp",
-  "kotlin",
-  "rust",
-  "zig",
-  "scss",
-]);
+import { isExportedDeclaration } from "./declaration-visibility.js";
 
 /**
  * Matches one `exportScopeBlockers` entry against an ancestor node. A plain entry compares the
@@ -200,9 +173,12 @@ const LOCAL_BINDER_NODE_TYPES: Record<string, true> = {
   type_pattern: true,
 };
 
-function isTypeMemberDeclaration(node: SyntaxNodeLike, languageId: string): boolean {
+function isTypeMemberDeclaration(
+  node: SyntaxNodeLike,
+  promotedVariable: ((node: SyntaxNodeLike) => SyntaxNodeLike | null) | undefined,
+): boolean {
   if (isPythonInstanceAttributeDeclaration(node)) return true;
-  if (languageId === "php" && phpConstructorPromotedVariable(node)) return true;
+  if (promotedVariable?.(node)) return true;
   if (node.parent && LOCAL_BINDER_NODE_TYPES[node.parent.type]) return false;
   let current = node.parent?.parent ?? null;
   while (current) {
@@ -211,119 +187,6 @@ function isTypeMemberDeclaration(node: SyntaxNodeLike, languageId: string): bool
     current = current.parent;
   }
   return false;
-}
-
-function enclosingJvmTypeDeclaration(node: SyntaxNodeLike): SyntaxNodeLike | undefined {
-  let current = node.parent?.parent ?? null;
-  while (current) {
-    if (
-      current.type === "class_declaration" ||
-      current.type === "interface_declaration" ||
-      current.type === "enum_declaration" ||
-      current.type === "record_declaration" ||
-      current.type === "annotation_type_declaration" ||
-      current.type === "object_declaration"
-    ) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return undefined;
-}
-function cppQualifiedExportName(
-  nameNode: SyntaxNodeLike,
-  source: string,
-  name: string,
-  omitInlineNamespaces = false,
-): string {
-  const namespaceSegments: string[][] = [];
-  let qualifiedSegments: string[] | null = null;
-  let current: SyntaxNodeLike | null = nameNode;
-  while (current) {
-    if (!qualifiedSegments && current.type === "qualified_identifier") {
-      // `a::C::run` nests `C::run` inside `a::(...)`; the outermost node carries the full path.
-      while (current.parent?.type === "qualified_identifier") current = current.parent;
-      if (current.parent?.type !== "using_declaration") {
-        const segments = cppQualifiedNameSegments(current, source);
-        if (segments.length > 1) qualifiedSegments = segments;
-      }
-    }
-    if (current.type === "namespace_definition") {
-      const namespaceName = current.childForFieldName("name");
-      if (!namespaceName) {
-        current = current.parent;
-        continue;
-      }
-      const declaresNamespaceSegment =
-        namespaceName.startIndex <= nameNode.startIndex && namespaceName.endIndex >= nameNode.endIndex;
-      if (declaresNamespaceSegment) {
-        qualifiedSegments =
-          namespaceName.type === "nested_namespace_specifier"
-            ? namespaceName.namedChildren
-                .filter((child) => child.type === "namespace_identifier" && child.endIndex <= nameNode.endIndex)
-                .map((child) => sliceText(child, source))
-            : [name];
-      } else if (!omitInlineNamespaces || current.child(0)?.type !== "inline") {
-        namespaceSegments.unshift(cppQualifiedNameSegments(namespaceName, source));
-      }
-    }
-    current = current.parent;
-  }
-  return [...namespaceSegments.flat(), ...(qualifiedSegments ?? [name])].join("::");
-}
-
-const RUBY_CONTAINER_TYPES = new Set(["class", "module"]);
-
-/** Whether `container`'s own body (not a nested class or module) declares `name`. */
-function rubyContainerDeclares(container: SyntaxNodeLike, name: string, source: string): boolean {
-  const visit = (node: SyntaxNodeLike): boolean => {
-    for (const child of node.namedChildren) {
-      if (RUBY_CONTAINER_TYPES.has(child.type)) {
-        const childName = child.childForFieldName("name");
-        if (childName && sliceText(childName, source) === name) return true;
-        continue;
-      }
-      if (visit(child)) return true;
-    }
-    return false;
-  };
-  return visit(container);
-}
-
-/**
- * Nested Ruby constants are not top-level names. `module Outer; class Base`
- * exports as `Outer::Base`, so a `require` cannot bind bare `Base`. A `scope_resolution`
- * name (`class Inner::Tool`) looks up its first segment lexically, as Ruby does: the
- * innermost enclosing class or module that declares `Inner` in this file supplies the
- * prefix (`Outer::Inner::Tool`); otherwise the path is top-level. A leading `::` is absolute.
- */
-function rubyQualifiedExportName(nameNode: SyntaxNodeLike, source: string, name: string): string {
-  if (name.startsWith("::")) return name.slice(2);
-  const containers: { node: SyntaxNodeLike; text: string }[] = [];
-  for (let current = nameNode.parent; current; current = current.parent) {
-    if (!RUBY_CONTAINER_TYPES.has(current.type)) continue;
-    const containerName = current.childForFieldName("name");
-    if (!containerName) continue;
-    const ownsExport = containerName.startIndex <= nameNode.startIndex && containerName.endIndex >= nameNode.endIndex;
-    if (ownsExport) continue;
-    const text = sliceText(containerName, source);
-    if (text) containers.push({ node: current, text });
-  }
-  // `containers` is innermost first. A plain constant is owned by the innermost container; a
-  // scope-resolution name by the innermost container that declares its first segment.
-  let ownerIndex = 0;
-  if (nameNode.type === "scope_resolution") {
-    const firstSegment = name.split("::")[0] ?? name;
-    ownerIndex = containers.findIndex((container) => rubyContainerDeclares(container.node, firstSegment, source));
-    if (ownerIndex < 0) return name;
-  } else if (nameNode.type !== "constant") {
-    return name;
-  }
-  const prefix = containers
-    .slice(ownerIndex)
-    .reverse()
-    .map((container) => container.text);
-  return prefix.length ? `${prefix.join("::")}::${name}` : name;
 }
 
 const C_DECLARATOR_IDENTIFIER_PATTERN = new RegExp(`^${XID_IDENTIFIER_SOURCE}`, "u");
@@ -366,65 +229,30 @@ function declaratorNameNode(node: SyntaxNodeLike | undefined): SyntaxNodeLike | 
   return undefined;
 }
 
-// C function and tag redeclarations share an identity. Tags remain separate from
-// typedefs and other ordinary names, even when both are classified as TypeAlias.
-function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>, languageId: string): string {
-  if (languageId === "c") {
-    if (entry.target.kind === SymbolKind.Function) return `${entry.exportedAs}\0function`;
-    if (entry.target.cTag) {
-      return `${entry.exportedAs}\0tag`;
-    }
-  }
+function localExportDedupeKey(entry: Extract<ExportEntry, { type: "local" }>): string {
   return `${entry.exportedAs}\0${entry.target.localName}\0${entry.target.range.start.index ?? 0}\0${entry.target.range.end.index ?? 0}`;
 }
 
-function collapseTypeScriptCallableExports(exports: ExportEntry[], languageId: string): ExportEntry[] {
-  if (languageId !== "ts" && languageId !== "tsx") return exports;
-  const groups = new Map<string, Extract<ExportEntry, { type: "local" }>[]>();
-  for (const entry of exports) {
-    if (entry.type !== "local" || entry.target.kind !== SymbolKind.Function) continue;
-    const callable = entry.target.callable;
-    if (!callable || callable.role === "other") continue;
-    const key = `${callable.key}\0${entry.exportedAs}`;
-    const group = groups.get(key) ?? [];
-    group.push(entry);
-    groups.set(key, group);
-  }
-  const drop = new Set<ExportEntry>();
-  for (const group of groups.values()) {
-    if (group.length < 2) continue;
-    const canonical = typescriptCollapsedOverloadTarget(group, (entry) => entry.target.callable);
-    if (!canonical) continue;
-    if (!canonical.target.docstring?.trim()) {
-      const documented = group.find((entry) => entry.target.docstring?.trim());
-      if (documented?.target.docstring) canonical.target.docstring = documented.target.docstring;
-    }
-    for (const entry of group) {
-      if (entry !== canonical) drop.add(entry);
-    }
-  }
-  if (drop.size === 0) return exports;
-  return exports.filter((entry) => !drop.has(entry));
-}
-
-function dedupeExportEntries(entries: ExportEntry[], languageId: string): ExportEntry[] {
+function dedupeExportEntries(entries: ExportEntry[], policy: DeclarationHooks | undefined): ExportEntry[] {
   const seen = new Map<string, number>();
   const out: ExportEntry[] = [];
+  const keyForLocal = policy?.localExportKey ?? localExportDedupeKey;
+  const preferredTagRole = policy?.preferredTagRole;
   for (const entry of entries) {
     if (entry.type !== "local") {
       out.push(entry);
       continue;
     }
-    const key = localExportDedupeKey(entry, languageId);
+    const key = keyForLocal(entry);
     const previousIndex = seen.get(key);
     if (previousIndex !== undefined) {
       const previous = out[previousIndex];
       if (
-        languageId === "c" &&
-        entry.target.cTag === "declaration" &&
+        preferredTagRole &&
+        entry.target.cTag === preferredTagRole &&
         previous?.type === "local" &&
         previous.target.cTag &&
-        previous.target.cTag !== "declaration"
+        previous.target.cTag !== preferredTagRole
       ) {
         out[previousIndex] = entry;
       }
@@ -741,6 +569,13 @@ export function collectLocalsAndExportsFromSource(
   const nativeQueries =
     opts?.nativeQueries === undefined ? getNativeQueryExecution(source, support).results : opts.nativeQueries;
   if (!nativeQueries) return { file, exports: [], imports, locals: [] };
+  const callableIdentityPolicy = callableIdentityPolicyFor(support.id);
+  const callableKeyShape = callableIdentityPolicy.keyShape;
+  const callableDeclarationParameters = callableIdentityPolicy.declarationParameters;
+  const declarationPolicy = indexLanguagePolicyFor(support.id).declarations;
+  const ownerFacts = declarationPolicy?.ownerFacts;
+  const qualifyExport = declarationPolicy?.qualifiedExportName;
+  const alternateExportName = declarationPolicy?.alternateExportName;
   const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
   const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
@@ -796,16 +631,14 @@ export function collectLocalsAndExportsFromSource(
     return matches ? matches.length : 0;
   };
 
-  const estimateComplexity = (range: Range, languageId: string): number | undefined => {
+  const estimateComplexity = (range: Range): number | undefined => {
     const startIdx = range.start.index;
     const endIdx = range.end.index;
     if (startIdx === undefined || endIdx === undefined || endIdx <= startIdx) return undefined;
     const snippet = source.slice(startIdx, endIdx);
     if (!snippet.trim()) return undefined;
     const keywordPatterns = [/\bif\b/g, /\bfor\b/g, /\bwhile\b/g, /\bcase\b/g, /\bcatch\b/g, /\belse\s+if\b/g];
-    if (languageId === "python") {
-      keywordPatterns.push(/\belif\b/g, /\bexcept\b/g);
-    }
+    if (declarationPolicy?.complexityKeywords) keywordPatterns.push(...declarationPolicy.complexityKeywords);
     const operatorPatterns = [/&&/g, /\|\|/g, /\?\s*[^:]/g];
     let count = 0;
     for (const re of keywordPatterns) count += countMatches(snippet, re);
@@ -850,7 +683,7 @@ export function collectLocalsAndExportsFromSource(
       docstring = extractLeadingDocstring(node);
     }
     const shouldEstimateComplexity = kind === SymbolKind.Function || kind === SymbolKind.Class;
-    const complexity = shouldEstimateComplexity ? estimateComplexity(range, support.id) : undefined;
+    const complexity = shouldEstimateComplexity ? estimateComplexity(range) : undefined;
     const base: SymbolDef = {
       file,
       localName,
@@ -860,14 +693,18 @@ export function collectLocalsAndExportsFromSource(
         ? {
             callable:
               callable ??
-              callableIdentityForDeclaration({
-                file,
-                name: localName,
-                range,
-                languageId: support.id,
-                source,
-                ...(node ? { node } : {}),
-              }),
+              callableIdentityForDeclaration(
+                {
+                  file,
+                  name: localName,
+                  range,
+                  languageId: support.id,
+                  source,
+                  ...(node ? { node } : {}),
+                },
+                callableKeyShape,
+                callableDeclarationParameters,
+              ),
           }
         : {}),
     };
@@ -876,58 +713,31 @@ export function collectLocalsAndExportsFromSource(
     const splitMethod =
       kind === SymbolKind.Function &&
       (node?.parent?.type === "property_signature" || node?.parent?.type === "public_field_definition");
-    if (splitMethod || (node && isTypeMemberDeclaration(node, support.id))) base.isMember = true;
-    if (support.id === "csharp" && node) {
+    if (splitMethod || (node && isTypeMemberDeclaration(node, declarationPolicy?.promotedProperties?.variable))) {
+      base.isMember = true;
+    }
+    if (declarationPolicy?.nominalArity && node) {
       const nominalType = kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias;
       if (nominalType) {
-        const arity = node.parent ? csharpGenericArity(node.parent) : 0;
+        const arity = node.parent ? declarationPolicy.nominalArity(node.parent) : 0;
         if (arity) base.csharpGenericArity = arity;
       }
     }
-    const jvmOwner =
-      node &&
-      (support.id === "java" || support.id === "kotlin") &&
-      (kind === SymbolKind.Class ||
-        kind === SymbolKind.Interface ||
-        (support.id === "java" && (kind === SymbolKind.TypeAlias || base.isMember)))
-        ? enclosingJvmTypeDeclaration(node)
-        : undefined;
-    const jvmOwnerStartIndex = jvmOwner?.childForFieldName("name")?.startIndex;
-    if (jvmOwnerStartIndex !== undefined) base.jvmTypeOwnerStartIndex = jvmOwnerStartIndex;
-    if (support.id === "java" && node && jvmOwner && base.isMember) {
-      const declaration = node.parent?.type === "variable_declarator" ? node.parent.parent : node.parent;
-      const implicitStatic =
-        declaration?.type === "enum_declaration" ||
-        declaration?.type === "interface_declaration" ||
-        declaration?.type === "annotation_type_declaration" ||
-        declaration?.type === "enum_constant" ||
-        jvmOwner.type === "interface_declaration" ||
-        (jvmOwner.type === "annotation_type_declaration" &&
-          declaration?.type !== "annotation_type_element_declaration");
-      const explicitStatic = declaration?.namedChildren.some(
-        (child) => child.type === "modifiers" && /\bstatic\b/u.test(child.text),
-      );
-      if (implicitStatic || explicitStatic) base.jvmStaticMember = true;
+    const hasOwnerFacts =
+      ownerFacts && node && (ownerFacts.declarationKinds.has(kind) || (ownerFacts.includeMembers && base.isMember));
+    if (hasOwnerFacts) {
+      let current = node.parent?.parent ?? null;
+      while (current && !ownerFacts.ownerTypes.has(current.type)) current = current.parent;
+      const owner = current ?? undefined;
+      const ownerStartIndex = owner?.childForFieldName("name")?.startIndex;
+      if (ownerStartIndex !== undefined) base.jvmTypeOwnerStartIndex = ownerStartIndex;
+      ownerFacts.complete?.(node, base, owner);
     }
-    if (
-      support.id === "java" &&
-      node &&
-      (kind === SymbolKind.Class || kind === SymbolKind.Interface || kind === SymbolKind.TypeAlias || base.isMember)
-    ) {
-      if (base.isMember && isJavaProtectedDeclaration(node)) base.javaProtectedMember = true;
-      if (
-        !isJavaPublicDeclaration(node) &&
-        jvmOwner?.type !== "interface_declaration" &&
-        jvmOwner?.type !== "annotation_type_declaration"
-      ) {
-        base.javaPackagePrivate = true;
-      }
-    }
-    if (support.id === "c" && node) {
-      const tagRole = cTagRole(node);
+    if (node && declarationPolicy?.tagRole) {
+      const tagRole = declarationPolicy.tagRole(node);
       if (tagRole) base.cTag = tagRole;
     }
-    if (support.id === "swift" && node && swiftExtensionOwnerType(node)) base.swiftExtensionOwner = true;
+    if (node && declarationPolicy?.extensionOwner?.(node)) base.swiftExtensionOwner = true;
     if (kind === SymbolKind.TypeAlias && node && isTypeParameterName(support.id, node)) base.typeParameter = true;
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
@@ -1101,8 +911,8 @@ export function collectLocalsAndExportsFromSource(
                 );
               }
             }
-          } else if (support.id === "php" && node && phpPropertyPromotionParameter(node)) {
-            const promoted = phpConstructorPromotedVariable(node, source);
+          } else if (node && declarationPolicy?.promotedProperties?.parameter(node)) {
+            const promoted = declarationPolicy.promotedProperties.variable(node, source);
             if (promoted) {
               pushLocal(sliceText(promoted, source), SymbolKind.Variable, toRange(promoted), promoted);
               capturedLocals = true;
@@ -1136,8 +946,9 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const recoverSplitMethods = support.id === "ts" || support.id === "tsx";
-  if (recoverSplitMethods || support.id === "js") {
+  const splitMethodName = declarationPolicy?.splitMethodName;
+  const isJsLike = isJsTsLanguage(support.id);
+  if (isJsLike) {
     const methodSupplementTree = ensureTree();
     if (methodSupplementTree) {
       supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
@@ -1149,18 +960,22 @@ export function collectLocalsAndExportsFromSource(
     const methodName = methodLike ? node.childForFieldName("name") : undefined;
     const missingName = methodName && methodName.startIndex === methodName.endIndex;
     const splitCandidate = missingName || node.type === "call_signature";
-    const splitName = recoverSplitMethods && splitCandidate ? typescriptSplitMethodName(node) : undefined;
+    const splitName = splitCandidate ? splitMethodName?.(node) : undefined;
     if (splitName) {
       const localName = sliceText(splitName, source);
       const range = toRange(splitName);
-      const callable = callableIdentityForDeclaration({
-        file,
-        name: localName,
-        range,
-        languageId: support.id,
-        source,
-        node,
-      });
+      const callable = callableIdentityForDeclaration(
+        {
+          file,
+          name: localName,
+          range,
+          languageId: support.id,
+          source,
+          node,
+        },
+        callableKeyShape,
+        callableDeclarationParameters,
+      );
       // Type-body modifiers are syntactic only in TypeScript; even `static m`
       // remains an instance MethodSignature. Class modifiers retain their scope.
       callable.kind = "instance-method";
@@ -1193,41 +1008,12 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
-    if (support.id !== "ts" && support.id !== "tsx") return items;
-    const byName = new Map<string, SymbolDef[]>();
-    for (const item of items) {
-      const group = byName.get(item.localName);
-      if (group) group.push(item);
-      else byName.set(item.localName, [item]);
-    }
-    const out: SymbolDef[] = [];
-    const rank = (k: SymbolKind): number => {
-      if (k === SymbolKind.Class) return 5;
-      if (k === SymbolKind.Interface) return 4;
-      if (k === SymbolKind.TypeAlias) return 3;
-      if (k === SymbolKind.Function) return 2;
-      return 1;
-    };
-    for (const group of byName.values()) {
-      if (group.length === 1) {
-        out.push(group[0]!);
-        continue;
-      }
-      if (group.every((item) => item.kind === SymbolKind.Function)) {
-        out.push(...group);
-        continue;
-      }
-      const sorted = [...group].sort((a, b) => rank(b.kind) - rank(a.kind));
-      out.push(sorted[0]!);
-    }
-    return out;
-  };
-  const mergedLocals = mergeTypeScriptNamespaceDeclarations(locals);
+  const mergedLocals = declarationPolicy?.mergeLocals?.(locals) ?? locals;
 
   const exports: ExportEntry[] = [];
-  const pythonAllExports = new Set<string>();
-  let hasPythonAll = false;
+  const explicitExportList = declarationPolicy?.explicitExportList;
+  const explicitExportNames = new Set<string>();
+  let hasExplicitExportList = false;
 
   const appendExportsFromMatches = (
     matches: NativeQueryResults["exports"],
@@ -1303,18 +1089,19 @@ export function collectLocalsAndExportsFromSource(
       if (exportNameNode && !isExportedDeclaration(support.id, exportNameNode)) continue;
       const isTypeOnly = support.isTypeOnly(stmtText);
 
-      if (support.id === "python") {
-        const leftText = map["left"]?.text ?? "";
-        const methodText = map["method"]?.text ?? "";
-        const isAllAssignment = leftText === "__all__" && !methodText;
-        const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
+      if (explicitExportList) {
+        const leftText = map[explicitExportList.targetCapture]?.text ?? "";
+        const methodText = map[explicitExportList.methodCapture]?.text ?? "";
+        const isListAssignment = leftText === explicitExportList.targetName && !methodText;
+        const isListMethod =
+          leftText === explicitExportList.targetName && explicitExportList.additiveMethods.has(methodText);
 
-        if (isAllAssignment || isAllMethod) {
-          hasPythonAll = true;
-          const items = capturesNamed(match, "all_item");
+        if (isListAssignment || isListMethod) {
+          hasExplicitExportList = true;
+          const items = capturesNamed(match, explicitExportList.itemCapture);
           for (const item of items) {
             const name = unquote(item.text);
-            pythonAllExports.add(name);
+            explicitExportNames.add(name);
             const local = mergedLocals.find((def) => def.localName === name);
             if (
               local &&
@@ -1331,10 +1118,11 @@ export function collectLocalsAndExportsFromSource(
           }
           continue;
         }
-        if (map["name"]) {
-          const nameText = map["name"].text;
+        const declarationCapture = map[explicitExportList.declarationCapture];
+        if (declarationCapture) {
+          const nameText = declarationCapture.text;
           const local = locals.find((def) => def.localName === nameText);
-          if (local && !nameText.startsWith("_")) {
+          if (local && !nameText.startsWith(explicitExportList.privatePrefix)) {
             exports.push({
               type: "local",
               exportedAs: nameText,
@@ -1609,9 +1397,7 @@ export function collectLocalsAndExportsFromSource(
           const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
           const qualifiedExportName = (): string => {
             if (!visibilityNameNode) return nameText;
-            if (support.id === "cpp") return cppQualifiedExportName(visibilityNameNode, source, nameText);
-            if (support.id === "ruby") return rubyQualifiedExportName(visibilityNameNode, source, nameText);
-            return nameText;
+            return qualifyExport?.(visibilityNameNode, source, nameText) ?? nameText;
           };
           const exportedName = qualifiedExportName();
           if (!isDefaultExport) {
@@ -1620,8 +1406,8 @@ export function collectLocalsAndExportsFromSource(
               exportedAs: exportedName,
               target: local,
             });
-            if (support.id === "cpp" && visibilityNameNode && exportedName !== nameText) {
-              const visibleAs = cppQualifiedExportName(visibilityNameNode, source, nameText, true);
+            if (alternateExportName && visibilityNameNode && exportedName !== nameText) {
+              const visibleAs = alternateExportName(visibilityNameNode, source, nameText);
               if (visibleAs !== exportedName) {
                 exports.push({
                   type: "local",
@@ -1710,99 +1496,14 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  if (support.id === "cpp") {
-    const treeForUsingDeclarations = ensureTree();
-    if (treeForUsingDeclarations) {
-      const callableExports = new Map<string, { index: number; isDefinition: boolean }>();
-      let retainedCount = 0;
-      for (const entry of exports) {
-        if (entry.type === "local" && entry.target.kind === SymbolKind.Function) {
-          const callable = entry.target.callable;
-          if (callable?.signature) {
-            const key = `${entry.exportedAs}\0${callable.signature}`;
-            const isDefinition = callable.definition === true;
-            const existing = callableExports.get(key);
-            if (existing) {
-              if (isDefinition && !existing.isDefinition) {
-                exports[existing.index] = entry;
-                existing.isDefinition = true;
-              }
-              continue;
-            }
-            callableExports.set(key, { index: retainedCount, isDefinition });
-          }
-        }
-        exports[retainedCount++] = entry;
-      }
-      exports.length = retainedCount;
-    }
-    const visitUsingDeclaration = (node: SyntaxNodeLike): void => {
-      if (support.exportScopeBlockers.some((blocker) => matchesExportScopeBlocker(node, blocker))) return;
-      if (node.type === "using_declaration") {
-        const qualified =
-          node.namedChildren.find((child) => child.type === "qualified_identifier") ??
-          node.namedChildren
-            .flatMap((child) => child.namedChildren)
-            .find((child) => child.type === "qualified_identifier");
-        if (qualified) {
-          const importedSegments = cppQualifiedNameSegments(qualified, source);
-          const importedName = importedSegments.join("::");
-          const localName = importedSegments.at(-1);
-          if (!localName) return;
-          const exportedName = cppQualifiedExportName(node, source, localName);
-          const exportedNames = [exportedName];
-          if (exportedName !== localName) {
-            const visibleAs = cppQualifiedExportName(node, source, localName, true);
-            if (visibleAs !== exportedName) exportedNames.push(visibleAs);
-          }
-          const targets = exports.filter(
-            (entry): entry is Extract<ExportEntry, { type: "local" }> =>
-              entry.type === "local" && entry.exportedAs === importedName,
-          );
-          for (const exportedAs of exportedNames) {
-            // Included declarations are not available during per-file extraction.
-            // Retain the qualified target for resolution against the completed index.
-            for (const imp of imports) {
-              if (imp.kind !== "star") continue;
-              const fromModule = resolvedImportFile(imp);
-              if (fromModule === undefined) continue;
-              exports.push({
-                type: "reexport",
-                exportedAs,
-                fromModule,
-                sourceSpecifier: importedName,
-              });
-            }
-            for (const target of targets) {
-              if (
-                exports.some(
-                  (entry) =>
-                    entry.type === "local" &&
-                    entry.exportedAs === exportedAs &&
-                    entry.target.range.start.index === target.target.range.start.index,
-                )
-              ) {
-                continue;
-              }
-              exports.push({
-                type: "local",
-                exportedAs,
-                target: target.target,
-              });
-            }
-          }
-        }
-        return;
-      }
-      for (const child of node.namedChildren) visitUsingDeclaration(child);
-    };
-    if (treeForUsingDeclarations) visitUsingDeclaration(treeForUsingDeclarations.rootNode);
+  const completeUsingExports = declarationPolicy?.completeUsingExports;
+  if (completeUsingExports) {
+    completeUsingExports(ensureTree(), source, imports, exports, support, matchesExportScopeBlocker);
   }
 
   // The native query does not cover CommonJS member assignments and some
   // re-export forms. Always run the deduplicating fallback for JS-like files:
   // source-form probes are too error-prone to risk silently dropping exports.
-  const isJsLike = support.id === "ts" || support.id === "tsx" || support.id === "js";
   // Comment- and string-masked JS-like source, shared by the export fallbacks below.
   let jsMaskedSource: string | undefined;
   const maskedJsSource = (): string => (jsMaskedSource ??= maskJsLikeCommentsAndStrings(source));
@@ -1810,58 +1511,9 @@ export function collectLocalsAndExportsFromSource(
     appendJsLikeRegexFallbackExports(file, source, locals, exports, leadingDocstringAt, ensureTree(), maskedJsSource());
   }
 
-  if (support.id === "python") {
-    for (const binding of imports) {
-      if (binding.mechanism !== "python" || !binding.moduleLevel) continue;
-      const fromModule = resolvedImportFile(binding);
-      if (fromModule === undefined) continue;
-      if (binding.kind === "named") {
-        if (binding.local.startsWith("_")) continue;
-        exports.push({
-          type: "reexport",
-          exportedAs: binding.local,
-          fromModule,
-          moduleSpecifier: binding.from,
-          sourceSpecifier: binding.imported,
-        });
-      } else if (binding.kind === "namespace" && !binding.localNS.startsWith("_")) {
-        exports.push({
-          type: "namespaceReexport",
-          exportedAs: binding.localNS,
-          fromModule,
-          moduleSpecifier: binding.from,
-        });
-      } else if (binding.kind === "star") {
-        // Every statement matters: importing the same module again restores its later binding.
-        exports.push({
-          type: "exportStar",
-          fromModule,
-          moduleSpecifier: binding.from,
-          sourceSpecifier: binding.from,
-        });
-      }
-    }
-  }
+  declarationPolicy?.completeExports?.(imports, exports, explicitExportNames, hasExplicitExportList);
 
-  if (support.id === "python" && hasPythonAll) {
-    const seen = new Set<string>();
-    const filtered = exports.filter((e) => {
-      if (e.type === "local") {
-        if (!pythonAllExports.has(e.exportedAs)) return false;
-        if (seen.has(e.exportedAs)) return false;
-        seen.add(e.exportedAs);
-        return true;
-      }
-      if (e.type === "reexport") return pythonAllExports.has(e.exportedAs);
-      return true;
-    });
-    replaceContents(exports, filtered);
-  }
-
-  if (
-    (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
-    !exports.some((e) => e.type === "local" && e.exportedAs === "default")
-  ) {
+  if (isJsLike && !exports.some((e) => e.type === "local" && e.exportedAs === "default")) {
     const maskedSource = maskedJsSource();
     const defFn = JS_DEFAULT_FUNCTION_PATTERN.exec(maskedSource);
     const defCls = JS_DEFAULT_CLASS_PATTERN.exec(maskedSource);
@@ -1901,22 +1553,26 @@ export function collectLocalsAndExportsFromSource(
       const start = local.range.start.index;
       const node =
         start === undefined ? undefined : tree?.rootNode.descendantForIndex(start, local.range.end.index ?? start);
-      local.callable = callableIdentityForDeclaration({
-        file,
-        name: local.localName,
-        range: local.range,
-        languageId: support.id,
-        source,
-        ...(node ? { node } : {}),
-      });
+      local.callable = callableIdentityForDeclaration(
+        {
+          file,
+          name: local.localName,
+          range: local.range,
+          languageId: support.id,
+          source,
+          ...(node ? { node } : {}),
+        },
+        callableKeyShape,
+        callableDeclarationParameters,
+      );
     }
   }
-  if (support.id === "cpp") propagateCppInternalLinkage(file, locals);
+  callableIdentityPolicy.completeLocals?.(file, locals);
   return {
     file,
-    exports: dedupeExportEntries(collapseTypeScriptCallableExports(exports, support.id), support.id),
+    exports: dedupeExportEntries(callableIdentityPolicy.completeExports?.(exports) ?? exports, declarationPolicy),
     imports,
     locals,
-    ...(tree && DOCSTRING_CAPTURE_LANGUAGES.has(support.id) ? { docstringsChecked: true } : {}),
+    ...(tree && support.capturesDocstrings ? { docstringsChecked: true } : {}),
   };
 }

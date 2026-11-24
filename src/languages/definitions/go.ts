@@ -5,6 +5,9 @@ import { classifyByParentType, isNameFieldOnParent, matchesParentTypePairs, node
 export const GO_DEF: LanguageDefinition = {
   id: "go",
   extensions: [".go"],
+  capturesDocstrings: true,
+  // Only cross-package member lookups use this; package peers can read unexported names.
+  exportedNamePattern: /^\p{Lu}/u,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

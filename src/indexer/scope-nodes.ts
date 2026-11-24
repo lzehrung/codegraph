@@ -17,9 +17,10 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 
 import type { Range } from "../types.js";
-import { isSwiftExtensionTypeName, isSwiftPatternLabel } from "../util/swift-tree.js";
+import { isSwiftExtensionTypeName, isSwiftPatternLabel, isSwiftQualifiedExtensionSuffix } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
+import { csharpTypeArgumentArity } from "../util/csharp-tree.js";
 import {
   rubyCallMayReadLocal,
   rubyCallReadsLocal,
@@ -40,6 +41,10 @@ import { blocksCsharpJavaSelectorBinding } from "./name-lookup-policies/csharp-j
 import { SymbolKind, type ParseErrorRange } from "./types.js";
 import type { Binding, Scope, ScopeBindingRules, ScopeIndex } from "./scope-types.js";
 import { isRecoveredTypeParameterName } from "./type-parameters.js";
+import { isCppTemplateArgumentName } from "./scope-binding-policies/cpp-binding.js";
+import { csharpQualifiedScopeBinding, wrongCsharpTypeArity } from "./scope-binding-policies/csharp-binding.js";
+import { effectivePythonModuleScopeBinding } from "./scope-binding-policies/python-binding.js";
+import { phpPromotedVariablesInClass } from "./scope-binding-policies/php-binding.js";
 
 export type ScopeNodeRow = {
   /** Ancestor node types that mark an identifier as a parameter rather than a declaration. */
@@ -476,11 +481,13 @@ export function csharpTypeOnlyName(node: SyntaxNodeLike, typeAliasPattern = fals
  * extension header names the type it extends, so a same-named function or variable cannot bind it. A row's
  * `typeOnlyUseTypes` lists the node types that appear only in type syntax.
  */
-export function typeOnlyName(languageId: string, node: SyntaxNodeLike): boolean {
-  if (languageId === "csharp") return csharpTypeOnlyName(node);
-  if (languageId === "swift") return isSwiftExtensionTypeName(node);
-  if (languageId === "kotlin") return node.parent?.type === "user_type";
-  return !!scopeNodesFor(languageId).typeOnlyUseTypes?.has(node.type);
+export function typeOnlyName(row: ScopeNodeRow, node: SyntaxNodeLike): boolean {
+  if (row.typeOnlyName) return row.typeOnlyName(node);
+  if (row.typeOnlyParentTypes) {
+    const parent = node.parent;
+    return !!parent && row.typeOnlyParentTypes.has(parent.type);
+  }
+  return !!row.typeOnlyUseTypes?.has(node.type);
 }
 
 /** A type-position name never binds a variable, parameter, or function of the same spelling. */
@@ -617,6 +624,7 @@ const ECMASCRIPT_SCOPE_NODES: ScopeNodeRow = {
 
 const TYPESCRIPT_SCOPE_NODES: ScopeNodeRow = {
   ...ECMASCRIPT_SCOPE_NODES,
+  bindingRules: { functionRedeclarations: "signature-group" },
   classNameTypes: new Set(["class_declaration", "abstract_class_declaration", "class", "module"]),
   typeNameTypes: new Set(["interface_declaration", "type_alias_declaration", "enum_declaration"]),
   enumAssignmentTypes: new Set(["enum_assignment"]),
@@ -674,6 +682,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   ts: TYPESCRIPT_SCOPE_NODES,
   tsx: TYPESCRIPT_SCOPE_NODES,
   python: {
+    bindingRules: { effectiveModuleBinding: effectivePythonModuleScopeBinding },
     parameterParents: new Set(["parameter", "lambda_parameters"]),
     destructuringTypeFieldTypes: new Set(["default_parameter", "typed_default_parameter"]),
     functionNameTypes: new Set(["function_definition"]),
@@ -697,6 +706,17 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     nonLexicalMemberPropertyTypes: new Set(["attribute"]),
   },
   php: {
+    bindingRules: {
+      variablePrefix: "$",
+      implicitReceiverName: "$this",
+      receiverProperty: {
+        accessType: "member_access_expression",
+        nameField: "name",
+        fallbackNameType: "name",
+        receiverField: "object",
+      },
+      promotedBindings: { containerTypes: new Set(["class_declaration"]), collect: phpPromotedVariablesInClass },
+    },
     functionNameTypes: new Set(["function_definition", "method_declaration"]),
     classNameTypes: new Set(["class_declaration", "trait_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration"]),
@@ -779,7 +799,14 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     ]),
   },
   csharp: {
+    bindingRules: {
+      nameOnlyPatternTypes: new Set(["parameter"]),
+      qualifiedNameBinding: csharpQualifiedScopeBinding,
+      typeArgumentArity: csharpTypeArgumentArity,
+      rejectsTypeArity: wrongCsharpTypeArity,
+    },
     acceptLocalCapture: (name) => !isCsharpPointerExpression(name) && !isCsharpDiscardName(name),
+    typeOnlyName: csharpTypeOnlyName,
     referenceNeedsVerification: (node, errors) => !!errors && csharpUnparsedReference(node, errors),
     referenceVerificationRequiresParseError: true,
     declarationOutsideScope: csharpDeclarationOutsideQuery,
@@ -881,12 +908,21 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
   },
   c: {
     ...C_SCOPE_NODES,
+    bindingRules: { functionRedeclarations: "shared-occurrences", usesTagNamespace: true },
     memberSelectorFields: { field_expression: "field" },
     memberSelectorParentTypes: new Set(["field_designator"]),
     memberSelectorRejectsBinding: (binding) => !binding.node || !C_MEMBER_BINDING_NAME_TYPES[binding.node.type],
   },
   cpp: {
     ...C_SCOPE_NODES,
+    bindingRules: {
+      functionRedeclarations: "overload-group",
+      qualifiedFunctionNames: true,
+      functionOutsideTypeScopeParents: new Set(["template_declaration"]),
+      nestedTypeScopeParents: { template_parameter_list: "template_template_parameter_declaration" },
+      declarationNameIsUse: isCppTemplateArgumentName,
+      nonLexicalMemberAccess: true,
+    },
     memberScopeTypes: new Set(["field_declaration_list"]),
     // The template's own name remains in its enclosing scope; only its parameters stay here.
     typeScopeTypes: new Set(["template_declaration"]),
@@ -908,6 +944,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     },
   },
   kotlin: {
+    typeOnlyParentTypes: new Set(["user_type"]),
     parameterParents: new Set(["parameter", "class_parameter", "lambda_parameters"]),
     functionNameTypes: new Set(["function_declaration"]),
     classNameTypes: new Set(["class_declaration"]),
@@ -923,6 +960,11 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     wholeScopeMemberDeclarationTypes: new Set(["property_declaration"]),
   },
   swift: {
+    bindingRules: {
+      classNameExclusion: { field: "declaration_kind", keyword: "extension" },
+      nonLexicalUse: isSwiftQualifiedExtensionSuffix,
+    },
+    typeOnlyName: isSwiftExtensionTypeName,
     parameterParents: new Set(["parameter"]),
     functionNameTypes: new Set(["function_declaration"]),
     classNameTypes: new Set(["class_declaration"]),

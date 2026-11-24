@@ -1,0 +1,1 @@
+Select Java and Kotlin implicit-receiver binding rules from their own lookup policies.

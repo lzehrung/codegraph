@@ -25,7 +25,6 @@ import { getCompilationUnitPeers, IMPLICIT_UNIT_LANGUAGES } from "./compilation-
 import { BloomFilter, isBloomIdentifierToken } from "../util/bloom-filter.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
-import { isGoExportedMemberName } from "./declaration-visibility.js";
 import { memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { phpObjectCreationKeyword } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import {
@@ -1454,7 +1453,8 @@ async function findReferencesInternal(
       }
     };
 
-    if (supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.supportsExportFromReferences) {
+    const fileSupport = supportForFileWithoutHeaderSample(fileId, index.languageExtensions);
+    if (fileSupport?.supportsExportFromReferences) {
       for (const entry of module.exports) {
         if (hasReachedCollectionLimit()) break;
         if (entry.type !== "reexport" || entry.forwardsImportBinding) continue;
@@ -1483,6 +1483,7 @@ async function findReferencesInternal(
 
     const loadedSubmodules =
       parsedContext.sup.id === "python" ? pythonLoadedSubmodules(index, module.imports) : undefined;
+    const memberNamePattern = fileSupport?.exportedNamePattern;
     for (const { imp, packageView } of importScanViews(index, module.imports)) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
@@ -1599,12 +1600,7 @@ async function findReferencesInternal(
         if (hasReachedCollectionLimit()) break;
         const cjsModuleValue = cjsExportedName === exportedName;
         if (imp.kind === "namespace" && !cjsModuleValue) {
-          if (
-            !isGoExportedMemberName(
-              supportForFileWithoutHeaderSample(fileId, index.languageExtensions)?.id,
-              exportedName,
-            )
-          ) {
+          if (memberNamePattern && !memberNamePattern.test(exportedName)) {
             continue;
           }
           const hit = resolveExport(index, targetFile, exportedName, exportOptions);

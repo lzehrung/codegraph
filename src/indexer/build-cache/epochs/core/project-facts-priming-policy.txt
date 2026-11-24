@@ -1,0 +1,1 @@
+Select project-scan priming and module namespace facts from project-fact policies.

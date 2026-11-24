@@ -13,7 +13,7 @@ import type {
   NativeSyntaxTree,
   NativeWorkerBindingHandoff,
 } from "../native/contracts.js";
-import type { ModuleRecordFallback, ModuleRecordPayload, ModuleRecordTask } from "../indexer/module-record.js";
+import type { ModuleRecordFallback, ModuleRecordPayload, ModuleRecordTask } from "../indexer/module-record-types.js";
 import type * as ModuleRecords from "../indexer/module-record.js";
 import type * as ProjectedTrees from "../native/projected-tree.js";
 import type { LanguageSupport } from "../languages.js";
@@ -31,15 +31,10 @@ import { supportById } from "../languages.js";
 import { buildBloomFilterFromSource } from "../util/bloom-filter.js";
 import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../native/source-limits.js";
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
-import { collectProjectFileFacts, JVM_PACKAGE_HEAD_CHARS, type ProjectFileFacts } from "../util/project-file-facts.js";
+import { collectProjectFileFacts, JVM_PACKAGE_HEAD_CHARS } from "../util/project-file-facts.js";
+import type { ProjectFileFacts } from "../util/project-file-facts-types.js";
+import type { NativeBloomFilterPayload } from "./native-bloom-types.js";
 import { isJvmLanguage, readsSyntaxTree } from "../util/syntax-tree.js";
-
-export type NativeBloomFilterPayload = {
-  bits: Uint8Array;
-  size: number;
-  hashCount: number;
-  itemCount: number;
-};
 
 function buildBloomFilterPayload(source: string, languageId: string): NativeBloomFilterPayload | undefined {
   const support = supportById(languageId);

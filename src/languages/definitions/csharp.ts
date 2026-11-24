@@ -55,6 +55,7 @@ const ATTRIBUTE_SUFFIX = "Attribute";
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs", ".csx"],
+  capturesDocstrings: true,
   usesQueryDrivenLocals: true,
   bloomUnprobeableIdentifiers: true,
   structure: {

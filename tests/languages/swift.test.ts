@@ -1635,6 +1635,31 @@ describe("Swift extension headers: type namespace, aliases, and dotted owners", 
     );
   });
 
+  it("resolves an ordinary qualified nested type without binding a top-level decoy", async () => {
+    const declarations = ["struct Inner {}", "struct Outer { struct Inner {} }"];
+    const uses = ["func take(_ value: Outer.Inner) {}"];
+    await withProject(
+      { "Types.swift": lines(...declarations), "Use.swift": lines(...uses) },
+      async ({ index, paths }) => {
+        const nested = await goToDefinition(index, {
+          file: paths["Use.swift"]!,
+          line: 1,
+          column: columnOf(uses, 1, "Inner"),
+        });
+        expect(nested.status).toBe("ok");
+        if (nested.status !== "ok") throw new Error("Expected the qualified nested type");
+        expect(normalizePath(nested.definition.file)).toBe(paths["Types.swift"]);
+        expect(nested.definition.range.start.line).toBe(2);
+        const decoy = await findReferences(index, {
+          file: paths["Types.swift"]!,
+          line: 1,
+          column: columnOf(declarations, 1, "Inner"),
+        });
+        expect(sites(decoy)).not.toContain("Use.swift:1");
+      },
+    );
+  });
+
   it("resolves the leading segment of a dotted extension owner and leaves its nested suffix unproven", async () => {
     await withProject(
       {

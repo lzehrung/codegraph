@@ -8,6 +8,7 @@ import {
   ECMASCRIPT_DECLARATION_NAME_PARENTS,
   ECMASCRIPT_FUNCTION_SCOPE_TYPES,
   ECMASCRIPT_MODULE_VAR_BLOCKS,
+  ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES,
   ecmaReferenceSpelling,
   isEcmaScriptFieldDefinitionName,
   isEcmaScriptTypeOnlyStatement,
@@ -33,6 +34,8 @@ const JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN = `
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
+  capturesDocstrings: true,
+  referenceBlockPriorities: ECMASCRIPT_REFERENCE_BLOCK_PRIORITIES,
   supportsExportFromReferences: true,
   structure: {
     blocks: [...ECMASCRIPT_CORE_FUNCTION_BLOCKS, ...ECMASCRIPT_MODULE_VAR_BLOCKS],

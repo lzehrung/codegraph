@@ -1,0 +1,1 @@
+Fingerprint language-owned docstring capture capabilities used by persisted module facts.

@@ -1,0 +1,1 @@
+Move C-family specifier source and C++ declared-container rules into index policies.

@@ -1,0 +1,1 @@
+Select qualified type and module binding lookup from language scope rules.

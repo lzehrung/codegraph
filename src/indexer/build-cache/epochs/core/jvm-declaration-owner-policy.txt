@@ -1,0 +1,1 @@
+Select declaration owner and visibility facts from language-owned indexing rules.

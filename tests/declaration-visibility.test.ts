@@ -13,6 +13,7 @@ import {
 } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
+import { supportById } from "../src/languages.js";
 import { testGoToDefinition } from "./test-utils.js";
 
 function tokenColumn(line: string, token: string): number {
@@ -40,6 +41,17 @@ async function withTempRoot(prefix: string, run: (root: string) => Promise<void>
     await rm(root, { recursive: true, force: true });
   }
 }
+
+describe("member-name visibility", () => {
+  it("applies Go's Unicode export rule without restricting other or unknown languages", () => {
+    const pattern = supportById("go")?.exportedNamePattern;
+    expect(pattern?.test("Public")).toBe(true);
+    expect(pattern?.test("\u03a9mega")).toBe(true);
+    expect(pattern?.test("hidden")).toBe(false);
+    expect(supportById("ts")?.exportedNamePattern).toBeUndefined();
+    expect(supportById("toString")).toBeUndefined();
+  });
+});
 
 describe("declaration visibility module exports", () => {
   it("keeps Rust non-pub items local while pub, pub(crate), and pub(super) stay importable", async () => {

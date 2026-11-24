@@ -20,6 +20,7 @@ import {
 } from "./navigation-php.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
 import type { ParsedFileContext } from "./parse-context.js";
+import type { PhpModuleImportNames } from "./php-module-facts-types.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -234,14 +235,6 @@ function phpDeclarationsIncomplete(moduleEntry: ModuleIndex, parsed: ParsedFileC
 }
 
 export const PHP_INCOMPLETE_DECLARATION_IDENTITY = "incomplete:";
-
-export type PhpModuleImportNames = {
-  classes: Set<string>;
-  functions: Set<string>;
-  consts: Set<string>;
-  namespaces: Set<string>;
-  incomplete: boolean;
-};
 
 /** Compact declaration facts using the same qualified names and roles as PHP navigation. */
 export function collectPhpModuleImportNames(moduleEntry: ModuleIndex, parsed: ParsedFileContext): PhpModuleImportNames {

@@ -4,7 +4,6 @@ import { getCallArgumentCount } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
-import { csharpTypeArgumentArity } from "../util/csharp-tree.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { cppSelectCallableBinding } from "./cpp-callables.js";
 import { typescriptCallableCandidatesInContainer, typescriptSelectOverloadCandidate } from "./ts-callables.js";
@@ -20,6 +19,7 @@ import {
   scopeNodesFor,
   closestContainingScope,
   typeOnlyName,
+  type ScopeNodeRow,
 } from "./scope-nodes.js";
 import { buildScopeIndexFromSource, type Binding, type ScopeIndex } from "./scope.js";
 import { csharpQualifiedNameNode, findClosestScopeBinding } from "./scope-lookup.js";
@@ -204,9 +204,10 @@ export function laterLocalShadowsUse(
   currentNode: SyntaxNodeLike,
   support: LanguageSupport,
   skipFunctionScope = false,
+  selectedRow?: ScopeNodeRow,
 ): boolean {
-  if (typeOnlyName(support.id, currentNode)) return false;
-  const row = scopeNodesFor(support.id);
+  const row = selectedRow ?? scopeNodesFor(support.id);
+  if (typeOnlyName(row, currentNode)) return false;
   if (!row.laterLocalBlocksOuterKinds && !row.moduleBindingsAtFunctionRuntime) return false;
   const canonicalName = scopeIdentifierKey(row, bindingName, currentNode, support.normalizeIdentifier);
   let scope = closestContainingScope(scopeIndex, currentNode);
@@ -279,10 +280,13 @@ export function definitionForBinding(
   support: LanguageSupport,
   source?: string,
   tree?: SyntaxTreeLike,
+  selectedRow?: ScopeNodeRow,
 ): SymbolDef | null {
   let binding = closest;
   if (!binding.def) return null;
-  if (support.id === "cpp" && binding.kind === "function" && source) {
+  const row = selectedRow ?? scopeNodesFor(support.id);
+  const callableGrouping = row.bindingRules?.functionRedeclarations;
+  if (callableGrouping === "overload-group" && binding.kind === "function" && source) {
     const collisions = binding.sameScopeFunctionBindings ?? [binding];
     if (collisions.length > 1 || binding.callable?.signature) {
       const selected = cppSelectCallableBinding(collisions, currentNode, source, file, file);
@@ -296,7 +300,7 @@ export function definitionForBinding(
       };
     }
   }
-  if ((support.id === "ts" || support.id === "tsx") && binding.kind === "function" && source && tree) {
+  if (callableGrouping === "signature-group" && binding.kind === "function" && source && tree) {
     const selected = selectTypeScriptOverloadBinding(binding, currentNode, source, support.id);
     if (!selected?.def) return null;
     binding = selected;
@@ -311,14 +315,14 @@ export function definitionForBinding(
   }
   const range = binding.def;
   if (!range) return null;
-  const tagRole = support.id === "c" && binding.node ? cTagRole(binding.node) : undefined;
+  const tagRole = row.bindingRules?.usesTagNamespace && binding.node ? cTagRole(binding.node) : undefined;
   return {
     file,
     localName: binding.name,
     kind,
     range,
     ...(binding.callable ? { callable: binding.callable } : {}),
-    ...(isTypeParameterBinding(scopeNodesFor(support.id), binding) ? { typeParameter: true } : {}),
+    ...(isTypeParameterBinding(row, binding) ? { typeParameter: true } : {}),
     ...(tagRole ? { cTag: tagRole } : {}),
   };
 }
@@ -386,6 +390,7 @@ export function resolveNamedDefinition(
   scopeIndex?: ScopeIndex,
 ): GoToResult | null {
   mod = withCsharpGlobalUsings(index, mod);
+  const row = scopeNodesFor(support.id);
   const callArgumentCount = callSite
     ? explicitCallArgumentCount(support.id, callSite.source, callSite.node)
     : undefined;
@@ -398,11 +403,13 @@ export function resolveNamedDefinition(
       callableReference.namedChildren.at(-1)?.id === callSite?.node.id);
   const argumentCount = callArgumentCount ?? undefined;
   const kotlinTypeUse =
-    support.id === "kotlin" && !!callSite && (callSite.typeOnly || typeOnlyName(support.id, callSite.node));
+    support.id === "kotlin" && !!callSite && (callSite.typeOnly || typeOnlyName(row, callSite.node));
+  const typeArgumentArity = row.bindingRules?.typeArgumentArity;
+  const csharpGenericArity = callSite && typeArgumentArity ? typeArgumentArity(callSite.node) : undefined;
   const arityOptions = {
     ...(isCallableUse ? { isCallableUse } : {}),
     ...(argumentCount !== undefined ? { argumentCount } : {}),
-    ...(support.id === "csharp" && callSite ? { csharpGenericArity: csharpTypeArgumentArity(callSite.node) } : {}),
+    ...(csharpGenericArity !== undefined ? { csharpGenericArity } : {}),
     ...(kotlinTypeUse ? { typeOnly: true } : {}),
   };
   const normalizedName = support.normalizeIdentifier(name);
@@ -451,7 +458,6 @@ export function resolveNamedDefinition(
   if (hit?.kind === "resolved" && fileIdentityKey(file) === fileIdentityKey(hit.def.file)) {
     localDefinition = hit.def;
   }
-  const row = scopeNodesFor(support.id);
   const moduleLookupAtRuntime =
     !!row.moduleBindingsAtFunctionRuntime &&
     !!localDefinition &&
@@ -462,7 +468,7 @@ export function resolveNamedDefinition(
       return !!body && referenceIndex >= body.startIndex && referenceIndex < body.endIndex;
     });
   let pendingOwnFunction = false;
-  if (support.id === "python" && hit?.kind === "resolved" && hit.def.kind === SymbolKind.Function) {
+  if (row.moduleBindingsAtFunctionRuntime && hit?.kind === "resolved" && hit.def.kind === SymbolKind.Function) {
     const sameFile = fileIdentityKey(file) === fileIdentityKey(hit.def.file);
     if (sameFile && callSite) {
       pendingOwnFunction = pythonFunctionPendingInDefault(hit.def.range.start.index, callSite.node);

@@ -1,0 +1,1 @@
+Move Swift nested type suffix resolution into the existing prelexical hook.

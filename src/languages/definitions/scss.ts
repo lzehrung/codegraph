@@ -26,6 +26,7 @@ const sassLocalQueries = `
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
+  capturesDocstrings: true,
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

@@ -9,10 +9,9 @@ import {
   BLOOM_FILTER_IDENTIFIER_SOURCE,
   BLOOM_FILTER_SEPARATOR_SOURCE,
   UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN,
-  foldPhpIdentifierCase,
   hasUnprobeableIdentifierSpelling,
 } from "./identifiers.js";
-import type { LanguageSupport } from "../languages.js";
+import type { LanguageDefinition } from "../languages/types.js";
 import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
 
@@ -215,12 +214,17 @@ export function isBloomIdentifierToken(text: string): boolean {
  */
 export function buildBloomFilterFromSource(
   source: string,
-  support: Pick<LanguageSupport, "normalizeIdentifier" | "id" | "bloomUnprobeableIdentifiers">,
+  support: {
+    normalizeIdentifier: NonNullable<LanguageDefinition["normalizeIdentifier"]>;
+    bloomAlternateKey?: LanguageDefinition["bloomAlternateKey"];
+    bloomSourceTokens?: LanguageDefinition["bloomSourceTokens"];
+    bloomUnprobeableIdentifiers?: boolean;
+  },
   falsePositiveRate = 0.01,
 ): BloomFilter {
   const identifierPattern = new RegExp(BLOOM_FILTER_IDENTIFIER_SOURCE, "gu");
   const matches = source.match(identifierPattern);
-  const isPhp = support.id === "php";
+  const alternateKey = support.bloomAlternateKey;
   // Few sources hold a separator, so one scan of the source tells whether any token needs splitting.
   const hasSeparator = SEPARATOR_PATTERN.test(source);
 
@@ -228,7 +232,7 @@ export function buildBloomFilterFromSource(
   const add = (identifier: string): void => {
     const normalized = support.normalizeIdentifier(identifier);
     unique.add(normalized);
-    if (isPhp) unique.add(foldPhpIdentifierCase(normalized));
+    if (alternateKey) unique.add(alternateKey(normalized));
   };
   for (const identifier of matches ?? []) {
     add(identifier);
@@ -237,7 +241,11 @@ export function buildBloomFilterFromSource(
       if (piece) add(piece);
     }
   }
-  if (support.id === "java" && source.includes("\\u")) unique.add(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN);
+  if (support.bloomSourceTokens) {
+    support.bloomSourceTokens(source, (token) => {
+      unique.add(token);
+    });
+  }
   if (support.bloomUnprobeableIdentifiers && hasUnprobeableIdentifierSpelling(source)) {
     unique.add(UNPROBEABLE_IDENTIFIER_BLOOM_TOKEN);
   }

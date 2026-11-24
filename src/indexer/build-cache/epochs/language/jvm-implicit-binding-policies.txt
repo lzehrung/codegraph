@@ -1,0 +1,1 @@
+Keep Java and Kotlin implicit-receiver binding hooks in their respective policies.

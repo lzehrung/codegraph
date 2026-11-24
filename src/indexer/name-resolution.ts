@@ -20,7 +20,7 @@ import {
   jvmQualifiedTypeSegments,
   kotlinQualifiedExpression,
 } from "../util/member-access.js";
-import { isSwiftQualifiedTypeSuffix, swiftQualifiedTypeSegments } from "../util/swift-tree.js";
+import { isJvmLanguage, type JvmLanguageId } from "../util/syntax-tree.js";
 import { memberLookupPolicyFor } from "./member-lookup-policies/index.js";
 import { swiftShorthandContextType } from "./swift-enum.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -143,9 +143,9 @@ function resolveQualifiedJvmName(
   root: SyntaxNodeLike,
   parts: readonly string[],
   typeOnly: boolean,
+  languageId: JvmLanguageId,
 ): SymbolDef | null {
   const { index, file, parsed, scopeIndex } = use;
-  const languageId = parsed.sup.id === "java" ? "java" : "kotlin";
   const rootName = parts[0]!;
   let rootResult = resolveBareName({ ...use, node: root, name: rootName }, typeOnly);
   while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
@@ -158,26 +158,6 @@ function resolveQualifiedJvmName(
   }
   if (rootResult?.status === "not_found" && isAmbiguousResolutionReason(rootResult.reason)) return null;
   return resolveJvmQualifiedPath(index, file, languageId, null, parts, typeOnly);
-}
-
-/**
- * A later segment of a dotted Swift type (`Base` in `Other.Base`) names a type nested in the segments before it, so its
- * own spelling never binds a bare name. The first segment is looked up as an ordinary name and must declare members;
- * the nested walk runs when the resolution is settled. A root that binds nothing, or a generic owner, proves no path.
- */
-function resolveSwiftQualifiedTypeSuffix(use: BareNameUse): NameResolution | undefined {
-  const { node, parsed } = use;
-  if (!isSwiftQualifiedTypeSuffix(node)) return undefined;
-  const unproven: NameResolution = { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
-  const segments = swiftQualifiedTypeSegments(node);
-  if (!segments) return unproven;
-  const root = segments[0]!;
-  let rootResult = resolveBareName({ ...use, node: root, name: sliceText(root, parsed.source) });
-  while (rootResult?.status === "deferred") rootResult = rootResult.fallback;
-  const owner = rootResult?.status === "ok" ? rootResult.definition : null;
-  if (!owner || !declaresMembers(owner)) return unproven;
-  const names = segments.slice(1).map((segment) => sliceText(segment, parsed.source));
-  return { status: "deferred", request: { kind: "swift-nested-type", owner, names }, fallback: unproven };
 }
 
 /**
@@ -197,13 +177,13 @@ export function resolveBareName(
   if (effectiveModule !== use.mod) use = { ...use, mod: effectiveModule };
   const { index, mod, file, parsed, scopeIndex, node } = use;
   const { sup, source, tree } = parsed;
-  if (sup.id === "java" || sup.id === "kotlin") {
+  if (isJvmLanguage(sup.id)) {
     const qualifiedSuffix = isQualifiedTypeSuffix(sup, node);
     const qualifiedContainer = node.type === "user_type" || node.type === "scoped_type_identifier";
     const segments = qualifiedSuffix || qualifiedContainer ? jvmQualifiedTypeSegments(sup, node) : null;
     if (segments) {
       const parts = segments.map((segment) => sliceText(segment, source));
-      const target = resolveQualifiedJvmName(use, segments[0]!, parts, true);
+      const target = resolveQualifiedJvmName(use, segments[0]!, parts, true, sup.id);
       return target
         ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
         : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
@@ -218,19 +198,15 @@ export function resolveBareName(
         return { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
       }
       const parts = [sliceText(chain.base, source), ...chain.names.toReversed()];
-      const target = resolveQualifiedJvmName(use, chain.base, parts, false);
+      const target = resolveQualifiedJvmName(use, chain.base, parts, false, sup.id);
       return target
         ? okGoToResult(index, target, { resolution: "member-access", confidence: "medium" })
         : { status: "not_found", reason: UNRESOLVED_QUALIFIED_TYPE_REASON };
     }
   }
-  if (sup.id === "swift") {
-    const qualifiedType = resolveSwiftQualifiedTypeSuffix(use);
-    if (qualifiedType) return qualifiedType;
-  }
   const policy = nameLookupPolicyFor(sup.id);
   const lookupName = policy.lookupName?.(use) ?? use.name;
-  const early = policy.beforeLexical?.(use, lookupName);
+  const early = policy.beforeLexical?.(use, lookupName, resolveBareName);
   if (early !== undefined) return early;
   let found = findClosestScopeBinding(scopeIndex, lookupName, node, sup, jvmTypeOnly);
   const row = scopeNodesFor(sup.id);
@@ -250,7 +226,7 @@ export function resolveBareName(
     const beforeLocal = policy.beforeLocal?.(state);
     if (beforeLocal !== undefined) return beforeLocal;
     const { closestBinding } = state;
-    const local = closestBinding ? definitionForBinding(closestBinding, file, node, sup, source, tree) : null;
+    const local = closestBinding ? definitionForBinding(closestBinding, file, node, sup, source, tree, row) : null;
     if (local) {
       const adjusted = policy.onLocal?.(state, local);
       if (adjusted !== undefined) return adjusted;
@@ -258,7 +234,7 @@ export function resolveBareName(
     }
     const unbound = policy.onUnboundLocal?.(state);
     if (unbound !== undefined) return unbound;
-    if (!jvmTypeOnly && laterLocalShadowsUse(scopeIndex, lookupName, node, sup)) {
+    if (!jvmTypeOnly && laterLocalShadowsUse(scopeIndex, lookupName, node, sup, false, row)) {
       return { status: "not_found", reason: "Local is not in scope before its declaration" };
     }
     const beforeCrossModule = policy.beforeCrossModule?.(state);

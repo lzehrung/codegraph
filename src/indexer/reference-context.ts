@@ -70,41 +70,13 @@ export function extractEnclosingBlock(
   let genericCandidate: SyntaxNodeLike | null = null;
   const isRootLikeNode = (type: string): boolean =>
     type === "program" || type === "module" || type === "source_file" || type === "document" || type === "config_file";
-  const blockTypePriority = (type: string): number => {
-    if (sup.id === "ts" || sup.id === "tsx" || sup.id === "js") {
-      if (
-        type === "function_declaration" ||
-        type === "method_definition" ||
-        type === "class_declaration" ||
-        type === "arrow_function" ||
-        type === "function_expression"
-      ) {
-        return 2;
-      }
-      if (type === "statement_block" || type === "class_body") {
-        return 1;
-      }
-      return 0;
-    }
-    if (sup.id === "python") {
-      if (type === "function_definition" || type === "class_definition") {
-        return 2;
-      }
-      if (type === "suite") {
-        return 1;
-      }
-      return 0;
-    }
-    if (sup.id === "terraform") {
-      return type === "block" ? 2 : 0;
-    }
-    return 0;
-  };
+  const blockPriorities = sup.referenceBlockPriorities;
 
   let bestBlockNode: SyntaxNodeLike | null = null;
   let bestBlockPriority = 0;
   while (current) {
-    const priority = blockTypePriority(current.type);
+    const entry = blockPriorities?.[current.type];
+    const priority = typeof entry === "number" ? entry : 0;
     if (priority > bestBlockPriority) {
       bestBlockNode = current;
       bestBlockPriority = priority;

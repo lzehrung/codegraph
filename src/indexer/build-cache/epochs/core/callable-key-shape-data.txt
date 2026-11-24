@@ -1,0 +1,1 @@
+Fingerprint declarative callable key shapes used to construct persisted identities.

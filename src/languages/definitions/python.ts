@@ -71,6 +71,11 @@ const PYTHON_BINDING_QUERY = `
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
   extensions: [".py", ".pyi", ".pyw"],
+  referenceBlockPriorities: {
+    function_definition: 2,
+    class_definition: 2,
+    suite: 1,
+  },
   usesQueryDrivenLocals: true,
   structure: {
     blocks: [

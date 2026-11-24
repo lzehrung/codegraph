@@ -3,7 +3,6 @@ import { memberLookupPolicyFor } from "../../indexer/member-lookup-policies/inde
 import { findClosestScopeBinding } from "../../indexer/scope-lookup.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
-import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
 import {
   hasSeparateMemberScopes,
   inheritsMemberOverloads,
@@ -12,7 +11,12 @@ import {
   type MemberSelection,
 } from "../../indexer/member-selection.js";
 import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/types.js";
-import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
+import {
+  GO_SUPPORT,
+  supportForFileWithoutHeaderSample,
+  type LanguageExtensionMap,
+  type LanguageSupport,
+} from "../../languages.js";
 import type { CallableArity, CallableIdentity } from "../../languages/callable-arity.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
@@ -43,6 +47,8 @@ import {
   PARAMETER_LIST_NODE_TYPES,
 } from "./ast.js";
 import type { ReceiverBinding, ReceiverMemberScope } from "./receiver-types.js";
+
+const GO_MEMBER_NAME_PATTERN = GO_SUPPORT.exportedNamePattern;
 
 /**
  * A receiver method call whose target could not be proven from the calling module
@@ -2096,7 +2102,8 @@ export function emitReceiverCallEdges(
         return false;
       return (
         !activeCandidate.goPackagePeerFiles ||
-        isGoExportedMemberName("go", node.name) ||
+        !GO_MEMBER_NAME_PATTERN ||
+        GO_MEMBER_NAME_PATTERN.test(node.name) ||
         activeCandidate.goPackagePeerFiles.has(node.file)
       );
     },

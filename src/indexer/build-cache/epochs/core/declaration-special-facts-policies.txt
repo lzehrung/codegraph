@@ -1,0 +1,1 @@
+Select tag, arity, extension owner, and promoted property facts from language policies.

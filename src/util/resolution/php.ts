@@ -20,13 +20,10 @@ import { foldPhpIdentifierCase, PHP_IDENTIFIER_SOURCE } from "../identifiers.js"
 import { PHP_PACKAGE_MANIFEST_NAMES, resolveNearestManifestRoot } from "./files.js";
 import { ensureParsedContext, type ParsedFileContext } from "../../indexer/parse-context.js";
 import { collectLocalsAndExportsFromSource } from "../../indexer/locals-and-exports.js";
-import {
-  collectPhpModuleImportNames,
-  phpModuleDeclaresImport,
-  type PhpModuleImportNames,
-} from "../../indexer/php-namespace-symbols.js";
+import { collectPhpModuleImportNames, phpModuleDeclaresImport } from "../../indexer/php-namespace-symbols.js";
 import { getNativeQueryExecution, isNativeRequiredUnavailableError } from "../../native/tree-sitter-native.js";
 import { compareStrings } from "../strings.js";
+import { phpModuleNamesReader, phpParsedModuleCache } from "./php-module-facts-cache.js";
 
 const PHP_IDENTIFIER_PATTERN = new RegExp(PHP_IDENTIFIER_SOURCE, "uy");
 
@@ -76,18 +73,6 @@ type PhpSymbolIndexEntry = {
 const phpImportResolutionCache = new Map<string, string | null>();
 const phpSymbolIndexCache = new Map<string, PhpSymbolIndexEntry>();
 const phpProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
-const phpParsedModuleCache = new Map<string, PhpModuleImportNames | null | Promise<PhpModuleImportNames | null>>();
-let phpModuleNamesReader: ((file: string) => Promise<PhpModuleImportNames | null | undefined>) | undefined;
-
-/** Indexed candidates borrow the active build's memoized extraction instead of parsing for proof. */
-export function setPhpModuleImportNamesReader(reader: typeof phpModuleNamesReader): void {
-  phpModuleNamesReader = reader;
-}
-
-/** The active build supplies declarations from its single native extraction or an unchanged module row. */
-export function primePhpModuleImportNames(file: string, names: PhpModuleImportNames | null): void {
-  phpParsedModuleCache.set(fileIdentityKey(file), names);
-}
 
 function phpCandidateDeclaresImport(
   file: string,
@@ -106,7 +91,7 @@ function phpCandidateDeclaresImport(
   if (!pending) {
     pending = (async () => {
       try {
-        const indexed = await phpModuleNamesReader?.(file);
+        const indexed = await phpModuleNamesReader.current?.(file);
         if (indexed !== undefined) return indexed;
         const parsed = await ensureParsedContext(file, parsedFiles?.get(fileKey));
         if (parsed.sup.id !== "php") return null;
@@ -696,6 +681,6 @@ export function clearPhpResolutionCaches(): void {
   phpSymbolIndexCache.clear();
   phpProjectSymbolIndexCache.clear();
   phpParsedModuleCache.clear();
-  phpModuleNamesReader = undefined;
+  phpModuleNamesReader.current = undefined;
   clearPhpComposerResolutionCaches();
 }

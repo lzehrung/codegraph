@@ -170,7 +170,11 @@ export type NameLookupPolicy = {
   references?: ReferenceHooks;
   lookupName?(use: BareNameUse): string;
   /** Before scope lookup: qualified names, role namespaces, unparsed macro input. */
-  beforeLexical?(use: BareNameUse, lookupName: string): NameResolution | null | undefined;
+  beforeLexical?(
+    use: BareNameUse,
+    lookupName: string,
+    resolveName: (use: BareNameUse) => NameResolution | null,
+  ): NameResolution | null | undefined;
   /**
    * Whether the closest scope binding is in a different namespace than the use and must be
    * ignored (a Java variable cannot be called as a method).

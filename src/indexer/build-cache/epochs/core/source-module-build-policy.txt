@@ -1,0 +1,1 @@
+Select direct source module extraction and parser fallback from index policies.

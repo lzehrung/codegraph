@@ -1,0 +1,1 @@
+Keep Python __all__ captures and module re-export completion in its declaration policy.

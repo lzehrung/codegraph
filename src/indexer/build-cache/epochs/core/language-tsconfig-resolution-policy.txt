@@ -1,0 +1,1 @@
+Select tsconfig path resolution and incremental invalidation from index language policy.
