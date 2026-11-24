@@ -18,6 +18,7 @@ import {
 } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util/ast.js";
+import { csharpUnparsedName, isCsharpDiscardName } from "../../util/csharp-bindings.js";
 import {
   csharpDesignatorReceiver,
   csharpDesignatorType,
@@ -293,6 +294,20 @@ function csharpDesignatorReceiverType(use: BareNameUse): SyntaxNodeLike | null {
 export const csharpLookupPolicy: NameLookupPolicy = {
   lookupName: (use) => csharpLookupName(use.node, use.parsed.source, use.name),
   beforeLexical(use) {
+    if (use.name === "_" && isCsharpDiscardName(use.node)) {
+      return { status: "not_found", reason: "C# discard is not a binding" };
+    }
+    if (
+      use.mod.parseErrorRanges?.length &&
+      !(use.parsed.sup.isDeclarationName(use.node) && use.node.parent?.type !== "ERROR") &&
+      !csharpTypeOnlyName(use.node) &&
+      csharpUnparsedName(use.node, use.mod.parseErrorRanges)
+    ) {
+      const binding = findClosestScopeBinding(use.scopeIndex, use.name, use.node, use.parsed.sup);
+      if (csharpUnparsedName(use.node, use.mod.parseErrorRanges, binding?.node)) {
+        return { status: "not_found", reason: "C# name occurs in unparsed syntax" };
+      }
+    }
     if (!isCsharpMemberDesignator(use.node)) return undefined;
     const fallback = { status: "not_found", reason: UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } as const;
     const call = csharpNamedArgumentCall(use.node);

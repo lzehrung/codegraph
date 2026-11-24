@@ -1,0 +1,1 @@
+C# scope and name-lookup hooks distinguish lexical binders and unparsed pattern names.

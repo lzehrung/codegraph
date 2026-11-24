@@ -38,8 +38,8 @@ import {
 import { BATCH6_CASES } from "./csharp-java-swift-batch6-fixture.js";
 
 /**
- * One record per binder form: a nearer binder of `X`, or a binder the scope index does not model, beside the header
- * parameter `X`. Every expectation below was checked against Roslyn (C#) and javac (Java).
+ * One record per nearer binder of `X` beside the header parameter `X`. Every expectation below was checked against
+ * Roslyn (C#) and javac (Java).
  */
 type BinderForm = {
   id: string;
@@ -65,10 +65,10 @@ const CSHARP_BINDER_FORMS: readonly BinderForm[] = [
     id: "Deconstruction",
     body: "int A() { var (X, Z) = (1, 2); return X; }",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
     ],
-    references: { names: [1], coverage: "partial" },
+    references: { names: [1], coverage: "complete" },
   },
   {
     id: "DeconstructionBlock",
@@ -114,16 +114,16 @@ const CSHARP_BINDER_FORMS: readonly BinderForm[] = [
     id: "AnonymousMethodParameter",
     body: "System.Func<int, int> F = delegate (int X) { return X; };",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
     ],
   },
   {
     id: "AnonymousMethodCall",
     body: "int A(int[] xs) => xs.Sum(delegate (int X) { return X; }) + X;",
     uses: [
-      [2, "not_found"],
-      [3, "not_found"],
+      [2, 2],
+      [3, 2],
       [4, 1],
     ],
   },

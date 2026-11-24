@@ -148,6 +148,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "acceptLocalCapture",
   "declarationOutsideScope",
   "referenceNeedsVerification",
+  "referenceVerificationRequiresParseError",
   "destructuringTypeFieldBindingTypes",
   "outerEvaluatedFields",
   "memberSelectorFields",

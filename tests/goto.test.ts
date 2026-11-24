@@ -3448,7 +3448,7 @@ describe("Go to Definition", () => {
       });
     });
 
-    it("keeps a nearer binder, or stops at one the scope does not model, beside a header parameter", async () => {
+    it("keeps a nearer binder beside a header parameter", async () => {
       await withBatch3Fixture("cg-csharp-header-binders-", CSHARP_BINDER_SOURCES, async (fixture) => {
         await eachIndexMode(fixture, (index) => expectCsharpBinderForms(fixture, index));
       });
