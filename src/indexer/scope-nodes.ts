@@ -20,7 +20,13 @@ import type { Range } from "../types.js";
 import { isSwiftExtensionTypeName, isSwiftPatternLabel } from "../util/swift-tree.js";
 import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
-import { rubyCallMayReadLocal, rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby-tree.js";
+import {
+  rubyCallMayReadLocal,
+  rubyCallReadsLocal,
+  rubyLambdaParameterShadows,
+  rubyNamesLocalVariable,
+  rubyMethodNameLiteral,
+} from "../util/ruby-tree.js";
 import {
   csharpBindingVisibleAt,
   csharpDeclarationOutsideQuery,
@@ -141,6 +147,8 @@ export type ScopeNodeRow = {
   shortVariableDeclarationTypes?: ReadonlySet<string>;
   /** Explicit unqualified calls use the method namespace, not same-named local variables. */
   explicitMethodCallTypes?: ReadonlySet<string>;
+  /** A command-call shape whose method token is proven to read a local instead (Ruby operands). */
+  explicitCallReadsLocal?: (node: SyntaxNodeLike) => boolean;
   /** Pattern nodes whose type field, and parameter default-value field, contain reads rather than names. */
   destructuringTypeFieldTypes?: ReadonlySet<string>;
   /** Type-field node type that retains its existing pattern binding instead of becoming a read. */
@@ -940,6 +948,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     assignmentDeclarationTypes: new Set(["assignment"]),
     assignmentIdentifierTypes: new Set(["identifier"]),
     explicitMethodCallTypes: new Set(["call"]),
+    explicitCallReadsLocal: rubyCallReadsLocal,
     memberFunctionTypes: new Set(["method", "singleton_method"]),
     memberContainerTypes: new Set(["class"]),
     childSkipNameTypes: new Set(["identifier"]),
@@ -949,6 +958,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     localOnlyScopeTypes: new Set(["class", "module", "singleton_class"]),
     localVariableNameTypes: new Set(["identifier"]),
     referenceNeedsVerification: rubyLambdaParameterShadows,
+    nonLexicalUse: rubyMethodNameLiteral,
     namespaceHidesBinding: (row, binding, use) => {
       if (binding.kind === "param" && isExplicitMethodCall(row, use)) return !rubyCallMayReadLocal(use);
       if (binding.kind !== "function") return false;
@@ -1085,7 +1095,8 @@ export function isExplicitMethodCall(row: ScopeNodeRow, node: SyntaxNodeLike): b
   const call = node.parent;
   if (!call || !row.explicitMethodCallTypes?.has(call.type) || call.childForFieldName("receiver")) return false;
   const method = call.childForFieldName("method");
-  return !!method && node.startIndex >= method.startIndex && node.endIndex <= method.endIndex;
+  if (!method || node.startIndex < method.startIndex || node.endIndex > method.endIndex) return false;
+  return !row.explicitCallReadsLocal?.(node);
 }
 
 /** Identify selector positions before applying their binding and namespace policy. */

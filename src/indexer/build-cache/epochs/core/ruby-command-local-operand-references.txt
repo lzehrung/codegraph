@@ -1,0 +1,1 @@
+Resolve command-shaped Ruby local operands before explicit-method namespace exclusions.

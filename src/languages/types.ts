@@ -1,3 +1,5 @@
+import type { Range } from "../types.js";
+
 export interface SyntaxPositionLike {
   row: number;
   column: number;
@@ -229,6 +231,9 @@ export interface LanguageDefinition {
     node?: SyntaxNodeLike,
     identifierTypes?: ReadonlySet<string>,
   ) => string | null;
+
+  /** The editable name inside an opted-in reference token, such as the name after Ruby's symbol colon. */
+  referenceRange?: (node: SyntaxNodeLike) => Range;
 
   /**
    * The identifier token a Bloom filter holds for a method name that is not one itself: Ruby `empty?` is stored as

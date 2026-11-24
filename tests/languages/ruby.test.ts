@@ -1739,11 +1739,13 @@ it("preserves an earlier singleton method's module-body references beside a late
     await fsp.writeFile(file, source);
     const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
     const index = await buildProjectIndex(root, options);
+    const before = await goToDefinition(index, { file, line: 3, column: 3 });
+    expect(before.status === "ok" && before.definition.range.start.line).toBe(2);
     const refs = await findReferences(index, { file, line: 2, column: 12 });
     expect(refs.status).toBe("ok");
     if (refs.status !== "ok") throw new Error("Missing singleton method references");
     expect(refs.references.map((ref) => ref.range.start.line)).toEqual([2, 3]);
-    expect(refs.referenceCoverage.state).toBe("complete");
+    expect(refs.referenceCoverage.state).toBe("partial");
     const session = createAgentSession({ root, useConfig: false, buildOptions: options });
     const renamed = await previewRenameWithSession(session, { root, handle: "order.rb:2:12", newName: "renamed" });
     // A same-named static/instance pair keeps rename linkage conservative.

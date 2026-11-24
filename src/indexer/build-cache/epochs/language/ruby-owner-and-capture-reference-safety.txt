@@ -1,0 +1,1 @@
+Keep unsupported module singletons partial, distinguish class-body method namespaces, and retain named capture reassignment uncertainty.

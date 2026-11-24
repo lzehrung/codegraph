@@ -1154,6 +1154,9 @@ async function findReferencesInternal(
     kotlinNeedsVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
+  if (memberLookupPolicyFor(parsedContext.sup.id).referenceFamilyUnproven?.(referenceDefinitionName)) {
+    receiverProofUnavailableFiles.set(fileIdentityKey(definitionFile), definitionFile);
+  }
   let memberCallOccurrencesNeedVerification = false;
   if (
     localBinding &&
@@ -2707,7 +2710,8 @@ function isReceiverMemberDefinition(
   hasCppOutOfLineOwner: boolean,
 ): boolean {
   if (def.isMember || hasCppOutOfLineOwner) return true;
-  const headerPropertyTypes = scopeNodesFor(parsedContext.sup.id).headerParameters?.propertyDeclarationTypes;
+  const scopeRow = scopeNodesFor(parsedContext.sup.id);
+  const headerPropertyTypes = scopeRow.headerParameters?.propertyDeclarationTypes;
   if (def.kind === SymbolKind.Variable && headerPropertyTypes) {
     const name = syntaxNodeForDefinition(parsedContext, def);
     const headerOwner = name ? headerParameterOwner(parsedContext.sup.id, name) : null;

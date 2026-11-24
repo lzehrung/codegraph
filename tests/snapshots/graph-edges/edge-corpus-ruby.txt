@@ -5,6 +5,13 @@ file navigation/consumer.rb -> navigation/mixins.rb raw=mixins
 file navigation/members_use.rb -> navigation/members.rb raw=members
 file navigation/members_use.rb -> navigation/members_decoy.rb raw=members_decoy
 file navigation/sub/consumer.rb -> navigation/sub/foo.rb raw=foo
+symbol method-names/fixture.rb::calculate@2:7 -[member_of]-> method-names/fixture.rb::SymbolTools@1:8
+symbol method-names/fixture.rb::reflective@23:7 -[member_of]-> method-names/fixture.rb::ReflectiveMeter@22:7
+symbol method-names/fixture.rb::total@9:7 -[member_of]-> method-names/fixture.rb::OperandMeter@8:7
+symbol method-names/fixture.rb::unrelated@27:7 -[member_of]-> method-names/fixture.rb::ReflectiveMeter@22:7
+symbol method-names/fixture.rb::work@13:7 -[calls]-> method-names/fixture.rb::total@9:7 site=18:35
+symbol method-names/fixture.rb::work@13:7 -[calls]-> method-names/fixture.rb::total@9:7 site=18:49
+symbol method-names/fixture.rb::work@13:7 -[member_of]-> method-names/fixture.rb::OperandMeter@8:7
 symbol navigation/api.rb::build@30:16 -[member_of]-> navigation/api.rb::Registry@29:11
 symbol navigation/api.rb::find@34:16 -[member_of]-> navigation/api.rb::Registry@29:11
 symbol navigation/api.rb::initialize@7:11 -[calls]-> navigation/api.rb::name=@20:11 site=8:14

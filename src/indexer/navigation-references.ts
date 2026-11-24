@@ -630,7 +630,7 @@ async function collectNamedNodeReferences(
         if (comparison !== "equivalent") return;
       }
       if (filter && !filter.includes(node)) return;
-      const range = toRange(node);
+      const range = parsed.sup.referenceRange ? parsed.sup.referenceRange(node) : toRange(node);
       if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
         matched.push({ range, node });
       }

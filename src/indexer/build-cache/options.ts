@@ -137,6 +137,7 @@ export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof Langua
   useSiteMemberName: true,
   isDeclarationSpelling: true,
   referenceSpelling: true, // Query-only reference candidates; no extracted, Bloom, or persisted detailed-graph data.
+  referenceRange: true, // Function-valued reference edit ranges are covered by the language behavior epoch.
   bloomProbeName: true,
   bloomUnprobeableIdentifiers: true,
   alternateUseNames: true,

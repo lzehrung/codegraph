@@ -1,0 +1,1 @@
+Invalidate Ruby alias roles, singleton and compound method references, and split local reference families.

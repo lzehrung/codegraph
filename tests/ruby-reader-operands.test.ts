@@ -44,7 +44,8 @@ it.each([
   try {
     await fsp.writeFile(file, source);
     const index = await buildProjectIndex(root, options);
-    expect((await goToDefinition(index, site(5, "total"))).status).toBe("not_found");
+    const operand = await goToDefinition(index, site(5, "total"));
+    expect(operand.status === "ok" && operand.definition.range.start.line).toBe(4);
     for (const control of controls) {
       const answer = await goToDefinition(index, control);
       expect(answer.status).toBe("ok");
@@ -55,7 +56,7 @@ it.each([
     const refs = await findReferences(index, site(2, ":total"));
     expect(refs.status).toBe("ok");
     if (refs.status !== "ok") throw new Error("Missing generated-reader references");
-    expect(refs.referenceCoverage.state).toBe("partial");
+    expect(refs.referenceCoverage.state).toBe("complete");
     expect(refs.references.map((reference) => reference.range.start.line)).toEqual([2, 7, 11, 11]);
     const graph = await buildSymbolGraphDetailed(index);
     const calls = graph.edges.filter((edge) => edge.label === "calls" && graph.nodes.get(edge.to)?.name === "total");
@@ -83,7 +84,8 @@ it.each([
     }
     await fsp.writeFile(file, renamed);
     const renamedIndex = await buildProjectIndex(root, options);
-    expect((await goToDefinition(renamedIndex, site(5, "total"))).status).toBe("not_found");
+    const renamedOperand = await goToDefinition(renamedIndex, site(5, "total"));
+    expect(renamedOperand.status === "ok" && renamedOperand.definition.range.start.line).toBe(4);
     for (const control of controls) {
       const answer = await goToDefinition(renamedIndex, control);
       expect(answer.status).toBe("ok");

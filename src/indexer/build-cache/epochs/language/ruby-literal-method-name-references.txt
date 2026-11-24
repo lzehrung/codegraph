@@ -1,0 +1,1 @@
+Normalize Ruby symbol names and retain method-naming candidates with colon-free edit ranges.

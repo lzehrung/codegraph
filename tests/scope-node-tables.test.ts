@@ -156,6 +156,7 @@ const SCOPE_NODE_SHAPE_FIELDS = new Set<string>([
   "memberSelectorReceiverFields",
   "memberSelectorRejectsBinding",
   "requireCall",
+  "explicitCallReadsLocal",
   "classScopeComprehension",
   "headerParameters",
   "patternDefaultValueFields",
