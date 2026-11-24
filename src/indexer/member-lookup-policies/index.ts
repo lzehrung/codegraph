@@ -16,6 +16,7 @@ import { jvmCrossFileMemberHidden, jvmQualifiedOwner } from "./jvm-owner.js";
 import { javascriptOwnerResolution, typescriptOwnerResolution } from "./typescript-owner.js";
 import { pythonQualifiedOwner } from "./python-owner.js";
 import { kotlinOwnerSyntax } from "./kotlin-owner.js";
+import { graphRulesFor } from "./graph-rules.js";
 import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { getCompilationUnitPeers } from "../compilation-units.js";
@@ -36,14 +37,16 @@ export type {
 const NO_POLICY: MemberLookupPolicy = {};
 
 export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
-  csharp: csharpMemberLookupPolicy,
+  c: { graph: graphRulesFor("c") },
+  csharp: { ...csharpMemberLookupPolicy, graph: graphRulesFor("csharp") },
   cpp: {
     ownerResolution: { lookup: { hierarchy: true }, qualified: cppQualifiedOwner },
+    graph: graphRulesFor("cpp"),
   },
   go: { receiverResolution: { syntax: goReceiverSyntax } },
   js: { separateMemberScopes: true, ownerResolution: javascriptOwnerResolution },
-  ts: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution },
-  tsx: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution },
+  ts: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution, graph: graphRulesFor("ts") },
+  tsx: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution, graph: graphRulesFor("tsx") },
   kotlin: {
     separateMemberScopes: true,
     selection: { inheritOverloads: true, callSite: true },
@@ -54,6 +57,7 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
       memberHidden: jvmCrossFileMemberHidden,
       qualified: jvmQualifiedOwner("kotlin"),
     },
+    graph: graphRulesFor("kotlin"),
   },
   java: {
     selection: { inheritOverloads: true },
@@ -64,6 +68,7 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
       qualified: jvmQualifiedOwner("java"),
       nonInheritedStaticOwners: { nodeTypes: { interface_declaration: true }, graphKinds: { interface: true } },
     },
+    graph: graphRulesFor("java"),
     declaredReceiverUsesNameLookup: true,
     membersBeforeFileExports: true,
     unprovenReferenceCandidate: javaUnprovenReferenceCandidate,
@@ -79,10 +84,10 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
       return false;
     },
   },
-  php: phpMemberLookupPolicy,
+  php: { ...phpMemberLookupPolicy, graph: graphRulesFor("php") },
   python: { ownerResolution: { qualified: pythonQualifiedOwner } },
-  ruby: rubyMemberLookupPolicy,
-  swift: swiftMemberLookupPolicy,
+  ruby: { ...rubyMemberLookupPolicy, graph: graphRulesFor("ruby") },
+  swift: { ...swiftMemberLookupPolicy, graph: graphRulesFor("swift") },
 };
 
 export function memberLookupPolicyFor(languageId: string): MemberLookupPolicy {

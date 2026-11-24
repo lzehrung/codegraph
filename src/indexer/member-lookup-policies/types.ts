@@ -1,14 +1,16 @@
 /** Types of the per-language member lookup policies in this directory. */
 import type { ReceiverBinding, ReceiverMemberScope } from "../../graphs/symbol-graph-detailed/receiver-types.js";
 import type { LanguageSupport } from "../../languages.js";
-import type { CallableArity } from "../../languages/callable-arity.js";
+import type { CallableArity, CallableIdentity, GraphParameterShapes } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import type { MemberAccessRow } from "../../util/member-access-tables.js";
 import type { FileId, Range } from "../../types.js";
 import type { MemberScope, MemberSelectionOptions } from "../member-selection-types.js";
 import type { JvmTypeNameResolver } from "../name-resolution-types.js";
+import type { ImportNameResolutionOptions } from "../import-name-types.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { ScopeIndex } from "../scope-types.js";
+import type { ParameterReferenceScanFilter } from "../reference-scan-types.js";
 import type {
   GoToResult,
   ImportBinding,
@@ -31,14 +33,6 @@ export type MemberCallEdge = "calls" | "instantiates";
  * a method but not an instance property.
  */
 export type MemberUse = "call" | "value" | "unbound";
-
-/** Candidate narrowing for a callable parameter's references outside its declaration file. */
-export type ParameterReferenceScanFilter = {
-  mayContain(source: string, name: string, callName?: string): boolean;
-  includes(node: SyntaxNodeLike): boolean;
-  unprobeableNameMarker?: string;
-  unproven?(node: SyntaxNodeLike, reason: string | undefined): boolean;
-};
 
 /**
  * Navigation helpers a policy needs but cannot import: the modules that define them import this registry, and a policy
@@ -323,6 +317,38 @@ export type GraphHookContext = {
 
 /** Language-specific graph facts at declaration, owner, and resolved-call events. */
 export type GraphHooks = Readonly<{
+  callableBindingGroups?: "canonical-name" | "equivalent-signature";
+  callableNameForm?: "case-folded" | "normalized";
+  aliasExportOptions?: ImportNameResolutionOptions;
+  collapseLocalAliases?: <T>(
+    group: readonly T[],
+    identityOf: (entry: T) => CallableIdentity | undefined,
+  ) => T | undefined;
+  namedNodeTypes?: Readonly<Record<string, true>>;
+  abstractMemberOwnerType?: string;
+  memberVisibility?: "file-hidden" | "not-exported";
+  ignoredBaseSpecifierTypes?: Readonly<Record<string, true>>;
+  preservedBaseSpecifierTypes?: Readonly<Record<string, true>>;
+  singleSuperclass?: Readonly<{ declarationType: string; heritageType: string; clauseType: string }>;
+  /** Declaration-only grammar shapes, selected before the graph's syntax traversal. */
+  declarationShapes?: Readonly<{
+    splitMethodName?: (node: SyntaxNodeLike) => SyntaxNodeLike | undefined;
+    propertyAccessors?: Readonly<{
+      declarationType: string;
+      receiverType: (node: SyntaxNodeLike) => SyntaxNodeLike | null;
+      variableType: string;
+      nameType: string;
+      accessorTypes: Readonly<Record<string, true>>;
+    }>;
+    objectTypeAlias?: Readonly<{ declarationType: string; valueType: string }>;
+    assignedFactoryType?: Readonly<{
+      assignmentType: string;
+      targetType: string;
+      callType: string;
+      receiverName: string;
+      methodName: string;
+    }>;
+  }>;
   declaration?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
   owner?: (context: GraphHookContext, owner: MemberOwnerRef) => void | Promise<void>;
   call?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
@@ -388,6 +414,7 @@ export type MemberLookupPolicy = {
    * hook, a target that accepts the call's argument count records `calls`.
    */
   callEdge?(
+    this: void,
     index: ProjectIndex,
     member: SymbolDef,
     callee: SyntaxNodeLike,
@@ -513,7 +540,10 @@ export type MemberLookupPolicy = {
     deps: MemberLookupDeps;
   }): Promise<MemberWalkRules>;
   /** The declaration a bare receiver name binds, where the language checks the lexical scopes first. */
-  lexicalBinding?(lookup: { scopeBindingIsImport(): boolean; binding(): SymbolDef | null }): SymbolDef | null;
+  lexicalBinding?(
+    this: void,
+    lookup: { scopeBindingIsImport(): boolean; binding(): SymbolDef | null },
+  ): SymbolDef | null;
 };
 
 /** The declarations that must be renamed with a target, and the reason one of them could not be proven. */
@@ -541,7 +571,7 @@ export type ReceiverSyntaxDeps = {
   constructorNameNode(node: SyntaxNodeLike, support: LanguageSupport): SyntaxNodeLike | null;
   nearestMemberContainer(node: SyntaxNodeLike): SyntaxNodeLike | null;
   qualifiedNameSegments(node: SyntaxNodeLike, source: string): string[];
-  declarationMemberArity(node: SyntaxNodeLike, languageId: string): number | undefined;
+  declarationMemberArity(node: SyntaxNodeLike, shapes?: GraphParameterShapes): number | undefined;
   findFirstNodeByType(node: SyntaxNodeLike, type: string): SyntaxNodeLike | null;
   isIdentifierType(support: LanguageSupport, type: string): boolean;
 };

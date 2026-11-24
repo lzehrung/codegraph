@@ -6,7 +6,7 @@
  * extension that is not in scope or on another type are no candidates, so the lookup goes on to the next receiver and
  * finally to the enclosing type, as kotlinc does. A member that accepts the call always outranks an extension.
  */
-import { kotlinExtensionReceiverType } from "../graphs/symbol-graph-detailed/ast.js";
+import { kotlinExtensionReceiverType } from "../languages/kotlin-graph.js";
 import { memberContainerDef, nearestMemberContainer } from "../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";

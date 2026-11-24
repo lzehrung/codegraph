@@ -13,7 +13,7 @@ import { resolveEcmaPrivateName } from "./member-selection.js";
 import { getMemberAccessParts, isMemberAccessNode, isReceiverNameNode } from "../util/member-access.js";
 import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
 import { MEMBER_LOOKUP_POLICIES, memberLookupPolicyFor } from "./member-lookup-policies/index.js";
-import type { ParameterReferenceScanFilter } from "./member-lookup-policies/types.js";
+import type { ParameterReferenceScanFilter } from "./reference-scan-types.js";
 import {
   classifyReceiver,
   declaresMembers,
@@ -36,10 +36,8 @@ import {
   comparePhpReferenceNames,
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
-  isInsidePhpUseDeclaration,
   isPhpConstantRead,
   isPhpQualifiedReferenceNode,
-  phpLastIdentifierSegment,
   readPhpNamespaceFromRange,
   selectFirstExistingPhpCanonicalName,
 } from "./navigation-php.js";
@@ -98,6 +96,8 @@ import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "./python
 import { ECMASCRIPT_IDENTIFIER_SOURCE, ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 import { compareStrings } from "../util/strings.js";
+import { referenceRulesFor } from "./name-lookup-policies/reference-rules.js";
+import type { NamedNodeReferenceCollection } from "./name-resolution-types.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -577,11 +577,7 @@ async function collectNamedNodeReferences(
   candidateFilter?: ParameterReferenceScanFilter,
   candidateCallName?: string,
   candidateCallDigest?: Buffer,
-): Promise<{
-  matched: Array<{ range: Range; node: SyntaxNodeLike }>;
-  parsed: ParsedFileContext;
-  nameEquivalenceUnavailable: boolean;
-} | null> {
+): Promise<NamedNodeReferenceCollection | null> {
   try {
     const fileKey = fileIdentityKey(fileId);
     const moduleIndex = index.byFile.get(fileKey);
@@ -604,43 +600,42 @@ async function collectNamedNodeReferences(
       if (source !== null && !filter.mayContain(source, symbolName, candidateCallName)) return null;
     }
     const parsed = await ensureParsedContextForIndex(index, fileId);
+    const referenceRules = referenceRulesFor(parsed.sup.id);
+    const candidateName = referenceRules.candidateName;
+    const createVisitor = referenceRules.namedNodeVisitor;
     const privateName = isJsTsLanguage(parsed.sup.id) && symbolName.startsWith("#");
     let canonicalSymbolName = parsed.sup.normalizeIdentifier(symbolName);
     if (privateName) canonicalSymbolName = ecmaPrivateNameKey(symbolName);
-    else if (parsed.sup.id === "java" || parsed.sup.id === "kotlin") {
-      canonicalSymbolName = parsed.sup.normalizeIdentifier(normalizeKotlinIdentifier(symbolName));
+    else if (candidateName) {
+      canonicalSymbolName = parsed.sup.normalizeIdentifier(candidateName(symbolName));
     } else if (parsed.sup.useSiteMemberName) {
       canonicalSymbolName = parsed.sup.useSiteMemberName(canonicalSymbolName);
     }
-    const isPhp = parsed.sup.id === "php";
     const probeName = parsed.sup.referenceSpelling?.(canonicalSymbolName) ?? canonicalSymbolName;
     const alternateNames =
-      !isPhp && parsed.sup.alternateUseNames
+      !createVisitor && parsed.sup.alternateUseNames
         ? new Set(parsed.sup.alternateUseNames(symbolName).map((name) => parsed.sup.normalizeIdentifier(name)))
         : undefined;
-    const matched: Array<{ range: Range; node: SyntaxNodeLike }> = [];
-    let nameEquivalenceUnavailable = false;
+    const matched: NamedNodeReferenceCollection["matched"] = [];
+    const collection = { matched, parsed, nameEquivalenceUnavailable: false };
     const importDeclarationKeys = importBindingDeclarationRangeKeys(moduleIndex);
-    const visit = (node: SyntaxNodeLike): void => {
-      if (isPhp) {
-        const text = parsed.sup.normalizeIdentifier(sliceText(node, parsed.source));
-        const comparisonText =
-          node.type === "qualified_name" || node.type === "relative_name" ? phpLastIdentifierSegment(text) : text;
-        const comparison = comparePhpReferenceNames(comparisonText, phpLastIdentifierSegment(canonicalSymbolName), {
-          caseSensitiveForm: node.type === "variable_name" || node.type === "constant",
-          ...(symbolKind ? { symbolKind } : {}),
-        });
-        if (comparison === "unverified") nameEquivalenceUnavailable = true;
-        if (comparison !== "equivalent") return;
-      }
-      if (filter && !filter.includes(node)) return;
-      const range = parsed.sup.referenceRange ? parsed.sup.referenceRange(node) : toRange(node);
-      if (!importDeclarationKeys.has(rangeIdentityKey(range)) && !(isPhp && isInsidePhpUseDeclaration(node))) {
-        matched.push({ range, node });
-      }
-    };
+    const visit = createVisitor
+      ? createVisitor(
+          parsed,
+          canonicalSymbolName,
+          symbolKind,
+          filter,
+          importDeclarationKeys,
+          collection,
+          rangeIdentityKey,
+        )
+      : (node: SyntaxNodeLike): void => {
+          if (filter && !filter.includes(node)) return;
+          const range = parsed.sup.referenceRange ? parsed.sup.referenceRange(node) : toRange(node);
+          if (!importDeclarationKeys.has(rangeIdentityKey(range))) matched.push({ range, node });
+        };
     visitNamedNodeSpellings(index, fileId, parsed, probeName, alternateNames, visit);
-    return { matched, parsed, nameEquivalenceUnavailable };
+    return collection;
   } catch (error) {
     rethrowStaleQuerySource(error);
     return null;
@@ -1558,7 +1553,7 @@ export function getCachedReferenceCandidateFiles(
     // without an import, so the import-graph narrowing below cannot apply. Every other language
     // is still a sound, source-free rejection: a PHP symbol can never be referenced from a file
     // whose own language a different parser owns.
-    return referenceModuleTable(index).phpFiles;
+    return referenceModuleTable(index).globalNameFiles;
   }
 
   let cache = referenceCandidateCache.get(index);
@@ -1570,6 +1565,7 @@ export function getCachedReferenceCandidateFiles(
   const key = `${languageId}:${referenceCandidateCacheKey(index, def, exportedNames)}`;
   const cached = cache.get(key);
   if (cached) return cached;
+  const unitPeerOptions = referenceRulesFor(languageId).unitPeerOptions;
 
   const definitionKey = fileIdentityKey(def.file);
   const candidates = new Map<string, string>();
@@ -1579,11 +1575,7 @@ export function getCachedReferenceCandidateFiles(
   // also includes same-directory files that can reach the type only through a qualified name,
   // so dotted and `global::` uses are candidates even when the consumer declares unrelated
   // namespaces. Bare-name resolution still uses the related-namespace peer set.
-  for (const unitPeer of getCompilationUnitPeers(
-    index,
-    def.file,
-    languageId === "csharp" ? { csharpQualifiedName: true } : undefined,
-  ).files) {
+  for (const unitPeer of getCompilationUnitPeers(index, def.file, unitPeerOptions).files) {
     if (fileIdentityKey(unitPeer) !== definitionKey) {
       candidates.set(fileIdentityKey(unitPeer), unitPeer);
     }
@@ -1742,6 +1734,7 @@ export function describeReferenceStrategies(args: {
 }): ReferenceStrategyReport {
   const applicable: ReferenceStrategyId[] = [];
   const executed: ReferenceStrategyId[] = [];
+  const globalNameStrategy = referenceRulesFor(args.languageId).globalNameStrategy;
   if (args.sameFileOccurrence?.applicable) {
     applicable.push("same_file_occurrence");
     if (args.sameFileOccurrence.executed) executed.push("same_file_occurrence");
@@ -1750,11 +1743,10 @@ export function describeReferenceStrategies(args: {
     applicable.push("implicit_unit_peers");
     if (args.implicitUnitPeers.executed) executed.push("implicit_unit_peers");
   }
-  if (args.languageId === "php") {
-    // Every PHP definition is addressable by its global or namespace-qualified spelling, so
-    // the qualified-name scan is required; the receiver scan is not the PHP strategy.
-    applicable.push("php_qualified_name");
-    if (args.phpQualifiedNames.length) executed.push("php_qualified_name");
+  if (globalNameStrategy) {
+    // Namespace-wide spellings require this scan even when the definition has no importers.
+    applicable.push(globalNameStrategy);
+    if (args.phpQualifiedNames.length) executed.push(globalNameStrategy);
   }
   return { applicable, executed };
 }
@@ -2047,7 +2039,7 @@ export function buildIndexedCandidateCoverage(args: {
     for (const file of degraded.files) addAffected(file);
   }
 
-  if (languageId !== "scss") {
+  if (referenceRulesFor(languageId).parseErrorCoverage !== "ignore") {
     // tree-sitter-scss reports ERROR on supported module syntax; revisit after the planned grammar fork.
     const parseErrorFiles = flaggedScanFiles(
       index,

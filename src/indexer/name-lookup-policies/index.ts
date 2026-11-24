@@ -17,6 +17,16 @@ import { csharpLookupPolicy, javaLookupPolicy, kotlinLookupPolicy, swiftLookupPo
 import { phpLookupPolicy } from "./php.js";
 import { rubyLookupPolicy } from "./ruby.js";
 import { importNamePolicyFor } from "./imports.js";
+import { cReferenceHooks, cppReferenceHooks } from "./c-family-references.js";
+import { csharpGraphImportHooks, csharpReferenceHooks } from "./csharp-references.js";
+import { javaReferenceHooks, kotlinGraphImportHooks, kotlinReferenceHooks } from "./jvm-references.js";
+import { phpReferenceHooks } from "./php-references.js";
+import { pythonReferenceHooks } from "./python-references.js";
+import { rubyReferenceHooks } from "./ruby-references.js";
+import { rustReferenceHooks } from "./rust-references.js";
+import { scssReferenceHooks } from "./scss-references.js";
+import { swiftGraphImportHooks, swiftReferenceHooks } from "./swift-references.js";
+import { typescriptReferenceHooks } from "./typescript-references.js";
 
 /** Whether a function shares its name with another function in its file (an overload set). */
 function hasSameNameSiblings(module: ModuleIndex, def: SymbolDef): boolean {
@@ -120,22 +130,34 @@ const zigLookupPolicy: NameLookupPolicy = {
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
-  c: { ...cLookupPolicy, imports: importNamePolicyFor("c") },
-  cpp: cppLookupPolicy,
-  csharp: { ...csharpLookupPolicy, imports: importNamePolicyFor("csharp") },
+  c: { ...cLookupPolicy, imports: importNamePolicyFor("c"), references: cReferenceHooks },
+  cpp: { ...cppLookupPolicy, references: cppReferenceHooks },
+  csharp: {
+    ...csharpLookupPolicy,
+    imports: { ...importNamePolicyFor("csharp"), ...csharpGraphImportHooks },
+    references: csharpReferenceHooks,
+  },
   css: { imports: importNamePolicyFor("css") },
   less: { imports: importNamePolicyFor("less") },
-  scss: { imports: importNamePolicyFor("scss") },
-  java: { ...javaLookupPolicy, imports: importNamePolicyFor("java") },
+  scss: { imports: importNamePolicyFor("scss"), references: scssReferenceHooks },
+  java: { ...javaLookupPolicy, imports: importNamePolicyFor("java"), references: javaReferenceHooks },
   go: goLookupPolicy,
-  kotlin: { ...kotlinLookupPolicy, imports: importNamePolicyFor("kotlin") },
-  php: phpLookupPolicy,
-  python: { ...pythonLookupPolicy, imports: importNamePolicyFor("python") },
-  ruby: { ...rubyLookupPolicy, imports: importNamePolicyFor("ruby") },
-  rust: rustLookupPolicy,
-  swift: swiftLookupPolicy,
-  ts: typescriptLookupPolicy,
-  tsx: typescriptLookupPolicy,
+  kotlin: {
+    ...kotlinLookupPolicy,
+    imports: { ...importNamePolicyFor("kotlin"), ...kotlinGraphImportHooks },
+    references: kotlinReferenceHooks,
+  },
+  php: { ...phpLookupPolicy, references: phpReferenceHooks },
+  python: { ...pythonLookupPolicy, imports: importNamePolicyFor("python"), references: pythonReferenceHooks },
+  ruby: { ...rubyLookupPolicy, imports: importNamePolicyFor("ruby"), references: rubyReferenceHooks },
+  rust: { ...rustLookupPolicy, references: rustReferenceHooks },
+  swift: {
+    ...swiftLookupPolicy,
+    imports: { ...swiftLookupPolicy.imports, ...swiftGraphImportHooks },
+    references: swiftReferenceHooks,
+  },
+  ts: { ...typescriptLookupPolicy, references: typescriptReferenceHooks },
+  tsx: { ...typescriptLookupPolicy, references: typescriptReferenceHooks },
   zig: zigLookupPolicy,
 };
 

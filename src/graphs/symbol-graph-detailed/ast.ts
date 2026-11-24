@@ -1,8 +1,9 @@
 import type { LanguageSupport } from "../../languages.js";
 import { generatedMembersIn } from "../../languages/generated-members.js";
+import type { GraphParameterShapes } from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
-import { typescriptSplitMethodName } from "../../indexer/ts-callables.js";
+import { graphRulesFor } from "../../indexer/member-lookup-policies/graph-rules.js";
 import { sliceText, unquote } from "../../util/ast.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import {
@@ -72,33 +73,6 @@ function functionNameNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
     return current.namedChildren.find((child) => FUNCTION_NAME_NODE_TYPES.has(child.type)) ?? null;
   }
   return node.childForFieldName("type");
-}
-
-/** Receiver spellings before an extension's name: a type, a nullable type, or a parenthesized one such as `(() -> Unit)`. */
-const KOTLIN_EXTENSION_RECEIVER_TYPES: Readonly<Record<string, true>> = {
-  user_type: true,
-  nullable_type: true,
-  parenthesized_type: true,
-};
-
-/**
- * The receiver type spelled before the name of an extension function or property, or before the parameters of an
- * anonymous function with a receiver (`fun Builder.() { }`).
- */
-export function kotlinExtensionReceiverType(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  let name: SyntaxNodeLike | null | undefined;
-  if (node.type === "function_declaration") name = node.childForFieldName("name");
-  else if (node.type === "property_declaration") {
-    name = node.namedChildren.find((child) => child.type === "variable_declaration");
-  } else if (node.type === "anonymous_function") {
-    name = node.namedChildren.find((child) => child.type === "function_value_parameters");
-  } else return null;
-  if (!name) return null;
-  return (
-    node.namedChildren.find(
-      (child) => child.startIndex < name.startIndex && KOTLIN_EXTENSION_RECEIVER_TYPES[child.type],
-    ) ?? null
-  );
 }
 
 export function collectDetailedDeclarations(
@@ -189,7 +163,21 @@ export function collectDetailedDeclarations(
         (local.range.start.index ?? Number.POSITIVE_INFINITY) < nameNode.endIndex,
     );
 
-  const recoverSplitMethods = sup.id === "ts" || sup.id === "tsx";
+  const declarationShapes = graphRulesFor(sup.id).declarationShapes;
+  const splitMethodName = declarationShapes?.splitMethodName;
+  const propertyAccessors = declarationShapes?.propertyAccessors;
+  const accessorDeclarationType = propertyAccessors?.declarationType;
+  const accessorReceiverType = propertyAccessors?.receiverType;
+  const accessorVariableType = propertyAccessors?.variableType;
+  const accessorNameType = propertyAccessors?.nameType;
+  const accessorTypes = propertyAccessors?.accessorTypes;
+  const objectTypeAliasDeclaration = declarationShapes?.objectTypeAlias?.declarationType;
+  const objectTypeAliasValue = declarationShapes?.objectTypeAlias?.valueType;
+  const factoryAssignmentType = declarationShapes?.assignedFactoryType?.assignmentType;
+  const factoryTargetType = declarationShapes?.assignedFactoryType?.targetType;
+  const factoryCallType = declarationShapes?.assignedFactoryType?.callType;
+  const factoryReceiverName = declarationShapes?.assignedFactoryType?.receiverName;
+  const factoryMethodName = declarationShapes?.assignedFactoryType?.methodName;
   const generatedMembers = generatedMembersIn(sup, source, hasGeneratedMembers);
   const walk = (node: SyntaxNodeLike): void => {
     // A method a call generates is declared at its argument token and has no body to walk.
@@ -203,7 +191,7 @@ export function collectDetailedDeclarations(
     const functionName = functionLike ? functionNameNode(node) : undefined;
     const missingName = functionName && functionName.startIndex === functionName.endIndex;
     const splitCandidate = missingName || node.type === "call_signature";
-    const splitName = recoverSplitMethods && splitCandidate ? typescriptSplitMethodName(node) : undefined;
+    const splitName = splitMethodName && splitCandidate ? splitMethodName(node) : undefined;
     if (functionLike) {
       const nameNode = splitName ?? functionName;
       const name = nameNode ? sliceText(nameNode, source) : undefined;
@@ -225,23 +213,23 @@ export function collectDetailedDeclarations(
         if (splitName.parent) fn.modifierNode = splitName.parent;
         functionNodes.push(fn);
       }
-    } else if (sup.id === "kotlin" && node.type === "property_declaration" && kotlinExtensionReceiverType(node)) {
-      const variable = node.namedChildren.find((child) => child.type === "variable_declaration");
-      const nameNode = variable?.namedChildren.find((child) => child.type === "identifier");
+    } else if (accessorDeclarationType && node.type === accessorDeclarationType && accessorReceiverType?.(node)) {
+      const variable = node.namedChildren.find((child) => child.type === accessorVariableType);
+      const nameNode = variable?.namedChildren.find((child) => child.type === accessorNameType);
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       const def = name && nameNode ? findDefinitionAt(name, nameNode) : undefined;
       if (def && name) {
         for (const accessor of node.namedChildren) {
-          if (accessor.type === "getter" || accessor.type === "setter") {
+          if (accessorTypes?.[accessor.type]) {
             functionNodes.push({ name, node: accessor, def });
           }
         }
       }
     } else if (
       typeNodeTypes.has(node.type) ||
-      ((sup.id === "ts" || sup.id === "tsx") &&
-        node.type === "type_alias_declaration" &&
-        node.childForFieldName("value")?.type === "object_type")
+      (objectTypeAliasDeclaration &&
+        node.type === objectTypeAliasDeclaration &&
+        node.childForFieldName("value")?.type === objectTypeAliasValue)
     ) {
       const nameNode = node.childForFieldName("name");
       const name = nameNode ? sliceText(nameNode, source) : undefined;
@@ -300,19 +288,19 @@ export function collectDetailedDeclarations(
           }
         }
       }
-    } else if (sup.id === "ruby" && node.type === "assignment") {
+    } else if (factoryAssignmentType && node.type === factoryAssignmentType) {
       const left = node.childForFieldName("left");
       const right = node.childForFieldName("right");
       const receiver = right?.childForFieldName("receiver");
       const method = right?.childForFieldName("method");
       if (
-        left?.type === "constant" &&
-        right?.type === "call" &&
-        receiver?.text === "Struct" &&
-        method?.text === "new"
+        left?.type === factoryTargetType &&
+        right?.type === factoryCallType &&
+        receiver?.text === factoryReceiverName &&
+        method?.text === factoryMethodName
       ) {
         const name = sliceText(left, source);
-        const def = findDefinition(name, left);
+        const def = findDefinition(name, left!);
         if (def) classNodes.push({ name, node, def });
       }
     }
@@ -368,8 +356,8 @@ export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
 
 /**
  * Positional parameter count of a member/function declaration node, or undefined when the node
- * declares no parameter list. Swift exposes parameters as direct declaration children, so its
- * language id is required to distinguish a zero-parameter declaration from an unknown shape.
+ * declares no parameter list. A direct-parameter shape distinguishes a zero-parameter declaration
+ * from an unknown shape; callers select the shapes before walking declarations.
  * Used for public declaration metadata and C++ declaration correspondence, never to establish
  * accepted call ranges. Receiver call selection uses the shared callable ranges instead.
  *
@@ -377,7 +365,14 @@ export function isVariadicParameterMarker(node: SyntaxNodeLike): boolean {
  * excluded because they accept zero arguments, while each language's own maximum-arity handling
  * keeps their upper bound unbounded.
  */
-export function declarationMemberArity(declarationNode: SyntaxNodeLike, languageId?: string): number | undefined {
+export function declarationMemberArity(
+  declarationNode: SyntaxNodeLike,
+  shapes?: GraphParameterShapes,
+): number | undefined {
+  const directParameterChildType = shapes?.directParameterChildType;
+  const variadicMarkerTypes = shapes?.variadicMarkerTypes;
+  const positionalParameterChildType = shapes?.positionalParameterChildType;
+  const ignoredParameterTypes = shapes?.ignoredParameterTypes;
   let parameters = declarationNode.childForFieldName("parameters");
   if (!parameters) {
     for (const type of Object.keys(PARAMETER_LIST_NODE_TYPES)) {
@@ -387,24 +382,20 @@ export function declarationMemberArity(declarationNode: SyntaxNodeLike, language
     }
   }
   if (!parameters) {
-    if (languageId !== "swift") return undefined;
-    return (declarationNode.namedChildren ?? []).filter((child) => child.type === "parameter").length;
+    if (!directParameterChildType) return undefined;
+    return (declarationNode.namedChildren ?? []).filter((child) => child.type === directParameterChildType).length;
   }
   let positionalParameters = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment");
-  if (languageId === "c" || languageId === "cpp") {
-    positionalParameters = positionalParameters.filter((child) => !isVariadicParameterMarker(child));
+  if (variadicMarkerTypes) {
+    positionalParameters = positionalParameters.filter((child) => !variadicMarkerTypes.has(child.type));
   }
-  if (languageId === "kotlin") {
-    // kotlin-ng keeps default values as bare `expression` siblings and `vararg` as
-    // `parameter_modifiers` beside the parameter they modify; only `parameter`
-    // nodes occupy positional argument slots.
-    positionalParameters = positionalParameters.filter((child) => child.type === "parameter");
+  if (positionalParameterChildType) {
+    positionalParameters = positionalParameters.filter((child) => child.type === positionalParameterChildType);
   }
-  if (languageId === "java") {
-    // An explicit receiver parameter (`Box this`) is not a call argument.
-    positionalParameters = positionalParameters.filter((child) => child.type !== "receiver_parameter");
+  if (ignoredParameterTypes) {
+    positionalParameters = positionalParameters.filter((child) => !ignoredParameterTypes.has(child.type));
   }
-  if ((languageId === "c" || languageId === "cpp") && positionalParameters.length === 1) {
+  if (shapes?.soleVoidMeansEmpty && positionalParameters.length === 1) {
     const parameterParts = positionalParameters[0]!.namedChildren.filter((child) => child.type !== "comment");
     if (
       parameterParts.length === 1 &&

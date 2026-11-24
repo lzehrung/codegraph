@@ -104,7 +104,15 @@ The following type shapes are part of the prerequisite contract; the named conte
 
 Keep `CallableIdentityPolicy`, `IndexLanguagePolicy`, `SpecifierExtractionPolicy`, and `SpecifierTargetPolicy` as leaf, per-language row/policy registries using the repository's existing registry convention, not one cross-layer service. Their default rows are shared singletons. Break type-only cycles by moving the existing request/result types to a leaf module; inject current helpers as dependencies as `MemberLookupDeps` already does. Do not make `languages/callable-arity.ts` import the indexer, navigation, or graph. Tests for `tests/source-structure.test.ts` must continue to pass.
 
+The graph declaration cutover selects `GraphHooks.declarationShapes` once per module: split-method recovery, extension-property accessors, object-type aliases, and assigned type factories keep their existing syntax guards. `GraphParameterShapes.positionalParameterChildType` restricts counted children where defaults and modifiers are list siblings. `declarationMemberArity` consumes already-selected `GraphParameterShapes`; graph modules select once, and guarded C++ readers reuse their module-selected row throughout ancestor/recursive walks. The shared Kotlin extension receiver reader lives in `src/languages/kotlin-graph.ts`, so graph and navigation policies can reuse it without a dependency cycle.
+
+`ReferenceHooks` additionally carries candidate-name normalization, compilation-unit options, namespace-binding scope, export separators, callable verification/equivalence modes, and member-definition grammar. A specialized `namedNodeVisitor` is selected once per file and owns spelling equivalence; the generic walker still invokes one visitor per matching identifier. `ReferenceModuleTable.globalNameFiles` caches the files admitting the configured namespace-wide reference strategy.
+
+`GraphHooks` additionally carries callable alias grouping, callable-name forms, member visibility, and named-node/base-specifier grammar. Cycle-free leaf selectors return the same singleton rows exposed by the name/member policy registries, and graph contexts retain selected fields before identifier or member traversal. Graph activation has core/language epoch entries; reference-only data is not persisted.
+
 Precompute the support row, name policy, member policy, and other relevant policy pointers once per file or outer query. Do not construct closures, argument objects, sets, arrays, or policy rows inside identifier/parameter walks. Where a new callback would execute on every identifier that previously only compared `id`, instead encode the finite rule as data or select the entire specialized traversal once outside that walk; if neither preserves the old execution shape, the slice is not ready. Do not claim a guaranteed timing improvement from field reads alone: unchanged work counters and paired profiles/timings are required evidence.
+
+Check an optional shape's presence before reading projected node properties. A missing rule must not trigger `node.type`, `node.parent`, or child lookup work that the original language guard skipped.
 
 ## Four disjoint file slices
 

@@ -22,10 +22,7 @@ import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from 
 
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-resolve.js";
-import {
-  typescriptCollapsedOverloadTarget,
-  typescriptOverloadImplementationAcceptsCount,
-} from "../indexer/ts-callables.js";
+import { typescriptOverloadImplementationAcceptsCount } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isExportedDeclaration, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
 import { kotlinPropertyInvocationArity } from "../indexer/member-lookup-policies/kotlin-receiver.js";
@@ -53,6 +50,8 @@ import { findClosestBinding, getOrBuildScopeIndex } from "../indexer/navigation-
 import { findClosestScopeBinding } from "../indexer/scope-lookup.js";
 import { memberLookupPolicyFor, type MemberLookupPolicy } from "../indexer/member-lookup-policies/index.js";
 import { MEMBER_ACCESS_ROWS } from "../util/member-access-tables.js";
+import { graphRulesFor } from "../indexer/member-lookup-policies/graph-rules.js";
+import type { GraphHooks } from "../indexer/member-lookup-policies/types.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";
 import {
@@ -62,7 +61,7 @@ import {
   tryEnsureParsedContextForIndex,
 } from "../indexer/parsed-cache.js";
 
-import type { CallableArity, CallableIdentity } from "../languages/callable-arity.js";
+import { getCallableArityProfile, type CallableArity, type CallableIdentity } from "../languages/callable-arity.js";
 import {
   SymbolKind,
   type ModuleIndex,
@@ -131,7 +130,7 @@ function symbolDefForBinding(moduleEntry: ModuleIndex, binding: Binding): Symbol
 
 function recordCallableDeclarationAliases(
   moduleEntry: ModuleIndex,
-  languageId: string,
+  bindingGroups: GraphHooks["callableBindingGroups"],
   bindings: readonly Binding[],
   nodeAliases: Map<string, string>,
 ): void {
@@ -149,7 +148,7 @@ function recordCallableDeclarationAliases(
     }
   };
 
-  if (languageId === "c") {
+  if (bindingGroups === "canonical-name") {
     const byName = new Map<string, Binding[]>();
     for (const binding of bindings) {
       if (binding.kind !== "function" || !binding.def) continue;
@@ -161,7 +160,7 @@ function recordCallableDeclarationAliases(
     for (const group of byName.values()) recordGroup(group);
     return;
   }
-  if (languageId !== "cpp") return;
+  if (bindingGroups !== "equivalent-signature") return;
 
   const handled = new Set<Binding>();
   for (const binding of bindings) {
@@ -172,12 +171,12 @@ function recordCallableDeclarationAliases(
   }
 }
 
-function recordTypeScriptCallableAliases(
+function recordLocalCallableAliases(
   moduleEntry: ModuleIndex,
-  languageId: string,
+  collapse: GraphHooks["collapseLocalAliases"],
   nodeAliases: Map<string, string>,
 ): void {
-  if (languageId !== "ts" && languageId !== "tsx") return;
+  if (!collapse) return;
   const groups = new Map<string, SymbolDef[]>();
   for (const local of moduleEntry.locals) {
     if (local.kind !== SymbolKind.Function || !local.callable || local.callable.role === "other") continue;
@@ -187,7 +186,7 @@ function recordTypeScriptCallableAliases(
   }
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const canonical = typescriptCollapsedOverloadTarget(group, (local) => local.callable);
+    const canonical = collapse(group, (local) => local.callable);
     if (!canonical) continue;
     const canonicalId = defNodeId(canonical);
     for (const local of group) {
@@ -390,14 +389,16 @@ export async function buildSymbolGraphDetailed(
       callableNames = { exact: new Set(), free: new Set() };
       for (const entry of index.byFile.values()) {
         const support = supportForIndexedFile(entry.file);
+        const callableNameForm = support ? graphRulesFor(support.id).callableNameForm : undefined;
+        const normalizeCallableName = callableNameForm === "normalized" ? support?.normalizeIdentifier : undefined;
         for (const local of entry.locals) {
           if (local.kind !== SymbolKind.Function) continue;
           callableNames.exact.add(local.localName);
           if (!local.isMember) callableNames.free.add(local.localName);
-          if (support?.id === "php")
+          if (callableNameForm === "case-folded")
             (callableNames.phpFolded ??= new Set()).add(foldPhpIdentifierCase(local.localName));
-          if (support?.id === "swift") {
-            (callableNames.swiftNormalized ??= new Set()).add(support.normalizeIdentifier(local.localName));
+          if (normalizeCallableName) {
+            (callableNames.swiftNormalized ??= new Set()).add(normalizeCallableName(local.localName));
           }
         }
       }
@@ -418,12 +419,12 @@ export async function buildSymbolGraphDetailed(
   // callable here as its files are processed.
   const noteCallableName = (
     name: string,
-    phpCaseInsensitive = false,
+    caseInsensitive = false,
     normalizeIdentifier?: (value: string) => string,
   ): void => {
     const names = ensureCallableNames();
     names.exact.add(name);
-    if (phpCaseInsensitive) (names.phpFolded ??= new Set()).add(foldPhpIdentifierCase(name));
+    if (caseInsensitive) (names.phpFolded ??= new Set()).add(foldPhpIdentifierCase(name));
     if (normalizeIdentifier) (names.swiftNormalized ??= new Set()).add(normalizeIdentifier(name));
   };
 
@@ -458,6 +459,9 @@ export async function buildSymbolGraphDetailed(
       const access = MEMBER_ACCESS_ROWS[sup.id];
       if (!sup.supportsCrossModuleSymbols) continue;
       const memberNamePattern = sup.exportedNamePattern;
+      const graphRules = graphRulesFor(sup.id);
+      const lexicalBinding = memberPolicy.lexicalBinding;
+      const graphDeclarationParameters = getCallableArityProfile(sup.id)?.graphDeclarationParameters;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
       const scopeIndex = getOrBuildScopeIndex(index, file, src, sup, moduleEntry, tree);
@@ -484,12 +488,10 @@ export async function buildSymbolGraphDetailed(
           }
         }
       }
-      if (sup.id === "c" || sup.id === "cpp") {
+      const aliasExportOptions = graphRules.aliasExportOptions;
+      if (aliasExportOptions) {
         for (const [alias, def] of [...aliasToTargetDef]) {
-          const exported = resolveExport(index, def.file, alias, {
-            allowLocalFallback: false,
-            ...(sup.id === "c" ? { cNamespace: "ordinary" as const } : {}),
-          });
+          const exported = resolveExport(index, def.file, alias, aliasExportOptions);
           if (exported?.kind !== "resolved") aliasToTargetDef.delete(alias);
         }
       }
@@ -582,8 +584,8 @@ export async function buildSymbolGraphDetailed(
       const { memberExpressionType, optionalMemberTypes, propertyIdentifierTypes, resolveMemberChainTarget } =
         memberResolver;
 
-      recordCallableDeclarationAliases(moduleEntry, sup.id, scopeIndex.all, nodeAliases);
-      recordTypeScriptCallableAliases(moduleEntry, sup.id, nodeAliases);
+      recordCallableDeclarationAliases(moduleEntry, graphRules.callableBindingGroups, scopeIndex.all, nodeAliases);
+      recordLocalCallableAliases(moduleEntry, graphRules.collapseLocalAliases, nodeAliases);
       // Files the shared name lookup reads synchronously for this module (imports, C++ includes).
       const parsedForResolution = new Map<string, ParsedFileContext>([
         [fileIdentityKey(file), { source: src, tree, sup }],
@@ -706,6 +708,17 @@ export async function buildSymbolGraphDetailed(
         tree,
         moduleEntry,
         scopeIndex,
+        callableBindingGroups: graphRules.callableBindingGroups,
+        namedNodeTypes: graphRules.namedNodeTypes,
+        abstractMemberOwnerType: graphRules.abstractMemberOwnerType,
+        memberVisibility: graphRules.memberVisibility,
+        ignoredBaseSpecifierTypes: graphRules.ignoredBaseSpecifierTypes,
+        preservedBaseSpecifierTypes: graphRules.preservedBaseSpecifierTypes,
+        singleSuperclass: graphRules.singleSuperclass,
+        callableNameForm: graphRules.callableNameForm,
+        memberCallEdge: memberPolicy.callEdge,
+        dottedCallsUseMemberLookup: memberPolicy.dottedCallsUseMemberLookup,
+        graphDeclarationParameters,
         nodes,
         membersOnly,
         memberExpressionType,
@@ -759,9 +772,8 @@ export async function buildSymbolGraphDetailed(
             resolveJvmTypeName,
             resolveLexicalBinding: (expression: SyntaxNodeLike): SymbolDef | null => {
               const name = src.slice(expression.startIndex, expression.endIndex);
-              const policy = memberPolicy;
-              if (policy.lexicalBinding) {
-                return policy.lexicalBinding({
+              if (lexicalBinding) {
+                return lexicalBinding({
                   scopeBindingIsImport: () => !!findClosestScopeBinding(scopeIndex, name, expression, sup)?.import,
                   binding: () => findClosestBinding(scopeIndex, moduleEntry.file, name, expression, sup, src, tree),
                 });

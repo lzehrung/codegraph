@@ -14,6 +14,7 @@ import { csharpNamespaceImportDirectories, resolveImported } from "./navigation-
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
 import { compareStrings } from "../util/strings.js";
+import { referenceRulesFor } from "./name-lookup-policies/reference-rules.js";
 
 /**
  * Query-time reverse indexes for reference lookups.
@@ -64,6 +65,7 @@ export type ReferenceModuleEntry = {
   readonly file: FileId;
   readonly key: string;
   readonly support: LanguageSupport | undefined;
+  readonly globalNameReferences: boolean;
 };
 
 export type ReferenceModuleTable = {
@@ -71,29 +73,26 @@ export type ReferenceModuleTable = {
   readonly entries: readonly ReferenceModuleEntry[];
   /** `fileIdentityKey` -> position in `entries`. */
   readonly rankByKey: ReadonlyMap<string, number>;
-  /** The PHP files, in `entries` order. */
-  readonly phpFiles: readonly FileId[];
+  /** Files that admit references without imports, in `entries` order. */
+  readonly globalNameFiles: readonly FileId[];
 };
 
 /** All modules sorted once per index, with the identity key and language each whole-project scan needs per file. */
 export const referenceModuleTable = perIndexCache((index): ReferenceModuleTable => {
-  const entries = Array.from(
-    index.byFile.values(),
-    (module): ReferenceModuleEntry => ({
-      file: module.file,
-      key: fileIdentityKey(module.file),
-      support: supportForFileWithoutHeaderSample(module.file, index.languageExtensions),
-    }),
-  );
+  const entries = Array.from(index.byFile.values(), (module): ReferenceModuleEntry => {
+    const support = supportForFileWithoutHeaderSample(module.file, index.languageExtensions);
+    const globalNameReferences = !!(support && referenceRulesFor(support.id).globalNameStrategy);
+    return { file: module.file, key: fileIdentityKey(module.file), support, globalNameReferences };
+  });
   entries.sort((left, right) => compareStrings(left.file, right.file));
   const rankByKey = new Map<string, number>();
-  const phpFiles: FileId[] = [];
+  const globalNameFiles: FileId[] = [];
   for (let rank = 0; rank < entries.length; rank += 1) {
     const entry = entries[rank]!;
     rankByKey.set(entry.key, rank);
-    if (entry.support?.id === "php") phpFiles.push(entry.file);
+    if (entry.globalNameReferences) globalNameFiles.push(entry.file);
   }
-  return { entries, rankByKey, phpFiles };
+  return { entries, rankByKey, globalNameFiles };
 });
 
 export type JvmModuleEntry = {

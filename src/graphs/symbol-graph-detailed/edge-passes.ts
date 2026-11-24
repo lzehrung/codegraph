@@ -50,7 +50,8 @@ import {
   resolvePhpExportByImportType,
 } from "../../indexer/navigation-resolve.js";
 import { resolveEcmaPrivateName, selectMember } from "../../indexer/member-selection.js";
-import { memberLookupPolicyFor, type MemberCallEdge } from "../../indexer/member-lookup-policies/index.js";
+import type { MemberCallEdge } from "../../indexer/member-lookup-policies/index.js";
+import type { GraphHooks, MemberLookupPolicy } from "../../indexer/member-lookup-policies/types.js";
 import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
 import { kotlinHasTrailingLambda } from "../../indexer/kotlin-call-compatibility.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
@@ -62,7 +63,11 @@ import { selectCsharpPartialRepresentative } from "../../indexer/member-lookup-p
 import { kotlinMayNameClassBare, kotlinSupertypeEntry } from "../../indexer/member-lookup-policies/kotlin-owner.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
-import { getCallArgumentCount, memberLookupBinding } from "../../languages/callable-arity.js";
+import {
+  getCallArgumentCount,
+  memberLookupBinding,
+  type GraphParameterShapes,
+} from "../../languages/callable-arity.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import {
@@ -139,6 +144,17 @@ type EdgePassContext = ReceiverSyntaxContext & {
   tree: SyntaxTreeLike;
   moduleEntry: ModuleIndex;
   scopeIndex: ScopeIndex;
+  callableBindingGroups: GraphHooks["callableBindingGroups"];
+  namedNodeTypes: GraphHooks["namedNodeTypes"];
+  abstractMemberOwnerType: string | undefined;
+  memberVisibility: GraphHooks["memberVisibility"];
+  ignoredBaseSpecifierTypes: GraphHooks["ignoredBaseSpecifierTypes"];
+  preservedBaseSpecifierTypes: GraphHooks["preservedBaseSpecifierTypes"];
+  singleSuperclass: GraphHooks["singleSuperclass"];
+  callableNameForm: GraphHooks["callableNameForm"];
+  memberCallEdge: MemberLookupPolicy["callEdge"];
+  dottedCallsUseMemberLookup: boolean | undefined;
+  graphDeclarationParameters: GraphParameterShapes | undefined;
   nodes: SymbolGraph["nodes"];
   membersOnly: boolean;
   memberExpressionType: string;
@@ -193,11 +209,7 @@ type EdgePassContext = ReceiverSyntaxContext & {
   /** Definition-node ids that collapse into their declaration-node id. */
   nodeAliases: Map<string, string>;
   /** Registers a name the detailed pass proved callable (function-valued bindings). */
-  noteCallableName: (
-    name: string,
-    phpCaseInsensitive?: boolean,
-    normalizeIdentifier?: (name: string) => string,
-  ) => void;
+  noteCallableName: (name: string, caseInsensitive?: boolean, normalizeIdentifier?: (name: string) => string) => void;
   /** Loads syntax needed to recover declaration metadata for cross-file member definitions. */
   loadParsedFile: (file: string) => Promise<{ source: string; tree: SyntaxTreeLike } | null>;
   /** Whether some function of the project, or some binding the pass proved callable, has exactly this name. */
@@ -228,7 +240,7 @@ function markImplementationTarget(
   if (node) node.implementationTarget = true;
 }
 function markMemberArity(context: EdgePassContext, id: string, declarationNode: SyntaxNodeLike): void {
-  const arity = declarationMemberArity(declarationNode, context.sup.id);
+  const arity = declarationMemberArity(declarationNode, context.graphDeclarationParameters);
   if (arity === undefined) return;
   const node = context.nodes.get(id);
   if (node) node.memberArity = arity;
@@ -312,9 +324,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
   if (
     isIdentifierType(context.sup, node.type) ||
     node.type === "type_identifier" ||
-    (context.sup.id === "csharp" && (node.type === "qualified_name" || node.type === "alias_qualified_name")) ||
-    (context.sup.id === "php" && (node.type === "qualified_name" || node.type === "relative_name")) ||
-    (context.sup.id === "cpp" && (node.type === "operator_name" || node.type === "destructor_name"))
+    context.namedNodeTypes?.[node.type]
   ) {
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name, node);
@@ -484,6 +494,9 @@ export async function emitMemberOwnershipEdges(
   functionNodes: DetailedFunctionNode[],
   classNodes: DetailedClassNode[],
 ): Promise<void> {
+  const abstractMemberOwnerType = context.abstractMemberOwnerType;
+  const memberVisibility = context.memberVisibility;
+  const mergeCallableDeclarations = context.callableBindingGroups === "equivalent-signature";
   for (const fn of functionNodes) {
     const owner = await memberOwner(context, fn, classNodes);
     if (!owner) continue;
@@ -505,17 +518,17 @@ export async function emitMemberOwnershipEdges(
     }
     const memberId = ensureNode(context, memberDef);
     if (
-      context.sup.id === "php" &&
-      owner.container?.type === "trait_declaration" &&
+      abstractMemberOwnerType &&
+      owner.container?.type === abstractMemberOwnerType &&
       phpTraitMethodIsAbstract(fn.node)
     ) {
       context.phpAbstractTraitMembers?.add(memberId);
     }
     if (definitionId !== memberId) context.nodeAliases.set(definitionId, memberId);
-    if (context.sup.id === "java" || context.sup.id === "kotlin" || context.sup.id === "swift") {
+    if (memberVisibility) {
       const declarationNode = outOfLineDeclaration?.node ?? fn.node;
       const hidden =
-        context.sup.id === "swift"
+        memberVisibility === "file-hidden"
           ? isSwiftFileHiddenSharedOwnerMember(context.sup.id, declarationNode)
           : !isExportedDeclaration(context.sup.id, declarationNode);
       if (hidden) {
@@ -535,10 +548,9 @@ export async function emitMemberOwnershipEdges(
     if (memberId !== definitionId) markMemberArity(context, memberId, arityNode);
     const memberScope = memberScopeForDefinition(context, fn, owner.cppOutOfLine, outOfLineDeclaration);
     const outOfLineMember = outOfLineDeclaration ? memberDef : undefined;
-    const arityRange =
-      context.sup.id === "cpp"
-        ? mergeCppCallableShapes(fn.def, outOfLineMember)
-        : acceptedMemberArityRange(context, memberDef);
+    const arityRange = mergeCallableDeclarations
+      ? mergeCppCallableShapes(fn.def, outOfLineMember)
+      : acceptedMemberArityRange(context, memberDef);
     recordMemberLookupIdentity(context, definitionId, memberId, memberScope, arityRange);
     recordDefEdge(context, definitionId, owner.def, "member_of");
     await emitSharedOwnerMembershipEdges(context, owner, definitionId, fn.node);
@@ -980,8 +992,8 @@ async function dottedCallEdge(
   member: SymbolDef,
   callee: SyntaxNodeLike,
 ): Promise<MemberCallEdge | null> {
-  const policy = memberLookupPolicyFor(context.sup.id);
-  if (policy.callEdge) return await policy.callEdge(context.index, member, callee, context.source, memberLookupDeps);
+  const callEdge = context.memberCallEdge;
+  if (callEdge) return await callEdge(context.index, member, callee, context.source, memberLookupDeps);
   // The graph records no edge for a call its target cannot accept, as for other member calls.
   return memberAcceptsCallAt(context.index, member, callee, context.source, context.sup.id) ? "calls" : null;
 }
@@ -1339,6 +1351,9 @@ export async function emitFunctionBodyEdges(
 ): Promise<void> {
   const specialized = SPECIALIZED_EDGE_PASSES[context.sup.id];
   const memberNamePattern = context.memberNamePattern;
+  const caseInsensitiveCallableNames = context.callableNameForm === "case-folded";
+  const normalizeCallableName = context.callableNameForm === "normalized" ? context.sup.normalizeIdentifier : undefined;
+  const dottedCallsUseMemberLookup = context.dottedCallsUseMemberLookup;
   let deferredSpecializedCalls: Array<() => Promise<void>> | undefined;
   const qualifiedConstructionTargets: Array<{
     fromId: string;
@@ -1397,18 +1412,13 @@ export async function emitFunctionBodyEdges(
   };
 
   for (const fn of functionNodes) {
-    const phpCaseInsensitive = context.sup.id === "php";
     const fromId = ensureNode(context, fn.def);
     const provenNode = context.nodes.get(fromId);
     // Function-valued bindings (`const helper = () => 1`) keep their `variable` kind;
     // the callable metadata records that this binding was proven to hold a function.
     if (provenNode && provenNode.kind !== "function" && provesCallableBinding(context, fn)) {
       provenNode.callable = true;
-      context.noteCallableName(
-        fn.name,
-        context.sup.id === "php",
-        context.sup.id === "swift" ? context.sup.normalizeIdentifier : undefined,
-      );
+      context.noteCallableName(fn.name, caseInsensitiveCallableNames, normalizeCallableName);
     }
     const seenAliases = new Set<string>();
     // Calls whose target needs an async member lookup (C++ out-of-line owner members, included
@@ -1648,23 +1658,21 @@ export async function emitFunctionBodyEdges(
           ...(context.sup.id === "go" && memberNamePattern && !memberNamePattern.test(memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
-          caseInsensitiveMemberName: phpCaseInsensitive,
+          caseInsensitiveMemberName: caseInsensitiveCallableNames,
         });
         return;
       }
       const hideGenerated = !!context.sup.selfIsInstanceAt && !context.sup.selfIsInstanceAt(access.property);
       if (binding.kind === "own-type") {
-        const normalizedMemberName =
-          context.sup.id === "swift" ? context.sup.normalizeIdentifier(memberName) : memberName;
+        const normalizedMemberName = normalizeCallableName ? normalizeCallableName(memberName) : memberName;
         const container = nearestMemberContainer(fn.node);
         const rawDeclared = container
           ? lexicalMembers(container).filter((candidate) => {
               if (hideGenerated && isGeneratedMember(context.sup, context.tree, candidate.def)) return false;
-              const candidateName =
-                context.sup.id === "swift"
-                  ? context.sup.normalizeIdentifier(candidate.def.localName)
-                  : candidate.def.localName;
-              const nameMatches = phpCaseInsensitive
+              const candidateName = normalizeCallableName
+                ? normalizeCallableName(candidate.def.localName)
+                : candidate.def.localName;
+              const nameMatches = caseInsensitiveCallableNames
                 ? foldPhpIdentifierCase(candidateName) === foldPhpIdentifierCase(memberName)
                 : candidateName === normalizedMemberName;
               if (!nameMatches) return false;
@@ -1719,7 +1727,7 @@ export async function emitFunctionBodyEdges(
         memberScope: binding.memberScope,
         ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
         ...(hideGenerated ? { hideGeneratedMembers: true } : {}),
-        caseInsensitiveMemberName: phpCaseInsensitive,
+        caseInsensitiveMemberName: caseInsensitiveCallableNames,
       });
     };
 
@@ -1760,7 +1768,7 @@ export async function emitFunctionBodyEdges(
         // A static caller can only reach a static bare member; an instance caller
         // may bare-call either, matching C#'s unqualified invocation rules.
         memberScope: nodeInStaticMemberContext(fn.node, context.source) ? "static" : "any",
-        caseInsensitiveMemberName: phpCaseInsensitive,
+        caseInsensitiveMemberName: caseInsensitiveCallableNames,
         fallbackTargetId: fallbackDef ? ensureNode(context, fallbackDef) : undefined,
       });
     };
@@ -1774,7 +1782,7 @@ export async function emitFunctionBodyEdges(
     const resolveCallTarget = (node: SyntaxNodeLike, callee: SyntaxNodeLike | null): void => {
       const access = receiverCallAccess(context.sup, node, callee);
       if (access) {
-        if (memberLookupPolicyFor(context.sup.id).dottedCallsUseMemberLookup) {
+        if (dottedCallsUseMemberLookup) {
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
@@ -2136,11 +2144,17 @@ function narrowBaseSpecifierNode(node: SyntaxNodeLike): SyntaxNodeLike {
 }
 
 /** Collect one type identifier per direct base or interface specifier. */
-function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, out: SyntaxNodeLike[]): void {
+function collectBaseSpecifierIdentifiers(
+  node: SyntaxNodeLike,
+  sup: LanguageSupport,
+  out: SyntaxNodeLike[],
+  ignoredTypes: GraphHooks["ignoredBaseSpecifierTypes"],
+  preservedTypes: GraphHooks["preservedBaseSpecifierTypes"],
+): void {
   if (isUnprovenHeritageExpression(node)) return;
   if (isNonBaseHeritageArgument(node)) return;
-  if (sup.id === "php" && node.type === "use_list") return;
-  if (sup.id === "cpp" && node.type === "qualified_identifier") {
+  if (ignoredTypes?.[node.type]) return;
+  if (preservedTypes?.[node.type]) {
     out.push(node);
     return;
   }
@@ -2158,7 +2172,9 @@ function collectBaseSpecifierIdentifiers(node: SyntaxNodeLike, sup: LanguageSupp
     out.push(narrowed);
     return;
   }
-  for (const child of narrowed.namedChildren ?? []) collectBaseSpecifierIdentifiers(child, sup, out);
+  for (const child of narrowed.namedChildren ?? []) {
+    collectBaseSpecifierIdentifiers(child, sup, out, ignoredTypes, preservedTypes);
+  }
 }
 
 /** The syntax type of the declaration a Swift definition names (`protocol_declaration`, `typealias_declaration`, ...). */
@@ -2301,7 +2317,13 @@ async function recordIdentifierRelations(
   extensionNominal?: SymbolDef | null,
 ): Promise<void> {
   const identifiers: SyntaxNodeLike[] = [];
-  collectBaseSpecifierIdentifiers(container, context.sup, identifiers);
+  collectBaseSpecifierIdentifiers(
+    container,
+    context.sup,
+    identifiers,
+    context.ignoredBaseSpecifierTypes,
+    context.preservedBaseSpecifierTypes,
+  );
   const seen = new Set<string>();
   for (const [index, identifier] of identifiers.entries()) {
     let target = await resolveBaseSpecifier(context, identifier);
@@ -2459,6 +2481,9 @@ export async function emitClassInheritanceEdges(
 ): Promise<void> {
   const rules = MEMBER_ACCESS_ROWS[context.sup.id]?.receiverAncestry;
   if (!rules) return;
+  const singleSuperclassDeclaration = context.singleSuperclass?.declarationType;
+  const singleSuperclassHeritage = context.singleSuperclass?.heritageType;
+  const singleSuperclassClause = context.singleSuperclass?.clauseType;
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
@@ -2488,9 +2513,9 @@ export async function emitClassInheritanceEdges(
       }
     }
 
-    if ((context.sup.id === "ts" || context.sup.id === "tsx") && cls.node.type === "class_declaration") {
-      const heritage = cls.node.namedChildren.find((child) => child.type === "class_heritage");
-      const superclass = heritage?.namedChildren.find((child) => child.type === "extends_clause");
+    if (singleSuperclassDeclaration && cls.node.type === singleSuperclassDeclaration) {
+      const heritage = cls.node.namedChildren.find((child) => child.type === singleSuperclassHeritage);
+      const superclass = heritage?.namedChildren.find((child) => child.type === singleSuperclassClause);
       // TypeScript classes have one superclass. Invalid multi-base syntax proves neither target.
       if (superclass && superclass.namedChildren.length > 1) continue;
     }

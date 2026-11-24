@@ -1,11 +1,13 @@
 import { declarationMemberArity, isVariadicParameterMarker } from "../graphs/symbol-graph-detailed/ast.js";
 import { callArgumentCount, cppQualifiedTextSegments } from "../graphs/symbol-graph-detailed/receiver-calls.js";
-import type { CallableArity } from "../languages/callable-arity.js";
+import { CALLABLE_ARITY_LANGUAGE_PROFILES, type CallableArity } from "../languages/callable-arity.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { rootNodeOf } from "../util/ast.js";
 import { fileIdentityKey } from "../util/paths.js";
 import type { FileId } from "../types.js";
 import type { Binding } from "./scope-types.js";
+
+const CPP_GRAPH_PARAMETERS = CALLABLE_ARITY_LANGUAGE_PROFILES.cpp.graphDeclarationParameters;
 
 type CppCallableEntity = {
   bindings: Binding[];
@@ -231,7 +233,7 @@ function appendParameterListTokens(node: SyntaxNodeLike, omittedSpans: Set<strin
   if (!parameters) return;
   // `(void)` is the C/C++ zero-parameter spelling. A variadic parameter list is not empty, so it
   // keeps its pack/ellipsis tokens instead of collapsing to `()`.
-  if (declarationMemberArity(node, "cpp") === 0 && !parameterListIsVariadic(parameters)) {
+  if (declarationMemberArity(node, CPP_GRAPH_PARAMETERS) === 0 && !parameterListIsVariadic(parameters)) {
     tokens.push("(", ")");
     return;
   }
