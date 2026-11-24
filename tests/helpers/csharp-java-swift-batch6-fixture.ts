@@ -83,7 +83,145 @@ export const CSHARP_BATCH6_SOURCES: Sources = {
 
 export const CSHARP_RECORD_TYPED_SOURCES: Sources = {
   "Person.cs": "public record Person(string Name);\n",
-  "Reader.cs": "class Reader { string Read(Person p) => p.Name; }\n",
+  "Reader.cs": [
+    "class Reader {",
+    "  string Read(Person p) => p.Name;",
+    "  string Local(Person source) { Person p = source; return p.Name; }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+// Switch labels have section scope; locals declared in section statements share the switch body.
+export const CSHARP_SWITCH_SCOPE_SOURCES: Sources = {
+  "Switch.cs": [
+    "using System;",
+    "class SwitchScopes {",
+    "  int p = 10, g = 20, a = 30, b = 40, across = 50, governing = 60, w = 70, f = 80;",
+    "  static bool Try(out int value) { value = 1; return true; }",
+    "  int Cases(object o) {",
+    "    switch (o) {",
+    "      case int p when p > 0 && Try(out var g) && g > 0: return p + g;",
+    "      case string s: return p + g;",
+    "      default: return p + g;",
+    "    }",
+    "  }",
+    "  int Arms(object o) => o switch { int a when a > 0 && Try(out int b) && b > 0 => a + b, _ => a + b };",
+    "  int Across(int n) { switch (n) { case 1: int across = 1; return across; case 2: across = 2; return across; default: break; } return across; }",
+    "  int Governing(object o) { switch (Try(out int governing) ? o : o) { case int p: Console.WriteLine(p + governing); break; default: break; } return governing; }",
+    "  int Loop() { while (Try(out int w) && w > 0) { return w; } return w; }",
+    "  static int[] Seq(out int value) { value = 1; return new[] { value }; }",
+    "  int Each() { foreach (var item in Seq(out int f)) { Console.WriteLine(f); } return f; }",
+    "  int Guard(object o, object v) { switch (o) { case int n when v is int g && g > 0: return g; default: return g; } }",
+    "  int SameName(object o) { switch (o) { case int item when item > 0: return item; case string item when item.Length > 0: return item.Length; default: return 0; } }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export const CSHARP_RECORD_LOCAL_SOURCES: Sources = {
+  "Person.cs": [
+    "public record Person(string Name);",
+    "public record Other(string Name);",
+    "public record Child(string Value) : Person(Value) { public new string Name => Value; }",
+    "",
+  ].join("\n"),
+  "Reader.cs": [
+    "class Reader {",
+    "  string Read(Person source) { Person p = source; return p.Name; }",
+    "  string Multiple(Person source) { Person first = source, second = source; return first.Name + second.Name; }",
+    "  string Assigned(Person source) { Person p; p = source; return p.Name; }",
+    '  string Reassigned(Person source) { Person p = source; p = new Person("two"); return p.Name; }',
+    "  string Parameter(Person p, Person source) { p = source; return p.Name; }",
+    '  string Constructed() { var p = new Person("one"); return p.Name; }',
+    "  string Different(Other other) { Other p = other; return p.Name; }",
+    '  string BaseDeclared() { Person p = new Child("one"); return p.Name; }',
+    '  string ChildConstructed() { var p = new Child("one"); return p.Name; }',
+    '  string ParameterAssigned(Person p) { p = new Child("one"); return p.Name; }',
+    '  string Nested(Person source) { Person p = source; { p = new Child("one"); return p.Name; } }',
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export const CSHARP_RECORD_INFERRED_SOURCES: Sources = {
+  "Person.cs": "public record Person(string Name);\n",
+  "Reader.cs": "class Reader { string Read(Person source) { var p = source; return p.Name; } }\n",
+};
+
+// A constructor assignment already proves the receiver for the nested read on main.
+export const CSHARP_ASSIGNMENT_RECEIVER_SOURCES: Sources = {
+  "Assignment.cs": [
+    "public readonly record struct Measurement(int Min);",
+    "class Child { public Measurement Measure() => new(1); }",
+    "class Reader {",
+    "  int Read(Child child) {",
+    "    var childWidth = child.Measure();",
+    "    if (child != null) {",
+    "      childWidth = new Measurement(childWidth.Min);",
+    "    }",
+    "    return childWidth.Min;",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+// Roslyn binds the field only outside the closer pattern, out, foreach, lambda, query, and deconstruction binders.
+export const CSHARP_RECEIVER_BINDER_SOURCES: Sources = {
+  "ReceiverBinders.cs": [
+    "using System;",
+    "using System.Collections.Generic;",
+    "using System.Linq;",
+    'public record Person(string Name) { public string Act() => "person"; }',
+    'public record Other(string Name) { public string Act() => "other"; }',
+    "class Reader {",
+    '  Person p = new Person("field");',
+    '  static bool Try(out Other value) { value = new Other("other"); return true; }',
+    "  string Field() => p.Name;",
+    "  string Local(Person source) { Person p = source; return p.Name; }",
+    '  string Pattern(object o) => o is Other p ? p.Name : "";',
+    '  string Case(object o) { switch (o) { case Other p: return p.Name; default: return ""; } }',
+    '  string Arm(object o) => o switch { Other p => p.Name, _ => "" };',
+    '  string Out() { if (Try(out var p)) return p.Name; return ""; }',
+    '  string TypedOut() { if (Try(out Other p)) return p.Name; return ""; }',
+    '  string Foreach(List<Other> items) { foreach (var p in items) return p.Name; return ""; }',
+    "  string Lambda(List<Other> items) => items.Select(p => p.Name).First();",
+    '  string Anonymous() { Func<Other, string> f = delegate (Other p) { return p.Name; }; return f(new Other("x")); }',
+    '  string Deconstruct() { var (p, q) = (new Other("x"), 1); return p.Name; }',
+    "  string Query(List<Other> items) => (from p in items select p.Name).First();",
+    "  string FieldCall() => p.Act();",
+    "  string LocalCall(Person source) { Person p = source; return p.Act(); }",
+    '  string PatternCall(object o) => o is Other p ? p.Act() : "";',
+    '  string AnonymousCall() { Func<Other, string> f = delegate (Other p) { return p.Act(); }; return f(new Other("x")); }',
+    "}",
+    "",
+  ].join("\n"),
+};
+
+export const CSHARP_SIBLING_USING_SOURCES: Sources = {
+  "Using.cs": [
+    "using System;",
+    'class A : IDisposable { public string Name => "A"; public void Dispose() {} }',
+    'class B : IDisposable { public string Name => "B"; public void Dispose() {} }',
+    "class Reader {",
+    "  string Read() { using (A d = new A()) {} using (var d = new B()) { return d.Name; } }",
+    "}",
+    "",
+  ].join("\n"),
+};
+
+// Operator parameters are ordinary receiver bindings, including conversion operators.
+export const CSHARP_OPERATOR_RECEIVER_SOURCES: Sources = {
+  "Operator.cs": [
+    "public class Sized {",
+    "  public int Value => 1;",
+    "  public static Sized operator +(Sized left, Sized right) => left.Value > right.Value ? left : right;",
+    "  public static implicit operator int(Sized item) => item.Value;",
+    "}",
+    "public class OtherSized { public int Value => -1; }",
+    "",
+  ].join("\n"),
 };
 
 // Roslyn rejects the two member reads with CS1061: primary-constructor parameters are not properties.
@@ -445,14 +583,158 @@ export const BATCH6_RENAME_ROWS: readonly {
   {
     sources: CSHARP_BATCH6_SOURCES,
     declaration: at("Records.cs", 1, "Name"),
-    references: [at("Records.cs", 1, "Name"), ...[2, 4].map((line) => at("Readers.cs", line, "Name"))],
-    coverage: "partial",
+    references: [at("Records.cs", 1, "Name"), ...[2, 3, 4].map((line) => at("Readers.cs", line, "Name"))],
   },
   {
     sources: CSHARP_RECORD_TYPED_SOURCES,
     declaration: at("Person.cs", 1, "Name"),
-    references: [at("Person.cs", 1, "Name"), at("Reader.cs", 1, "Name")],
+    references: [at("Person.cs", 1, "Name"), at("Reader.cs", 2, "Name"), at("Reader.cs", 3, "Name")],
   },
+  {
+    sources: CSHARP_RECEIVER_BINDER_SOURCES,
+    declaration: at("ReceiverBinders.cs", 4, "Name"),
+    references: [
+      at("ReceiverBinders.cs", 4, "Name"),
+      at("ReceiverBinders.cs", 9, "Name"),
+      at("ReceiverBinders.cs", 10, "Name"),
+    ],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_RECEIVER_BINDER_SOURCES,
+    declaration: at("ReceiverBinders.cs", 4, "Act"),
+    references: [
+      at("ReceiverBinders.cs", 4, "Act"),
+      at("ReceiverBinders.cs", 21, "Act"),
+      at("ReceiverBinders.cs", 22, "Act"),
+    ],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_SIBLING_USING_SOURCES,
+    declaration: at("Using.cs", 3, "Name"),
+    references: [at("Using.cs", 3, "Name"), at("Using.cs", 5, "Name")],
+    unsafe: true,
+  },
+  {
+    sources: CSHARP_OPERATOR_RECEIVER_SOURCES,
+    declaration: at("Operator.cs", 2, "Value"),
+    references: [
+      at("Operator.cs", 2, "Value"),
+      at("Operator.cs", 3, "Value"),
+      at("Operator.cs", 3, "Value", 2),
+      at("Operator.cs", 4, "Value"),
+    ],
+  },
+  {
+    sources: CSHARP_RECORD_LOCAL_SOURCES,
+    declaration: at("Person.cs", 1, "Name"),
+    references: [
+      at("Person.cs", 1, "Name"),
+      ...[2, 3, 4, 5, 6, 7, 9, 11, 12].map((line) => at("Reader.cs", line, "Name")),
+      at("Reader.cs", 3, "Name", 2),
+    ],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_RECORD_LOCAL_SOURCES,
+    declaration: at("Person.cs", 2, "Name"),
+    references: [at("Person.cs", 2, "Name"), at("Reader.cs", 8, "Name")],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_RECORD_LOCAL_SOURCES,
+    declaration: at("Person.cs", 3, "Name"),
+    references: [at("Person.cs", 3, "Name")],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_RECORD_INFERRED_SOURCES,
+    declaration: at("Person.cs", 1, "Name"),
+    references: [at("Person.cs", 1, "Name")],
+    coverage: "partial",
+  },
+  {
+    sources: CSHARP_ASSIGNMENT_RECEIVER_SOURCES,
+    declaration: at("Assignment.cs", 1, "Min"),
+    references: [at("Assignment.cs", 1, "Min"), at("Assignment.cs", 7, "Min")],
+    coverage: "partial",
+  },
+  ...(["p", "g"] as const).map((name) => ({
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 7, name),
+    references: [1, 2, 3].map((nth) => at("Switch.cs", 7, name, nth)),
+  })),
+  ...(["p", "g"] as const).map((name) => ({
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 3, name),
+    references: [
+      at("Switch.cs", 3, name),
+      at("Switch.cs", 8, name),
+      at("Switch.cs", 9, name),
+      ...(name === "g" ? [at("Switch.cs", 18, "g", 4)] : []),
+    ],
+  })),
+  ...(["a", "b"] as const).map((name) => ({
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 12, name),
+    references: [1, 2, 3].map((nth) => at("Switch.cs", 12, name, nth)),
+  })),
+  ...(["a", "b"] as const).map((name) => ({
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 3, name),
+    references: [at("Switch.cs", 3, name), at("Switch.cs", 12, name, 4)],
+  })),
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 13, "across"),
+    references: [1, 2, 3, 4].map((nth) => at("Switch.cs", 13, "across", nth)),
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 3, "across"),
+    references: [at("Switch.cs", 3, "across"), at("Switch.cs", 13, "across", 5)],
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 14, "governing"),
+    references: [1, 2, 3].map((nth) => at("Switch.cs", 14, "governing", nth)),
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 14, "p"),
+    references: [1, 2].map((nth) => at("Switch.cs", 14, "p", nth)),
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 15, "w"),
+    references: [1, 2, 3].map((nth) => at("Switch.cs", 15, "w", nth)),
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 3, "w"),
+    references: [at("Switch.cs", 3, "w"), at("Switch.cs", 15, "w", 4)],
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 17, "f"),
+    references: [1, 2].map((nth) => at("Switch.cs", 17, "f", nth)),
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 3, "f"),
+    references: [at("Switch.cs", 3, "f"), at("Switch.cs", 17, "f", 3)],
+  },
+  {
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 18, "g"),
+    references: [1, 2, 3].map((nth) => at("Switch.cs", 18, "g", nth)),
+  },
+  ...[1, 4].map((first) => ({
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    declaration: at("Switch.cs", 19, "item", first),
+    references: [first, first + 1, first + 2].map((nth) => at("Switch.cs", 19, "item", nth)),
+  })),
   {
     sources: JAVA_BATCH6_SOURCES,
     declaration: at("Size.java", 1, "SMALL"),
@@ -686,7 +968,6 @@ async function expectRows(fixture: Batch3Fixture, index: ProjectIndex): Promise<
 
 export async function expectCsharpBatch6(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
   await expectRows(fixture, index);
-  await expectGoto(fixture, index, at("Readers.cs", 3, "Name"), "not_found");
   const field = at("Scopes.cs", 3, "x");
   const fieldReads = [5, 6, 7, 8, 9, 10].map((line) => at("Scopes.cs", line, "x", line === 6 ? 4 : 3));
   for (const use of fieldReads) await expectGoto(fixture, index, use, field);
@@ -699,6 +980,71 @@ export async function expectCsharpBatch6(fixture: Batch3Fixture, index: ProjectI
     [10, 7, "Name", 1],
   ] as const) {
     await expectGoto(fixture, index, at("Readers.cs", useLine, name), at("Records.cs", declarationLine, name, nth));
+  }
+}
+
+async function expectCsharpInferredRecordReceiver(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  await expectRows(fixture, index);
+  await expectGoto(fixture, index, at("Reader.cs", 1, "Name"), "not_found");
+}
+
+async function expectCsharpLocalRecordReceivers(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  await expectRows(fixture, index);
+  // Main also cannot select this explicit `new` property over the inherited property.
+  await expectGoto(fixture, index, at("Reader.cs", 10, "Name"), "not_found");
+}
+
+async function expectCsharpAssignmentReceiver(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  await expectRows(fixture, index);
+  // The later read remains unproven on main; it must not make a rename look complete.
+  await expectGoto(fixture, index, at("Assignment.cs", 9, "Min"), "not_found");
+}
+
+async function expectCsharpReceiverBinderBarriers(fixture: Batch3Fixture, index: ProjectIndex): Promise<void> {
+  await expectRows(fixture, index);
+  const decoys = [
+    ...[11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((line) => [line, "Name"] as const),
+    [23, "Act"] as const,
+    [24, "Act"] as const,
+  ];
+  for (const [line, member] of decoys) {
+    const use = at("ReceiverBinders.cs", line, member);
+    const result = await goToDefinition(index, {
+      file: fixture.files[use.file]!,
+      ...placeOf(fixture.sources, use),
+    });
+    if (result.status === "ok") {
+      const expected = placeOf(fixture.sources, at("ReceiverBinders.cs", 5, member));
+      expect([result.definition.range.start.line, result.definition.range.start.column]).toEqual([
+        expected.line,
+        expected.column,
+      ]);
+    } else {
+      expect(result.status).toBe("not_found");
+    }
+  }
+  await expectGoto(fixture, index, at("ReceiverBinders.cs", 18, "Name"), at("ReceiverBinders.cs", 5, "Name"));
+  await expectGoto(fixture, index, at("ReceiverBinders.cs", 24, "Act"), at("ReceiverBinders.cs", 5, "Act"));
+  const graph = await buildSymbolGraphDetailed(index);
+  for (const member of ["Name", "Act"] as const) {
+    const target = await goToDefinition(index, {
+      file: fixture.files["ReceiverBinders.cs"]!,
+      ...placeOf(fixture.sources, at("ReceiverBinders.cs", 4, member)),
+    });
+    expect(target.status).toBe("ok");
+    if (target.status !== "ok") continue;
+    for (const [line, decoyMember] of decoys) {
+      if (decoyMember !== member) continue;
+      const position = placeOf(fixture.sources, at("ReceiverBinders.cs", line, member));
+      const falseEdge = graph.edges.some(
+        (edge) =>
+          edge.site?.file === fixture.files["ReceiverBinders.cs"] &&
+          edge.site.range.start.line === position.line &&
+          edge.site.range.start.column === position.column &&
+          edge.to === defNodeId(target.definition),
+      );
+      expect(falseEdge, `${line}:${member}`).toBe(false);
+    }
   }
 }
 
@@ -845,6 +1191,55 @@ export const BATCH6_CASES = [
     language: "csharp",
     references: true,
     sources: CSHARP_RECORD_TYPED_SOURCES,
+    check: expectRows,
+  },
+  {
+    name: "switch label scopes and switch-block locals",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_SWITCH_SCOPE_SOURCES,
+    check: expectRows,
+  },
+  {
+    name: "explicitly typed record local receivers",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_RECORD_LOCAL_SOURCES,
+    check: expectCsharpLocalRecordReceivers,
+  },
+  {
+    name: "unproven inferred record local receivers",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_RECORD_INFERRED_SOURCES,
+    check: expectCsharpInferredRecordReceiver,
+  },
+  {
+    name: "existing assignment receiver proof",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_ASSIGNMENT_RECEIVER_SOURCES,
+    check: expectCsharpAssignmentReceiver,
+  },
+  {
+    name: "typed receiver binder barriers",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_RECEIVER_BINDER_SOURCES,
+    check: expectCsharpReceiverBinderBarriers,
+  },
+  {
+    name: "sibling using receiver bindings",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_SIBLING_USING_SOURCES,
+    check: expectRows,
+  },
+  {
+    name: "operator parameter receivers",
+    language: "csharp",
+    references: true,
+    sources: CSHARP_OPERATOR_RECEIVER_SOURCES,
     check: expectRows,
   },
   {

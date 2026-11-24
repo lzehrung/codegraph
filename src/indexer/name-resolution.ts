@@ -56,11 +56,11 @@ import {
 } from "./navigation-goto.js";
 import {
   definitionForBinding,
-  findClosestScopeBinding,
   getOrBuildScopeIndex,
   laterLocalShadowsUse,
   resolveNamedDefinition,
 } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 
 import { okGoToResult } from "./navigation-provenance.js";
 

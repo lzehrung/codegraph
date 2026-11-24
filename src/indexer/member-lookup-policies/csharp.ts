@@ -1,4 +1,5 @@
 /** C# additions to member navigation and to reference coverage. */
+import { csharpReceiverDeclaredBindingVisible } from "../../util/csharp-bindings.js";
 import {
   csharpNamedArgumentCall,
   csharpUnprovenReferenceCandidate,
@@ -79,6 +80,9 @@ function unprovenMemberReference(
 
 export const csharpMemberLookupPolicy: MemberLookupPolicy = {
   declaredReceiverUsesNameLookup: true,
+  receiverDeclaratorTypeParent: "variable_declaration",
+  receiverDeclaredTypeSurvivesAssignment: true,
+  receiverDeclaredBindingVisible: csharpReceiverDeclaredBindingVisible,
   membersBeforeFileExports: true,
   implicitMember: csharpRecordProperty,
   renameCompanions: csharpInterfaceRenameCompanions,

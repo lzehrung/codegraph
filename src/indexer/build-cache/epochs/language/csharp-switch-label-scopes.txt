@@ -1,0 +1,1 @@
+C# switch bodies scope locals while label and guard bindings remain within their sections.

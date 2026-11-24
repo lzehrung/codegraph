@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { memberLookupPolicyFor } from "../../indexer/member-lookup-policies/index.js";
+import { findClosestScopeBinding } from "../../indexer/scope-lookup.js";
+import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { findCommentEnd } from "../../impact/call-compatibility/text-scanner.js";
 import { isGoExportedMemberName } from "../../indexer/declaration-visibility.js";
 import {
@@ -13,7 +15,7 @@ import { SymbolKind, type ModuleIndex, type SymbolDef } from "../../indexer/type
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../../languages.js";
 import type { CallableArity, CallableIdentity } from "../../languages/callable-arity.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { rootNodeOf, sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
@@ -538,12 +540,17 @@ export type ReceiverProof = {
   locallyBound: boolean;
 };
 
-type ReceiverTypeEvidence = { typeNode: SyntaxNodeLike; origin: "constructor" | "declared-type" };
+type ReceiverTypeEvidence = {
+  typeNode: SyntaxNodeLike;
+  origin: "constructor" | "declared-type";
+  declaration?: SyntaxNodeLike;
+  fromAssignment?: boolean;
+};
 type BindingProof =
   | { status: "none" }
   | { status: "unproven" }
   | { status: "type"; node: SyntaxNodeLike }
-  /** A TypeScript type annotation: every later assignment must conform to it. */
+  /** An explicit type annotation: every later assignment must conform to it. */
   | { status: "declared"; node: SyntaxNodeLike };
 
 /** The declarator of a C# `variable_declaration` whose name is the declaration's own simple type name (`Widget Widget;`). */
@@ -1082,6 +1089,26 @@ function bindingProof(node: SyntaxNodeLike, receiverName: string, source: string
     if (!child) break;
     if (child.type === "...") return { status: "unproven" };
   }
+  if (node.type === "variable_declarator") {
+    const parent = node.parent;
+    const declaratorParent = memberLookupPolicyFor(sup.id).receiverDeclaratorTypeParent;
+    if (declaratorParent && parent?.type === declaratorParent) {
+      const type = parent.childForFieldName("type");
+      if (!type) return { status: "unproven" };
+      if (type.type !== "implicit_type") {
+        const declared = declaredTypeNameNode(parent, sup);
+        return declared ? { status: "declared", node: declared } : { status: "unproven" };
+      }
+      const value = bindingValueExpression(node);
+      const constructed = value ? constructionTypeName(value, source, sup) : null;
+      return constructed ? { status: "type", node: constructed } : { status: "unproven" };
+    }
+  }
+  if (node.type === "assignment_expression" && memberLookupPolicyFor(sup.id).receiverDeclaredTypeSurvivesAssignment) {
+    const value = bindingValueExpression(node);
+    const constructed = value ? constructionTypeName(value, source, sup) : null;
+    return constructed ? { status: "type", node: constructed } : { status: "unproven" };
+  }
   const annotation = isJsTsLanguage(sup.id) ? node.childForFieldName("type") : null;
   const annotated = annotation ? (unwrapNamedType(annotation, sup) ?? typescriptImportTypeQuery(annotation)) : null;
   if (annotated) return { status: "declared", node: annotated };
@@ -1108,17 +1135,29 @@ function findPriorConstructorInContainer(
   let typeEvidence: ReceiverTypeEvidence | null = null;
   let sawUnproven = false;
   let declared = false;
+  const receiverPolicy = memberLookupPolicyFor(sup.id);
+  const retainsDeclaredType = !!receiverPolicy.receiverDeclaredTypeSurvivesAssignment;
+  const needsDeclaredBinding = !!receiverPolicy.receiverDeclaredBindingVisible;
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return true;
     if (current !== node && isSkippableBindingContainer(current, receiver, sup)) return true;
     const proof = bindingProof(current, receiverName, source, sup);
     if (proof.status === "declared") {
       typeEvidence = { typeNode: proof.node, origin: "declared-type" };
-      declared = isJsTsLanguage(sup.id);
+      if (needsDeclaredBinding) {
+        const declaration = bindingIdentifier(current, sup);
+        if (declaration) typeEvidence.declaration = declaration;
+      }
+      declared = isJsTsLanguage(sup.id) || retainsDeclaredType;
       return true;
     }
-    // A later assignment to an annotated binding cannot change its declared type.
-    if (declared && proof.status !== "none") return true;
+    if (declared && proof.status !== "none") {
+      // A later assignment keeps the declared type, but a new declarator introduces a different binding.
+      if (!retainsDeclaredType || current.type === "assignment_expression") return true;
+      declared = false;
+      typeEvidence = null;
+      sawUnproven = false;
+    }
     if (proof.status === "unproven") {
       if (typeEvidence) {
         typeEvidence = null;
@@ -1136,7 +1175,11 @@ function findPriorConstructorInContainer(
         typeEvidence = null;
         return false;
       }
-      typeEvidence = { typeNode: proof.node, origin: "constructor" };
+      typeEvidence = {
+        typeNode: proof.node,
+        origin: "constructor",
+        fromAssignment: current.type === "assignment_expression",
+      };
       return true;
     }
     for (const child of current.namedChildren) {
@@ -1155,11 +1198,13 @@ function bindingContainerDeclaresNameBefore(
   source: string,
   sup: LanguageSupport,
 ): boolean {
+  const assignmentUpdatesExisting =
+    isJsTsLanguage(sup.id) || !!memberLookupPolicyFor(sup.id).receiverDeclaredTypeSurvivesAssignment;
   const visit = (current: SyntaxNodeLike): boolean => {
     if (current.startIndex >= receiver.startIndex) return false;
     if (current !== node && isSkippableBindingContainer(current, receiver, sup)) return false;
-    // A JavaScript/TypeScript assignment updates an existing binding; it declares nothing.
-    const declaresNewBinding = !(isJsTsLanguage(sup.id) && current.type === "assignment_expression");
+    // In these languages an assignment updates an existing binding instead of declaring one.
+    const declaresNewBinding = current.type !== "assignment_expression" || !assignmentUpdatesExisting;
     if (
       declaresNewBinding &&
       BINDING_DECLARATION_TYPES.has(current.type) &&
@@ -1182,6 +1227,7 @@ function findVisiblePriorConstructor(
   sup: LanguageSupport,
 ): ReceiverTypeEvidence | null {
   let current: SyntaxNodeLike | null = receiver;
+  let assignmentFallback: ReceiverTypeEvidence | null = null;
   while (current) {
     if (
       BINDING_CONTAINER_TYPES.has(current.type) ||
@@ -1189,13 +1235,22 @@ function findVisiblePriorConstructor(
       sup.createsFunctionScope(current)
     ) {
       const constructor = findPriorConstructorInContainer(current, receiver, receiverName, source, sup);
-      if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
-        return constructor;
+      const assignmentNeedsDeclaration =
+        constructor?.fromAssignment && memberLookupPolicyFor(sup.id).receiverDeclaredTypeSurvivesAssignment;
+      // A nearer assignment can still be the existing constructor proof for an untyped binding.
+      if (constructor && assignmentNeedsDeclaration && !assignmentFallback) assignmentFallback = constructor;
+      if (
+        (constructor && !assignmentNeedsDeclaration) ||
+        bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)
+      ) {
+        return constructor ?? assignmentFallback;
       }
     }
     current = current.parent;
   }
-  return findPriorConstructorInContainer(rootNodeOf(receiver), receiver, receiverName, source, sup);
+  return (
+    findPriorConstructorInContainer(rootNodeOf(receiver), receiver, receiverName, source, sup) ?? assignmentFallback
+  );
 }
 
 /** Constructor or declared type visible at a receiver, without resolving its owner. */
@@ -1504,6 +1559,8 @@ export function classifyReceiver(
   accessNode: SyntaxNodeLike,
   hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
   classifyImport?: (name: string, node: SyntaxNodeLike) => "module-import" | "static-type" | null,
+  scopeIndex?: ScopeIndex | (() => ScopeIndex),
+  tree?: SyntaxTreeLike,
 ): ReceiverBinding {
   const text = receiverKeywordText(sup, receiver, source, hasLexicalBinding);
   if (!text) return { kind: "unknown", receiver };
@@ -1529,6 +1586,16 @@ export function classifyReceiver(
   }
   if (proof.typeEvidence) {
     const { typeNode, origin } = proof.typeEvidence;
+    if (origin === "declared-type") {
+      const visible = memberLookupPolicyFor(sup.id).receiverDeclaredBindingVisible;
+      if (visible) {
+        const declaration = proof.typeEvidence.declaration;
+        if (!declaration || !scopeIndex || !tree) return { kind: "unknown", receiver };
+        const scope = typeof scopeIndex === "function" ? scopeIndex() : scopeIndex;
+        const binding = findClosestScopeBinding(scope, sliceText(receiver, source), receiver, sup);
+        if (!visible(tree, receiver, declaration, binding?.node ?? null)) return { kind: "unknown", receiver };
+      }
+    }
     return {
       kind: "named-type",
       proof: origin,

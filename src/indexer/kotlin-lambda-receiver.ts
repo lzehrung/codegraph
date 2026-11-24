@@ -70,7 +70,8 @@ import {
   type ReceiverTypeMember,
 } from "./navigation-goto.js";
 import { okGoToResult } from "./navigation-provenance.js";
-import { definitionForBinding, findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { definitionForBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Binding } from "./scope-types.js";
 import { declarationNodeOf } from "./kotlin-call-compatibility.js";

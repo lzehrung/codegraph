@@ -53,7 +53,8 @@ import {
 import { inferPhpQualifiedReferenceImportType } from "../indexer/navigation-php.js";
 import { ensurePhpNamespaceSymbolIndex } from "../indexer/php-namespace-symbols.js";
 import { isPythonDottedImportBinding, pythonDottedImportPackageFile } from "../indexer/python-dotted-imports.js";
-import { findClosestBinding, findClosestScopeBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestBinding, getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { findClosestScopeBinding } from "../indexer/scope-lookup.js";
 import { memberLookupPolicyFor } from "../indexer/member-lookup-policies/index.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { kotlinCallableAcceptsTrailingLambda } from "../indexer/kotlin-call-compatibility.js";

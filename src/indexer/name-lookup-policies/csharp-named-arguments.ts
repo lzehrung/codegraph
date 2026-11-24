@@ -6,7 +6,8 @@ import { sliceText } from "../../util/ast.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import type { BareNameUse, JvmTypeNameResolver } from "../name-resolution-types.js";
 import { memberAcceptsCallAt, resolveMemberAccessDefinition } from "../navigation-goto.js";
-import { definitionForBinding, findClosestScopeBinding } from "../navigation-local.js";
+import { definitionForBinding } from "../navigation-local.js";
+import { findClosestScopeBinding } from "../scope-lookup.js";
 import { ensureParsedContextForIndex } from "../parsed-cache.js";
 import { SymbolKind, type GoToResult, type ProjectIndex, type SymbolDef } from "../types.js";
 

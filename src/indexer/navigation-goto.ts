@@ -126,13 +126,12 @@ import {
 import {
   csharpLookupName,
   csharpQualifiedThroughGenericOwner,
-  csharpQualifiedNameNode,
   definitionForBinding,
-  findClosestScopeBinding,
   getOrBuildScopeIndex,
   laterLocalShadowsUse,
   resolveNamedDefinition,
 } from "./navigation-local.js";
+import { csharpQualifiedNameNode, findClosestScopeBinding } from "./scope-lookup.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-using-static.js";
 import { csharpTypeOnlyName } from "./scope-nodes.js";
@@ -2115,11 +2114,22 @@ export async function resolveMemberAccessDefinition(params: {
   const resolvedReceiver = obj && prop && node.id === prop.id ? await resolveExpression(obj) : null;
   const receiverProof =
     obj && prop && node.id === prop.id
-      ? classifyReceiver(sup, obj, source, null, 0, memberNode, receiverHasLexicalBinding, () => {
-          if (resolvedReceiver?.kind === "namespace") return "module-import";
-          if (resolvedReceiver?.kind === "resolved" && declaresMembers(resolvedReceiver.def)) return "static-type";
-          return null;
-        })
+      ? classifyReceiver(
+          sup,
+          obj,
+          source,
+          null,
+          0,
+          memberNode,
+          receiverHasLexicalBinding,
+          () => {
+            if (resolvedReceiver?.kind === "namespace") return "module-import";
+            if (resolvedReceiver?.kind === "resolved" && declaresMembers(resolvedReceiver.def)) return "static-type";
+            return null;
+          },
+          ensureScopeIndex,
+          tree,
+        )
       : null;
   const classLevelReceiver = namesClassItself(sup, receiverProof, node);
   const pythonInstanceReceiver =
@@ -2325,6 +2335,7 @@ export async function resolveMemberAccessDefinition(params: {
       receiverProof,
       resolvedReceiver,
       hiddenReceiverType,
+      tree,
     );
 
     if (receiver) {
@@ -3284,6 +3295,9 @@ export async function provenClassifiedReceiverOmitsMember(
       const scope = getOrBuildScopeIndex(index, fileId, parsed.source, parsed.sup, mod, parsed.tree);
       return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
     },
+    undefined,
+    () => getOrBuildScopeIndex(index, fileId, parsed.source, parsed.sup, mod, parsed.tree),
+    parsed.tree,
   );
   if (receiver.kind === "unknown" || receiver.kind === "module-import") return false;
   if (receiver.kind === "named-type") {
@@ -5209,6 +5223,7 @@ async function resolveReceiverDefinition(
   proof?: ReceiverBinding | null,
   resolvedDirect?: ResolvedExport | null,
   hiddenReceiverType?: (expr: SyntaxNodeLike) => Promise<SymbolDef | null>,
+  tree?: SyntaxTreeLike,
 ): Promise<ResolvedReceiverDefinition | null> {
   // A C# member that binds the receiver's name before an alias types it by its own declaration.
   const hiddenType = await hiddenReceiverType?.(obj);
@@ -5216,11 +5231,22 @@ async function resolveReceiverDefinition(
   const direct = resolvedDirect === undefined ? await resolveExpression(obj) : resolvedDirect;
   const receiver =
     proof ??
-    classifyReceiver(sup, obj, source, null, 0, obj.parent ?? obj, noLexicalBinding, () => {
-      if (direct?.kind === "namespace") return "module-import";
-      if (direct?.kind === "resolved" && declaresMembers(direct.def)) return "static-type";
-      return null;
-    });
+    classifyReceiver(
+      sup,
+      obj,
+      source,
+      null,
+      0,
+      obj.parent ?? obj,
+      noLexicalBinding,
+      () => {
+        if (direct?.kind === "namespace") return "module-import";
+        if (direct?.kind === "resolved" && declaresMembers(direct.def)) return "static-type";
+        return null;
+      },
+      getScopeIndex,
+      tree,
+    );
   if (receiver.kind === "module-import") return null;
   if (supportsDeclaredFieldChains(sup.id) && isMemberAccessNode(sup, obj)) {
     const directType = direct?.kind === "resolved" ? asMemberContainer(index, direct.def) : undefined;
@@ -5238,6 +5264,7 @@ async function resolveReceiverDefinition(
         undefined,
         undefined,
         hiddenReceiverType,
+        tree,
       );
       if (!owner || owner.runtimeTypeOnly) return null;
       const field = await resolveKeywordReceiverMember(

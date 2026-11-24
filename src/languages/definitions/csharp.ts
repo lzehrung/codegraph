@@ -45,6 +45,7 @@ const createsCsharpBlockScope = nodeTypeIn([
   "catch_clause",
   "for_statement",
   "while_statement",
+  "switch_body",
   "switch_expression_arm",
   "query_expression",
 ]);
@@ -177,6 +178,8 @@ export const CSHARP_DEF: LanguageDefinition = {
     "method_declaration",
     "constructor_declaration",
     "destructor_declaration",
+    "operator_declaration",
+    "conversion_operator_declaration",
     "local_function_statement",
     "lambda_expression",
   ]),

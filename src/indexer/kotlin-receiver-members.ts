@@ -20,7 +20,8 @@ import {
   type ExternalBaseOmits,
   type ReceiverTypeMember,
 } from "./navigation-goto.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { getOrBuildScopeIndex } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import {
   declarationNodeOf,

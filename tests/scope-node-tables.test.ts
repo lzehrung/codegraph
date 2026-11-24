@@ -25,6 +25,7 @@ const FUNCTION_SCOPE_CANDIDATES = [
   "anonymous_function",
   "arrow_function",
   "constructor_declaration",
+  "conversion_operator_declaration",
   "deinit_declaration",
   "destructor_declaration",
   "func_literal",
@@ -43,6 +44,7 @@ const FUNCTION_SCOPE_CANDIDATES = [
   "method",
   "method_declaration",
   "method_definition",
+  "operator_declaration",
   "singleton_method",
   "subscript_declaration",
 ];
@@ -245,6 +247,18 @@ const UNNAMED_FUNCTION_SCOPE_FIXTURES = [
     nodeType: "destructor_declaration",
     source: "class Probe {\n  ~Probe() {}\n}\n",
     bindsContainerName: true,
+  },
+  {
+    languageId: "csharp",
+    nodeType: "operator_declaration",
+    source: "class Probe { public static Probe operator +(Probe a, Probe b) => a; }\n",
+    bindsContainerName: false,
+  },
+  {
+    languageId: "csharp",
+    nodeType: "conversion_operator_declaration",
+    source: "class Probe { public static implicit operator string(Probe value) => value.ToString(); }\n",
+    bindsContainerName: false,
   },
   {
     languageId: "csharp",
