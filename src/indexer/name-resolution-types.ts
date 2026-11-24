@@ -2,12 +2,13 @@
  * Types and small result helpers for shared bare-name lookup and its per-language policies.
  * A leaf module, so policies and member navigation can use them without a cycle.
  */
-import type { SyntaxNodeLike } from "../languages/types.js";
+import type { LanguageSupport } from "../languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { ParsedFileProvider } from "./parsed-cache.js";
-import type { Binding, ScopeIndex } from "./scope.js";
-import type { GoToResult, ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import type { Binding, ScopeIndex } from "./scope-types.js";
+import type { GoToResult, ImportBinding, ModuleIndex, ProjectIndex, ReferenceCoverage, SymbolDef } from "./types.js";
 
 /** A lookup step that needs async member resolution before its answer is known. */
 export type DeferredNameRequest =
@@ -102,12 +103,71 @@ export type NameLookupState = {
   closestBinding: Binding | null;
 };
 
+/** A specialized binding selector; undefined continues the generic selection. */
+export type BindingHooks = Readonly<{
+  select?: (
+    binding: Binding,
+    file: FileId,
+    currentNode: SyntaxNodeLike,
+    support: LanguageSupport,
+    source?: string,
+    tree?: SyntaxTreeLike,
+  ) => SymbolDef | null | undefined;
+}>;
+
+/** Options already used by export and import lookup. */
+export type ImportNameResolutionOptions = Readonly<{
+  preferredKind?: SymbolDef["kind"];
+  allowLocalFallback?: boolean;
+  cNamespace?: "tag" | "ordinary";
+  referenceIndex?: number;
+  csharpGenericArity?: number;
+  argumentCount?: number;
+  isCallableUse?: boolean;
+  typeOnly?: boolean;
+}>;
+
+/** Language-specific alias keys and import lookup stages. */
+export type ImportNameHooks = Readonly<{
+  aliasKey?: (name: string) => string;
+  resolveAlias?: (use: BareNameUse, binding: ImportBinding) => NameResolution | null | undefined;
+  resolveTarget?: (
+    index: ProjectIndex,
+    binding: ImportBinding,
+    exportedName: string,
+    options?: ImportNameResolutionOptions,
+  ) => SymbolDef | { namespace: FileId } | null | undefined;
+}>;
+
+/** Existing state needed to plan references to one definition. */
+export type ReferencePlanContext = Readonly<{
+  index: ProjectIndex;
+  definition: SymbolDef;
+  module: ModuleIndex;
+  parsed: ParsedFileContext;
+  exportedNames: readonly string[];
+  scopeIndex?: ScopeIndex;
+}>;
+
+/** Additional equivalents, candidates, and coverage for a references query. */
+export type ReferenceHooks = Readonly<{
+  equivalentDefinitions?: (context: ReferencePlanContext) => Promise<readonly SymbolDef[] | undefined>;
+  candidateFiles?: (context: ReferencePlanContext) => Promise<readonly FileId[] | undefined>;
+  coverage?: (context: ReferencePlanContext, current: ReferenceCoverage) => ReferenceCoverage | undefined;
+}>;
+
 /**
  * One language's additions to the shared lookup order. Each hook returns a resolution to stop
  * the lookup, or `undefined` to continue; the skeleton in {@link resolveBareName} fixes the
  * order in which hooks run. A language without special rules has an empty policy.
  */
 export type NameLookupPolicy = {
+  /** Specialized same-scope binding selection; absent keeps the generic selector. */
+  bindingResolution?: BindingHooks;
+  /** Language-specific import and alias lookup; absent keeps the generic stages. */
+  imports?: ImportNameHooks;
+  /** Reference planning additions; absent keeps the generic reference plan. */
+  references?: ReferenceHooks;
   lookupName?(use: BareNameUse): string;
   /** Before scope lookup: qualified names, role namespaces, unparsed macro input. */
   beforeLexical?(use: BareNameUse, lookupName: string): NameResolution | null | undefined;

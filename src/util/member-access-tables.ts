@@ -91,11 +91,22 @@ export type AnonymousOwnerForm = {
   baseField?: string;
 };
 
+/** Node and field shapes for qualified names and member-access segments. */
+export type QualifiedAccessShapes = Readonly<{
+  containingTypes?: ReadonlySet<string>;
+  parentFields?: Readonly<Record<string, string>>;
+  segmentTypes?: ReadonlySet<string>;
+  unwrapNameTypes?: ReadonlySet<string>;
+  quotedSegments?: boolean;
+}>;
+
 export type MemberAccessRow = {
   /** Why the language has no member-access capability at all; only document, style, and data formats set it. */
   omittedReason?: string;
   /** Member-expression node type for a support whose `nodeTypes.memberExpression` capability is absent. */
   memberExpressionType?: string;
+  /** Qualified access syntax; absent keeps the generic access rules. */
+  qualifiedAccess?: QualifiedAccessShapes;
   /** Node types added to the shared traversal base set in `memberAccessTraversalTypes`. */
   extraTraversalTypes?: readonly string[];
   /** Node types added to the shared generic member-access list in `isMemberAccessNode`. */

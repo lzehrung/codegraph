@@ -6,8 +6,8 @@ import {
   emitReceiverCallEdges,
   type MemberArityRange,
   type ReceiverCallCandidate,
-  type ReceiverMemberScope,
 } from "../src/graphs/symbol-graph-detailed/receiver-calls.js";
+import type { ReceiverMemberScope } from "../src/graphs/symbol-graph-detailed/receiver-types.js";
 import type { SymbolGraph, SymbolNode } from "../src/graphs/symbol-graph.js";
 import { findCallHierarchy } from "../src/indexer/call-hierarchy.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";

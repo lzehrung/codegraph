@@ -45,12 +45,20 @@ export type LanguageSupport = {
   useSiteMemberName?: (declared: string) => string;
   isDeclarationSpelling?: (node: SyntaxNodeLike) => boolean;
   referenceSpelling?: LanguageDefinition["referenceSpelling"];
+  identifierValidation?: LanguageDefinition["identifierValidation"];
+  bloomAlternateKey?: LanguageDefinition["bloomAlternateKey"];
+  bloomSourceTokens?: LanguageDefinition["bloomSourceTokens"];
+  capturesDocstrings?: LanguageDefinition["capturesDocstrings"];
+  referenceBlockPriorities?: LanguageDefinition["referenceBlockPriorities"];
+  impactDefinitionTypes?: LanguageDefinition["impactDefinitionTypes"];
   bloomProbeName?: (name: string) => string;
   bloomUnprobeableIdentifiers?: boolean;
   alternateUseNames?: (declared: string) => readonly string[];
   normalizeIdentifier: (name: string) => string;
   renameMatchesNormalizedIdentifiers?: boolean;
 };
+
+const EMPTY_REFERENCE_BLOCK_PRIORITIES: Readonly<Record<string, 0 | 1 | 2>> = Object.freeze({});
 
 function adaptDefinition(def: LanguageDefinition): LanguageSupport {
   return {
@@ -71,6 +79,12 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     supportsExportFromReferences: def.supportsExportFromReferences ?? false,
     usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
     normalizeIdentifier: def.normalizeIdentifier || ((name) => name),
+    capturesDocstrings: def.capturesDocstrings ?? false,
+    referenceBlockPriorities: def.referenceBlockPriorities ?? EMPTY_REFERENCE_BLOCK_PRIORITIES,
+    ...(def.identifierValidation ? { identifierValidation: def.identifierValidation } : {}),
+    ...(def.bloomAlternateKey ? { bloomAlternateKey: def.bloomAlternateKey } : {}),
+    ...(def.bloomSourceTokens ? { bloomSourceTokens: def.bloomSourceTokens } : {}),
+    ...(def.impactDefinitionTypes ? { impactDefinitionTypes: def.impactDefinitionTypes } : {}),
     ...(def.native ? { native: def.native } : {}),
     ...(def.generatedMembers ? { generatedMembers: def.generatedMembers } : {}),
     ...(def.generatedMembersMarker ? { generatedMembersMarker: def.generatedMembersMarker } : {}),

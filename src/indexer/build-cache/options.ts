@@ -98,12 +98,20 @@ function languageDefinitionFingerprintDescriptor(
  * rejects definition objects carrying keys outside this set. Function-valued
  * behavior fields are intentionally covered by LANGUAGE_BEHAVIOR_EPOCH instead of
  * source text; add an epochs/language/ entry with every hook behavior change.
+ * Dormant hook contracts do not affect indexed data yet. A slice activating one
+ * must add any indexed data to the descriptor or update the applicable epoch.
  */
 export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof LanguageDefinition, true>> = {
   id: true,
   extensions: true,
   structure: true,
   graph: true,
+  identifierValidation: true, // Query-only rename validation.
+  bloomAlternateKey: true, // Function-valued Bloom behavior is covered by LANGUAGE_BEHAVIOR_EPOCH.
+  bloomSourceTokens: true, // Function-valued Bloom behavior is covered by LANGUAGE_BEHAVIOR_EPOCH.
+  capturesDocstrings: true, // Dormant; fingerprint this data before indexing consumes it.
+  referenceBlockPriorities: true, // Query-only reference context.
+  impactDefinitionTypes: true, // Query-only impact classification.
   usesQueryDrivenLocals: true,
   supportsExportFromReferences: true,
   exportScopeBlockers: true,

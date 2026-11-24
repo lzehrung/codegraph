@@ -97,9 +97,9 @@ import {
   nearestMemberContainer,
   inheritedReceiverMemberSignatures,
   type ReceiverCallCandidate,
-  type ReceiverMemberScope,
   type MemberArityRange,
 } from "./symbol-graph-detailed/receiver-calls.js";
+import type { ReceiverMemberScope } from "./symbol-graph-detailed/receiver-types.js";
 
 type BuildDetailedSymbolGraphOptions = {
   scope?: "all" | "imported";

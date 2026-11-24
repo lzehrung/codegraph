@@ -122,14 +122,13 @@ import {
   rustImplSelfTypeNode,
   supportsImplicitSelfMemberCalls,
   supportsReceiverMemberOverloads,
-  type ReceiverBinding,
   type ReceiverCallAccess,
   type ReceiverCallCandidate,
-  type ReceiverMemberScope,
   type MemberArityRange,
   type ReceiverProof,
   importTypeQuerySpecifier,
 } from "./receiver-calls.js";
+import type { ReceiverBinding, ReceiverMemberScope } from "./receiver-types.js";
 
 type EdgePassContext = {
   index: ProjectIndex;

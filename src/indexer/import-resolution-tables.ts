@@ -40,9 +40,19 @@ export type ExternalSpecifierResolutionData = {
  */
 export type ImplicitCompilationUnitKind = "package" | "namespace" | "module";
 
+/** Syntax of package and import directives for a compilation unit. */
+export type PackageSyntax = Readonly<{
+  packageNodeType?: string;
+  packageNameField?: string;
+  importNodeType?: string;
+  normalizeQualifiedName?: (name: string) => string;
+}>;
+
 export type ImportResolutionRow = {
   /** Why the language has none of these resolution capabilities. */
   omittedReason?: string;
+  /** Package syntax; absent keeps the generic unit behavior. */
+  packageSyntax?: PackageSyntax;
   /**
    * Imports name declarations in other files, so a content change can move the target.
    */
