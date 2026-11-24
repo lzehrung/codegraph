@@ -38,13 +38,8 @@ import {
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
-import {
-  findClosestBinding,
-  findClosestScopeBinding,
-  findDeclarationNameNode,
-  getOrBuildScopeIndex,
-  toModuleRef,
-} from "./navigation-local.js";
+import { findClosestBinding, findDeclarationNameNode, getOrBuildScopeIndex, toModuleRef } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { headerParameterOwner, isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";
 import { AMBIGUOUS_CPP_OVERLOAD_REASON, AMBIGUOUS_RECEIVER_MEMBER_REASON } from "./ambiguous-resolution.js";

@@ -33,7 +33,7 @@ import {
   supportsDeclaredFieldChains,
   type SharedOwnerContainer,
 } from "../../indexer/navigation-goto.js";
-import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/navigation-local.js";
+import { csharpQualifiedNameNode, findClosestScopeBinding } from "../../indexer/scope-lookup.js";
 import { bindsTypeParameter } from "../../indexer/type-parameters.js";
 import type { ScopeIndex } from "../../indexer/scope-types.js";
 import { csharpTypeOnlyName } from "../../indexer/scope-nodes.js";
@@ -1609,6 +1609,8 @@ export async function emitFunctionBodyEdges(
           access.accessNode,
           hasLexicalBinding,
           classifyImport,
+          context.scopeIndex,
+          context.tree,
         );
       const pythonInstanceReceiver =
         context.sup.id === "python" &&
@@ -1816,6 +1818,8 @@ export async function emitFunctionBodyEdges(
           access.accessNode,
           hasLexicalBinding,
           classifyImport,
+          context.scopeIndex,
+          context.tree,
         );
         if (recordImportTypeCall(context, access, fromId, receiverProof)) return;
         if (supportsDeclaredFieldChains(context.sup.id) && isMemberAccessNode(context.sup, access.receiver)) {

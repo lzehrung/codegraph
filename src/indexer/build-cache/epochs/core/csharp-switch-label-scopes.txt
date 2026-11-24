@@ -1,0 +1,1 @@
+Scope C# switch label bindings to their sections while retaining switch-block local visibility.

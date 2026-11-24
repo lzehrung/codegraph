@@ -6,7 +6,7 @@ import { normalizeSwiftIdentifier } from "../util/identifiers.js";
 import { getMemberAccessParts, isMemberAccessNode } from "../util/member-access.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { swiftCallLabels, swiftParameterForArgument } from "../util/swift-tree.js";
-import { findClosestScopeBinding } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import type { BareNameUse } from "./name-resolution-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "./parsed-cache.js";

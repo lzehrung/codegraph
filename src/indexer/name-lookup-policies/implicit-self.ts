@@ -49,12 +49,11 @@ import {
 import {
   CSHARP_GENERIC_OWNER_REASON,
   csharpLookupName,
-  csharpQualifiedNameNode,
   csharpQualifiedThroughGenericOwner,
   definitionForBinding,
-  findClosestScopeBinding,
   findDeclarationNameNode,
 } from "../navigation-local.js";
+import { csharpQualifiedNameNode, findClosestScopeBinding } from "../scope-lookup.js";
 import { enclosingReceiverScopes } from "../kotlin-lambda-receiver.js";
 import { csharpUsingStaticFiles, withCsharpUsingStatic } from "./csharp-using-static.js";
 import { csharpHeaderParameterUse } from "./csharp-header-parameters.js";

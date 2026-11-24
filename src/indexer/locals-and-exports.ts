@@ -25,7 +25,7 @@ import {
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { isTypeParameterBinding, isTypeParameterName, scopeNodesFor } from "./scope-nodes.js";
-import { findClosestScopeBinding } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import { isPythonInstanceAttributeDeclaration } from "../languages/definitions/python.js";

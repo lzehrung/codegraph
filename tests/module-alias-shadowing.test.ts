@@ -850,12 +850,13 @@ describe("module import alias shadowing", () => {
         const graph = await buildSymbolGraphDetailed(index);
         const calls = graph.edges.filter((edge) => edge.label === "calls");
         expect(calls.map((edge) => [graph.nodes.get(edge.from)?.name, graph.nodes.get(edge.to)?.file]).sort()).toEqual([
+          ["Field", files["Second.cs"]],
           ["Lambda", files["Second.cs"]],
           ["Local", files["Second.cs"]],
           ["Param", files["Second.cs"]],
         ]);
-        // Untyped foreach elements and a bare field keep the baseline's conservative graph result.
-        for (const line of [4, 5, 7]) {
+        // Untyped foreach elements keep the baseline's conservative graph result.
+        for (const line of [4, 5, 6, 7]) {
           const result = await goToDefinition(index, {
             file: files["Use.cs"]!,
             line,
@@ -881,7 +882,7 @@ describe("module import alias shadowing", () => {
           const callLines = references.references
             .filter((site) => site.file === files["Use.cs"])
             .map((site) => site.range.start.line);
-          for (const line of [4, 5, 7]) expect(callLines).toContain(line);
+          for (const line of [4, 5, 6, 7]) expect(callLines).toContain(line);
         }
       }
     } finally {

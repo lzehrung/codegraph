@@ -9,7 +9,8 @@
  *    member of another type, not the parameter.
  */
 import { nearestMemberContainer } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
+import { csharpShadowedByUnmodeledBinder } from "../../util/csharp-bindings.js";
 import { isCsharpMemberDesignator } from "../../util/csharp-designators.js";
 import { normalizeCsharpIdentifier } from "../../util/identifiers.js";
 import { UNPROVEN_CSHARP_BINDER_REASON, UNPROVEN_CSHARP_MEMBER_DESIGNATOR_REASON } from "../ambiguous-resolution.js";
@@ -96,103 +97,10 @@ function namesBodyMember(name: SyntaxNodeLike, owner: SyntaxNodeLike): boolean {
   return sameNode(declaration.parent?.parent, owner);
 }
 
-/** The names a deconstruction `var (X, (Y, _)) = ...` declares. */
-function deconstructedNames(pattern: SyntaxNodeLike, out: SyntaxNodeLike[]): void {
-  for (const child of pattern.namedChildren) {
-    if (child.type === "identifier") out.push(child);
-    else if (child.type === "tuple_pattern") deconstructedNames(child, out);
-  }
-}
-
-function spells(name: SyntaxNodeLike, wanted: string): boolean {
-  return normalizeCsharpIdentifier(name.text) === wanted;
-}
-
-/** The names the deconstructions of one local declaration statement declare (`var (X, Z) = ...;`). */
-function deconstructedNamesOf(statement: SyntaxNodeLike): SyntaxNodeLike[] {
-  const names: SyntaxNodeLike[] = [];
-  for (const declaration of statement.namedChildren) {
-    for (const declarator of declaration.namedChildren) {
-      const pattern = declarator.namedChildren.find((child) => child.type === "tuple_pattern");
-      if (pattern) deconstructedNames(pattern, names);
-    }
-  }
-  return names;
-}
-
-/** One deconstructed name in a block: where the first statement declaring it ends, and its declaring tokens. */
-type BlockDeconstruction = { firstEnd: number; tokens: Map<number, number> };
-
-/** The deconstructed locals of a block's statements by normalized name, read once per block and tree. */
-const BLOCK_DECONSTRUCTIONS = new WeakMap<SyntaxTreeLike, Map<string, ReadonlyMap<string, BlockDeconstruction>>>();
-
-function blockDeconstructions(tree: SyntaxTreeLike, scope: SyntaxNodeLike): ReadonlyMap<string, BlockDeconstruction> {
-  let blocks = BLOCK_DECONSTRUCTIONS.get(tree);
-  if (!blocks) {
-    blocks = new Map();
-    BLOCK_DECONSTRUCTIONS.set(tree, blocks);
-  }
-  const key = `${scope.type}:${scope.startIndex}:${scope.endIndex}`;
-  const cached = blocks.get(key);
-  if (cached) return cached;
-  const names = new Map<string, BlockDeconstruction>();
-  for (const statement of scope.namedChildren) {
-    if (statement.type !== "local_declaration_statement") continue;
-    for (const name of deconstructedNamesOf(statement)) {
-      const normalized = normalizeCsharpIdentifier(name.text);
-      let entry = names.get(normalized);
-      if (!entry) {
-        // Statements are read in order, so the first one declaring a name is the earliest.
-        entry = { firstEnd: statement.endIndex, tokens: new Map() };
-        names.set(normalized, entry);
-      }
-      entry.tokens.set(name.startIndex, name.endIndex);
-    }
-  }
-  blocks.set(key, names);
-  return names;
-}
-
-/** Whether `use` is a name a deconstruction of `scope` declares, or `wanted` is one an earlier statement of it declares. */
-function deconstructsBefore(tree: SyntaxTreeLike, scope: SyntaxNodeLike, use: SyntaxNodeLike, wanted: string): boolean {
-  const declared = blockDeconstructions(tree, scope).get(wanted);
-  if (!declared) return false;
-  return declared.firstEnd <= use.startIndex || declared.tokens.get(use.startIndex) === use.endIndex;
-}
-
-/** Whether an anonymous method (`delegate (int X) { ... }`) declares the parameter `use` names, or one `wanted` in its body. */
-function anonymousMethodBinds(method: SyntaxNodeLike, use: SyntaxNodeLike, wanted: string): boolean {
-  const parameters = method.childForFieldName("parameters");
-  if (!parameters) return false;
-  const inParameters = parameters.startIndex <= use.startIndex && use.endIndex <= parameters.endIndex;
-  return parameters.namedChildren.some((parameter) => {
-    const name = parameter.childForFieldName("name");
-    return !!name && (sameNode(name, use) || (!inParameters && spells(name, wanted)));
-  });
-}
-
-/**
- * Whether a binder the scope index does not model sits between `use` and `owner` and spells `wanted`, or declares `use`
- * itself: a deconstructed local or an anonymous method parameter. It, not a parameter or member, is the binding.
- */
-function shadowedByUnmodeledBinder(
-  tree: SyntaxTreeLike,
-  use: SyntaxNodeLike,
-  owner: SyntaxNodeLike,
-  wanted: string,
-): boolean {
-  for (let node = use.parent; node && !sameNode(node, owner); node = node.parent) {
-    if (node.type === "anonymous_method_expression" && anonymousMethodBinds(node, use, wanted)) return true;
-    const holdsStatements = node.type === "block" || node.type === "switch_section";
-    if (holdsStatements && deconstructsBefore(tree, node, use, wanted)) return true;
-  }
-  return false;
-}
-
 /** A stop: a binder the scope index does not model sits between the use and the parameter or member the lookup picks. */
 function unmodeledBinderStop(state: NameLookupState, owner: SyntaxNodeLike): NameResolution | undefined {
   const wanted = normalizeCsharpIdentifier(state.lookupName);
-  if (!shadowedByUnmodeledBinder(state.use.parsed.tree, state.use.node, owner, wanted)) return undefined;
+  if (!csharpShadowedByUnmodeledBinder(state.use.parsed.tree, state.use.node, owner, wanted)) return undefined;
   return { status: "not_found", reason: UNPROVEN_CSHARP_BINDER_REASON };
 }
 

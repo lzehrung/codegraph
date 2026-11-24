@@ -1,6 +1,7 @@
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { isJavaSwitchLabelName } from "../../util/java-designators.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "../navigation-local.js";
+import { getOrBuildScopeIndex } from "../navigation-local.js";
+import { findClosestScopeBinding } from "../scope-lookup.js";
 import { findReceiverTypeMember, resolveMemberAccessDefinition } from "../navigation-goto.js";
 import { createLoadingParsedFileProvider, ensureParsedContextForIndex } from "../parsed-cache.js";
 import { fileIdentityKey } from "../../util/paths.js";

@@ -45,7 +45,8 @@ import {
 import { isKeywordReceiver, memberSyntaxNamesFreeFunction } from "../util/member-access-tables.js";
 import { getCompilationUnitPeers, getPackageDeclarationName } from "./compilation-units.js";
 import { isJvmPackageSymbolVisible } from "./declaration-visibility.js";
-import { findClosestScopeBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { getOrBuildScopeIndex } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import {
   coverageFacts,
@@ -723,6 +724,9 @@ async function receiverProofUnavailable(
     if (isMemberAccessNode(parsed.sup, current)) {
       const { object, property } = getMemberAccessParts(parsed.sup, current);
       if (!object || !property || property.startIndex !== range.start.index) return false;
+      const mod = index.byFile.get(fileIdentityKey(fileId));
+      if (!mod) return true;
+      const getScope = (): ScopeIndex => getCachedScope(index, fileId, mod, parsed);
       const receiver = classifyReceiver(
         parsed.sup,
         object,
@@ -730,12 +734,10 @@ async function receiverProofUnavailable(
         new Map(),
         current.startIndex,
         current,
-        (callee) => {
-          const mod = index.byFile.get(fileIdentityKey(fileId));
-          if (!mod) return true;
-          const scope = getCachedScope(index, fileId, mod, parsed);
-          return !!findClosestScopeBinding(scope, sliceText(callee, parsed.source), callee, parsed.sup);
-        },
+        (callee) => !!findClosestScopeBinding(getScope(), sliceText(callee, parsed.source), callee, parsed.sup),
+        undefined,
+        getScope,
+        parsed.tree,
       );
       if (parsed.sup.id === "php" && receiver.kind === "own-type") {
         const mayUseProperty = await phpTraitPropertyMayUseDefinition(

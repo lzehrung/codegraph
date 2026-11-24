@@ -1,0 +1,1 @@
+Validate C# declared receiver proofs against the closest visible binding.

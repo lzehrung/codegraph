@@ -1,12 +1,8 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
-import {
-  definitionForBinding,
-  findClosestScopeBinding,
-  getOrBuildScopeIndex,
-  resolveNamedDefinition,
-} from "./navigation-local.js";
+import { definitionForBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "./navigation-local.js";
+import { findClosestScopeBinding } from "./scope-lookup.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import {
   assertQuerySourceForIndex,

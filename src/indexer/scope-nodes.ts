@@ -22,8 +22,8 @@ import { isCsharpMemberDesignator } from "../util/csharp-designators.js";
 import { isJavaAnnotationElementName, isJavaSwitchLabelName } from "../util/java-designators.js";
 import { rubyLambdaParameterShadows, rubyNamesLocalVariable } from "../util/ruby-tree.js";
 import {
+  csharpBindingVisibleAt,
   csharpDeclarationOutsideQuery,
-  csharpQueryBindingVisibleAt,
   isCsharpPointerExpression,
 } from "../util/csharp-bindings.js";
 import { javaPatternBindingVisibleAt, javaPatternVariableName } from "../util/java-patterns.js";
@@ -766,7 +766,13 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
     parameterParents: new Set(["parameter"]),
     bindingCoversBeforeDeclaration: csharpAttributeParameterCoversUse,
     functionNameTypes: new Set(["method_declaration", "local_function_statement"]),
-    unnamedFunctionScopeTypes: new Set(["constructor_declaration", "destructor_declaration", "lambda_expression"]),
+    unnamedFunctionScopeTypes: new Set([
+      "constructor_declaration",
+      "destructor_declaration",
+      "operator_declaration",
+      "conversion_operator_declaration",
+      "lambda_expression",
+    ]),
     classNameTypes: new Set(["class_declaration", "struct_declaration", "record_declaration"]),
     typeNameTypes: new Set(["interface_declaration", "enum_declaration", "delegate_declaration"]),
     typeScopeTypes: new Set([
@@ -797,7 +803,7 @@ export const SCOPE_NODE_ROWS: Record<string, ScopeNodeRow> = {
       "let_clause",
       "query_expression",
     ]),
-    patternBindingVisibleAt: csharpQueryBindingVisibleAt,
+    patternBindingVisibleAt: csharpBindingVisibleAt,
     variableDeclarationTypes: new Set(["variable_declaration", "field_declaration"]),
     destructuringTypeFieldTypes: new Set(["parameter"]),
     variableDeclaratorTypes: new Set(["variable_declarator"]),

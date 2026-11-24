@@ -1,5 +1,5 @@
 /** Types of the per-language member lookup policies in this directory. */
-import type { SyntaxNodeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import type { MemberScope } from "../member-selection.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { ModuleIndex, ProjectIndex, Reference, SymbolDef } from "../types.js";
@@ -145,6 +145,17 @@ export type MemberLookupPolicy = {
   memberNameKey?: (normalizedName: string) => string;
   /** Resolve a declared receiver type through positioned source-unit lookup; a value itself cannot own members. */
   declaredReceiverUsesNameLookup?: boolean;
+  /** A declarator gets its explicit type from this parent node, rather than from its initializer. */
+  receiverDeclaratorTypeParent?: string;
+  /** Later assignments cannot change a value's explicitly declared receiver type. */
+  receiverDeclaredTypeSurvivesAssignment?: boolean;
+  /** Whether a declared receiver proof belongs to the binding visible at the use. */
+  receiverDeclaredBindingVisible?: (
+    tree: SyntaxTreeLike,
+    receiver: SyntaxNodeLike,
+    declaration: SyntaxNodeLike,
+    closest: SyntaxNodeLike | null,
+  ) => boolean;
   /** A nominal receiver's members are resolved on that receiver, not through its source file's exports. */
   membersBeforeFileExports?: boolean;
   /** A source-declared stand-in for a generated instance property, after explicit members have been checked. */
