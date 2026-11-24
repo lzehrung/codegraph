@@ -2662,6 +2662,44 @@ describe("tracked file restoration matches cold builds", () => {
     }
   });
 
+  it("shares directory probes for missing source candidates ahead of JSON", async () => {
+    const root = await mkTmpDir("cg-json-source-candidate-probes-");
+    const sourceDir = path.join(root, "src");
+    const dataDir = path.join(root, "data");
+    const options = { cache: "disk" as const, threads: 1, useNativeWorkers: false, logLevel: "silent" as const };
+    try {
+      await fsp.mkdir(sourceDir);
+      await fsp.mkdir(dataDir);
+      for (let index = 0; index < 8; index += 1) {
+        await fsp.writeFile(
+          path.join(sourceDir, `entry${index}.ts`),
+          `import data from "../data/config${index}";\nexport const value${index} = data;\n`,
+        );
+        await fsp.writeFile(path.join(dataDir, `config${index}.json`), "{}\n");
+      }
+      await buildProjectIndex(root, options);
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      const stat = vi.spyOn(fsp, "stat");
+      try {
+        await buildProjectIndexIncremental(root, options);
+        const sourceProbes = stat.mock.calls.filter(([file]) => {
+          if (typeof file !== "string") return false;
+          const relative = path.relative(dataDir, file);
+          if (relative.startsWith("..") || path.isAbsolute(relative)) return false;
+          return !relative.endsWith(".json");
+        });
+        expect(sourceProbes.length).toBeLessThanOrEqual(12);
+      } finally {
+        stat.mockRestore();
+      }
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps shared JSON candidate lookup linear in the number of importers", async () => {
     const root = await mkTmpDir("cg-json-candidate-many-importers-");
     const sourceDir = path.join(root, "src");
@@ -2720,6 +2758,242 @@ describe("tracked file restoration matches cold builds", () => {
       expect(large).toBeGreaterThanOrEqual(2000);
       expect(large).toBeLessThan(small * 6);
     } finally {
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(cacheModes)(
+    "reuses importers when an ignored source changes contents ($cache, $api)",
+    async ({ cache, api }) => {
+      const root = await mkTmpDir("cg-json-ignored-source-edit-");
+      const entry = path.join(root, "entry.ts");
+      const data = path.join(root, "ignored-gen.json");
+      const source = path.join(root, "ignored-gen.ts");
+      const options = {
+        cache,
+        threads: 1,
+        useNativeWorkers: false,
+        logLevel: "silent" as const,
+        discovery: { ignoreGlobs: ["**/ignored-*.ts"] },
+      };
+      const request = { file: entry, line: 2, column: 22 };
+      try {
+        await fsp.writeFile(entry, 'import data from "./ignored-gen";\nexport const value = data;\n');
+        await fsp.writeFile(data, "{}\n");
+        await fsp.writeFile(source, "export default 1;\n");
+        await buildProjectIndex(root, options);
+        if (cache === "disk") {
+          closeDiskCacheDatabase(root, options);
+          clearMemoryCache();
+        }
+        await fsp.writeFile(source, "export default 234;\n");
+        const report: BuildReport = { timings: {} };
+        const warm =
+          api === "full"
+            ? await buildProjectIndex(root, { ...options, report })
+            : await buildProjectIndexIncremental(root, { ...options, report });
+        const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+        expect(report.files?.total).toBeGreaterThan(0);
+        expect(report.files?.cached).toBe(report.files?.total);
+        expect(warm.graph.edges).toEqual(cold.graph.edges);
+        expect(await goToDefinition(warm, request)).toEqual(await goToDefinition(cold, request));
+      } finally {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(cacheModes)("updates ignored JSON source priority ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-ignored-existing-shadow-");
+    const entry = path.join(root, "entry.ts");
+    const barrel = path.join(root, "barrel.ts");
+    const consumer = path.join(root, "consumer.ts");
+    const other = path.join(root, "other.ts");
+    const data = path.join(root, "ignored-gen.json");
+    const otherData = path.join(root, "other.json");
+    const shadow = path.join(root, "ignored-gen.ts");
+    const movedShadow = path.join(root, "ignored-gen-moved.ts");
+    const lowerShadow = path.join(root, "ignored-gen.js");
+    const options = {
+      cache,
+      threads: 1,
+      useNativeWorkers: false,
+      logLevel: "silent" as const,
+      discovery: { ignoreGlobs: ["**/ignored-*.ts", "**/ignored-*.js"] },
+    };
+    const source = 'import data from "./ignored-gen";\nexport function value() { return data; }\nvalue();\n';
+    const request = { file: entry, line: 2, column: columnOf(source.split("\n"), 2, "data") };
+    const definition = { file: entry, line: 2, column: columnOf(source.split("\n"), 2, "value") };
+    const reexport = { file: consumer, line: 2, column: 22 };
+    const candidateUpdate = vi.spyOn(jsonCandidateCache, "updateJsonCandidates");
+    const check = async (label: string, target: string | null): Promise<ProjectIndex> => {
+      candidateUpdate.mockClear();
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      if (label !== "initial JSON") {
+        const update = candidateUpdate.mock.calls[0];
+        if (!update) throw new Error(`${label}: expected candidate refresh`);
+        const updatedFiles = update[0].files.map((item) => fileIdentityKey(item.file));
+        expect(updatedFiles, label).not.toContain(fileIdentityKey(other));
+      }
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect([...warm.byFile.keys()].sort(), label).toEqual([...cold.byFile.keys()].sort());
+      expect(warm.graph.edges.map((edge) => JSON.stringify(edge)).sort(), label).toEqual(
+        cold.graph.edges.map((edge) => JSON.stringify(edge)).sort(),
+      );
+      const warmDetailed = await buildSymbolGraphDetailed(warm);
+      const coldDetailed = await buildSymbolGraphDetailed(cold);
+      expect(warmDetailed.edges.map((edge) => JSON.stringify(edge)).sort(), label).toEqual(
+        coldDetailed.edges.map((edge) => JSON.stringify(edge)).sort(),
+      );
+      expect(edgeTargets(warm, entry), label).toEqual([
+        target ? `file:${normalizePath(target)}` : "external:./ignored-gen",
+      ]);
+      expect(edgeTargets(warm, barrel), label).toEqual(edgeTargets(cold, barrel));
+      expect(warm.byFile.has(fileIdentityKey(data)), label).toBe(target === data);
+      const goto = await goToDefinition(warm, request);
+      expect(goto, label).toEqual(await goToDefinition(cold, request));
+      expect(goto.status, label).toBe(target === data ? "ok" : "not_found");
+      if (goto.status === "ok") expect(fileIdentityKey(goto.definition.file), label).toBe(fileIdentityKey(data));
+      expect(await goToDefinition(warm, reexport), label).toEqual(await goToDefinition(cold, reexport));
+      const references = await findReferences(warm, definition);
+      expect(references, label).toEqual(await findReferences(cold, definition));
+      expect(references.status, label).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references of value");
+      expect(references.referenceCoverage.state, label).toBe("complete");
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+      return warm;
+    };
+    try {
+      await fsp.writeFile(entry, source);
+      await fsp.writeFile(barrel, 'export { default as config } from "./ignored-gen";\n');
+      await fsp.writeFile(consumer, 'import { config } from "./barrel";\nexport const value = config;\n');
+      await fsp.writeFile(other, 'import other from "./other.json";\nexport const unrelated = other;\n');
+      await fsp.writeFile(otherData, "{}\n");
+      await fsp.writeFile(data, "{}\n");
+      const initial = await check("initial JSON", data);
+      await fsp.writeFile(lowerShadow, "export default 1;\n");
+      await check("lower-priority source added", lowerShadow);
+      expect((await goToDefinition(initial, request)).status).toBe("ok");
+      await fsp.writeFile(shadow, "export default 2;\n");
+      await check("higher-priority source added", shadow);
+      await fsp.rename(shadow, movedShadow);
+      await check("higher-priority source renamed away", lowerShadow);
+      await fsp.rename(movedShadow, shadow);
+      await check("higher-priority source renamed back", shadow);
+      await fsp.unlink(shadow);
+      await check("higher-priority source deleted", lowerShadow);
+      await fsp.unlink(lowerShadow);
+      await check("JSON revealed", data);
+      await fsp.rename(data, `${data}.moved`);
+      await check("JSON renamed away", null);
+      await fsp.rename(`${data}.moved`, data);
+      await check("JSON restored", data);
+      await fsp.writeFile(shadow, "export default 3;\n");
+      await check("source restored", shadow);
+      await fsp.unlink(shadow);
+      await check("source removed again", data);
+    } finally {
+      candidateUpdate.mockRestore();
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(cacheModes)("updates ignored directory-index priority ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-ignored-index-");
+    const entry = path.join(root, "entry.ts");
+    const directory = path.join(root, "ignored-dir");
+    const data = path.join(directory, "index.json");
+    const shadow = path.join(directory, "index.ts");
+    const options = {
+      cache,
+      threads: 1,
+      useNativeWorkers: false,
+      logLevel: "silent" as const,
+      discovery: { ignoreGlobs: ["**/ignored-dir/*.ts"] },
+    };
+    const request = { file: entry, line: 2, column: 22 };
+    const check = async (target: string): Promise<void> => {
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(edgeTargets(warm, entry)).toEqual([`file:${normalizePath(target)}`]);
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      expect([...warm.byFile.keys()].sort()).toEqual([...cold.byFile.keys()].sort());
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe(target === data ? "ok" : "not_found");
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+    };
+    try {
+      await fsp.mkdir(directory);
+      await fsp.writeFile(entry, 'import data from "./ignored-dir";\nexport const value = data;\n');
+      await fsp.writeFile(data, "{}\n");
+      await check(data);
+      await fsp.writeFile(shadow, "export default 1;\n");
+      await check(shadow);
+      await fsp.unlink(shadow);
+      await check(data);
+    } finally {
+      closeDiskCacheDatabase(root, options);
+      clearMemoryCache();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(cacheModes)("reveals JSON after an ignored source disappears ($cache, $api)", async ({ cache, api }) => {
+    const root = await mkTmpDir("cg-json-initial-ignored-shadow-");
+    const entry = path.join(root, "entry.ts");
+    const data = path.join(root, "ignored-gen.json");
+    const shadow = path.join(root, "ignored-gen.ts");
+    const options = {
+      cache,
+      threads: 1,
+      useNativeWorkers: false,
+      logLevel: "silent" as const,
+      discovery: { ignoreGlobs: ["**/ignored-*.ts"] },
+    };
+    const request = { file: entry, line: 2, column: 22 };
+    try {
+      await fsp.writeFile(entry, 'import data from "./ignored-gen";\nexport const value = data;\n');
+      await fsp.writeFile(data, "{}\n");
+      await fsp.writeFile(shadow, "export default 1;\n");
+      const initial = await buildProjectIndex(root, options);
+      expect((await goToDefinition(initial, request)).status).toBe("not_found");
+      if (cache === "disk") {
+        closeDiskCacheDatabase(root, options);
+        clearMemoryCache();
+      }
+      await fsp.unlink(shadow);
+      const warm =
+        api === "full" ? await buildProjectIndex(root, options) : await buildProjectIndexIncremental(root, options);
+      const cold = await buildProjectIndex(root, { ...options, cache: "off" });
+      expect(edgeTargets(warm, entry)).toEqual([`file:${normalizePath(data)}`]);
+      expect(warm.graph.edges).toEqual(cold.graph.edges);
+      const goto = await goToDefinition(warm, request);
+      expect(goto).toEqual(await goToDefinition(cold, request));
+      expect(goto.status).toBe("ok");
+      if (goto.status !== "ok") throw new Error("Expected the JSON target to resolve");
+      expect(fileIdentityKey(goto.definition.file)).toBe(fileIdentityKey(data));
+      const definition = { file: entry, line: 2, column: 14 };
+      const references = await findReferences(warm, definition);
+      expect(references).toEqual(await findReferences(cold, definition));
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") throw new Error("Expected references of value");
+      expect(references.referenceCoverage.state).toBe("complete");
+    } finally {
+      closeDiskCacheDatabase(root, options);
       clearMemoryCache();
       await fsp.rm(root, { recursive: true, force: true });
     }

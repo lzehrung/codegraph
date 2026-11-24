@@ -7,12 +7,14 @@ import { fileIdentityKey } from "../../util/paths.js";
 import {
   rubyDeclaresLocalVariable,
   rubyIsBlockTypeMethod,
+  rubyLambdaParameterShadows,
   rubyMayBuildTypesWithBlocks,
   rubyMethodIsOwnedAt,
   rubyMethodVisibleAt,
   rubyNamesLocalVariable,
   rubyReadsLocalAsOperand,
 } from "../../util/ruby-tree.js";
+import { UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON } from "../ambiguous-resolution.js";
 import { definitionForBinding } from "../navigation-local.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import { scopeIdentifierKey, scopeNodesFor } from "../scope-nodes.js";
@@ -53,7 +55,12 @@ function declarationNamesItself({ use, closestBinding }: NameLookupState): GoToR
  * is answered by the shared lookup.
  */
 function unmodeledLocal({ use, closestBinding }: NameLookupState): NameResolution | undefined {
-  if (closestBinding?.kind === "local" || closestBinding?.kind === "param") return undefined;
+  if (closestBinding?.kind === "local" || closestBinding?.kind === "param") {
+    if (rubyLambdaParameterShadows(use.node)) {
+      return { status: "not_found", reason: UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON };
+    }
+    return undefined;
+  }
   if (!rubyNamesLocalVariable(use.node)) return undefined;
   return { status: "not_found", reason: UNMODELED_LOCAL_REASON };
 }

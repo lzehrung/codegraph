@@ -61,6 +61,8 @@ export const UNINDEXED_PHP_TRAIT_REASON = "A composed PHP trait is not indexed a
  * (an external type, an unresolved callee, an overload set), so the receiver may declare the name before the enclosing type.
  */
 export const UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON = "Kotlin lambda receiver may declare this member";
+/** A Ruby lambda parameter can shadow a local that the scope index otherwise selects. */
+export const UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON = "Ruby lambda parameter may shadow this local";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
@@ -79,6 +81,7 @@ const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   UNPROVEN_JAVA_ANNOTATION_ELEMENT_REASON,
   UNPROVEN_JAVA_SWITCH_CASE_REASON,
   AMBIGUOUS_CSHARP_ATTRIBUTE_REASON,
+  UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON,
   UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON,
 ]);
 

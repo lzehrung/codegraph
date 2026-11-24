@@ -8,12 +8,12 @@ import { mapLimit } from "../../util/concurrency.js";
 import { fileIdentityKey, isCanonicalRelativePath, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lru-map.js";
 import { iterateResolutionCandidates, STYLESHEET_RESOLUTION_EXTENSIONS } from "../../util/resolution-candidates.js";
-import { probeRealpath } from "../../util/fs-probe-cache.js";
+import { probeKind, probeRealpath } from "../../util/fs-probe-cache.js";
 import type { BuildOptions, ModuleIndex } from "../types.js";
 import { cacheRoot } from "./location.js";
 import { compareStrings } from "../../util/strings.js";
 
-/** One first-party JSON candidate and the importers whose resolution can depend on it. */
+/** One first-party candidate that can change a JSON import and the importers depending on it. */
 export type JsonCandidateRecord = {
   file: string;
   signature: string | null;
@@ -78,7 +78,7 @@ export function validateJsonCandidates(value: unknown): JsonCandidateRecord[] | 
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
     const { file, signature, importers } = item as Partial<JsonCandidateRecord>;
-    if (typeof file !== "string" || !isCanonicalRelativePath(file) || !file.toLowerCase().endsWith(".json")) {
+    if (typeof file !== "string" || !isCanonicalRelativePath(file)) {
       return undefined;
     }
     if (signature !== null && (typeof signature !== "string" || !signature)) return undefined;
@@ -95,17 +95,20 @@ export function validateJsonCandidates(value: unknown): JsonCandidateRecord[] | 
 }
 
 async function candidateSignature(realRoot: string | null, file: string): Promise<string | null> {
+  // Only JSON content affects its module. Source candidates matter by existence and confined identity.
+  const isJson = file.toLowerCase().endsWith(".json");
+  if (!isJson && (await probeKind(file)) !== "file") return null;
   try {
-    const stat = await fsp.stat(file);
-    if (!stat.isFile()) return null;
+    const stat = isJson ? await fsp.stat(file) : undefined;
+    if (stat && !stat.isFile()) return null;
     // The resolver confines the physical path, not just its stat identity. In-root and
     // out-of-root hard links can have identical stats after a symlink is retargeted.
     const realFile = await probeRealpath(file);
     if (!realRoot || !realFile || !isFilePathWithinRoot(realRoot, realFile)) return null;
     const relativeRealFile = path.relative(realRoot, realFile).replace(/\\/g, "/");
-    return JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, relativeRealFile]);
+    return JSON.stringify(stat ? [stat.size, stat.mtimeMs, stat.ctimeMs, relativeRealFile] : [relativeRealFile]);
   } catch {
-    // An inaccessible candidate is treated as missing. If it becomes readable, its stat changes.
+    // An inaccessible candidate is treated as missing until it becomes accessible.
     return null;
   }
 }
@@ -158,14 +161,16 @@ export function relativeSpecifierCanImportJson(file: string, specifier: string):
 }
 
 /**
- * Use the relative resolver's own candidate order. A candidate after the resolved file cannot
- * change this resolution; a missing JSON candidate before it can. Alias and workspace candidate
- * generation is owned by their resolvers and is intentionally not reproduced here.
+ * Use the relative resolver's own candidate order. Track JSON candidates and, when a JSON target or
+ * an unindexed target currently wins, the earlier source candidates that could shadow it. Indexed
+ * source targets are already tracked by discovery. Alias and workspace candidate generation is
+ * owned by their resolvers and is intentionally not reproduced here.
  */
 function candidatesForFile(
   projectRoot: string,
   input: JsonCandidateInputs,
   languageExtensions: LanguageExtensionMap | undefined,
+  indexedFiles: ReadonlyMap<string, ModuleIndex>,
 ): Map<string, boolean | undefined> {
   if (!canImportJson(input.file, languageExtensions)) return new Map();
   const candidates = new Map<string, boolean | undefined>();
@@ -173,10 +178,18 @@ function candidatesForFile(
     if (!specifier.startsWith(".")) return;
     const base = path.resolve(path.dirname(input.file), specifier);
     const resolvedKey = resolved ? fileIdentityKey(path.resolve(resolved)) : undefined;
+    let trackSourceCandidates = false;
+    if (resolved && resolvedKey) {
+      const resolvedJson = resolved.toLowerCase().endsWith(".json");
+      const resolvedUnindexed = !resolvedJson && !indexedFiles.has(resolvedKey);
+      if (resolvedJson || (resolvedUnindexed && relativeSpecifierCanImportJson(input.file, specifier))) {
+        trackSourceCandidates = isFilePathWithinRoot(projectRoot, resolved);
+      }
+    }
     for (const candidate of iterateResolutionCandidates(base)) {
       const candidateKey = fileIdentityKey(path.resolve(candidate));
       const isResolved = resolvedKey === candidateKey;
-      if (candidate.toLowerCase().endsWith(".json")) {
+      if (candidate.toLowerCase().endsWith(".json") || trackSourceCandidates) {
         const relative = relativeFile(projectRoot, candidate);
         if (relative !== undefined) {
           if (ambiguous) {
@@ -228,6 +241,7 @@ export async function updateJsonCandidates(args: {
   replacedFiles: ReadonlySet<string>;
   files: readonly JsonCandidateInputs[];
   languageExtensions: LanguageExtensionMap | undefined;
+  indexedFiles: ReadonlyMap<string, ModuleIndex>;
   concurrency: number;
 }): Promise<JsonCandidateRecord[]> {
   const replaced = new Set(Array.from(args.replacedFiles, (file) => fileIdentityKey(path.resolve(file))));
@@ -249,7 +263,12 @@ export async function updateJsonCandidates(args: {
   for (const input of args.files) {
     const importer = relativeFile(args.projectRoot, input.file);
     if (importer === undefined) continue;
-    for (const [candidate, expectedPresent] of candidatesForFile(args.projectRoot, input, args.languageExtensions)) {
+    for (const [candidate, expectedPresent] of candidatesForFile(
+      args.projectRoot,
+      input,
+      args.languageExtensions,
+      args.indexedFiles,
+    )) {
       const key = fileIdentityKey(candidate);
       let row = candidates.get(key);
       if (!row) {

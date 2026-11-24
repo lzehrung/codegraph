@@ -377,6 +377,33 @@ function bindsLocalAt(leaf: SyntaxNodeLike): boolean {
   return false;
 }
 
+/** Whether a parameter list binds `use`'s spelling no later than the use. */
+function parameterListBindsUse(node: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
+  if (node.startIndex > use.startIndex) return false;
+  if (node.type === "identifier") return node.text === use.text && bindsLocalAt(node);
+  if (BLOCK_SCOPES.has(node.type) || LOCAL_SCOPE_OWNERS.has(node.type)) return false;
+  for (const child of node.namedChildren) {
+    if (parameterListBindsUse(child, use)) return true;
+  }
+  return false;
+}
+
+/** A lambda parameter is not modeled as a binding; a nearer block parameter remains modeled. */
+export function rubyLambdaParameterShadows(use: SyntaxNodeLike): boolean {
+  if (use.type !== "identifier") return false;
+  const call = use.parent;
+  if (call?.type === "call" && sameNode(call.childForFieldName("method"), use)) return false;
+  let child = use;
+  for (let current = use.parent; current; child = current, current = current.parent) {
+    if (current.type === "singleton_method" && sameNode(current.childForFieldName("object"), child)) continue;
+    if (LOCAL_SCOPE_OWNERS.has(current.type)) return false;
+    if (!BLOCK_SCOPES.has(current.type)) continue;
+    const parameters = current.childForFieldName("parameters");
+    if (parameters && parameterListBindsUse(parameters, use)) return current.type === "lambda";
+  }
+  return false;
+}
+
 /** The names a `/(?<name>...)/ =~ value` match assigns as locals, or none for any other binary expression. */
 function capturedNames(binary: SyntaxNodeLike): string[] {
   if (binary.childForFieldName("operator")?.text !== "=~") return [];

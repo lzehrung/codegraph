@@ -2565,6 +2565,7 @@ async function buildIndexFromFileListInProbeCache(
         replacedFiles,
         files: candidateInputs,
         languageExtensions: opts?.languageExtensions,
+        indexedFiles: modules,
         concurrency: conc,
       });
     }
@@ -4128,6 +4129,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         replacedFiles: new Set([...filesList, ...deletedTrackedFiles]),
         files: jsonFiles,
         languageExtensions: opts?.languageExtensions,
+        indexedFiles: modules,
         concurrency: conc,
       });
       await timeIndexBuildPhase({
