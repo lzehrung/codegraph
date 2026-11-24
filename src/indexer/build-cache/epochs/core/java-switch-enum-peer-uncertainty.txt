@@ -1,0 +1,1 @@
+Do not propagate unresolved switch-label uncertainty to unrelated Java package-peer constant fields.

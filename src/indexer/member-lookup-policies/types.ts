@@ -176,8 +176,13 @@ export type MemberLookupPolicy = {
     expected: SymbolDef,
     hasEquivalents: boolean,
   ): Promise<boolean>;
-  /** Whether `file` sees one of `definitions` through its compilation unit, beside its imports. */
-  visibleThroughUnit?(index: ProjectIndex, file: string, definitions: readonly SymbolDef[]): boolean;
+  /** Whether `file` sees the owned declaration token's definitions through its unit, beside imports. */
+  visibleThroughUnit?(
+    index: ProjectIndex,
+    file: string,
+    definitions: readonly SymbolDef[],
+    definitionName: SyntaxNodeLike,
+  ): boolean;
   /** Whether a same-named use the lookup could not place makes the references of `expected` partial. */
   uncertaintyRelevant?(
     index: ProjectIndex,

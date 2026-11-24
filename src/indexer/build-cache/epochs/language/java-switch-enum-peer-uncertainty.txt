@@ -1,0 +1,1 @@
+Java compilation-unit uncertainty propagation checks the owned enum-constant declaration token.

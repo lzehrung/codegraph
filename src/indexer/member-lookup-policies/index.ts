@@ -8,6 +8,8 @@ import { csharpMemberLookupPolicy } from "./csharp.js";
 import { phpMemberLookupPolicy } from "./php.js";
 import { swiftMemberLookupPolicy } from "./swift.js";
 import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
+import { fileIdentityKey } from "../../util/paths.js";
+import { getCompilationUnitPeers } from "../compilation-units.js";
 import type { MemberLookupPolicy } from "./types.js";
 
 export type {
@@ -30,6 +32,17 @@ const POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
     declaredReceiverUsesNameLookup: true,
     membersBeforeFileExports: true,
     unprovenReferenceCandidate: javaUnprovenReferenceCandidate,
+    visibleThroughUnit(index, file, definitions, definitionName) {
+      if (definitionName.parent?.type !== "enum_constant") return false;
+      const peers = getCompilationUnitPeers(index, file).files;
+      for (const definition of definitions) {
+        const definitionKey = fileIdentityKey(definition.file);
+        for (const peer of peers) {
+          if (fileIdentityKey(peer) === definitionKey) return true;
+        }
+      }
+      return false;
+    },
   },
   php: phpMemberLookupPolicy,
   swift: swiftMemberLookupPolicy,
