@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { runCliOrThrow } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { buildProjectIndex, type BuildReport } from "../src/index.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
@@ -11,6 +12,7 @@ import {
   __resetNativeTreeSitterBindingForTests,
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
+import { lifecycleKernelLockPath } from "../src/installer/locks.js";
 import { loadBinding } from "../src/native/runtime.js";
 import { resetWindowsProcessDrainForTests, windowsProcessDrainIsRequired } from "../src/util/windows-process-drain.js";
 
@@ -69,6 +71,22 @@ describe("required native runtime", () => {
     } finally {
       __resetNativeTreeSitterBindingForTests();
       resetWindowsProcessDrainForTests();
+    }
+  });
+
+  it("keeps a lock-only lifecycle command free of the Windows exit drain", async () => {
+    const root = await mkTmpDir("cg-lock-only-drain-");
+    __resetNativeTreeSitterBindingForTests();
+    resetWindowsProcessDrainForTests();
+    try {
+      const stopped = await runCliOrThrow(["server", "stop", "--root", root]);
+      expect(stopped.stdout).toContain("No Codegraph server registry exists");
+      expect(windowsProcessDrainIsRequired()).toBe(false);
+    } finally {
+      __resetNativeTreeSitterBindingForTests();
+      resetWindowsProcessDrainForTests();
+      await fsp.rm(await lifecycleKernelLockPath(root), { force: true });
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
