@@ -42,8 +42,10 @@ import { specifierTargetPolicyFor } from "../util/resolution/language-specifiers
 import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
+  isFileIdentityCaseInsensitive,
   isFilePathWithinRoot,
   normalizePath,
+  sortProjectFiles,
 } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { pushAll } from "../util/collections.js";
@@ -243,7 +245,6 @@ type IndexedFileBuildArgs = {
   workerSetup: WorkerPoolSetupResult;
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
-  jsonDependencies: Map<string, string>;
   bloomFilterCache: BloomFilterCache | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
@@ -381,6 +382,23 @@ function isConfinedFileReadError(error: unknown): boolean {
     )
   );
 }
+
+/**
+ * The listed spelling of each requested file, keyed by `fileIdentityKey`. On a case-insensitive file system a requested
+ * file that a listing holds under another spelling is that listed file, and the listing's spelling wins: the file keeps
+ * one module, one position, and one spelling in a cold and an updated build.
+ */
+function findListedSpellings(listedFiles: Iterable<string>, requestedFiles: readonly string[]): Map<string, string> {
+  const spellings = new Map<string, string>();
+  if (!requestedFiles.length) return spellings;
+  const requestedKeys = new Set(requestedFiles.map(fileIdentityKey));
+  for (const file of listedFiles) {
+    const key = fileIdentityKey(file);
+    if (requestedKeys.has(key) && !spellings.has(key)) spellings.set(key, file);
+  }
+  return spellings;
+}
+
 /** A placeholder module. `parseErrorRanges` stays unset: no parser ran, so its parse state is unknown. */
 function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
@@ -659,7 +677,6 @@ async function finishModuleRecordForBuild(
     ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
     ...(args.report ? { report: args.report } : {}),
     parsedFiles: args.parsedMap,
-    jsonDependencies: args.jsonDependencies,
     ...(cacheSignature ? { cacheSignature } : {}),
   });
   return {
@@ -857,7 +874,6 @@ async function buildIndexedModuleForFile(args: IndexedFileBuildArgs): Promise<In
       );
     }
   }
-  collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
   if (sourceModule) {
     mod = sourceModule(args.file, source);
@@ -953,6 +969,35 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
     parseErrorRanges: [],
     locals: [symbol],
   });
+}
+
+/**
+ * Indexes each JSON file an import of `modules` names and no module covers, in the order the modules first name
+ * them. The modules are what the index holds, so a module an update replaced leaves no file behind.
+ */
+function ensureJsonModules(modules: Map<FileId, ModuleIndex>): void {
+  const jsonFiles = new Map<string, string>();
+  for (const mod of modules.values()) collectJsonDependencies(mod.imports, jsonFiles);
+  for (const jsonPath of jsonFiles.values()) ensureJsonModule(modules, jsonPath);
+}
+
+/**
+ * Lists `modules` in the order of `files`, the project's listing order (see `sortProjectFiles`). A module of no
+ * listed file keeps its place after them. An update loads the cached modules first and the ones it extracts again
+ * after them, so its map has them in that order until this lists them as a full build does.
+ */
+function orderModulesByFiles(modules: Map<FileId, ModuleIndex>, files: Iterable<string>): void {
+  const ordered = new Map<FileId, ModuleIndex>();
+  for (const file of files) {
+    const key = fileIdentityKey(file);
+    const mod = modules.get(key);
+    if (mod) ordered.set(key, mod);
+  }
+  for (const [key, mod] of modules) {
+    if (!ordered.has(key)) ordered.set(key, mod);
+  }
+  modules.clear();
+  for (const [key, mod] of ordered) modules.set(key, mod);
 }
 
 function graphEdgeKey(edge: Edge): string {
@@ -2068,7 +2113,6 @@ async function buildIndexFromFileListInProbeCache(
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
-  const jsonDependencies = new Map<string, string>();
   type ModuleCacheProbe =
     | { sigInfo: FileSignature; mod: ModuleIndex | null; previouslyCached: boolean; staleMod: ModuleIndex | null }
     | { error: unknown };
@@ -2380,7 +2424,6 @@ async function buildIndexFromFileListInProbeCache(
           : undefined;
         let edges: Edge[] = [];
         if (mod && edgesCached) {
-          collectJsonDependencies(mod.imports, jsonDependencies);
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
@@ -2435,7 +2478,6 @@ async function buildIndexFromFileListInProbeCache(
             ...(resolverEnvironmentFingerprint !== undefined ? { resolverEnvironmentFingerprint } : {}),
             parsedMap,
             parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
-            jsonDependencies,
             bloomFilterCache,
             fileSignatures,
             cacheEnabled,
@@ -2447,7 +2489,6 @@ async function buildIndexFromFileListInProbeCache(
           graphContext = built.graphContext;
           cacheWrite = built.cacheWrite;
         } else {
-          collectJsonDependencies(mod.imports, jsonDependencies);
           await restoreReusedBloomFilter(file, sigInfo, mod);
           // Reuse the failed extraction even if the cached edge entry has to be recomputed.
           if (mod.syntaxTreeUnavailableReason) graphContext = unprojectableEdgeSource(support);
@@ -2604,9 +2645,7 @@ async function buildIndexFromFileListInProbeCache(
       await collectAngularJsFrameworkEdges(projectRoot, normalizedFiles, workspaceConfig, undefined, modules.values()),
     );
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-    for (const jsonPath of jsonDependencies.values()) {
-      ensureJsonModule(modules, jsonPath);
-    }
+    ensureJsonModules(modules);
     expandStarImports(modules, opts);
     if (manifestEntries) {
       for (const [file, signature] of fileSignatures) {
@@ -2799,9 +2838,12 @@ async function buildProjectIndexWithManifestOptions(
     );
     const additionalFileExistence = await probePathExistence(additionalFileCandidates, buildConcurrency(opts));
     const additionalFiles = additionalFileCandidates.filter((file) => additionalFileExistence.get(file));
-    const discoveredFileSet = new Set(discoveredFiles);
-    const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
-    const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
+    const discoveredSpellings = findListedSpellings(discoveredFiles, additionalFiles);
+    const transientFiles = additionalFiles.filter((file) => !discoveredSpellings.has(fileIdentityKey(file)));
+    // Discovery lists files in path order; a file it did not find takes its place in that order.
+    const files = transientFiles.length
+      ? sortProjectFiles(new Set([...discoveredFiles, ...transientFiles]))
+      : discoveredFiles;
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering project metadata");
     const metadataDiscoveryStart = performance.now();
     const projectFiles = await discoverProjectFilesWithGitCandidates(projectRoot, {
@@ -3189,12 +3231,12 @@ async function buildProjectIndexIncrementalInProbeCache(
     let manifestRequiresSanitization =
       manifestFileKeys.length !== trackedEntryKeys.length ||
       manifestFileKeys.some((file) => !Object.hasOwn(trackedEntries, file));
-    const explicitFiles = await normalizeIndexedFileInputsWithinRoot(
+    const requestedExplicitFiles = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.files ?? [],
       "Incremental file",
     );
-    const additionalFiles = await normalizeIndexedFileInputsWithinRoot(
+    const requestedAdditionalFiles = await normalizeIndexedFileInputsWithinRoot(
       projectRoot,
       opts?.additionalFiles ?? [],
       "Additional index file",
@@ -3343,8 +3385,8 @@ async function buildProjectIndexIncrementalInProbeCache(
       discoveryTimings.sourceDiscoveryMs = Math.round(sourceDiscoveryMs);
     }
     const candidateFiles = [
-      ...explicitFiles,
-      ...additionalFiles,
+      ...requestedExplicitFiles,
+      ...requestedAdditionalFiles,
       ...manifestDiffFiles,
       ...gitFiles,
       ...untrackedFiles,
@@ -3352,6 +3394,28 @@ async function buildProjectIndexIncrementalInProbeCache(
     ];
     const candidateExistence = await probePathExistence(candidateFiles, buildConcurrency(opts));
     const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
+    // A requested file that a listing holds under another spelling is that listed file (`findListedSpellings`).
+    const listedSpellings = isFileIdentityCaseInsensitive()
+      ? findListedSpellings(
+          [
+            ...gitFiles.filter(existsInCandidateSnapshot),
+            ...untrackedFiles.filter(existsInCandidateSnapshot),
+            ...rediscoveredFiles.filter(existsInCandidateSnapshot),
+            ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+            ...[...trackedFiles].filter((file) => !previousTransientFileSet.has(file)),
+          ],
+          [...requestedExplicitFiles, ...requestedAdditionalFiles],
+        )
+      : new Map<string, string>();
+    const respellListed = (files: readonly string[]): string[] =>
+      files.map((file) => {
+        const listed = listedSpellings.get(fileIdentityKey(file));
+        if (listed === undefined) return file;
+        candidateExistence.set(listed, true);
+        return listed;
+      });
+    const explicitFiles = respellListed(requestedExplicitFiles);
+    const additionalFiles = respellListed(requestedAdditionalFiles);
     const additionalFileSet = new Set(additionalFiles.filter(existsInCandidateSnapshot));
     const transientFiles = [...additionalFileSet].filter(
       (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
@@ -3366,15 +3430,17 @@ async function buildProjectIndexIncrementalInProbeCache(
     if (retiredTransientFiles.length) manifestRequiresSanitization = true;
     const fileReport = initFileReport(report);
     if (fileReport) fileReport.total = trackedFiles.size;
-    const allFiles = new Set<string>([
-      ...trackedFiles,
-      ...explicitFiles.filter(existsInCandidateSnapshot),
-      ...additionalFiles.filter(existsInCandidateSnapshot),
-      ...manifestDiffFiles.filter(existsInCandidateSnapshot),
-      ...gitFiles.filter(existsInCandidateSnapshot),
-      ...untrackedFiles.filter(existsInCandidateSnapshot),
-      ...rediscoveredFiles.filter(existsInCandidateSnapshot),
-    ]);
+    const allFiles = new Set<string>(
+      sortProjectFiles([
+        ...trackedFiles,
+        ...explicitFiles.filter(existsInCandidateSnapshot),
+        ...additionalFiles.filter(existsInCandidateSnapshot),
+        ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+        ...gitFiles.filter(existsInCandidateSnapshot),
+        ...untrackedFiles.filter(existsInCandidateSnapshot),
+        ...rediscoveredFiles.filter(existsInCandidateSnapshot),
+      ]),
+    );
     if (fileReport) fileReport.total = allFiles.size;
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
     if (allFiles.size === 0) {
@@ -3556,7 +3622,6 @@ async function buildProjectIndexIncrementalInProbeCache(
       });
       const modules = new Map<FileId, ModuleIndex>();
       const parsedMap = new Map<string, ParsedFileContext>();
-      const jsonDependencies = new Map<string, string>();
       const useBloomFilters = opts?.useBloomFilters ?? true;
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloom-filter.js")).BloomFilterCache()
@@ -3663,7 +3728,6 @@ async function buildProjectIndexIncrementalInProbeCache(
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(fileIdentityKey(file), cached);
           primeReusedFileFacts(file, cached, opts);
-          collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file, sigInfo);
             if (persistedFilter) {
@@ -3910,7 +3974,6 @@ async function buildProjectIndexIncrementalInProbeCache(
               workerSetup,
               parsedMap,
               parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
-              jsonDependencies,
               bloomFilterCache,
               fileSignatures,
               cacheEnabled,
@@ -3972,9 +4035,8 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
       }
       if (timings && changedList.length) timings.parseMs = Math.round(parseMs);
-      for (const jsonPath of jsonDependencies.values()) {
-        ensureJsonModule(modules, jsonPath);
-      }
+      orderModulesByFiles(modules, allFiles);
+      ensureJsonModules(modules);
       expandStarImports(modules, opts);
       // The declared-container index is rebuilt from modules already in memory, so this costs no
       // extra file reads. A container whose declaring-file set changed invalidates the consumers

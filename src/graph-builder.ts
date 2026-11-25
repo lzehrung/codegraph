@@ -3,6 +3,7 @@ import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig } from "./util/workspace.js";
 import { fileIdentityKey, normalizePath, normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
+import { appendToArrayMap, pushAll } from "./util/collections.js";
 import { logWithLevel } from "./logging.js";
 import type { LogLevel } from "./logging.js";
 import { assertNativeRequiredAvailable, isNativeRequiredUnavailableError } from "./native/tree-sitter-native.js";
@@ -34,6 +35,27 @@ function canReuseSqlEdgeCache(
   return matchesGitSig || cached.sig === signature.sig;
 }
 
+/**
+ * The edges of each file in turn, in the order of `files`: the order a full build lists them in. Edges of a file that
+ * `files` does not list follow, and the edges of one file keep their order.
+ */
+function edgesInFileOrder(files: readonly string[], edgeGroups: ReadonlyArray<readonly Edge[]>): Edge[] {
+  const edgesBySource = new Map<string, Edge[]>();
+  for (const group of edgeGroups) {
+    for (const edge of group) appendToArrayMap(edgesBySource, fileIdentityKey(edge.from), edge);
+  }
+  const ordered: Edge[] = [];
+  for (const file of files) {
+    const source = fileIdentityKey(file);
+    const edges = edgesBySource.get(source);
+    if (!edges) continue;
+    pushAll(ordered, edges);
+    edgesBySource.delete(source);
+  }
+  for (const edges of edgesBySource.values()) pushAll(ordered, edges);
+  return ordered;
+}
+
 export async function collectGraph(
   projectRoot: string,
   files: string[],
@@ -52,6 +74,7 @@ export async function collectGraph(
     additionalEdges?: readonly Edge[];
     replaceFiles?: Set<string>;
     logLevel?: LogLevel;
+    /** Every project file in listing order: the graph lists its nodes, and the edges of each file, in this order. */
     allFiles?: string[];
     languageExtensions?: LanguageExtensionMap;
     angularJsModules?: Iterable<Pick<ModuleIndex, "file" | "angularJsFacts">>;
@@ -169,9 +192,10 @@ export async function collectGraph(
     opts?.angularJsModules,
   );
   addEdgeTargetsToGraph(angularJsEdges);
-  graph.edges = opts?.additionalEdges?.length
-    ? mergeUniqueEdges(graph.edges, newEdges, angularJsEdges, opts.additionalEdges)
-    : mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
+  // A full build lists each file's edges in turn, then the workspace manifests' edges, then the AngularJS edges. The
+  // retained edges of a cached graph and the recollected ones interleave in that order by source file.
+  const fileEdges = edgesInFileOrder(normalizedAllFiles, [graph.edges, newEdges]);
+  graph.edges = mergeUniqueEdges(fileEdges, opts?.additionalEdges ?? [], angularJsEdges);
   graph.nodes = new Set(normalizedAllFiles);
   addEdgeTargetsToGraph(graph.edges);
   return graph;

@@ -111,7 +111,7 @@ Impact maps changed symbols to resolved references and reverse dependencies. Sev
 
 ## Cache and session behavior
 
-Caching avoids repeated work; it does not change extraction or resolution semantics.
+Caching avoids repeated work; it does not change extraction, resolution, or output order. Files, modules, and graph edges are ordered by file path in UTF-16 code-unit order (uppercase before lowercase), the same for cold, `memory`, and `disk` builds.
 
 - `off` runs cold.
 - `memory` reuses parsed work in one process.
