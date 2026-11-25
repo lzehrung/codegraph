@@ -1,0 +1,11 @@
+libtree-sitter.lib(scanner.obj): file format coff-x86-64
+Disassembly of section .text:
+0000000000000000 <scan_implicit_end_tag>:
+       0:       vpcmpeqb %ymm0, %ymm1, %ymm2
+       4:       retq
+0000000000000000 <_ZN12_GLOBAL__N_17Scanner4scanEv>:
+       0:       vpaddd %xmm0, %xmm1, %xmm0
+       4:       retq
+0000000000000000 <tree_sitter_html_external_scanner_scan>:
+       0:       movdqu %xmm0, (%rax)
+       4:       retq

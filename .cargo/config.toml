@@ -1,0 +1,10 @@
+# Keep parser C/C++ code portable even when a release compiler's default CPU changes.
+# These target-specific flags apply to local builds too, without changing ARM64.
+# Rust already defaults to x86-64; its runtime-dispatched SIMD remains enabled.
+[env]
+CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64"
+CFLAGS_x86_64_apple_darwin = "-march=x86-64"
+CXXFLAGS_x86_64_apple_darwin = "-march=x86-64"
+CFLAGS_x86_64_pc_windows_msvc = "/arch:SSE2"
+CXXFLAGS_x86_64_pc_windows_msvc = "/arch:SSE2"

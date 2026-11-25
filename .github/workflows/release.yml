@@ -106,6 +106,8 @@ jobs:
 
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
+    permissions:
+      contents: read
     needs:
       - plan-release
     runs-on: ${{ matrix.os }}
@@ -188,14 +190,33 @@ jobs:
 
       - name: Build native target
         if: ${{ !contains(matrix.rust-target, 'musl') }}
+        env:
+          CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
+          CXXFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
+          CFLAGS_x86_64_apple_darwin: -march=x86-64
+          CXXFLAGS_x86_64_apple_darwin: -march=x86-64
+          CFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
+          CXXFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
         run: node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts --target ${{ matrix.rust-target }}
 
       - name: Build native musl target with Zig
         if: contains(matrix.rust-target, 'musl')
+        env:
+          CFLAGS_x86_64_unknown_linux_musl: -mcpu=baseline
+          CXXFLAGS_x86_64_unknown_linux_musl: -mcpu=baseline
         run: node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts --target ${{ matrix.rust-target }} -x
 
       - name: Stage native target
         run: node ./node_modules/@napi-rs/cli/dist/cli.js artifacts --cwd packages/codegraph-native --output-dir ./artifacts --npm-dir ./npm
+
+      - name: Check x86-64 native CPU baseline
+        if: startsWith(matrix.rust-target, 'x86_64-')
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          node scripts/check-native-cpu-baseline.mjs \
+            --addon packages/codegraph-native/npm/${{ matrix.suffix }}/index.${{ matrix.suffix }}.node \
+            --build-dir packages/codegraph-native/target/${{ matrix.rust-target }}/release/build
 
       - name: Reject glibc-linked musl artifacts
         if: contains(matrix.rust-target, 'musl')

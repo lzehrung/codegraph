@@ -1,0 +1,52 @@
+addon.node: file format elf64-x86-64
+Disassembly of section .text:
+0000000000001000 <tree_sitter_hcl_external_scanner_scan>:
+    1000: andnq %rdx, %rsi, %rax
+    1001: bextrl %edx, %esi, %eax
+    1002: blsiq %rdx, %rax
+    1003: blsrq %rdx, %rax
+    1004: blsmskq %rdx, %rax
+    1005: tzcntq %rdx, %rax
+    1006: bzhiq %rdx, %rsi, %rax
+    1007: mulxq %rdx, %rsi, %rax
+    1008: pdepq %rdx, %rsi, %rax
+    1009: pextq %rdx, %rsi, %rax
+    100a: rorxq $1, %rdx, %rax
+    100b: sarxq %rdx, %rsi, %rax
+    100c: shlxq %rdx, %rsi, %rax
+    100d: shrxq %rdx, %rsi, %rax
+    100e: lzcntq %rdx, %rax
+    100f: movbeq (%rdx), %rax
+    1010: popcntq %rdx, %rax
+    1011: haddps %xmm1, %xmm0
+    1012: movddup %xmm1, %xmm0
+    1013: lddqu (%rdx), %xmm0
+    1014: pshufb %xmm1, %xmm0
+    1015: palignr $1, %xmm1, %xmm0
+    1016: blendps $1, %xmm1, %xmm0
+    1017: pblendw $1, %xmm1, %xmm0
+    1018: ptest %xmm1, %xmm0
+    1019: pcmpeqq %xmm1, %xmm0
+    101a: pmuldq %xmm1, %xmm0
+    101b: roundsd $1, %xmm1, %xmm0
+    101c: crc32q %rdx, %rax
+    101d: pcmpistri $1, %xmm1, %xmm0
+    101e: pcmpgtq %xmm1, %xmm0
+    101f: aesenc %xmm1, %xmm0
+    1020: pclmulqdq $1, %xmm1, %xmm0
+    1021: vfmadd132sd %xmm2, %xmm1, %xmm0
+    1022: vcvtph2ps %xmm1, %xmm0
+    1023: kandw %k1, %k2, %k0
+    1024: cmpxchg16b (%rdx)
+    1025: rdrandq %rax
+    1026: rdseedq %rax
+    1027: lahf
+    1028: sahf
+    1029: clflushopt (%rdx)
+    102a: fisttpl (%rdx)
+    102b: pabsb %xmm1, %xmm0
+    102c: pinsrd $1, %edx, %xmm0
+    102d: crc32b %dl, %eax
+    102e: addq %r16, %rax
+    102f: {nf}	addb	$0x7b, %bl
+    1030: retq

@@ -44,7 +44,27 @@ jobs:
         run: npm run format:check
 
       - name: Build
+        env:
+          CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
+          CXXFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
         run: npm run build
+
+      - name: Check x86-64 native CPU baseline
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          node scripts/check-native-cpu-baseline.mjs \
+            --addon packages/codegraph-native/index.linux-x64-gnu.node \
+            --build-dir packages/codegraph-native/target/x86_64-unknown-linux-gnu/release/build
+
+      - name: SandyBridge GNU parse/query smoke
+        shell: bash
+        run: |
+          docker run --rm --volume "$PWD:/work:ro" --workdir /work \
+            node:24.10.0-bookworm-slim@sha256:b8d2197aff9129d16c801a3e3e1b2a873c4946480f5a310f38056df2268c38d9 sh -ec '
+              apt-get update && apt-get install -y --no-install-recommends qemu-user=1:7.2+dfsg-7+deb12u18+b3
+              qemu-x86_64 -cpu SandyBridge /usr/local/bin/node \
+                scripts/native-cpu-smoke.cjs packages/codegraph-native/index.linux-x64-gnu.node'
 
       - name: Native tests
         run: npm run test:native
@@ -103,7 +123,23 @@ jobs:
           npm run format:check
 
       - name: Build
+        env:
+          CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
+          CXXFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
+          CFLAGS_x86_64_apple_darwin: -march=x86-64
+          CXXFLAGS_x86_64_apple_darwin: -march=x86-64
         run: npm run build
+
+      - name: Check x86-64 native CPU baseline
+        if: runner.arch == 'X64'
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          suffix="$(node --input-type=module -e 'import { nativeTargetSuffixForPlatform as suffix } from "./packages/codegraph-native/platform.js"; console.log(suffix(process.platform, process.arch, "gnu"))')"
+          host="$(rustc -vV | awk '/^host:/ {print $2}')"
+          node scripts/check-native-cpu-baseline.mjs \
+            --addon "packages/codegraph-native/index.$suffix.node" \
+            --build-dir "packages/codegraph-native/target/$host/release/build"
 
       - name: Check answer snapshot
         run: npm run answers:snapshot:check
@@ -151,7 +187,18 @@ jobs:
           npm run format:check
 
       - name: Build
+        env:
+          CFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
+          CXXFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
         run: npm run build
+
+      - name: Check x86-64 native CPU baseline
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          node scripts/check-native-cpu-baseline.mjs \
+            --addon packages/codegraph-native/index.win32-x64-msvc.node \
+            --build-dir packages/codegraph-native/target/x86_64-pc-windows-msvc/release/build
 
       - name: Check answer snapshot
         run: npm run answers:snapshot:check
@@ -198,7 +245,18 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Build
+        env:
+          CFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
+          CXXFLAGS_x86_64_pc_windows_msvc: /arch:SSE2
         run: npm run build
+
+      - name: Check x86-64 native CPU baseline
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          node scripts/check-native-cpu-baseline.mjs \
+            --addon packages/codegraph-native/index.win32-x64-msvc.node \
+            --build-dir packages/codegraph-native/target/x86_64-pc-windows-msvc/release/build
 
       - name: Check answer snapshot
         run: npm run answers:snapshot:check

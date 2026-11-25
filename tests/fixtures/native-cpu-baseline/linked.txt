@@ -1,0 +1,17 @@
+addon.node: file format elf64-x86-64
+Disassembly of section .text:
+0000000000001000 <ts_lexer_init>:
+    1000:       movdqu %xmm0, 0x10(%rax)
+    1004:       retq
+0000000000001010 <tree_sitter_cpp_external_scanner_scan>:
+    1010:       movups %xmm1, (%rax)
+    1014:       retq
+0000000000001020 <_RNv_memchr_arch_x86_64_avx2_runtime_dispatched>:
+    1020:       vpbroadcastb %xmm0, %ymm0
+    1025:       vmovdqu %ymm0, (%rax)
+    1029:       vzeroupper
+    102c:       retq
+0000000000001030 <_ts_parser_new>:
+    1030:       verr %ax
+    1033:       verw %ax
+    1036:       retq

@@ -1,0 +1,14 @@
+member.o: file format coff-x86-64
+Disassembly of section .text$mn:
+0000000000000000 <helper>:
+       0: jmp 0x14
+0000000000000008 <$LN1>:
+       8: retq
+0000000000000010 <$LN2>:
+      10: <unknown>
+      12: <unknown>
+      14: vpxor %ymm0, %ymm0, %ymm0
+0000000000000018 <$LN3>:
+      18: retq
+0000000000000020 <$LN4>:
+      20: retq
