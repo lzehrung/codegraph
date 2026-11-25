@@ -61,7 +61,7 @@ goto navigation/api.rb:13:15 "empty?" -> not_found "No matching receiver member 
 goto navigation/api.rb:16:11 "reset!" -> ok navigation/api.rb:16:11-16:17 function "reset!" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/api.rb:17:14 "name" -> ok navigation/api.rb:20:11-20:16 function "name=" via={"exportedName":"name="} prov={"backend":"native","confidence":"medium","resolution":"member-access"}
 goto navigation/api.rb:1:8 "Atlas" -> ok navigation/api.rb:1:8-1:13 class "Atlas" prov={"backend":"native","confidence":"high","resolution":"exact"}
-goto navigation/api.rb:20:11 "name" -> ok navigation/api.rb:24:11-24:15 function "name" prov={"backend":"native","confidence":"high","resolution":"exact"}
+goto navigation/api.rb:20:11 "name" -> ok navigation/api.rb:20:11-20:16 function "name=" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/api.rb:20:17 "value" -> ok navigation/api.rb:20:17-20:22 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/api.rb:21:17 "value" -> ok navigation/api.rb:20:17-20:22 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/api.rb:24:11 "name" -> ok navigation/api.rb:24:11-24:15 function "name" prov={"backend":"native","confidence":"high","resolution":"exact"}
@@ -155,7 +155,7 @@ goto navigation/members.rb:16:17 ":idle" -> not_found "Unproven Ruby method-name
 goto navigation/members.rb:19:7 "drain" -> ok navigation/members.rb:19:7-19:12 function "drain" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:1:7 "Gauge" -> ok navigation/members.rb:1:7-1:12 class "Gauge" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:23:14 "value" -> ok navigation/members.rb:23:14-23:19 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
-goto navigation/members.rb:23:7 "label" -> ok navigation/members.rb:27:7-27:12 function "label" prov={"backend":"native","confidence":"high","resolution":"exact"}
+goto navigation/members.rb:23:7 "label" -> ok navigation/members.rb:23:7-23:13 function "label=" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:24:14 "value" -> ok navigation/members.rb:23:14-23:19 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:27:7 "label" -> ok navigation/members.rb:27:7-27:12 function "label" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:2:15 ":level" -> ok navigation/members.rb:2:15-2:21 function "level" prov={"backend":"native","confidence":"high","resolution":"exact"}
@@ -173,7 +173,7 @@ goto navigation/members.rb:38:10 "label" -> ok navigation/members.rb:27:7-27:12 
 goto navigation/members.rb:3:15 ":target" -> ok navigation/members.rb:3:15-3:22 function "target=" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:3:3 "attr_writer" -> not_found "No matching local or imported definition"
 goto navigation/members.rb:42:7 "Settings" -> ok navigation/members.rb:42:7-42:15 class "Settings" prov={"backend":"native","confidence":"high","resolution":"exact"}
-goto navigation/members.rb:43:12 "config" -> ok navigation/members.rb:47:12-47:18 function "config" prov={"backend":"native","confidence":"high","resolution":"exact"}
+goto navigation/members.rb:43:12 "config" -> ok navigation/members.rb:43:12-43:19 function "config=" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:43:20 "value" -> ok navigation/members.rb:43:20-43:25 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:44:15 "value" -> ok navigation/members.rb:43:20-43:25 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:47:12 "config" -> ok navigation/members.rb:47:12-47:18 function "config" prov={"backend":"native","confidence":"high","resolution":"exact"}
@@ -182,7 +182,7 @@ goto navigation/members.rb:4:3 "attr_accessor" -> not_found "No matching local o
 goto navigation/members.rb:6:7 "full?" -> ok navigation/members.rb:6:7-6:12 function "full?" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members.rb:7:5 "level" -> ok navigation/members.rb:2:15-2:21 function "level" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members_decoy.rb:13:14 "value" -> ok navigation/members_decoy.rb:13:14-13:19 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
-goto navigation/members_decoy.rb:13:7 "label" -> ok navigation/members_decoy.rb:17:7-17:12 function "label" prov={"backend":"native","confidence":"high","resolution":"exact"}
+goto navigation/members_decoy.rb:13:7 "label" -> ok navigation/members_decoy.rb:13:7-13:13 function "label=" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members_decoy.rb:14:14 "value" -> ok navigation/members_decoy.rb:13:14-13:19 variable "value" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members_decoy.rb:17:7 "label" -> ok navigation/members_decoy.rb:17:7-17:12 function "label" prov={"backend":"native","confidence":"high","resolution":"exact"}
 goto navigation/members_decoy.rb:1:7 "Dial" -> ok navigation/members_decoy.rb:1:7-1:11 class "Dial" prov={"backend":"native","confidence":"high","resolution":"exact"}
@@ -479,7 +479,7 @@ refs navigation/api.rb:38:11-38:17 function "lookup" -> ok navigation/api.rb:38:
 refs navigation/api.rb:3:11-3:17 class "Device" -> ok navigation/api.rb:3:11-3:17 class "Device" coverage=partial scope=indexed_candidates reasons=["strategy_unavailable"] affected=["navigation/consumer.rb"] count=5 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs navigation/api.rb:5:21-5:28 function "serial" -> ok navigation/api.rb:5:21-5:28 function "serial" coverage=partial scope=indexed_candidates reasons=["strategy_unavailable"] affected=["navigation/consumer.rb"] count=2 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs navigation/api.rb:5:21-5:28 function "serial=" -> ok navigation/api.rb:5:21-5:28 function "serial=" coverage=partial scope=indexed_candidates reasons=["strategy_unavailable"] affected=["navigation/consumer.rb"] count=2 prov={"backend":"native","confidence":"high","resolution":"exact"}
-refs navigation/api.rb:7:11-7:21 function "initialize" -> ok navigation/api.rb:7:11-7:21 function "initialize" coverage=complete scope=indexed_candidates reasons=[] affected=[] count=1 prov={"backend":"native","confidence":"high","resolution":"exact"}
+refs navigation/api.rb:7:11-7:21 function "initialize" -> ok navigation/api.rb:7:11-7:21 function "initialize" coverage=partial scope=indexed_candidates reasons=["strategy_unavailable"] affected=["navigation/api.rb"] count=1 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs navigation/api.rb:7:22-7:26 variable "name" -> ok navigation/api.rb:7:22-7:26 variable "name" coverage=complete scope=indexed_candidates reasons=[] affected=[] count=2 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs navigation/consumer.rb:10:1-10:5 variable "item" -> ok navigation/consumer.rb:10:1-10:5 variable "item" coverage=complete scope=indexed_candidates reasons=[] affected=[] count=10 prov={"backend":"native","confidence":"high","resolution":"exact"}
 refs navigation/consumer.rb:24:1-24:7 variable "values" -> ok navigation/consumer.rb:24:1-24:7 variable "values" coverage=complete scope=indexed_candidates reasons=[] affected=[] count=1 prov={"backend":"native","confidence":"high","resolution":"exact"}

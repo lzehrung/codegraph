@@ -1,0 +1,1 @@
+Ruby self-level misses need a class whose file declares its whole heritage and that no other indexed file opens, never a module; level sharing reads receiver chains, literal sends, unnamed receivers and block-evaluating redefinitions of self-keeping names.

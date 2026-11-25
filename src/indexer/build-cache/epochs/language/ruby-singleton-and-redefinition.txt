@@ -1,0 +1,1 @@
+Ruby self levels distinguish class << self bodies, and method policies keep def tokens, type-name selection, and initialize coverage per definition.

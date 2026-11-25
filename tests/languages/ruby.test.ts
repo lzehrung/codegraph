@@ -1675,8 +1675,9 @@ describe("Ruby block and lambda parameter shadowing", () => {
     }
   });
 
+  // `Box.total` runs the singleton method (Ruby 3.3 prints 42), never the class-body local of that name.
   it.each(["singleton_method", "singleton_class"])(
-    "never resolves a qualified %s call to a class-body local",
+    "resolves a qualified %s call to the singleton method, never a class-body local",
     async (form) => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ruby-singleton-local-"));
       const file = path.join(root, "singleton.rb");
@@ -1686,20 +1687,20 @@ describe("Ruby block and lambda parameter shadowing", () => {
           : ["  class << self", "    total = 3", "    def total; 42; end", "    puts total", "  end"];
       const lines = ["class Box", ...body, "end", "puts Box.total", ""];
       const declaration = form === "singleton_method" ? 2 : 3;
+      const methodLine = declaration + 1;
       try {
         await fsp.writeFile(file, lines.join("\n"));
         const options = { cache: "off" as const, threads: 1, useNativeWorkers: false };
         const index = await buildProjectIndex(root, options);
         const useLine = lines.length - 1;
         const selected = await goToDefinition(index, { file, line: useLine, column: 10 });
-        expect(selected.status).toBe("not_found");
+        expect(selected.status === "ok" && selected.definition.range.start.line).toBe(methodLine);
         const column = lines[declaration - 1]!.indexOf("total") + 1;
         const local = await findReferences(index, { file, line: declaration, column });
         expect(local.status).toBe("ok");
         if (local.status !== "ok") throw new Error("Missing class-body local");
         expect(local.referenceCoverage.state).toBe("complete");
         expect(local.references.map((ref) => ref.range.start.line)).toEqual([declaration, declaration + 2]);
-        const methodLine = declaration + 1;
         const method = await findReferences(index, {
           file,
           line: methodLine,
@@ -1707,8 +1708,8 @@ describe("Ruby block and lambda parameter shadowing", () => {
         });
         expect(method.status).toBe("ok");
         if (method.status !== "ok") throw new Error("Missing singleton method");
-        expect(method.referenceCoverage.state).toBe("partial");
-        expect(method.references.some((ref) => ref.range.start.line === useLine)).toBe(false);
+        expect(method.referenceCoverage.state).toBe("complete");
+        expect(method.references.some((ref) => ref.range.start.line === useLine)).toBe(true);
         const session = createAgentSession({ root, useConfig: false, buildOptions: options });
         const renamed = await previewRenameWithSession(session, {
           root,

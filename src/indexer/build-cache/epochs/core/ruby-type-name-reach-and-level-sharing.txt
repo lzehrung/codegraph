@@ -1,0 +1,1 @@
+Ruby type-name calls reach singleton methods defined on the constant outside its body, level sharing reads every body, self-named mixins, method_missing and ancestors, blocks of block-evaluating receiver methods leave self unproven, and only redefinitions that code can call stay partial.

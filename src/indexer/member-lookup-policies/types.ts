@@ -402,6 +402,23 @@ export type MemberLookupPolicy = {
   ) => boolean;
   /** A nominal receiver's members are resolved on that receiver, not through its source file's exports. */
   membersBeforeFileExports?: boolean;
+  /**
+   * The ones among `candidates`, the same-named members one type declares, that a call through the type's name runs,
+   * where the language keeps one of them: a Ruby class method over an instance method, and a later `def` over an
+   * earlier one, unless the call at `sameFileUse` runs before the later `def` does.
+   */
+  typeNameMembers?(
+    this: void,
+    candidates: readonly SymbolDef[],
+    context: ParsedFileContext,
+    sameFileUse: SyntaxNodeLike | undefined,
+  ): readonly SymbolDef[];
+  /**
+   * Whether a call through the name of the type declared at `ownerName` may run a member that the type's file declares
+   * under the member's name: one of the type, of a body reopening it, or of a type its heritage names, never one of a
+   * type that merely encloses it.
+   */
+  typeNameMayReachFileMember?(this: void, ownerName: SyntaxNodeLike, memberName: SyntaxNodeLike): boolean;
   /** A source-declared stand-in for a generated instance property, after explicit members have been checked. */
   implicitMember?(
     index: ProjectIndex,
