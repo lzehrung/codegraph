@@ -1656,11 +1656,20 @@ function classLevelMemberFilter(context: ParsedFileContext): ((local: SymbolDef)
   return (local) => !isGeneratedMember(context.sup, context.tree, local);
 }
 
-/** Whether the export `hit` is a generated instance method, which a type name does not reach. */
-async function isGeneratedExport(index: ProjectIndex, hit: ResolvedExport): Promise<boolean> {
-  if (hit.kind !== "resolved") return false;
+/**
+ * Whether the export `hit`, found by name in the file of the type `owner`, is a member that the type's name reaches: not
+ * a generated instance method, and, where the language tells which types a type name reaches, one of those.
+ */
+async function isTypeFileMemberExport(index: ProjectIndex, owner: SymbolDef, hit: ResolvedExport): Promise<boolean> {
+  if (hit.kind !== "resolved") return true;
   const context = await ensureParsedContextForIndex(index, hit.def.file);
-  return isGeneratedMember(context.sup, context.tree, hit.def);
+  if (isGeneratedMember(context.sup, context.tree, hit.def)) return false;
+  const mayReach = memberLookupPolicyFor(context.sup.id).typeNameMayReachFileMember;
+  if (!mayReach) return true;
+  if (fileIdentityKey(owner.file) !== fileIdentityKey(hit.def.file)) return false;
+  const ownerName = nameNodeForDef(context, owner);
+  const memberName = nameNodeForDef(context, hit.def);
+  return !!ownerName && !!memberName && mayReach(ownerName, memberName);
 }
 
 export async function resolveMemberAccessDefinition(params: {
@@ -2071,10 +2080,11 @@ export async function resolveMemberAccessDefinition(params: {
             return memberDef ? { kind: "resolved", def: memberDef } : null;
           }
           if (sup.id === "ruby" && declaresMembers(base.def)) {
-            const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+            const sameFileUse = fileIdentityKey(base.def.file) === fileIdentityKey(mod.file) ? subProp : undefined;
+            const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName, undefined, sameFileUse);
             if (memberDef) return { kind: "resolved", def: memberDef };
             const localHit = resolveExport(index, base.def.file, memberName);
-            if (localHit && !(await isGeneratedExport(index, localHit))) return localHit;
+            if (localHit && (await isTypeFileMemberExport(index, base.def, localHit))) return localHit;
           }
           return null;
         }
@@ -5438,13 +5448,16 @@ async function reachableThroughTypeName(index: ProjectIndex, def: SymbolDef): Pr
  * type name reaches (static members and nested types) when the base is a type, then chosen by
  * the call's argument count; without a count, or when several accept it, the lookup is
  * ambiguous. A sole reachable candidate is kept even when the count does not fit, as for other
- * calls; the graph records no edge for it. Ruby reopens a method by redefining it, so it keeps the first match.
+ * calls; the graph records no edge for it. A language that keeps one of several same-named
+ * declarations narrows them through its policy first (Ruby keeps the last class method), given
+ * the member's name at `sameFileUse` when the use is in the type's own file.
  */
 async function resolveMemberDefinitionForBase(
   index: ProjectIndex,
   baseDef: SymbolDef,
   member: string,
   knownArgumentCount?: number,
+  sameFileUse?: SyntaxNodeLike,
 ): Promise<SymbolDef | undefined> {
   const targetContext = await ensureParsedContextForIndex(index, baseDef.file);
   const start = baseDef.range.start;
@@ -5478,12 +5491,15 @@ async function resolveMemberDefinitionForBase(
     }
   }
   if (candidates.length) {
-    let reachable = candidates;
-    if (!memberPolicy.selection?.firstDeclarationWins && candidates.length > 1) {
-      reachable = [];
-      for (const candidate of candidates) {
-        if (!declaresMembers(baseDef) || (await reachableThroughTypeName(index, candidate))) reachable.push(candidate);
+    let reachable = memberPolicy.typeNameMembers?.(candidates, targetContext, sameFileUse) ?? candidates;
+    if (!memberPolicy.selection?.firstDeclarationWins && reachable.length > 1) {
+      const throughTypeName: SymbolDef[] = [];
+      for (const candidate of reachable) {
+        if (!declaresMembers(baseDef) || (await reachableThroughTypeName(index, candidate))) {
+          throughTypeName.push(candidate);
+        }
       }
+      reachable = throughTypeName;
     }
     const selected = selectMember([baseDef], indexedMemberModel(index, reachable, languageId), {
       name: member,

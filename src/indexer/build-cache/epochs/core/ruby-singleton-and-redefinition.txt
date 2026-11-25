@@ -1,0 +1,1 @@
+Ruby def tokens name their own definition, calls bind only methods of their own self level, other constant receivers skip the enclosing type, type-name calls take the last class method, and initialize references stay partial.

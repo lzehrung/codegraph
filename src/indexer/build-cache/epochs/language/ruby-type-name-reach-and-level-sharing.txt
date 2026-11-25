@@ -1,0 +1,1 @@
+Ruby name and member policies name a setter's writer from its def token, keep an extended module's method unproven at class-body calls, and widen type-name reach for methods on constants, other objects, and rebound blocks.

@@ -1,0 +1,1 @@
+The Ruby name policy checks other indexed files that open a class or its declared heritage before it claims a self-level miss.

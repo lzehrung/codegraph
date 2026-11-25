@@ -63,6 +63,14 @@ export const UNINDEXED_PHP_TRAIT_REASON = "A composed PHP trait is not indexed a
 export const UNPROVEN_KOTLIN_LAMBDA_RECEIVER_REASON = "Kotlin lambda receiver may declare this member";
 /** A Ruby lambda parameter can shadow a local that the scope index otherwise selects. */
 export const UNPROVEN_RUBY_LAMBDA_PARAMETER_REASON = "Ruby lambda parameter may shadow this local";
+/**
+ * A call of a method of `self` in a Ruby class or `class << self` body that no method of that `self` proves: the type's
+ * same-named method is defined for another `self` or later. The Ruby member policy keeps a method the call may still
+ * reach (a top-level method, one of a base class or mixin) unproven.
+ */
+export const UNPROVEN_RUBY_CLASS_BODY_METHOD_REASON = "No proven Ruby singleton method at this class-body call";
+/** The same for a call in a method or block body: the type's same-named method is defined for another `self`. */
+export const UNPROVEN_RUBY_SELF_METHOD_REASON = "No proven Ruby method of self at this call";
 
 const AMBIGUOUS_RESOLUTION_REASONS: ReadonlySet<string> = new Set([
   AMBIGUOUS_STAR_IMPORT_REASON,
