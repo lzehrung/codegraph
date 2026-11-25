@@ -36,23 +36,19 @@ order. Entries within a section sort by filename using code-unit order. `npm run
 rejects malformed fragments and nonempty `[Unreleased]` content, and runs in `npm run check`.
 See [PUBLISHING.md](PUBLISHING.md) for non-mutating previews and fragment consumption.
 
-Cache-changing work adds a uniquely named `.txt` file under
+Cache-changing work adds a uniquely named `.txt` file with a one-line invalidation reason under
 `src/indexer/build-cache/epochs/core/`; behavior-hook changes also add one under `epochs/language/`.
-Epoch filenames use the same slug rule. Each record contains a one-line invalidation reason.
-Entries are permanent and append-only: never
-rename, delete, or reuse them, and never edit the immutable legacy seeds.
+Epoch filenames use the same slug rule. Entries are permanent: never rename, delete, or reuse them,
+and never edit the legacy seeds. No reservations or merge-order renumbering are needed; add a new
+record even after another branch's record merges.
 
 `npm run build` and `npm run typecheck` derive safe-integer equality tokens from each sorted filename
-set and its legacy seed (core 175, language 30). The ignored `epochs.generated.ts` is compiled into
-the library, core package, and bundled CLI; worker bundles do not consume epochs. Runtime code
-never reads entry files.
-No reservations or merge-order renumbering are needed; add a new record even after another branch
-with a different record merges.
-
-Run `npm run generate:cache-epochs` before a bare `npx vitest` command or an IDE typecheck in a
-fresh checkout. The normal npm build, typecheck, and test commands already arrange generation.
-Dotfiles such as `.DS_Store` and `.gitkeep` are ignored in fragment and epoch directories.
-Dot-prefixed names ending in `.md` or `.txt` are rejected, like other invalid record names.
+set and its legacy seed (core 175, language 30) into the ignored `epochs.generated.ts`, which the
+library, core package, and bundled CLI compile in; worker bundles do not use epochs, and runtime code
+never reads entry files. Run `npm run generate:cache-epochs` before a bare `npx vitest` command or an
+IDE typecheck in a fresh checkout; the npm build, typecheck, and test commands already generate it.
+Fragment and epoch directories ignore dotfiles such as `.DS_Store` and `.gitkeep` but reject
+dot-prefixed names ending in `.md` or `.txt`.
 
 ## Agent workflows (ODW)
 

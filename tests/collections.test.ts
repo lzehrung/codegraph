@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { previewRenameWithSession } from "../src/agent/rename-preview.js";
+import { createAgentSession } from "../src/agent/session.js";
+import { buildProjectIndex, discoverProjectFiles, findReferences } from "../src/index.js";
 import { pushAll, replaceContents } from "../src/util/collections.js";
 import { compareStrings } from "../src/util/strings.js";
+import { runCliOrThrow } from "./helpers/cli.js";
+import { createTempProjectRoot } from "./helpers/filesystem.js";
 
 // `target.push(...items)` throws `RangeError: Maximum call stack size exceeded` at roughly 125,000 elements on
 // Node's default stack, which a large repository's edges or references pass.
@@ -163,5 +169,85 @@ describe("compareStrings", () => {
     const actual = JSON.parse(result.stdout) as { locale: string; values: string[] };
     expect(actual.values).toEqual([...ORDER_VALUES].sort(compareStrings));
     if (process.platform === "linux") expect(actual.locale.slice(0, 2)).toBe(locale.slice(0, 2));
+  });
+});
+
+describe("locale-independent public order", () => {
+  const czech = new Intl.Collator("cs-CZ");
+  const BUILD_OPTIONS = { cache: "off" as const, threads: 1, useNativeWorkers: false };
+
+  it("keeps results, discovery, and cached representatives in en-US order under a Czech default", async () => {
+    const root = await createTempProjectRoot("cg-locale-order-", [
+      { path: "src/lib.ts", contents: "export function shared(): number {\n  return 1;\n}\n" },
+      { path: "src/cherry.ts", contents: 'import { shared } from "./lib";\nexport const cherry = shared();\n' },
+      { path: "src/honey.ts", contents: 'import { shared } from "./lib";\nexport const honey = shared();\n' },
+      { path: "tests/cherry.test.ts", contents: 'import { shared } from "../src/lib";\nshared();\n' },
+      { path: "tests/honey.test.ts", contents: 'import { shared } from "../src/lib";\nshared();\n' },
+      { path: "go.mod", contents: "module example.com/fruit\n\ngo 1.22\n" },
+      { path: "basket/cherry.go", contents: "package basket\n\nfunc Cherry() int { return 1 }\n" },
+      { path: "basket/honey.go", contents: "package basket\n\nfunc Honey() int { return 2 }\n" },
+      { path: "cherry/package.json", contents: '{ "name": "cherry" }\n' },
+      { path: "honey/package.json", contents: '{ "name": "honey" }\n' },
+      {
+        path: "main.go",
+        contents: 'package main\n\nimport "example.com/fruit/basket"\n\nfunc main() { basket.Cherry() }\n',
+      },
+    ]);
+    const relative = (file: string) => path.relative(root, file).replaceAll("\\", "/");
+    // Emulate a process whose default collation is Czech, which sorts "ch" after "h" (honey before cherry).
+    const czechDefault = vi.spyOn(String.prototype, "localeCompare").mockImplementation(function (
+      this: string,
+      that: string,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.CollatorOptions,
+    ) {
+      const collator =
+        locales === undefined && options === undefined ? czech : new Intl.Collator(locales ?? "cs-CZ", options);
+      return collator.compare(this.toString(), that);
+    });
+    try {
+      expect(["cherry", "honey"].sort((left, right) => left.localeCompare(right))).toEqual(["honey", "cherry"]);
+      const index = await buildProjectIndex(root, BUILD_OPTIONS);
+      const references = await findReferences(index, { file: path.join(root, "src/lib.ts"), line: 1, column: 17 });
+      expect(references.status).toBe("ok");
+      if (references.status !== "ok") return;
+      const sharedFiles = [
+        "src/cherry.ts",
+        "src/honey.ts",
+        "src/lib.ts",
+        "tests/cherry.test.ts",
+        "tests/honey.test.ts",
+      ];
+      expect([...new Set(references.references.map((reference) => relative(reference.file)))]).toEqual(sharedFiles);
+
+      const fileEdges = index.graph.edges.flatMap((edge) =>
+        edge.to.type === "file" ? [[relative(edge.from), relative(edge.to.path)]] : [],
+      );
+      expect(fileEdges).toEqual([
+        ["main.go", "basket/cherry.go"],
+        ["src/cherry.ts", "src/lib.ts"],
+        ["src/honey.ts", "src/lib.ts"],
+        ["tests/cherry.test.ts", "src/lib.ts"],
+        ["tests/honey.test.ts", "src/lib.ts"],
+      ]);
+      const manifests = (await discoverProjectFiles(root)).flatMap((file) =>
+        path.basename(file.path) === "package.json" ? [relative(file.path)] : [],
+      );
+      expect(manifests).toEqual(["cherry/package.json", "honey/package.json"]);
+
+      const session = createAgentSession({ root, useConfig: false, buildOptions: BUILD_OPTIONS });
+      const renamed = await previewRenameWithSession(session, { root, handle: "src/lib.ts:1:17", newName: "common" });
+      expect(renamed.safe).toBe(true);
+      expect([...new Set(renamed.edits.map((edit) => edit.file))]).toEqual(sharedFiles);
+
+      const affected = await runCliOrThrow(["affected", "--root", root, "--cache", "memory", "--json", "src/lib.ts"], {
+        cwd: root,
+      });
+      const report = JSON.parse(affected.stdout) as { affectedTests: { file: string }[] };
+      expect(report.affectedTests.map((entry) => entry.file)).toEqual(["tests/cherry.test.ts", "tests/honey.test.ts"]);
+    } finally {
+      czechDefault.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
