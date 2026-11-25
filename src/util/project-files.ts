@@ -6,7 +6,7 @@ import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { compareStrings, stringifyUnknown } from "./strings.js";
-import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, sortProjectFiles } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discovery-path.js";
 
 export { isRelativePathInside, matchesDiscoveryGlob } from "./discovery-path.js";
@@ -1276,7 +1276,7 @@ async function listProjectFilesInternal(
       indexableCandidates.push(filePath);
     }
     const rootSafeFiles = await filterRealPathsWithinRootEntries(indexableCandidates, realRoot, reportSourcePathChecks);
-    return rootSafeFiles
+    const discoveredFiles = rootSafeFiles
       .filter(
         ({ path: filePath, realPath }) =>
           // The real path only differs when the entry was reached through a symlink, so
@@ -1284,6 +1284,9 @@ async function listProjectFilesInternal(
           normalizePath(realPath) === filePath || !isIgnoredByGitignore(realPath, gitignoreIndex),
       )
       .map(({ path: filePath }) => filePath);
+    // Git lists files sorted, while a scan lists them in crawl order, which differs from run to run. One order
+    // keeps the same files in the same order whichever found them.
+    return sortProjectFiles(discoveredFiles);
   } catch (error) {
     logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);

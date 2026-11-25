@@ -11,7 +11,13 @@ import type { ProjectFileInfo } from "../../util/project-files.js";
 import { BloomFilter, BloomFilterCache } from "../../util/bloom-filter.js";
 import { summarizeAnalysis } from "../../analysis-summary.js";
 import type { AnalysisSummary } from "../../analysis-summary.js";
-import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  isFilePathWithinRoot,
+  normalizePath,
+  sortProjectFiles,
+} from "../../util/paths.js";
 import { removeStaleTempFiles, writeFileAtomically } from "../../util/atomic-file.js";
 import { getNativeRuntimeFingerprint } from "../../native/tree-sitter-native.js";
 import { logWithLevel } from "../../logging.js";
@@ -113,6 +119,8 @@ type HydratedSnapshotModulesCacheEntry = {
   identity: SnapshotFileIdentity;
   root: string;
   modules: Map<string, ModuleIndex>;
+  /** `modules` in listing order, set by the first index load; the file-signature loader never needs the order. */
+  listingOrdered?: Map<string, ModuleIndex>;
 };
 
 type SerializedBloomFilter = {
@@ -571,11 +579,12 @@ export async function tryLoadProjectIndexSnapshot(
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
     };
-    const modules = collectSnapshotModules(projectRoot, opts, payload, snapshotPath, parsedSnapshot.identity);
-    if (!modules || !thinSnapshotModulesComplete(payload, modules)) {
+    const hydratedModules = collectSnapshotModules(projectRoot, opts, payload, snapshotPath, parsedSnapshot.identity);
+    if (!hydratedModules || !thinSnapshotModulesComplete(payload, hydratedModules)) {
       recordSnapshotInvalidation(snapshotPath, "thin snapshot missing disk-cached modules", opts?.logLevel);
       return null;
     }
+    const modules = orderSnapshotModules(snapshotPath, hydratedModules, payload);
     let csharpProjectUsings = refreshedSnapshotUsings.get(payload) ?? payload.csharpProjectUsings;
     const csharpFiles: string[] = [];
     for (const mod of modules.values()) {
@@ -918,6 +927,33 @@ function modulesForThinSnapshot(
   );
 }
 
+/**
+ * The modules of the snapshot's files in listing order (see `sortProjectFiles`), then any module of no listed file,
+ * such as a JSON file only an import names, as stored. Embedded modules and cache rows load in different orders, and
+ * a row's place follows when it was last written, so the loaded map is not in the order a full build lists them. The
+ * order is kept with the hydrated entry, so only the first index load of a snapshot sorts.
+ */
+function orderSnapshotModules(
+  snapshotPath: string,
+  modules: Map<string, ModuleIndex>,
+  payload: ProjectSnapshotModulesPayload,
+): Map<string, ModuleIndex> {
+  const entry = hydratedSnapshotModulesCache.get(snapshotPath);
+  const hydrated = entry?.modules === modules ? entry : undefined;
+  if (hydrated?.listingOrdered) return hydrated.listingOrdered;
+  const ordered = new Map<string, ModuleIndex>();
+  for (const file of sortProjectFiles(Object.keys(payload.fileSignatures))) {
+    const key = fileIdentityKey(file);
+    const mod = modules.get(key);
+    if (mod) ordered.set(key, mod);
+  }
+  for (const [key, mod] of modules) {
+    if (!ordered.has(key)) ordered.set(key, mod);
+  }
+  if (hydrated) hydrated.listingOrdered = ordered;
+  return ordered;
+}
+
 function collectSnapshotModules(
   projectRoot: string,
   opts: BuildOptions | undefined,
@@ -956,8 +992,7 @@ function collectSnapshotModules(
       modules.set(key, freezeSnapshotPayload(mod));
     }
   }
-  const entry = { identity, root: projectRoot, modules };
-  setBoundedSnapshotCache(hydratedSnapshotModulesCache, snapshotPath, entry);
+  setBoundedSnapshotCache(hydratedSnapshotModulesCache, snapshotPath, { identity, root: projectRoot, modules });
   return modules;
 }
 

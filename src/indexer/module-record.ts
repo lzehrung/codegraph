@@ -193,8 +193,6 @@ export type ModuleRecordFinishContext = {
   languageExtensions?: LanguageExtensionMap;
   report?: BuildReport;
   parsedFiles?: ReadonlyMap<string, ParsedFileContext>;
-  /** JSON files the build's modules import, by identity key. */
-  jsonDependencies: Map<string, string>;
   /** The signature the module is cached under; absent when the build does not cache it. */
   cacheSignature?: () => Promise<string>;
 };
@@ -208,8 +206,8 @@ export type FinishedModuleRecord = {
 
 /**
  * Finishes a module record on the main thread: resolves its requests in first-use order with the file's import
- * resolver, puts each target where its placeholder was (the binding keeps its key order), then records JSON
- * dependencies, points re-exports at their files, and takes the cache signature.
+ * resolver, puts each target where its placeholder was (the binding keeps its key order), then points re-exports at
+ * their files and takes the cache signature.
  */
 export async function finishModuleRecord(
   record: ModuleRecord,
@@ -240,7 +238,6 @@ export async function finishModuleRecord(
     }
     binding.resolved = target;
   }
-  collectJsonDependencies(mod.imports, context.jsonDependencies);
   await resolveCrossModuleSymbolExports(
     context.file,
     mod,

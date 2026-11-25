@@ -1,0 +1,1 @@
+Project snapshots written before files, modules and graph edges had one canonical listing order hold them in cache-dependent order.

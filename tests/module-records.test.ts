@@ -473,7 +473,6 @@ describe("module records", () => {
             support,
             projectRoot: slash(path.dirname(file)),
             graphOptions: {},
-            jsonDependencies: new Map(),
           },
         ),
       ).rejects.toThrow(/has no resolution request 2/u);
@@ -490,7 +489,6 @@ describe("module records", () => {
         support,
         projectRoot: slash(path.join(sampleRoot, "typescript")),
         graphOptions: {},
-        jsonDependencies: new Map(),
         cacheSignature: async () => "signature",
       });
 

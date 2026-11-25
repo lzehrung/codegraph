@@ -18,6 +18,16 @@ export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }
 
+/**
+ * Project files in listing order: ascending UTF-16 code units of the normalized path (the default string order, not a
+ * locale order and not Git's UTF-8 byte order). Discovery, a full build, and an update all list files this way, so an
+ * index holds its files in one order whether Git or a scan found them and whether a cache or a parse produced their
+ * modules. The paths are normalized, as every discovery, manifest, and cache list holds them.
+ */
+export function sortProjectFiles(files: Iterable<string>): string[] {
+  return Array.from(files).sort();
+}
+
 const PATH_CACHE_MAX_ENTRIES = 16_384;
 const normalizedPathCache = new Map<string, string>();
 
