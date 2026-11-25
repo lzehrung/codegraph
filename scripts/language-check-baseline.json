@@ -1,0 +1,1733 @@
+{
+  "schemaVersion": 1,
+  "sites": [
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "0e7d977676e2028f9cf6006f1c9dae4f4c3c9ebb501f7f49a2cfa35f3890ae7d",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 2
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "24d657303621c275d75f7ed7de78183eb174f201121497abd93d476b8b91d5ca",
+      "function": "buildSymbolGraphDetailed::<anonymous>",
+      "condition": "useLanguage === \"kotlin\"",
+      "expression": "useLanguage === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "3783775fd09310df324c986e1b3a1c50880a3009f5ac2b77ebd5b649959e18d0",
+      "function": "buildSymbolGraphDetailed::resolveMemberAccessTarget",
+      "condition": "sup . id === \"kotlin\"",
+      "expression": "sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "432fdb0625c5c19f790a5b66c692a099bd5c169c1014884eaa157a4c227d62a0",
+      "function": "buildSymbolGraphDetailed::resolveMemberPathFromModule",
+      "condition": "languageId === \"go\" && ( ! lastName || ( memberNamePattern && ! memberNamePattern . test ( lastName ) ) )",
+      "expression": "languageId === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "438fa07eade7a64453a81b8b048c203a5f932bcff76d5a3dad4be7bf3abcb094",
+      "function": "buildSymbolGraphDetailed::resolveMemberAccessTarget",
+      "condition": "sup . id === \"python\" && ! pythonReceiverResolutionCache",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "496d789382c74d1711e714e5ab8108b228983db788429954c24f0f49b0155188",
+      "function": "buildSymbolGraphDetailed::hasCallableNamed",
+      "condition": "support ?. id === \"swift\" && names . swiftNormalized . has ( support . normalizeIdentifier ( candidate . memberName ) )",
+      "expression": "support ?. id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "4e06c4613f6d62ebeb17a9f736db73165eabbf9315f9be18cf8caa9de4fce66c",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "languageId !== \"ts\" && languageId !== \"tsx\"",
+      "expression": "languageId !== \"ts\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "59b9c356d7f6d15b959b8c2c3c2710e747f9ffc05788d7246ac7356f0934529c",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "supportForIndexedFile ( module . file ) ?. id !== \"kotlin\"",
+      "expression": "supportForIndexedFile ( module . file ) ?. id !== \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "63f4f64857021477f0292f65c9e0c6abc54ce773a4b24a56dedd3f370b216b9c",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "targetLanguageId !== \"ts\" && targetLanguageId !== \"tsx\"",
+      "expression": "targetLanguageId !== \"tsx\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "64615c02d121cea412176608ece8e662f0a5b9e8669f8096ece1d9710e16b880",
+      "function": "buildSymbolGraphDetailed::resolveNamespaceAlias",
+      "condition": "sup . id === \"zig\" || sup . id === \"csharp\" || isJsTsLanguage ( sup . id )",
+      "expression": "sup . id === \"zig\"",
+      "count": 2
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "6638ec6933fcedf10ff157cc4a68dc3be51096c416dda8f96bf5682b0642e54b",
+      "function": "buildSymbolGraphDetailed::resolveNamespaceAlias",
+      "condition": "sup . id === \"csharp\" || sup . id === \"zig\"",
+      "expression": "sup . id === \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "6b1acfab4a6b3b4727b8c273711155951ecc756952f4f7a1eabd31095bc48832",
+      "function": "buildSymbolGraphDetailed::resolveNamespaceAlias",
+      "condition": "sup . id === \"zig\" || sup . id === \"csharp\" || isJsTsLanguage ( sup . id )",
+      "expression": "sup . id === \"csharp\"",
+      "count": 2
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "72b9859cc33e41ebd003eb8b6d98c20eda62c2ada7f32d3dc424041ab3ccec5b",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "supportForIndexedFile ( moduleEntry . file ) ?. id !== \"php\"",
+      "expression": "supportForIndexedFile ( moduleEntry . file ) ?. id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "7761753eb3becfa31144ff1b5cb044359840857b96b54a08ac22e077430bcb25",
+      "function": "buildSymbolGraphDetailed::aliasTableAnswers",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "834e68f0c4653f10a469801decf842d9431ff6278ed17978443fa04865042afe",
+      "function": "buildSymbolGraphDetailed::resolveNamespaceAlias",
+      "condition": "sup . id === \"python\"",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "8ab2225d9e7c5f4dcbace7c98321177ef7470ce4bedc5c11a174b0ac795f40f3",
+      "function": "buildSymbolGraphDetailed::bareNameUse",
+      "condition": "sup . id === \"php\"",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "92182ae74e6380850cdc6cc2930aadcaaefb9fb8e99fe15a2e4f22972f4b07f6",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "sup . id === \"python\"",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "a5e0b736025230bf0fe6c7eb69473106bea78c76a23d4389443a9f9f3b8f8103",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "languageId !== \"ts\" && languageId !== \"tsx\"",
+      "expression": "languageId !== \"tsx\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "a8df4ed28e37a7f0ec9fe64b3e8a2be382c40654fa51a186233418b49c60e2ce",
+      "function": "buildSymbolGraphDetailed::resolveMemberPathFromModule",
+      "condition": "languageId === \"c\" || languageId === \"cpp\" || ( languageId && ( isJsTsLanguage ( languageId ) || languageHasDeclarationVisibility ( languageId ) ) )",
+      "expression": "languageId === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "b741de62416f83f499248f96a628d5a2d109bab143b3904fd49a5ec592df43cb",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "targetLanguageId !== \"ts\" && targetLanguageId !== \"tsx\"",
+      "expression": "targetLanguageId !== \"ts\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "bc8bdb5f6488a48a7b02285ca8944d5be9177dfa5c8d573f59a8f6d4afd4032c",
+      "function": "buildSymbolGraphDetailed::resolveMemberPathFromModule",
+      "condition": "languageId === \"c\" || languageId === \"cpp\" || ( languageId && ( isJsTsLanguage ( languageId ) || languageHasDeclarationVisibility ( languageId ) ) )",
+      "expression": "languageId === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "c40b90a70dab06fd7ef52c163f1f1d6a1eeb39599b04a8f3feb5d72f999628c5",
+      "function": "buildSymbolGraphDetailed::boundByOuterOwner",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "c8822b91030a97cd9596f216048f8ea62b0c82fda729197547c232d44b43bac0",
+      "function": "buildSymbolGraphDetailed::resolveNamespaceAlias",
+      "condition": "sup . id === \"csharp\" || sup . id === \"zig\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "ca08facdf230b946f2ae776716f82d9de867711c7b4e71461868e325bffcefd7",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "support ?. id === \"swift\"",
+      "expression": "support ?. id === \"swift\"",
+      "count": 2
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "cc88bfed29608e9342a478eaaa666d742f86a08d2e6f7ed76bd2f4e1a04e5688",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "sup . id === \"python\" && moduleEntry . imports . some ( isPythonDottedImportBinding )",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "d863bd6a4a136df2eede3f6573b12a0ae35bc07ee1cf6d28bad70aa0773deed1",
+      "function": "buildSymbolGraphDetailed::<anonymous>",
+      "condition": "supportForIndexedFile ( candidate . site . file ) ?. id === \"kotlin\"",
+      "expression": "supportForIndexedFile ( candidate . site . file ) ?. id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "dc5084d6227bffb2a556053f957169a2677716d2df8545a988bf558d40bb2433",
+      "function": "buildSymbolGraphDetailed::aliasTableAnswers",
+      "condition": "sup . id !== \"kotlin\"",
+      "expression": "sup . id !== \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "e0eea9dfa234ba66321e8a1ecd443d282c5a77309502497d9166e87f81ce9512",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "sup . id === \"kotlin\" && moduleEntry . imports . some ( ( imp ) => imp . kind === \"star\" && imp . jvmPackageFiles && imp . jvmPackageIncomplete )",
+      "expression": "sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "f5a4551269b52c70a8f141010c397ae34af36e909abdca37befc8789e2e2abdc",
+      "function": "buildSymbolGraphDetailed::resolveMemberAccessTarget::resolveLexicalBinding",
+      "condition": "sup . id === \"csharp\" && findClosestScopeBinding ( scopeIndex , name , expression , sup ) ?. import",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed.ts",
+      "fingerprint": "f6e9f1f4374efb79dd8a6003018c77c8cd32d2c0c533c6e85c21630b7b0e4946",
+      "function": "buildSymbolGraphDetailed",
+      "condition": "trailingLambdaNames . has ( def . localName ) && supportForIndexedFile ( def . file ) ?. id === \"kotlin\"",
+      "expression": "supportForIndexedFile ( def . file ) ?. id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "09c0b4f9030649fc00f99c2c5bed582b1fbcd92688f876f6a14cd1104cadfc7f",
+      "function": "emitSharedOwnerMembershipEdges",
+      "condition": "context . sup . id !== \"csharp\" && context . sup . id !== \"swift\"",
+      "expression": "context . sup . id !== \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "0baa6cf8271cc762d8f27d2e8d362704c969d09b224803c27f11cc1dabb7a994",
+      "function": "tryResolveNode",
+      "condition": "label === \"calls\" && context . sup . id === \"zig\" && target . isMember",
+      "expression": "context . sup . id === \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "0bde1dbfa56f386d59f4c61f5019c40d99d3a14c7606bc12dcfe642cb9b51151",
+      "function": "memberOwner",
+      "condition": "context . sup . id === \"go\" && fn . node . type === \"method_declaration\"",
+      "expression": "context . sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "14b1516083774260fcbc353b8124133ae8489ae1c792b87a38991fc997be2d8d",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"kotlin\" && node . parent ?. type !== \"user_type\"",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "15c97cbd49388be1b4a27366862740d7e4bc0e31dad8944529e8ac4bce0ff9a2",
+      "function": "resolveBareBase",
+      "condition": "! target && context . sup . id === \"ruby\"",
+      "expression": "context . sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "17ec9fcecefb44964b76524a99f4ba0053759eeb1566192b381a066b974f7ff9",
+      "function": "emitSharedOwnerMembershipEdges",
+      "condition": "context . sup . id !== \"csharp\" && context . sup . id !== \"swift\"",
+      "expression": "context . sup . id !== \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "1902fa5bb0adee2007968b4b786c6a8c03f644b66b945e8be4ea862f5fbd5acc",
+      "function": "emitFunctionBodyEdges::recordReceiverCall",
+      "condition": "context . sup . id === \"kotlin\" && kotlinHasTrailingLambda ( access . property )",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 2
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "23918e8a6e7981a3133256b1d961d5aa489b2bf9b656b9c1ca8b856e64d8e994",
+      "function": "resolveTypeScriptNamespaceMember",
+      "condition": "( context . sup . id !== \"ts\" && context . sup . id !== \"tsx\" ) || ! isIdentifierType ( context . sup , receiverNode . type )",
+      "expression": "context . sup . id !== \"ts\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "39ef0e5c32a8751d521524ab9c3d1c5aeb5ff9ddeabcbe14038643554d4d6d66",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"csharp\" && context . sup . isDeclarationName ( node )",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "3cfc112506a400530ab5a67e00cf916a604f9a58fc6f85ec07c6e3f87b2bff23",
+      "function": "resolveNamedType",
+      "condition": "( context . sup . id === \"go\" || context . sup . id === \"zig\" ) && context . optionalMemberTypes . has ( node . type )",
+      "expression": "context . sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "45c42580fa14fe4768ef81c6dbfacbe921312cf6051dad3075b10a3347f0233a",
+      "function": "emitClassInheritanceEdges",
+      "condition": "context . sup . id === \"swift\" && isSwiftExtensionContainer ( cls . node , context . source )",
+      "expression": "context . sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "48121654032fcef11e7ec732920010c8654495874289504f067e5feedfb3db79",
+      "function": "memberOwner",
+      "condition": "context . sup . id === \"cpp\"",
+      "expression": "context . sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "494316864a08bdd52cff5280741c1d99f1f96f13b7f77d30abbe46d51f36387d",
+      "function": "resolveNamedType",
+      "condition": "( context . sup . id === \"go\" || context . sup . id === \"zig\" ) && context . optionalMemberTypes . has ( node . type )",
+      "expression": "context . sup . id === \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "4d285adb9511e568c1a0a5dc10ecafc7423d1c3afb22bee10bc4a8a77a2273be",
+      "function": "resolveQualifiedPathBase",
+      "condition": "context . sup . id === \"ruby\"",
+      "expression": "context . sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "5a8b997bd21a55863b7044abd0b9e4aa57e4fad34bd4c3480e7e8c8672c5bb89",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"zig\" && context . optionalMemberTypes . has ( access . receiver . type ) && recordZigQualifiedTypeReceiverCall ( context , node , access , fromId )",
+      "expression": "context . sup . id === \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "6444565fb62e14ba90bfbf3fd545a87d0d04208f4b47c7ba7fe2183b537b25fb",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"kotlin\" && kotlinThisNeedsScopeProof ( access . receiver )",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "6fd322150521f13b79de388b5ec4710c7767f42554af701c5cdf8affbca4d9b1",
+      "function": "baseClauseRelation",
+      "condition": "context . sup . id === \"kotlin\"",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "6fd3cf7d7631a8aa9583d3724e90c52886781bc39aa7cd1dab0b043024966917",
+      "function": "emitFunctionBodyEdges::recordCallOrInstantiation",
+      "condition": "( context . sup . id === \"java\" || context . sup . id === \"csharp\" ) && property",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "74164540011ab1deae365ccf6d74cd96e3ee1f6cef01ea9f1f53c528e6d0e6bc",
+      "function": "emitFunctionBodyEdges::recordCallOrInstantiation",
+      "condition": "( context . sup . id === \"java\" || context . sup . id === \"csharp\" ) && property",
+      "expression": "context . sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "7bd4dca1dc503749c82561397fa0fcac5dbea1672910d7d4a7c1481217218945",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"java\" || context . sup . id === \"kotlin\"",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "7ca2e215a574c907a584b6d012d388103dbc9da23bd4d29ef397c973e244cad2",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"cpp\" && context . source . slice ( access . receiver . endIndex , access . property . startIndex ) . includes ( \"::\" )",
+      "expression": "context . sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "7d06d99aaa013cbc92c2ecd9882e92637611ca6b0b5a8ac4c92c8d42622bc166",
+      "function": "emitSharedOwnerMembershipEdges",
+      "condition": "context . sup . id === \"swift\" && isSwiftExtensionContainer ( container , context . source )",
+      "expression": "context . sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "7e4f71e22cc2b36a852879c79853f8297f304742b098d916502f4b4ced0090c6",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "! target && ( context . sup . id !== \"go\" || ! memberNamePattern || memberNamePattern . test ( exportedName ) )",
+      "expression": "context . sup . id !== \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "81eea19f994f9bb8b51b2a316c802bbef639baac6ddb6b977e6d22eade26d95e",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"csharp\" && isIdentifierType ( context . sup , access . receiver . type ) && ! context . aliasTableAnswers ( sliceText ( access . receiver , context . source ) , access . receiver )",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "9297db43f06611bb628b0d148ca3d1392ca47ab2ef4d2ea827cb4cbffb9b3a80",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"php\"",
+      "expression": "context . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "93eed4dd81861a05af49cb107ddbd082ec3e080151ebbf18cb8e6c27c0833905",
+      "function": "emitSharedOwnerMembershipEdges",
+      "condition": "context . sup . id === \"swift\" && isSwiftConstrainedExtension ( container , context . source )",
+      "expression": "context . sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "9a5e93a87449690c284e142e7c630a9365d77003d825895ff5b7fe82a5e33418",
+      "function": "emitFunctionBodyEdges::recordReceiverCall",
+      "condition": "context . sup . id === \"python\" && ( ( binding . kind === \"own-type\" && sliceText ( access . receiver , context . source ) === \"self\" ) || ( binding . kind === \"named-type\" && binding . proof !== \"static-type\" ) )",
+      "expression": "context . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "9efd478cd8ed1444515919d4ee62288c8872680b69e2051e8e86ec29092019db",
+      "function": "resolveNamedType",
+      "condition": "context . sup . id === \"python\"",
+      "expression": "context . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "9f43fdea6ca669dd5dbfe4ca1bdd8dfebf4dc05b206a53b9e4501579237e40df",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"java\" || context . sup . id === \"kotlin\"",
+      "expression": "context . sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "ab9910b0e1a5c83e1dd5228f8902a8245ab8455fa4ea9c27ded5be8ad86a9f5b",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "tableDef && context . sup . id === \"csharp\" && csharpTypeOnlyName ( node , true )",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "abaa6deef91d83827aeabd698fe22829df16540f14f817f19612814f5fb75d6b",
+      "function": "emitClassInheritanceEdges",
+      "condition": "context . sup . id === \"php\"",
+      "expression": "context . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "ad6f90567880d5fe9e65361044e302e874512ca68bba94ac852bd7302c1d2dce",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "! ! exportedName && context . sup . id === \"python\" && context . aliasToTargetModule . has ( `${ nameKey } . $ { exportedName } `)",
+      "expression": "context . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "b4acb03ca7289e43b7445de18bda681aff5b7655eba1ea624a863a386b1875a3",
+      "function": "memberOwner",
+      "condition": "context . sup . id === \"kotlin\"",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "b90702d3cc0f71442e5eecb6834a14a972855479c95768436fa41a6c1fac5073",
+      "function": "emitFunctionBodyEdges",
+      "condition": "context . sup . id === \"swift\" && target && declaresMembers ( target )",
+      "expression": "context . sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "baaf830f0078e13c9dd95bb508a1a87f2b6c6f97a7c71fe4f1c3485a859a9d16",
+      "function": "tryResolveNode",
+      "condition": "context . sup . id === \"cpp\" && node . type === \"qualified_identifier\"",
+      "expression": "context . sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "c047fa1c9e4b48dcaa1236340237cef4ce8b3f670929988bc983f7a365b9194d",
+      "function": "emitFunctionBodyEdges::recordReceiverCall",
+      "condition": "context . sup . id === \"go\" && memberNamePattern && ! memberNamePattern . test ( memberName )",
+      "expression": "context . sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "c059d954df8948b587639ab5a663e786ae4ed95e55d2a0e007d37ae551120ee7",
+      "function": "emitSharedOwnerMembershipEdges",
+      "condition": "context . sup . id === \"csharp\" && peerDefs . length",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "c38c2dfaf35cc0edd95b74b06c27f719b1960a7eced3e2967fce4198514b2fd4",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"java\" && javaConstructionType && isMemberAccessNode ( context . sup , javaConstructionType )",
+      "expression": "context . sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "c503840920332fc1ebb8e9d48ba6ccd94d56b967de6531517b6be4bda5c218d0",
+      "function": "emitFunctionBodyEdges::recordImplicitSelfMemberCall",
+      "condition": "context . sup . id === \"kotlin\" && kotlinHasTrailingLambda ( callee )",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "c5a8c54ff9793db021dc8a644b80352a9e8aca436d253635b019fbdf4b4d7130",
+      "function": "emitFunctionBodyEdges::recordAliasUse",
+      "condition": "context . sup . id === \"kotlin\" && node . parent ?. type === \"navigation_expression\"",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "cb5f8b49966fafd76899f2a502ef42de4971548ea4c1745f5727494d7a3a3ab8",
+      "function": "emitFunctionBodyEdges::recordReceiverCall",
+      "condition": "context . sup . id === \"kotlin\" && ! ! container && context . moduleEntry . locals . some ( ( local ) => { if ( local . kind !== SymbolKind . Variable || local . localName !== memberName ) return false ; const start = local . range . start . index ; if ( start === undefined || start < container . startIndex || start > = container . endIndex ) return false ; const nameNode = context . tree . rootNode . descendantForIndex ( start , start ) ; return isDirectKeywordMemberDeclaration ( nameNode , container ) ; } )",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "cb6998b3b6d385ad25b4fda41906c4f50370f58ddd5b773cc751f1a08dd81445",
+      "function": "resolveTypeScriptNamespaceMember",
+      "condition": "( context . sup . id !== \"ts\" && context . sup . id !== \"tsx\" ) || ! isIdentifierType ( context . sup , receiverNode . type )",
+      "expression": "context . sup . id !== \"tsx\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "d24f2596ac4be459595581fd7a35ce5e35bccb914d97cf7089c4802f85438c89",
+      "function": "recordIdentifierRelations",
+      "condition": "context . sup . id === \"swift\"",
+      "expression": "context . sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "d348c556eb13990a85baa89aa3b2d5b8cad4c11f4fc85e8e796eeea8457fee12",
+      "function": "resolveNamedType",
+      "condition": "context . sup . id === \"csharp\"",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "d81da888c7de0bec02dc8e3dec4eee4998cc69506f9963b4c3eab00da571b859",
+      "function": "resolveNamedType",
+      "condition": "rubyConstructed || context . sup . id === \"ruby\"",
+      "expression": "context . sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "dd7f926dbbeeda4e841ca90878c3d686cb34183e3028e735c6a5d6644140da83",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"java\" && access . receiver . type === \"object_creation_expression\"",
+      "expression": "context . sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "e4b82270d5ea790315d8e1965801ab8359e8b3a0a1973fea369992e68644f4f9",
+      "function": "emitFunctionBodyEdges::classifyImport",
+      "condition": "context . sup . id === \"csharp\"",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "e6521d6abcd1aae2af4c6f0790b3c4fcd4e0dacbaa1cc06dd2068c27d3bc3821",
+      "function": "memberOwner",
+      "condition": "context . sup . id === \"rust\"",
+      "expression": "context . sup . id === \"rust\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "f4c311ed64ec0565ac3a4f60ce28b8f1254a7cd4dacfe23e47901d8f7803849a",
+      "function": "emitFunctionBodyEdges::resolveCallTarget",
+      "condition": "context . sup . id === \"kotlin\" && ( isIdentifierType ( context . sup , access . receiver . type ) || access . receiver . type === \"navigation_expression\" ) && ! context . resolveIdentifier ( sliceText ( access . receiver , context . source ) , access . receiver )",
+      "expression": "context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "fbaf8aad8635637e8adf6f393451616f417cacea37bdd697a49e1bdd025b6539",
+      "function": "memberOwner",
+      "condition": "context . sup . id !== \"zig\"",
+      "expression": "context . sup . id !== \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "fec3d31121d6ff1cc5a710cc6484424822b94bbb3aecd20062c976ab217ac3aa",
+      "function": "resolveBaseSpecifier",
+      "condition": "context . sup . id === \"cpp\" && identifier . type === \"qualified_identifier\"",
+      "expression": "context . sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/edge-passes.ts",
+      "fingerprint": "fecd7e2265dc4a2777db812421443b2181f3e91319acf6bc795716bdaa7d0956",
+      "function": "resolveNamedType",
+      "condition": "context . sup . id === \"csharp\" && csharpQualifiedNameNode ( node )",
+      "expression": "context . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/import-aliases.ts",
+      "fingerprint": "18c798b5d364816586d7734f38b8cef985128c0e1a5a7cdf7aab7a39d07db053",
+      "function": "buildImportAliasMaps",
+      "condition": "languageId === \"java\" && targetLanguage === \"kotlin\"",
+      "expression": "languageId === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/import-aliases.ts",
+      "fingerprint": "5ba4741f41e98faaeb014869afc6a34924b8ead9dadb30f39bb3fdf679981c3d",
+      "function": "buildImportAliasMaps::<anonymous>",
+      "condition": "languageId === \"rust\"",
+      "expression": "languageId === \"rust\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph-detailed/import-aliases.ts",
+      "fingerprint": "a7f56730e243402d4214c6a077fb1875fd854b8bde80551dddb68ddd66bb4e13",
+      "function": "buildImportAliasMaps",
+      "condition": "languageId === \"java\" && targetLanguage === \"kotlin\"",
+      "expression": "targetLanguage === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph.ts",
+      "fingerprint": "1e8001f80de262735472ebc026e1ffc357f53916dee64a5472c3f98a675d4cb1",
+      "function": "buildSymbolGraph::addDefinitionEdge",
+      "condition": "languageId !== \"c\" && languageId !== \"cpp\"",
+      "expression": "languageId !== \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph.ts",
+      "fingerprint": "3349d15548e058d19178b0bfc98d24c3fb7b6febdd648b983ec3e995b562b0cf",
+      "function": "buildSymbolGraph::addDefinitionEdge",
+      "condition": "imp && ( phpNamedImportRole ( imp ) !== undefined || imp . jvmTypeOwnerStartIndex !== undefined || languageId === \"java\" )",
+      "expression": "languageId === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/graphs/symbol-graph.ts",
+      "fingerprint": "5b38d193bb61dc216581468520549a89e76dc17e5328f3b8028a2fa823eb2ca8",
+      "function": "buildSymbolGraph::addDefinitionEdge",
+      "condition": "languageId !== \"c\" && languageId !== \"cpp\"",
+      "expression": "languageId !== \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/impact/call-compatibility.ts",
+      "fingerprint": "195eb39245ab1a7925e5d6d4d205afc1752c3c84c788e5af92cd063333fc8957",
+      "function": "callBindingForm",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/impact/call-compatibility.ts",
+      "fingerprint": "b806af3c546fbbc7a862185afb00f3f3e064f07eaa2d0867139bfc8dc7f64954",
+      "function": "callBindingForm",
+      "condition": "languageId === \"rust\"",
+      "expression": "languageId === \"rust\"",
+      "count": 1
+    },
+    {
+      "file": "src/impact/call-compatibility.ts",
+      "fingerprint": "b981b1ea61f40e6f9d51bf2fc9217874cff1208fac44277f204d5d6701996b07",
+      "function": "callBindingForm",
+      "condition": "languageId !== \"python\" || ! callee",
+      "expression": "languageId !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "027c5bb8b7a7f53fe31fe4e368845d77816daca3c6d4ad15e0d264f0be69ac95",
+      "function": "baseRefsFromContainer",
+      "condition": "def && sup . id === \"swift\"",
+      "expression": "sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "04f3fc27ca4e463da12b4a6d8310cfff673ba9d61913529faf9a95ecc44671ef",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"php\"",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "08580203f45a2d1eaaa052e4bf75e8afcbd9ace1c63d62fbc98a8d91366f3fce",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"csharp\" && mod . imports . some ( ( imp ) => imp . kind === \"star\" && imp . staticMembersOf )",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "08d2adf6dc19ee30fd24bd5b327241ff0665e7f163cf2c16307df48d8ba8305d",
+      "function": "baseRefsFromContainer",
+      "condition": "sup . id === \"python\"",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "0bae019b88141107e8e12c909decb97d30724082a25cd816dbadeb1002784398",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"python\" && pythonImportLookup ( mod , ensureScopeIndex ( ) ) . hasDottedImports",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "0f89096c4f0ed1e2da13d034cb9945a0bf6f975ca349bcaa3d15beeb6451d151",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 2
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "1737400f0c14cd7cc190ed3f87d8a1f4df796911aa4220eb7f1fd6343f975c75",
+      "function": "selectGoReceiverMember::<anonymous>",
+      "condition": "context . sup . id === \"go\"",
+      "expression": "context . sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "192b207d4734e7294ee2bc7a512bbb7b809597ddb741b315f5f2779fbeb07582",
+      "function": "resolveKeywordReceiverMember",
+      "condition": "startAtAncestor && ( ref . context . sup . id !== \"php\" || depth === 0 )",
+      "expression": "ref . context . sup . id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "2084174d44a5b64e0c096b53c1dd74c9c811aa3cac5f288b57190aaf073969a0",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"java\" || sup . id === \"kotlin\" || sup . id === \"swift\"",
+      "expression": "sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "22341dd2bb7b0eb8172d530365fb72a70e7558fc6e68f7b0e89d47ea595b6a77",
+      "function": "collectDeclaredBaseTypes::collectType",
+      "condition": "sup . id === \"cpp\" && core . type === \"base_class_clause\"",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "24b56d8c2cd56ce899584bccb0232026b96a5aff8d2aa26feff431a991a4e17e",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"java\" || sup . id === \"kotlin\" || sup . id === \"swift\"",
+      "expression": "sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "27c5eb3b854b2cad03f514b2723bde5736a624d585dd77520ac8fbb1a464e3e7",
+      "function": "collectDeclaredBaseTypes::collectType",
+      "condition": "sup . id === \"cpp\"",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "2b7c8821a10396cebc38cd7f34a99932674659697933ecd7fefce3f8423d3027",
+      "function": "findReceiverMemberDefinition",
+      "condition": "targetContext . sup . id === \"rust\"",
+      "expression": "targetContext . sup . id === \"rust\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "2d81a6a2347d77cdd2a378a552e5c17597abe70a76cdf9e190ef6f802fd2f145",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"java\" && isQualifiedTypeSuffix ( access ?. qualifiedAccess , node )",
+      "expression": "sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "2fc3c378dc2d838a268e8a920a5ee88ab70965fc0091d513b1a9472dbd21109b",
+      "function": "collectDeclaredBaseTypes::collectType",
+      "condition": "sup . id === \"ruby\" && core . type === \"scope_resolution\"",
+      "expression": "sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "30b46261a5eb44cd4a3702e36510604377c6975d2f52af4dec2faecbd6da56e9",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"kotlin\" && expr . type === \"user_type\"",
+      "expression": "sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "3d32f1c190c4d72692b5386491529ee9f87cbcbf592e13faf1783abfb525bd61",
+      "function": "baseRefsFromContainer",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "481f2be4a2a85bb13f9cc75b74a119c0ea4a614107c72258a43ccaea3dccec46",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"swift\" && direct ?. kind === \"resolved\" && direct . def . kind === SymbolKind . TypeAlias",
+      "expression": "sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "489496080117fba6f95459c545f6e0b0076d54fb829f101b3da5511b83cecc64",
+      "function": "pythonClassRefFromDef::<anonymous>",
+      "condition": "! context || context . sup . id !== \"python\"",
+      "expression": "context . sup . id !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "4c144571a1311ec41bbe2f863697d6c1c131fb04163ead9c44ed249cbbe68472",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"python\" && ( ( receiverProof ?. kind === \"own-type\" && obj ?. type === \"identifier\" && sliceText ( obj , source ) === \"self\" ) || ( receiverProof ?. kind === \"named-type\" && receiverProof . proof !== \"static-type\" ) )",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "4c2f57b0c3629dc6e30af391af165670e11f9080228678bad54b2fda1465f157",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"python\" && isPythonDottedImportBinding ( imp )",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "5a486fd5565c1860a1c02cfbd07982b26b7f62f8443551898ec249af2e7f21ae",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "! base && sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "5c7aaa4cce1a669967e45bff7ed1f09bfc85574ecb1c7a489f78d3edd65dd261",
+      "function": "resolveKeywordReceiverMember",
+      "condition": "current . context . sup . id === \"kotlin\" && kotlinHasTrailingLambda ( node )",
+      "expression": "current . context . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "658470ee13e4fbf06e1df38f26b3796432ecd28469947ba6d84644a074a0d6e9",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"python\"",
+      "expression": "sup . id === \"python\"",
+      "count": 4
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "66d7dfdb027e448556a86a1e8a048518dceec511e0b0a65c297c0458db560e05",
+      "function": "resolveKeywordReceiverMember",
+      "condition": "current . context . sup . id === \"php\"",
+      "expression": "current . context . sup . id === \"php\"",
+      "count": 2
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "68588369058a83e3c7d0088f21ee793cc39493b38d3e74503ec48b5ce31c6fd9",
+      "function": "baseRefsFromContainer",
+      "condition": "base . kind === \"simple\" && sup . id === \"php\"",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "6d948e96aa99b8c3e6e4725698c81f76f957e2489b984132c95a0e393b40c095",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"zig\"",
+      "expression": "sup . id === \"zig\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "70f9e809311814a1a550411a269903e43a6cc569bce57f6a590b876ac73e9893",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"ruby\"",
+      "expression": "sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "7877a0c723caf56041e5e21b10f187465d726c7ed4e34194bbadef5e07a64e1b",
+      "function": "baseRefsFromContainer",
+      "condition": "! def && base . kind === \"simple\" && sup . id !== \"php\"",
+      "expression": "sup . id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "7c3ebc028f9f25a2defcced38f594344bf923df29b2a7c19744cbdba280ccb70",
+      "function": "resolveDeclaredBase",
+      "condition": "! named || sup . id !== \"swift\"",
+      "expression": "sup . id !== \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "818075fd2bb319bd1c288e1025160613d6a3e264397882a8a89eb61d6513530b",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"python\"",
+      "expression": "sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "820aa88e4c4ae8f87fd4db5a9f85e8362b28a086c91e3c36dc97804a8e4fcdd5",
+      "function": "followSwiftAlias",
+      "condition": "context . sup . id !== \"swift\"",
+      "expression": "context . sup . id !== \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "8f257c3ce42e1441fc026863c7aa4b8276df0001e23025e2900bb454c7803364",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"php\"",
+      "expression": "sup . id === \"php\"",
+      "count": 2
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "8f95f89b6fa3ce7d0995b069dd9a30f8129cbda15307f23ac67e926f784a6b49",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"ruby\" && typedLocals . length === 0",
+      "expression": "sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "9459cc613909fc2145496c9353b1161f9fdd2df9dc26bd5f8bd92b2fa24c1936",
+      "function": "swiftNestedType",
+      "condition": "ref ?. context . sup . id !== \"swift\"",
+      "expression": "ref ?. context . sup . id !== \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "95f18caf9478d4d31ee8bfbbb0ed9ed0b492fb0a29ac8d5727eeb5960344cfd4",
+      "function": "resolveRubyVisibleConstant",
+      "condition": "sup . id !== \"ruby\"",
+      "expression": "sup . id !== \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "9d628b576cd6fb23c7a4d14a023330554abc7c1e8b85dbf122d9cc0c5d2aefa4",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"cpp\" && memberNode . type === \"qualified_identifier\"",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "a195f44e091eba3e3021d338073b529e957b3da01085f0e058c456740c264180",
+      "function": "findReceiverMemberDefinition",
+      "condition": "targetContext . sup . id === \"kotlin\"",
+      "expression": "targetContext . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "a25eff9aab8fa4f356ed4f758aa2df2177f9bb37f8669420c1d9193d15abe3bb",
+      "function": "resolveMemberAccessDefinition::hiddenReceiverType",
+      "condition": "sup . id !== \"csharp\" || ! isReceiverNameNode ( sup , expr . type )",
+      "expression": "sup . id !== \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "a2cfcb7b5d34054551f1584ff68c700bce750a5eb938730960cdd9e4eb27e316",
+      "function": "resolveQualifiedMemberContainer",
+      "condition": "sup . id === \"swift\"",
+      "expression": "sup . id === \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "a3953db7fda575a8018169283bde6200468a66ad9ec7d96fe16da7c0167e448b",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"java\" && ( expr . type === \"scoped_identifier\" || expr . type === \"scoped_type_identifier\" )",
+      "expression": "sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "b035d9a1a24e46126f2f59544428fd676026bee6917e682de25ba3f37e6a186e",
+      "function": "findReceiverMemberDefinition",
+      "condition": "targetContext . sup . id === \"go\"",
+      "expression": "targetContext . sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "b74a71a061e713001982c17e524a2c291e87e15788178d7f8096b1a047743bd8",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "b7682704113817de084bcc0f25fe59b6710fb1de0d862edbc1bdae77dd1128d9",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "b7cf5cb2fad4418fa96438f2ea9f336432e62d1ab8788036e1acd547a17c7a54",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"csharp\" && ! csharpNameUnshadowed ( ensureScopeIndex ( ) , expr , exprName )",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "be5c9af2de7f720b5384e734cbf0b6c598405c56b876f2144738226757be41d6",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "! base && ! dottedRoot && sup . id === \"csharp\"",
+      "expression": "sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "c1040d4c9c1b121283e7bb4b1ad4cf9a0575edee304786d5162a80c9cf712f5c",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"rust\"",
+      "expression": "sup . id === \"rust\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "c1d31046bddfe6c0aa464b66c393b74f2548af0485436aff12d134916ecfce26",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "sup . id === \"php\" && memberNode . type === \"member_access_expression\" && ! report . named",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "cd1e222ddad09f1325aa2b39d78db6c89df0f2c4af1eaf78403cfcfeb4b50893",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"ruby\" && declaresMembers ( base . def )",
+      "expression": "sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "d1957d4294823d83096990808c87b688df5b64a81744dcce89094b31ef336703",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"go\"",
+      "expression": "sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "d6ae41e588bdf7ac515d37f60cbdf17409aa3094e3f37c4eae5ad4dc91f41e21",
+      "function": "resolveMemberAccessDefinition",
+      "condition": "memberDef && ( sup . id === \"cpp\" || ! memberNamePattern || memberNamePattern . test ( member ) || getCompilationUnitPeers ( index , mod . file ) . files . has ( memberDef . file ) ) && ! memberHidden ?. ( mod . file , memberDef , memberContext )",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "d83958b26325a6c2517acf5ec5822a4ea3fa53069b332cf6531abd32ab9619ec",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"go\"",
+      "expression": "sup . id === \"go\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "dd09dd7c89012bae817e38557a4af110d2d7752ec876fa4a11e2b6fc0a0be13b",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"java\" || sup . id === \"kotlin\" || sup . id === \"swift\"",
+      "expression": "sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "ddeba080265883122b551832a66a7bd1a0033994f5f91e85408563369e4ece48",
+      "function": "resolveRubySuperDefinition",
+      "condition": "sup . id !== \"ruby\" || node . type !== \"super\"",
+      "expression": "sup . id !== \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "e0728838575a3a255f4b06d1929ed2fd00f9c944882b1439a9436463b04934ec",
+      "function": "resolveMemberAccessDefinition::resolveExpression",
+      "condition": "sup . id === \"php\" && imp . kind === \"named\" && typeof imp . resolved === \"string\"",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "e2981713c63159d0ebacc8f577e6c10dc9fea31ca8ca6b6b7e2de0ce96f4a628",
+      "function": "resolveReceiverDefinition",
+      "condition": "sup . id === \"cpp\"",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-goto.ts",
+      "fingerprint": "f4c6c871e84e87388d011e91a94bf25ae90e526c3219ab0b268fc874f0967993",
+      "function": "collectDeclaredBaseTypes::collectType",
+      "condition": "sup . id === \"php\" && node . type === \"use_list\"",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "005e3427dc74931506cdbfd1034d3c3fdcc888235f1d4b5be7cf344a824d33c6",
+      "function": "resolveNamedDefinition",
+      "condition": "callArgumentCount !== undefined || ( support . id === \"kotlin\" && callableReference ?. type === \"callable_reference\" && callableReference . namedChildren . at ( - 1 ) ?. id === callSite ?. node . id )",
+      "expression": "support . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "185da80ae4c8a5622e9a5824bf5cc168278fe3d9ce4f3359f1661ac107c50dca",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"c\" && fileIdentityKey ( file ) !== fileIdentityKey ( hit . def . file )",
+      "expression": "support . id === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "42bce7db1315a826ce6685339925bb17a24d39b8db1e80c13acebdaa5417d46c",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"csharp\" && referenceIndex !== undefined",
+      "expression": "support . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "4dbf4450ceb414b7799865423bd2a3c1b1e213acb399b9e9c7932dc0ddff353a",
+      "function": "resolveNamedDefinition",
+      "condition": "requiresExplicitReceiver && support . id !== \"c\"",
+      "expression": "support . id !== \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "5bd5e19aa05c3175f6d86946fc2d1bcda7d67cab1d0fd63dc86a9dedc7436b91",
+      "function": "resolveNamedDefinition",
+      "condition": "! declarationOutOfScope && ( support . id !== \"python\" || effectiveBinding ?. kind === \"local\" )",
+      "expression": "support . id !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "5cbd65433224587c559571f6a3d25f2f35f02b509189699f35b64aa10ef51b29",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"kotlin\" && ! ! callSite && ( callSite . typeOnly || typeOnlyName ( row , callSite . node ) )",
+      "expression": "support . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "6dd750004ab954ae59e0d7ce07426751904468bde77bddc0629304f24c18a706",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"python\"",
+      "expression": "support . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "8dfb000d2a996853b25d5b030323d6f0c1c15a048573942bfc32ada855ea7068",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"csharp\" && csharpShadowedStarsMayHold ( index , mod , name )",
+      "expression": "support . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "e27b052d619762f718ce9473f40c3e5aff186c45b7579d739fec2171b3bca6b8",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"cpp\" && ! name . includes ( \"::\" )",
+      "expression": "support . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-local.ts",
+      "fingerprint": "f5348ba7390f5f9a423ba13ff209abc762ea72d17e0f26f16ffd77373b8f7f53",
+      "function": "resolveNamedDefinition",
+      "condition": "support . id === \"csharp\"",
+      "expression": "support . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "046e6a86b67fa0477e3a0e6970f929098187ade82c070de2917d590ed793f76e",
+      "function": "importersReachingDefinition",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "0638b6082a3a245a078376d2e6000f82bf4ceb0d249f63f70b89f87b315e5082",
+      "function": "readPhpDefinitionNames",
+      "condition": "definitionParsed . sup . id !== \"php\"",
+      "expression": "definitionParsed . sup . id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "08f42fa657b6134a8684b0ede9ab10b95950ed04c5dd894ad4e1cc832948431d",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "! filter || ! canProbeRoot || ! canProbeName || ( filter . mightContain ( rootProbe ) && filter . mightContain ( nameProbe ) ) || ( jvmModule . languageId === \"java\" && filter . mightContain ( JAVA_UNICODE_ESCAPE_BLOOM_TOKEN ) )",
+      "expression": "jvmModule . languageId === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "0ad2f2204e2a69e4a4a49ec57ce623caa776d131c1e4ffbb8f4de53d112b7514",
+      "function": "importTargetCanReferenceDefinition",
+      "condition": "languageId === \"c\"",
+      "expression": "languageId === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "130561aaa2bdbde867f951347a59ad0fd9aa17b1bca9d012afc004d1e8841a80",
+      "function": "collectVerifiedNamedNodeReferences",
+      "condition": "parsed . sup . id === \"php\"",
+      "expression": "parsed . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "2217f2fdb96824d0227f1c12a856553c617be63818152c31747087750bad5839",
+      "function": "importCanReferenceDefinition",
+      "condition": "languageId === \"python\" && isPythonDottedImportBinding ( imp )",
+      "expression": "languageId === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "28902b07b4b4a4f94a929ac477920aebbab288b2cc8d7cfe03fbc9c064d8839b",
+      "function": "phpQualifiedConstantProbe",
+      "condition": "parsed . sup . id !== \"php\" || ! isPhpQualifiedReferenceNode ( node ) || inferPhpQualifiedReferenceImportType ( node )",
+      "expression": "parsed . sup . id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "2f2817ecde7c821d2d59bf08df68b386127f3c8c6fcfe410e5491e6f6dafa6df",
+      "function": "importersReachingDefinition::importNamesAnsweringFile",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "2f750c1396d9986fcd6e087284118fff10faa306cbfc25c924ecaf658f10acf4",
+      "function": "importersReachingDefinition::reachesThroughAnyImport::<anonymous>",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "4a218eae3b45fc1b7e7ba1e6d99db539d5e04e840134148fe1fb9a78b2a20ebe",
+      "function": "importTargetCanReferenceDefinition",
+      "condition": "targetLanguageId === \"java\" || targetLanguageId === \"kotlin\"",
+      "expression": "targetLanguageId === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "4b0f6ac0049af7b9b49ca452b2371d47b40d860b3a8aa1d1f3e75d8e15810dab",
+      "function": "isPhpDefinition",
+      "condition": "supportForFileWithoutHeaderSample ( def . file , index . languageExtensions ) ?. id === \"php\"",
+      "expression": "supportForFileWithoutHeaderSample ( def . file , index . languageExtensions ) ?. id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "4dbb01781910b74426ae3a5389f6761c53c7bc2b70b931a77e8bbc4f646130d6",
+      "function": "collectVerifiedNamedNodeReferences",
+      "condition": "parsed . sup . id === \"c\" && expectedDef . kind === SymbolKind . Function",
+      "expression": "parsed . sup . id === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "4ddd3feeb9963a8f80d459a8c25aec3f4f7b9593bee9585a96a06110d077f188",
+      "function": "importersReachingDefinition",
+      "condition": "languageId === \"python\"",
+      "expression": "languageId === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "6d8c4b920e96aa798bae0ad31ff0044e197cfbf4d8f7f44b01a5201004c89c71",
+      "function": "importersReachingDefinition::reachesThroughIndirectImport::<anonymous>",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "850e1046f7919c81731a20edddf62123127a85b29363509dd5b6184a2c8ee1bf",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "languageId === \"c\"",
+      "expression": "languageId === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "86428f905feca42e0812b46bf2ac9d8ffaab7f3693e122d232717662f02c3662",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "languageId === \"python\" && ! def . isMember",
+      "expression": "languageId === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "9605178cbd24f2db38df29072d0fa2f5d94f3eaa810c4ecd9a2dd7e718714ba7",
+      "function": "getCachedScope::keepOccurrence",
+      "condition": "parsedCtx . sup . id !== \"php\" || ! binding . def || occurrence . start . index === binding . def . start . index",
+      "expression": "parsedCtx . sup . id !== \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "a51464f9de73ba88dfda3aabc2352513971c8929f7c72b5822b92bc241d983ea",
+      "function": "collectVerifiedNamedNodeReferences",
+      "condition": "parsed . sup . id === \"php\" && expectedDef . isMember",
+      "expression": "parsed . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "aacbdd01e899a967f41bb857e58ae13fe824f3daf06f60a1c228972f61f78401",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "languageId === \"csharp\"",
+      "expression": "languageId === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "c0b96d437709b492272b62dfbf4735b26b182cf3d06c630b3dfcb740f3d0246c",
+      "function": "receiverProofUnavailable",
+      "condition": "parsed . sup . id === \"php\" && receiver . kind === \"own-type\"",
+      "expression": "parsed . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "e51d5aae98516260688403f709adfaec3310710f76aa165d9f801a32d5366249",
+      "function": "importTargetCanReferenceDefinition",
+      "condition": "targetLanguageId === \"java\" || targetLanguageId === \"kotlin\"",
+      "expression": "targetLanguageId === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "e523fbd667c724442ee39de19701342d599f801d4b8530997f25f1ac6ce0d2c1",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "languageId === \"java\" || languageId === \"kotlin\"",
+      "expression": "languageId === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "ed3d1faf8adbddd00b5218d6a7c50c29e3c14d95e85af40ee6b3a4c211d73ab9",
+      "function": "importTargetCanReferenceDefinition",
+      "condition": "languageId !== \"python\"",
+      "expression": "languageId !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "f41cef47080e47295db8e560aeef714f4e79ec2af9f8950c130e6629272ad672",
+      "function": "getCachedReferenceCandidateFiles",
+      "condition": "languageId === \"java\" || languageId === \"kotlin\"",
+      "expression": "languageId === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation-references.ts",
+      "fingerprint": "fa21c27a739e44dec0d82f7aaf9e7f1733697b0bc68e6e1e6a7743bb176cd3a7",
+      "function": "cppCanonicalStructuralExport",
+      "condition": "languageId !== \"cpp\"",
+      "expression": "languageId !== \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "026ccc07bf6d7393307f249dbc9a26c1099cde77f05b0848b82be364ef0924ee",
+      "function": "findReferencesInternal",
+      "condition": "( parsed . sup . id === \"csharp\" && imp . localRange ) || parsed . sup . id === \"python\"",
+      "expression": "parsed . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "09531fa38f386aa7998f053fc7cb7cfacda77c4d2fa045d1e14ad23283969792",
+      "function": "isUnresolvedReceiverMemberProperty",
+      "condition": "! parent || ( ! supportsReceiverMemberNavigation ( sup . id ) && sup . id !== \"c\" ) || ! isMemberAccessNode ( sup , parent )",
+      "expression": "sup . id !== \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "221bc8e23bf28b36eca9a499f4a36f42acba11bc9f762b83f9213e8a742ecfff",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"php\"",
+      "expression": "sup . id === \"php\"",
+      "count": 4
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "308eb8840be4ab244f4cbc91ec2ff66d9999b150af2cf89d2b2cd9502cdd2fb0",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"kotlin\" && scopeIndex && ! receiverless",
+      "expression": "sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "3929ced854f358327308a0e9566487178ac0e411a7914909f7c1f4ce88378930",
+      "function": "findReferencesInternal",
+      "condition": "! definition . isMember && fileIdentityKey ( fileId ) !== fileIdentityKey ( definitionFile ) && ( unitPeerKeys . has ( fileIdentityKey ( fileId ) ) || parsedContext . sup . id === \"java\" || parsedContext . sup . id === \"kotlin\" ) && ! hasReachedCollectionLimit ( )",
+      "expression": "parsedContext . sup . id === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "3b50d50d8770af6d6d9b0b1af2b5e09648ddc98475aaa204c25218453bf9a1a7",
+      "function": "cIncludeLinkedCallableEquivalents",
+      "condition": "candidateParsed . sup . id !== \"c\"",
+      "expression": "candidateParsed . sup . id !== \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "4011fba17477a0e803e30bfd9b896ea4f07382e9ea271bcc58738c37764536d2",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"python\" && pythonPropertyAccessorNeedsPartialCoverage ( parsedContext , definition )",
+      "expression": "parsedContext . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "437bc17dc1c8e6ab2f1baa930fa200e1cab78d6cb4db1149ea516cf6f9480d33",
+      "function": "findReferencesInternal",
+      "condition": "! definition . isMember && fileIdentityKey ( fileId ) !== fileIdentityKey ( definitionFile ) && ( unitPeerKeys . has ( fileIdentityKey ( fileId ) ) || parsedContext . sup . id === \"java\" || parsedContext . sup . id === \"kotlin\" ) && ! hasReachedCollectionLimit ( )",
+      "expression": "parsedContext . sup . id === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "47f58c40c66aa0be100bd8904e6cec508ff11365de8af9fc6542c98f19ba5982",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"php\" && phpQualifiedReference && index . projectRoot",
+      "expression": "sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "51711ac49d5ca06e706cd9e9e1bda95c6fedcb8cd080513a7ba136c84db8cb9d",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"cpp\" && scopeIndex && memberAccessNode",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "55dbcbfd33353453ab432e84d11798e3dc6a4fbe8d5edec35fedda60ada9ec06",
+      "function": "shouldScanVerifiedReferences",
+      "condition": "parsedContext . sup . id === \"php\" && ! isPhpCaseInsensitiveSymbolKind ( def . kind )",
+      "expression": "parsedContext . sup . id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "5e78511343f8c7faf5dd33907cf73d11c2de3a8b7eaef25007e343b878e467b3",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"python\"",
+      "expression": "parsedContext . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "623e7ed36a4578f05ebc8d9da08990258ea71908dfdde93b176cbad12d6bff3c",
+      "function": "findReferencesInternal",
+      "condition": "! targetFile && parsedContext . sup . id === \"csharp\" && imp . kind === \"namespace\"",
+      "expression": "parsedContext . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "662203c224e96408af7e00115a2205981e25c6b6fb943090a3b3aa043bbdda39",
+      "function": "swiftNavigationMemberAccess",
+      "condition": "sup . id !== \"swift\" || node . parent ?. type !== \"navigation_suffix\"",
+      "expression": "sup . id !== \"swift\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "75a8961ac4d5f0becc1ad6e97b4e899a0fd9ec9beb7ebd9cd324bc604bb4afc8",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"scss\"",
+      "expression": "parsedContext . sup . id === \"scss\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "7a29931d769de568fd40ec25b7b5973073f50c890518cce31cd54e4b46198f63",
+      "function": "canonicalizePythonReceiverAttributeDefinition",
+      "condition": "context . sup . id !== \"python\"",
+      "expression": "context . sup . id !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "8034e2b29203b508ee35b452a268c49ff0304fa7cc6797cb7da8db3e6e5fc05d",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"cpp\"",
+      "expression": "sup . id === \"cpp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "8f75e9407d0a4b11ddac25d4062e3371f48694dba50ea10c302081e9e4ad251c",
+      "function": "findReferencesInternal",
+      "condition": "targetLanguage === \"java\" || targetLanguage === \"kotlin\"",
+      "expression": "targetLanguage === \"java\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "94599d7a66b9b39f8f734bea6aadc3c1fe3700aa188c604005b4601f94734584",
+      "function": "goToDefinitionInternal",
+      "condition": "sup . id === \"ruby\" && node . type === \"super\"",
+      "expression": "sup . id === \"ruby\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "94c7f2573d17c9bc78ad88f8b42f9250f14b06b036051d936bfa90ff31d4e555",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"scss\" && definition . localName . startsWith ( \"$\" )",
+      "expression": "parsedContext . sup . id === \"scss\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "97daa8bdd83a510f5427469df3d5972ed8847716918d373bf61b710a14c1bd75",
+      "function": "findReferencesInternal",
+      "condition": "entry . support ?. id === \"php\" && isPhpCaseInsensitiveSymbolKind ( definition . kind )",
+      "expression": "entry . support ?. id === \"php\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "a4e09bbbca7945ef16dfecaa4a2989ce98cbead85ceee35e41cefb525e105df4",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"csharp\" && ! definition . isMember && ( definition . kind === SymbolKind . Class || definition . kind === SymbolKind . Interface || definition . kind === SymbolKind . TypeAlias )",
+      "expression": "parsedContext . sup . id === \"csharp\"",
+      "count": 2
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "b1fbc6cb5251e7c92c38ca00c6c6581664abb75c0cf056a9c0ffccea0272d6b6",
+      "function": "findReferencesInternal",
+      "condition": "collectionMode === \"rename\" ? reverseReachableModules ( index , [ definition , ... equivalentDefinitions ] . map ( ( candidate ) => candidate . file ) , { throughImports : parsedContext . sup . id === \"c\" } , ) . modules : [ ]",
+      "expression": "parsedContext . sup . id === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "bd1ffb8cee44252f727a6a8005890d29fafe14b24c445d5194df82bec1b7874a",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"ruby\"",
+      "expression": "parsedContext . sup . id === \"ruby\"",
+      "count": 2
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "d615fa204897fdef632494c00552f645f6031c236812a4ccc3bdb9d80a97b240",
+      "function": "findReferencesInternal",
+      "condition": "parsed . sup . id === \"python\"",
+      "expression": "parsed . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "d94933f273d3a79b6235d6ce60e7a20db729231228e7add4d7287efc6470e2fa",
+      "function": "canonicalizePythonReceiverAttributeDefinition",
+      "condition": "supportForFileWithoutHeaderSample ( position . file , index . languageExtensions ) ?. id !== \"python\"",
+      "expression": "supportForFileWithoutHeaderSample ( position . file , index . languageExtensions ) ?. id !== \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "dfc2ad1e4cc81af722087599e9f8c5fd3c4519a7b80aa7e5169d7f9b9bb60446",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"csharp\"",
+      "expression": "parsedContext . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "ea120dfdb454ef5b3fb7c1a88c7bba4ace87b92a4e9761d373f96116995cd26d",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"python\" && ! definition . isMember && ! hasReachedCollectionLimit ( )",
+      "expression": "parsedContext . sup . id === \"python\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "ea87a910a21d1e9e0d481489b7e3d594c0b27be0165cccb60adcdd3c1a40235c",
+      "function": "findReferencesInternal",
+      "condition": "( parsed . sup . id === \"csharp\" && imp . localRange ) || parsed . sup . id === \"python\"",
+      "expression": "parsed . sup . id === \"csharp\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "f20bbb01792dca9b8ec8e1bde2c25a32ead8ac05171213e0201df51485e1ad46",
+      "function": "isKotlinReceiverClaimableCall",
+      "condition": "parsedContext . sup . id !== \"kotlin\" || start === undefined",
+      "expression": "parsedContext . sup . id !== \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "f482ee5def4279a23ec7b38fb3beee1f62b241805f72ed778def11dcac9ef2f1",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"c\"",
+      "expression": "parsedContext . sup . id === \"c\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "f4effcb1cfb149a403ef589afe01e2b6a560915cc59c74d61285efc287f663d5",
+      "function": "findReferencesInternal",
+      "condition": "targetLanguage === \"java\" || targetLanguage === \"kotlin\"",
+      "expression": "targetLanguage === \"kotlin\"",
+      "count": 1
+    },
+    {
+      "file": "src/indexer/navigation.ts",
+      "fingerprint": "f7b45430341f2d4496ddb959f828606c8f31daa086e44b6c1cd3b3deea059e9f",
+      "function": "findReferencesInternal",
+      "condition": "parsedContext . sup . id === \"scss\" && definition . localName . startsWith ( \"$\" ) && ! ( await scssMemberForDefinition ( index , definition ) )",
+      "expression": "parsedContext . sup . id === \"scss\"",
+      "count": 1
+    }
+  ]
+}

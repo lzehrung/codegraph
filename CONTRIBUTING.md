@@ -4,6 +4,19 @@
 - See [agent workflows](docs/agent-workflows.md) for Codegraph CLI and library-session guidance.
 - Run `npm run answers:snapshot:check` (included in `npm run check`); regenerate with `npm run answers:snapshot` and classify every changed answer against base/head evidence before committing. `npm run answers:snapshot:corpora -- --help` describes scratch-only comparisons of pinned benchmark corpora.
 
+## Inline language checks
+
+`npm run language-checks:check` runs before tests in `npm run check` and in CI. It compares
+non-exempt identity checks against `scripts/language-check-baseline.json`, using file, function,
+and normalized condition/expression fingerprints rather than line numbers; duplicate sites are counted.
+New checks fail, and removed checks require regeneration.
+
+Move the language-specific operation into the existing language-owned data row or policy hook
+instead of adding an identity wrapper, singleton-language flag, or baseline entry. After removing
+sites, run `node scripts/language-check-inventory.mjs --write-baseline`; regeneration refuses
+additions to an existing baseline. See the [migration plan](docs/plans/2026-11-24-language-checks-to-hooks.md)
+for the narrow format, registry, and target-file grammar-safety exemptions.
+
 ## Change records
 
 User-visible changes add one uniquely named Markdown file under `changes/unreleased/`, not an

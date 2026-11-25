@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +100,17 @@ const boundarySites = new Set([
   'src/util/resolution/terraform.ts::entries .filter((entry) => entry.isFile() || entry.isSymbolicLink()) .map((entry callback::supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "terraform"',
   "src/terraform/resolution.ts::isTerraformFile::supportForFileWithoutHeaderSample(file, index.languageExtensions)?.id === TERRAFORM_LANGUAGE_ID",
   "src/terraform/resolution.ts::computeFacts::parsed.sup.id !== TERRAFORM_LANGUAGE_ID",
+]);
+// Exact target-grammar guards relocated into language-owned operations (plan exemption 4).
+const parserSafetySites = new Set([
+  'src/indexer/member-lookup-policies/cpp-receiver.ts::cppOutOfLineOwnerPath::support.id !== "cpp"',
+  'src/indexer/member-lookup-policies/cpp-receiver.ts::cppOutOfLineMemberName::sup.id !== "cpp"',
+  'src/indexer/member-lookup-policies/cpp-receiver.ts::cppOutOfLineMemberDeclarationNode::sup.id !== "cpp"',
+  'src/indexer/member-lookup-policies/csharp-owner.ts::parsedContextForIdentity::sup.id !== "csharp"',
+  'src/indexer/member-lookup-policies/csharp-owner.ts::csharpPartialExportIdentity::languageId !== "csharp"',
+  'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::retained?.sup?.id === "csharp"',
+  'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::sup.id !== "csharp"',
+  'src/util/resolution/namespace-specifiers.ts::acceptsFile::supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp"',
 ]);
 const ownerFiles = {
   A: [
@@ -240,6 +252,55 @@ function frame(n, sf) {
     p = q;
   }
   return { kind: "expression", condition: short(n.getText(sf)), whenTrue: "evaluate expression", whenFalse: "" };
+}
+// Token normalization drops trivia without truncating long conditions or changing string contents.
+function normalizedExpression(node, source) {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, node.getText(source));
+  const tokens = [];
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const text =
+      token === ts.SyntaxKind.StringLiteral ? JSON.stringify(scanner.getTokenValue()) : scanner.getTokenText();
+    tokens.push(text);
+  }
+  return tokens.join(" ");
+}
+
+function baselineIdentity(node, source) {
+  const scope = [];
+  let condition = node;
+  let foundCondition = false;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (ts.isFunctionLike(parent)) {
+      const namedParent = parent.parent;
+      if (parent.name) scope.unshift(normalizedExpression(parent.name, source));
+      else if (
+        ts.isVariableDeclaration(namedParent) ||
+        ts.isPropertyAssignment(namedParent) ||
+        ts.isPropertyDeclaration(namedParent)
+      ) {
+        scope.unshift(normalizedExpression(namedParent.name, source));
+      } else scope.unshift("<anonymous>");
+      // A containing function's return/initializer is not this function's condition.
+      foundCondition = true;
+    }
+    if (foundCondition) continue;
+    let candidate;
+    if (ts.isIfStatement(parent) || ts.isConditionalExpression(parent)) {
+      candidate = ts.isIfStatement(parent) ? parent.expression : parent.condition;
+      if (node.pos < candidate.pos || node.end > candidate.end) continue;
+    } else if (ts.isReturnStatement(parent)) candidate = parent.expression;
+    else if (ts.isVariableDeclaration(parent)) candidate = parent.initializer;
+    else if (ts.isSwitchStatement(parent)) candidate = parent.expression;
+    if (candidate) {
+      condition = candidate;
+      foundCondition = true;
+    }
+  }
+  return {
+    function: scope.join("::") || "<module>",
+    condition: normalizedExpression(condition, source),
+    expression: normalizedExpression(node, source),
+  };
 }
 
 function assign(x) {
@@ -441,16 +502,21 @@ function assign(x) {
 
 function cliOptions(argv) {
   let root = defaultRoot;
-  let summary = false;
+  let mode = "inventory";
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--summary") summary = true;
-    else if (argv[i] === "--root" && argv[i + 1]) root = path.resolve(argv[++i]);
+    if (["--summary", "--check", "--write-baseline"].includes(argv[i])) {
+      if (mode !== "inventory") throw new Error("Choose only one of --summary, --check, or --write-baseline.");
+      mode = argv[i].slice(2);
+    } else if (argv[i] === "--root" && argv[i + 1]) root = path.resolve(argv[++i]);
     else if (argv[i] === "--help") {
-      console.log("Usage: node scripts/language-check-inventory.mjs [--root <checkout>] [--summary]");
+      console.log(
+        "Usage: node scripts/language-check-inventory.mjs [--root <checkout>] [--summary | --check | --write-baseline]\n" +
+          "--check rejects new sites and stale baseline entries; --write-baseline removes retired sites only.",
+      );
       process.exit(0);
     } else throw new Error("Unknown or incomplete option: " + argv[i]);
   }
-  return { root, summary };
+  return { root, mode };
 }
 
 function registeredLanguageIds(files) {
@@ -700,6 +766,11 @@ function classify(site) {
     category = "central-family-helper";
     destination = "Central ECMAScript family registry filtered through registered language IDs.";
   }
+  if (parserSafetySites.has(key)) {
+    status = "exempt";
+    category = "language-policy-boundary";
+    destination = "Exact target-file grammar safety check inside a language-owned helper (plan exemption 4).";
+  }
   if (status === "UNCLASSIFIED") {
     status = "move";
     category = "needs-classification";
@@ -765,6 +836,7 @@ function generate(root) {
         function: nearestFn(node, source),
         ...frame(node, source),
         dynamicMembership,
+        baselineIdentity: baselineIdentity(node, source),
       };
       sites.push(classify(site));
     }
@@ -858,11 +930,96 @@ function generate(root) {
   }
   return { schemaVersion: 1, sourceRoot: "src", counts, categories, slices, sites };
 }
+const regenerateCommand = "node scripts/language-check-inventory.mjs --write-baseline";
+
+function baselineSites(inventory) {
+  const entries = new Map();
+  for (const site of inventory.sites) {
+    if (site.status === "exempt") continue;
+    const identity = site.baselineIdentity;
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify([site.syntax, identity.function, identity.condition, identity.expression]))
+      .digest("hex");
+    const key = site.file + "::" + fingerprint;
+    const existing = entries.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.locations.push(site.line);
+    } else {
+      entries.set(key, { file: site.file, fingerprint, ...identity, count: 1, locations: [site.line] });
+    }
+  }
+  return [...entries.values()].sort((left, right) => {
+    const a = left.file + "::" + left.fingerprint;
+    const b = right.file + "::" + right.fingerprint;
+    return a < b ? -1 : Number(a > b);
+  });
+}
+
+function readBaseline(file) {
+  if (!fs.existsSync(file)) return undefined;
+  const baseline = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (baseline.schemaVersion !== 1 || !Array.isArray(baseline.sites))
+    throw new Error("Invalid language-check baseline.");
+  const keys = new Set();
+  for (const site of baseline.sites) {
+    const key = site.file + "::" + site.fingerprint;
+    const validCount = Number.isSafeInteger(site.count) && site.count > 0;
+    if (typeof site.file !== "string" || !/^[a-f0-9]{64}$/.test(site.fingerprint) || !validCount || keys.has(key)) {
+      throw new Error("Invalid or duplicate language-check baseline site.");
+    }
+    keys.add(key);
+  }
+  return baseline.sites;
+}
+
+function checkBaseline(root, inventory, write) {
+  const file = path.join(root, "scripts/language-check-baseline.json");
+  const current = baselineSites(inventory);
+  const baseline = readBaseline(file);
+  if (!baseline && !write) throw new Error("Missing language-check baseline. Run: " + regenerateCommand);
+  const previous = new Map((baseline ?? []).map((site) => [site.file + "::" + site.fingerprint, site]));
+  const additions = [];
+  const removals = [];
+  for (const site of current) {
+    const key = site.file + "::" + site.fingerprint;
+    const oldCount = previous.get(key)?.count ?? 0;
+    if (baseline && site.count > oldCount) {
+      additions.push(
+        `${site.file}:${site.locations.join(",")} (${site.function}): ${site.condition} [${site.count - oldCount} new site(s)]`,
+      );
+    }
+    if (site.count < oldCount) removals.push(`${site.file} (${site.function}): ${site.condition}`);
+    previous.delete(key);
+  }
+  for (const site of previous.values()) removals.push(`${site.file} (${site.function}): ${site.condition}`);
+  if (additions.length) {
+    throw new Error(
+      "New non-exempt inline language checks:\n" +
+        additions.join("\n") +
+        "\nMove the language-specific operation to its language-owned data or policy; do not baseline new checks.",
+    );
+  }
+  if (write) {
+    const sites = current.map(({ locations: _locations, ...site }) => site);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, sites }, null, 2) + "\n");
+    console.log(`Wrote language-check baseline: ${inventory.counts.move} sites, ${sites.length} fingerprints.`);
+  } else if (removals.length) {
+    throw new Error(
+      "Retired language-check baseline entries:\n" + removals.join("\n") + "\nRegenerate with: " + regenerateCommand,
+    );
+  } else {
+    console.log(`Language-check baseline matches: ${inventory.counts.move} sites, ${current.length} fingerprints.`);
+  }
+}
 
 try {
   const options = cliOptions(process.argv.slice(2));
   const result = generate(options.root);
-  if (options.summary) {
+  if (options.mode === "check" || options.mode === "write-baseline") {
+    checkBaseline(options.root, result, options.mode === "write-baseline");
+  } else if (options.mode === "summary") {
     const { counts, categories, slices } = result;
     console.log(JSON.stringify({ counts, categories, slices }, null, 2));
   } else console.log(JSON.stringify(result, null, 2));
