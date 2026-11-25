@@ -1,0 +1,15 @@
+addon.node: file format elf64-x86-64
+Disassembly of section .text:
+0000000000001000 <ts_lexer_init>:
+    1000:       vinserti128 $0x1, %xmm1, %ymm0, %ymm0
+    1006:       vmovdqu %ymm0, (%rax)
+    100a:       retq
+0000000000001010 <tree_sitter_kotlin_external_scanner_scan>:
+    1010:       vpaddd %xmm0, %xmm1, %xmm0
+    1014:       {vex}	vpdpbusd	%ymm2, %ymm1, %ymm0
+    1019:       retq
+0000000000001020 <_ts_parser_new>:
+    1020:       vmovdqu64 %zmm0, (%rax)
+    1026:       kmovw %eax, %k1
+    102a:       vzeroupper
+    102d:       retq

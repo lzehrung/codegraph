@@ -104,6 +104,12 @@ The package smoke runner installs local candidate tarballs into a fresh temporar
 
 Linux musl rows execute inside matching-architecture Alpine containers.
 
+### Native CPU baseline
+
+Release and source CI run `node scripts/check-native-cpu-baseline.mjs --addon <addon> --build-dir <cargo-build-directory>` with Rust's `llvm-tools-preview`. The guard rejects non-baseline instructions, undecodable C/C++ code, and IR/LTO; it skips only validated COFF short imports, proven COFF jump-table data, and Mach-O data directives. Runtime-dispatched Rust SIMD stays outside the C-only check. PR CI also runs parse/query smokes under SandyBridge emulation.
+
+A native addon release is required to ship CPU-baseline fixes; rebuilding only the CLI or repackaging an existing addon does not replace its machine code.
+
 ### Native certification classes
 
 - Runtime: `win32-x64-msvc`, `linux-x64-gnu`, `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`, `darwin-x64`, and `darwin-arm64`.

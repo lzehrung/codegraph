@@ -1,0 +1,24 @@
+baseline.o: file format elf64-x86-64
+Disassembly of section .text:
+0000000000001000 <scanner_helper>:
+    1000: movdqu %xmm0, (%rax)
+    1001: pshufd $1, %xmm1, %xmm0
+    1002: cvtsi2sdq %rdx, %xmm0
+    1003: cmpl %edx, %eax
+    1004: setne %al
+    1005: cmovneq %rdx, %rax
+    1006: bsfq %rdx, %rax
+    1007: bsrq %rdx, %rax
+    1008: cltq
+    1009: rep stosq %rax, %es:(%rdi)
+    100a: data16 cs nopw (%rax)
+    100b: fldl (%rax)
+    100c: fstpt (%rax)
+    100d: endbr64
+    100e: lock
+    100f: xaddl %eax, (%rcx)
+    1010: movzbl (%rdx), %eax
+    1011: movslq %ecx, %rax
+    1012: cmpltsd %xmm1, %xmm0
+    1013: jne 0x1000 <scanner_helper>
+    1014: retq

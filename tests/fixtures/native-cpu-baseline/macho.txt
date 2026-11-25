@@ -1,0 +1,15 @@
+addon.node:
+(__TEXT,__text) section
+_ts_lexer_init:
+    1000: movdqu %xmm0, (%rax)
+    1004: retq
+_ts_lex_keywords:
+    1010: .byte 0x62 #bad opcode
+    1011: .long 0xfffff1ff
+    1015: retq
+__RNv_memchr_arch_x86_64_avx2:
+    1020: vpbroadcastb %xmm0, %ymm0
+    1025: retq
+_tree_sitter_cpp_external_scanner_scan:
+    1030: vpxor %xmm0, %xmm0, %xmm0
+    1034: retq

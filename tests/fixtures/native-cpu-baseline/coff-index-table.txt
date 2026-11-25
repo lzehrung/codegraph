@@ -1,0 +1,31 @@
+member.o: file format coff-x86-64
+Disassembly of section .text$mn:
+0000000000000000 <helper>:
+     d35: cmpl $0x53, %ecx
+     d38: ja 0xdc9 <$LN49>
+     d3e: movslq %ecx, %rax
+     d41: movzbl (%r9,%rax), %eax
+     d4a: movl (%r9,%rax,4), %ecx
+     d52: addq %r9, %rcx
+     d55: jmpq *%rcx
+0000000000000d57 <$LN43>:
+     d57: retq
+0000000000000d6a <$LN44>:
+     d6a: retq
+0000000000000d7d <$LN45>:
+     d7d: retq
+0000000000000d90 <$LN46>:
+     d90: retq
+0000000000000da3 <$LN47>:
+     da3: retq
+0000000000000db6 <$LN48>:
+     db6: retq
+0000000000000dc9 <$LN49>:
+     dc9: retq
+0000000000000e60 <$LN309>:
+     e60: <unknown>
+     e78: <unknown>
+0000000000000e7c <$LN308>:
+     e7c: addb %al, (%rcx)
+     e82: <unknown>
+     ecf: <unknown>

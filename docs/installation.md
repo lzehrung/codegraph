@@ -6,6 +6,7 @@ Install `@lzehrung/codegraph` for the CLI, MCP server, viewer, and agent-client 
 
 - npm and source installs require Node.js 22.16 or newer. Published installs need neither Rust nor a separate native-runtime step. Disk cache uses the Node.js standard-library `node:sqlite` module; builds below 22.16 may load it but omit statement APIs Codegraph needs, and those runs disable disk cache after one warning.
 - `@lzehrung/codegraph-native` is a required dependency. A compatible native artifact is required for analysis; if it cannot load, Codegraph returns an error instead of switching to reduced mode. Run `codegraph doctor` to inspect the installed runtime; it exits non-zero if the addon cannot load. See [native runtime](./cli.md#native-runtime).
+- Native x64 addons use the x86-64/SSE2 baseline; AVX and AVX2 are not required. Node.js can impose a higher CPU baseline.
 - Standalone archives bundle Node.js and support Windows, macOS, and glibc Linux on x64 and ARM64. Use npm or a source checkout on musl Linux. Windows ARM64 is structurally checked but not runtime-tested on matching hardware.
 
 ## Install from public npm (recommended)
@@ -67,6 +68,18 @@ node ./dist/cli.js doctor
 Run checkout commands through `node ./dist/cli.js`. `npm run build` rebuilds `dist/` and builds the native workspace when Cargo is available; run `npm run build:native` when the native addon must build successfully. To use the global `codegraph` command instead, run `npm install -g .` after the build.
 
 Building the native addon needs Rust 1.90 or newer, which the Tree-sitter 0.27 runtime requires; run `rustup update stable` when the build reports a crate that needs a newer `rustc`. It also needs Git access to `github.com/tree-sitter/tree-sitter-cpp` for the pinned C++ grammar and to `github.com/lzehrung/tree-sitter-kotlin` and `github.com/lzehrung/tree-sitter-typescript` for the pinned Kotlin and TypeScript grammar forks. A fully offline or registry-only Cargo environment cannot build the addon until those revisions ship in a release. Installing the published package is unaffected, because it ships prebuilt binaries.
+
+`.cargo/config.toml` supplies defaults, but existing target-specific `CFLAGS_<target>` and `CXXFLAGS_<target>` values override them. Retain `-march=x86-64` for GNU/macOS, `/arch:SSE2` for MSVC, or `-mcpu=baseline` for Zig musl when setting those variables.
+
+Cross-compiling the x64 musl addon also needs Zig 0.15.2, `cargo-zigbuild`, and the Rust `x86_64-unknown-linux-musl` target. Use Zig's explicit CPU flag, as the release build does; GCC's `-march=x86-64` spelling is not accepted by Zig:
+
+```bash
+CFLAGS_x86_64_unknown_linux_musl=-mcpu=baseline \
+CXXFLAGS_x86_64_unknown_linux_musl=-mcpu=baseline \
+node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release \
+  --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts \
+  --target x86_64-unknown-linux-musl -x
+```
 
 ## Configure agent clients
 
