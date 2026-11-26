@@ -577,7 +577,7 @@ describe("files inside submodules", () => {
     expect((await listChangedFileEntries(root, hidden)).files).toEqual([]);
     const complete = await listChangedFileEntries(root, { ...hidden, includeHiddenSubmoduleChanges: true });
     const gitlink = normalizePath(path.join(root, "vendor/lib"));
-    expect(complete).toEqual({ files: [gitlink], gitlinks: [gitlink] });
+    expect(complete).toEqual({ files: [gitlink], gitlinks: [gitlink], symlinks: [] });
     runGit(root, ["config", "diff.ignoreSubmodules", "all"]);
     await fsp.appendFile(path.join(submodule, "helper.ts"), "// edit\n");
     expect((await listChangedFileEntries(root, { ...hidden, includeHiddenSubmoduleChanges: true })).gitlinks).toEqual([

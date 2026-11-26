@@ -1,0 +1,1 @@
+Manifests record every symlink instead of a symlinked-directory hint that updates could not refresh, so older caches can hold stale or missing linked files.

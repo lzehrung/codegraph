@@ -1,4 +1,3 @@
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { getGitHeadOrEmptyTree, listChangedFileEntries, listFlaggedTrackedFiles } from "../util/git.js";
@@ -21,7 +20,7 @@ import {
   DEFAULT_PROJECT_PATTERNS,
   type ProjectDiscoveryContext,
 } from "../util/project-files.js";
-import { createRootPathMapper } from "../util/paths.js";
+import { createRootPathMapper, sortProjectFiles } from "../util/paths.js";
 import { languageExtensionPatterns } from "../languages.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 import { compareStrings } from "../util/strings.js";
@@ -69,7 +68,8 @@ export async function writeIndexManifestSnapshot(args: {
   manifestReport: ManifestReport | undefined;
   allowEmpty?: boolean;
   transientFiles?: string[];
-  symlinkDirectories?: string[];
+  /** Absolute paths of the symlinks, and of the missing candidates, a listing screened; see `IndexManifest.symlinks`. */
+  symlinks?: string[];
   declaredContainers?: Map<string, readonly string[]> | Record<string, readonly string[]>;
   jsonCandidates?: JsonCandidateRecord[];
   resolverEnvironmentFingerprint?: string;
@@ -134,8 +134,6 @@ export async function writeIndexManifestSnapshot(args: {
   const configHashResult =
     args.configHash ?? (await computeConfigHash(args.projectRoot, args.opts?.logLevel, args.discoveryContext));
   recordManifestTimingStep(args.timings, "config-hash", configHashStartedAt);
-  const projectRootMtimeMs =
-    args.symlinkDirectories !== undefined ? (await fsp.stat(args.projectRoot)).mtimeMs : undefined;
   const configHash = recordConfigHashResult(args.manifestReport, configHashResult, args.opts?.logLevel);
   const transformStartedAt = performance.now();
   const manifestData: IndexManifest = {
@@ -164,13 +162,8 @@ export async function writeIndexManifestSnapshot(args: {
     transientFiles: (args.transientFiles ?? []).map((file) =>
       path.relative(args.projectRoot, file).replace(/\\/g, "/"),
     ),
-    ...(args.symlinkDirectories !== undefined
-      ? {
-          symlinkDirectories: args.symlinkDirectories.map((directory) =>
-            cacheRelativePath(args.projectRoot, directory),
-          ),
-          ...(projectRootMtimeMs !== undefined ? { symlinkDirectoriesRootMtimeMs: projectRootMtimeMs } : {}),
-        }
+    ...(args.symlinks !== undefined
+      ? { symlinks: sortProjectFiles(new Set(args.symlinks.map(createRootPathMapper(args.projectRoot).toRelative))) }
       : {}),
   };
   recordManifestTimingStep(args.timings, "manifest-transform", transformStartedAt);

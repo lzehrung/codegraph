@@ -198,6 +198,7 @@ import {
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   collectGitManifestChangeCandidates,
+  findLinkedManifestEntries,
   findRespelledTrackedFiles,
   findStaleOrUnseenManifestFiles,
   listGitWorktreeSignals,
@@ -206,7 +207,10 @@ import {
   partitionTrackedManifestFiles,
   probePathExistence,
   reconcileGitHiddenChanges,
+  reconcileLinkedFiles,
+  reconcileListedFiles,
   type GitWorktreeSignals,
+  type LinkedFilesPlan,
 } from "./incremental-plan.js";
 import {
   declarationImportRecheck,
@@ -609,6 +613,8 @@ async function collectNoManifestDeletedFiles(args: {
   opts: BuildOptions | undefined;
   concurrency: number;
   includeNonDeclarationFiles: boolean;
+  /** Symlinks of a listing that holds the whole project: a row below one that the listing lacks is no longer a file. */
+  links: readonly string[];
 }): Promise<Array<{ file: string; languageId: string | undefined; mod: ModuleIndex | null }>> {
   const live = new Set(args.files.map(fileIdentityKey));
   const rows = new Map<string, string>();
@@ -633,12 +639,19 @@ async function collectNoManifestDeletedFiles(args: {
     candidates.push({ file, languageId });
   }
   if (!candidates.length) return [];
+  // A file a symlink no longer reaches can still exist: its link now points outside the root.
+  const unreached = new Set(
+    findLinkedManifestEntries(
+      candidates.map((candidate) => candidate.file),
+      args.links,
+    ),
+  );
   const existence = await probePathExistence(
-    candidates.map((candidate) => candidate.file),
+    candidates.filter((candidate) => !unreached.has(candidate.file)).map((candidate) => candidate.file),
     args.concurrency,
   );
   return candidates
-    .filter((candidate) => !existence.get(candidate.file))
+    .filter((candidate) => unreached.has(candidate.file) || !existence.get(candidate.file))
     .map((candidate) => ({
       file: candidate.file,
       languageId: candidate.languageId,
@@ -1196,7 +1209,7 @@ type BuildIndexHelperOptions = {
   reportDiscoveryProgress?: boolean;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   transientFiles?: string[];
-  symlinkDirectories?: string[];
+  symlinks?: string[];
   confineReads?: boolean;
   configHash?: { hash: string; error?: string };
   discoveryContext?: ProjectDiscoveryContext;
@@ -1487,6 +1500,8 @@ async function collectStaleCachedModules(args: {
   loadMatchPathForFile: (file: string) => Promise<MatchPathFn | undefined>;
   concurrency: number;
   canRetireDeletedFiles: boolean;
+  /** The symlinks of the listing and of the manifest: what a build that holds the whole project can retire below. */
+  links: readonly string[];
   recoverJsonFiles: ReadonlySet<string>;
   confinedRoot?: string | undefined;
   trustedSources?: ReadonlyMap<string, string> | undefined;
@@ -1501,12 +1516,21 @@ async function collectStaleCachedModules(args: {
         opts: args.opts,
         concurrency: args.concurrency,
         includeNonDeclarationFiles: args.canRetireDeletedFiles,
+        links: args.canRetireDeletedFiles ? args.links : [],
       });
   const deletedFiles = deletedRows.map(({ file }) => file);
   if (!cachedModules.size) return { stale: new Set<string>(), deletedFiles };
   const stale = await cachedModulesWithMissingTargets(cachedModules, args.concurrency, args.recoverJsonFiles);
   for (const [file, { mod }] of cachedModules) {
     if (mod.importLookupIncomplete) stale.add(file);
+  }
+  // An importer resolved a file a symlink no longer reaches: its target still exists, so no probe finds it missing.
+  if (deletedFiles.length) {
+    const retiredKeys = new Set(deletedFiles.map(fileIdentityKey));
+    for (const [file, { mod }] of cachedModules) {
+      const targets = cachedModuleTargets(mod, args.recoverJsonFiles.has(file));
+      if (targets.some((target) => retiredKeys.has(fileIdentityKey(target)))) stale.add(file);
+    }
   }
   const resolvesFromDeclarations = (file: string): boolean =>
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
@@ -1570,8 +1594,15 @@ async function collectStaleCachedModules(args: {
       declaredContainerNamesChanged(manifestDeclaredContainerIndex(args.manifest), nextDeclaredContainers),
     );
     const missingFromBuild = Object.keys(manifestFiles).filter((file) => !currentKeys.has(fileIdentityKey(file)));
-    const existence = await probePathExistence(missingFromBuild, args.concurrency);
-    const deleted = new Set(missingFromBuild.filter((file) => !existence.get(file)));
+    // A file a symlink no longer reaches can still exist: its link now points outside the root.
+    const unreached = new Set(
+      args.canRetireDeletedFiles ? findLinkedManifestEntries(missingFromBuild, args.links) : [],
+    );
+    const existence = await probePathExistence(
+      missingFromBuild.filter((file) => !unreached.has(file)),
+      args.concurrency,
+    );
+    const deleted = new Set(missingFromBuild.filter((file) => unreached.has(file) || !existence.get(file)));
     for (const file of [
       ...changed,
       ...collectDeletedTrackedFileDependents(manifestFiles, deleted),
@@ -2270,6 +2301,7 @@ async function buildIndexFromFileListInProbeCache(
         loadMatchPathForFile,
         concurrency: conc,
         canRetireDeletedFiles,
+        links: [...(manifest?.symlinks ?? []), ...(helperOpts?.symlinks ?? [])],
         recoverJsonFiles,
         ...(confinedRoot ? { confinedRoot, trustedSources } : {}),
       });
@@ -2686,9 +2718,7 @@ async function buildIndexFromFileListInProbeCache(
             ...(helperOpts?.configHash ? { configHash: helperOpts.configHash } : {}),
             ...(helperOpts?.discoveryContext ? { discoveryContext: helperOpts.discoveryContext } : {}),
             ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
-            ...(helperOpts?.symlinkDirectories !== undefined
-              ? { symlinkDirectories: helperOpts.symlinkDirectories }
-              : {}),
+            ...(helperOpts?.symlinks !== undefined ? { symlinks: helperOpts.symlinks } : {}),
           }),
       });
     }
@@ -2775,29 +2805,26 @@ async function buildProjectIndexWithManifestOptions(
   await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
-    // With disk caching enabled, reuse the previous full scan's symlinked-directory
-    // list so the file-discovery and project-file walks below can skip their own
-    // full-tree symlink probe. Off and memory modes never read or write this disk
-    // manifest, keeping read-only builds from mutating the project root. A missing or
-    // unusable manifest falls back to probing once.
-    // The manifest records the project-root directory mtime alongside symlink hints. A changed
-    // root mtime triggers the cheap full-tree probe, while strict modes always probe.
-    const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
-    const symlinkHintManifest =
-      !helperOpts?.ignoreExistingManifest && !wantsMaxSymlinkCorrectness && useDiskCache
+    // A warm disk project is checked quietly, and its manifest records the symlinks of an earlier listing. Strict and
+    // verifying builds, and builds without such a manifest, announce discovery.
+    const wantsMaxCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
+    const warmManifest =
+      !helperOpts?.ignoreExistingManifest && !wantsMaxCorrectness && useDiskCache
         ? await loadManifest(projectRoot, opts)
         : null;
-    const rootMtime = symlinkHintManifest ? (await fsp.stat(projectRoot)).mtimeMs : undefined;
-    const symlinkHintIsFresh =
-      symlinkHintManifest?.symlinkDirectoriesRootMtimeMs !== undefined &&
-      rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs;
-    if (!helperOpts?.reportDiscoveryProgress && !symlinkHintIsFresh) {
+    if (!helperOpts?.reportDiscoveryProgress && warmManifest?.symlinks === undefined) {
       emitIndexCheckStart(opts, "Discovering source files");
     }
-    const knownSymlinkDirectories = symlinkHintIsFresh ? symlinkHintManifest?.symlinkDirectories : undefined;
-    let discoveredSymlinkDirectories = knownSymlinkDirectories;
+    // Every full listing screens the symlinks itself: a recorded list could not know of a link added or removed
+    // below the root. The directories it finds go to metadata discovery, which would otherwise screen them again,
+    // and the links to the manifest, for the updates that list changes without listing the project.
+    let discoveredSymlinkDirectories: string[] | undefined;
     const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {
       discoveredSymlinkDirectories = Array.from(directories);
+    };
+    let discoveredSymlinks: string[] | undefined;
+    const onSymlinksDiscovered = (links: readonly string[], missing: readonly string[], watched: readonly string[]) => {
+      discoveredSymlinks = [...links, ...missing, ...watched];
     };
     let discoveredGitCandidates: GitCandidateSet | null | undefined;
     const onGitCandidatesDiscovered = (candidates: GitCandidateSet | null) => {
@@ -2810,10 +2837,9 @@ async function buildProjectIndexWithManifestOptions(
     const onDiscoveryTiming = timings
       ? (step: { name: string; ms: number }) => recordBuildTimingStep(timings, step)
       : undefined;
-    // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
-    // sequentially rather than in Promise.all to avoid duplicate full-tree probes. The Git
-    // candidate callback below reuses that same listing so metadata discovery does not spawn
-    // Git a second time.
+    // listProjectFiles() and discoverProjectFiles() run sequentially rather than in Promise.all to avoid duplicate
+    // full-tree probes. The Git candidate callback below reuses that same listing so metadata discovery does not
+    // spawn Git a second time.
     if (helperOpts?.reportDiscoveryProgress) emitIndexCheckActivity(opts, "Discovering source files");
     const sourceDiscoveryStart = performance.now();
     const discoveredFiles = await listProjectFilesWithGitCandidates(
@@ -2822,8 +2848,8 @@ async function buildProjectIndexWithManifestOptions(
       {
         ...opts?.discovery,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
         onSymlinkDirectoriesDiscovered,
+        onSymlinksDiscovered,
         onGitCandidatesDiscovered,
         ...(onDiscoveryProgress ? { onDiscoveryProgress } : {}),
         ...(onDiscoveryTiming ? { onDiscoveryTiming } : {}),
@@ -2864,7 +2890,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(discoveryContext ? { discoveryContext } : {}),
       projectFiles,
       transientFiles,
-      ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
+      ...(discoveredSymlinks !== undefined ? { symlinks: discoveredSymlinks } : {}),
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -3274,6 +3300,8 @@ async function buildProjectIndexIncrementalInProbeCache(
     // need no rescan.
     let rediscoveredFiles: string[] = [];
     let discoveredGitCandidates: GitCandidateSet | null | undefined;
+    // What a full listing reaches through symlinks, which Git's changes do not show (see `reconcileLinkedFiles`).
+    let linked: LinkedFilesPlan | undefined;
     if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
         const reconciledUntrackedFiles = canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined;
@@ -3292,6 +3320,17 @@ async function buildProjectIndexIncrementalInProbeCache(
             collectGitManifestChangeCandidates(projectRoot, trackedEntries, discoveryContext, manifest),
           );
         }
+        linked = await measureSourceDiscovery(() =>
+          reconcileLinkedFiles({
+            projectRoot,
+            manifest,
+            trackedEntries,
+            opts,
+            context: discoveryContext,
+            gitSignals: true,
+            untrackedFiles,
+          }),
+        );
       } catch (error) {
         if (manifestReport) {
           manifestReport.reason = "gitUntrackedScanFailed";
@@ -3311,13 +3350,16 @@ async function buildProjectIndexIncrementalInProbeCache(
         });
       }
     } else if (!opts?.filesAreProjectScope) {
+      let rediscoveredSymlinks: string[] = [];
+      let rediscoveredWatched: string[] = [];
       rediscoveredFiles = await measureSourceDiscovery(() =>
         listProjectFilesWithGitCandidates(projectRoot, projectPatternsForLanguageExtensions(opts), {
           ...opts?.discovery,
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-          ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
-            ? { knownSymlinkDirectories: manifest.symlinkDirectories }
-            : {}),
+          onSymlinksDiscovered: (links, missing, watched) => {
+            rediscoveredSymlinks = [...links, ...missing];
+            rediscoveredWatched = [...watched];
+          },
           onGitCandidatesDiscovered: (candidates) => {
             discoveredGitCandidates = candidates;
           },
@@ -3330,7 +3372,34 @@ async function buildProjectIndexIncrementalInProbeCache(
           ...(discoveryContext ? { discoveryContext } : {}),
         }),
       );
+      linked = await measureSourceDiscovery(() =>
+        reconcileListedFiles({
+          projectRoot,
+          manifest,
+          trackedEntries,
+          opts,
+          context: discoveryContext,
+          gitAvailable,
+          listed: rediscoveredFiles,
+          links: rediscoveredSymlinks,
+          watched: rediscoveredWatched,
+        }),
+      );
     }
+    // A declared project scope lists the project before this build, so it does not rediscover it; its symlinks are
+    // still screened, to record them and to retire the files that no symlink reaches any more.
+    linked ??= await measureSourceDiscovery(() =>
+      reconcileLinkedFiles({
+        projectRoot,
+        manifest,
+        trackedEntries,
+        opts,
+        context: discoveryContext,
+        gitSignals: false,
+        untrackedFiles: [],
+      }),
+    );
+    const linkedPlan: LinkedFilesPlan = linked;
     manifestDiffFiles = [...new Set([...manifestDiffFiles, ...gitManifestCandidates])];
     const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
     // A case-only rename leaves the manifest key spelled the old way on a case-insensitive file system, where an
@@ -3364,7 +3433,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         rediscovered.has(file),
       ).retiredTrackedFiles;
     }
-    for (const file of retiredTrackedFiles) {
+    for (const file of [...retiredTrackedFiles, ...linkedPlan.retiredFiles]) {
       if (!trackedFiles.delete(file)) continue;
       deletedTrackedFiles.add(file);
       delete trackedEntries[file];
@@ -3393,6 +3462,8 @@ async function buildProjectIndexIncrementalInProbeCache(
       ...rediscoveredFiles,
     ];
     const candidateExistence = await probePathExistence(candidateFiles, buildConcurrency(opts));
+    // A file the listing reached through a symlink resolved when it was listed.
+    for (const file of linkedPlan.files) candidateExistence.set(file, true);
     const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
     // A requested file that a listing holds under another spelling is that listed file (`findListedSpellings`).
     const listedSpellings = isFileIdentityCaseInsensitive()
@@ -3401,6 +3472,7 @@ async function buildProjectIndexIncrementalInProbeCache(
             ...gitFiles.filter(existsInCandidateSnapshot),
             ...untrackedFiles.filter(existsInCandidateSnapshot),
             ...rediscoveredFiles.filter(existsInCandidateSnapshot),
+            ...linkedPlan.files,
             ...manifestDiffFiles.filter(existsInCandidateSnapshot),
             ...[...trackedFiles].filter((file) => !previousTransientFileSet.has(file)),
           ],
@@ -3439,6 +3511,7 @@ async function buildProjectIndexIncrementalInProbeCache(
         ...gitFiles.filter(existsInCandidateSnapshot),
         ...untrackedFiles.filter(existsInCandidateSnapshot),
         ...rediscoveredFiles.filter(existsInCandidateSnapshot),
+        ...linkedPlan.files,
       ]),
     );
     if (fileReport) fileReport.total = allFiles.size;
@@ -3468,7 +3541,7 @@ async function buildProjectIndexIncrementalInProbeCache(
             jsonCandidates: [],
             configHash: currentConfigHashResult,
             discoveryContext,
-            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+            symlinks: linkedPlan.links,
           }),
       });
       return {
@@ -3572,10 +3645,18 @@ async function buildProjectIndexIncrementalInProbeCache(
       buildConcurrency(opts),
     );
     const hasStaleOrUnseenUntrackedFile = !!staleUntrackedFiles.length;
+    // Git does not see a file reached through a symlink either: a changed target leaves no Git signal at its link.
+    const staleLinkedFiles = await findStaleOrUnseenManifestFiles(
+      linkedPlan.files,
+      trackedEntries,
+      buildConcurrency(opts),
+    );
+    const hasStaleOrUnseenLinkedFile = !!staleLinkedFiles.length;
     const canSkipFileValidation =
       gitAvailable &&
       !opts?.cacheStrict &&
       !hasStaleOrUnseenUntrackedFile &&
+      !hasStaleOrUnseenLinkedFile &&
       !additionalFiles.length &&
       !gitChangeCandidates.size;
     if (canSkipFileValidation) {
@@ -4201,7 +4282,7 @@ async function buildProjectIndexIncrementalInProbeCache(
             jsonCandidates,
             configHash: currentConfigHashResult,
             discoveryContext,
-            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+            symlinks: linkedPlan.links,
           }),
       });
       const index = await finalizeProjectIndex({

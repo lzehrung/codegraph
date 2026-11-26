@@ -6,6 +6,7 @@ import picomatch from "picomatch";
 import { performance } from "node:perf_hooks";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { compareStrings, stringifyUnknown } from "./strings.js";
+import { isMissingPathError } from "./errors.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, sortProjectFiles } from "./paths.js";
 import { isRelativePathInside, matchesDiscoveryGlob } from "./discovery-path.js";
 
@@ -201,6 +202,17 @@ function emitDiscoveryTiming(
 type InternalProjectFileDiscoveryOptions = ProjectFileDiscoveryOptions &
   DiscoveryWorkCallbacks & {
     onGitCandidatesDiscovered?: (candidates: GitCandidateSet | null) => void;
+    /**
+     * Receives each screened symlink, then the screened paths where a symlink may return: those with nothing at them
+     * (`missing`) and those that hold a directory or could not be read (`watched`).
+     */
+    onSymlinksDiscovered?: (links: readonly string[], missing: readonly string[], watched: readonly string[]) => void;
+    /**
+     * List only what a full listing reaches through symlinks: the files below each safe symlinked directory and the
+     * symlinks that are files themselves. `candidates` names the paths to screen; without it, the paths a full listing
+     * screens.
+     */
+    linkedOnly?: { candidates?: readonly string[] };
     discoveryContext?: ProjectDiscoveryContext;
   };
 
@@ -232,6 +244,7 @@ type SafeSymlinkDirectoryCrawlOptions = {
   candidatePaths?: readonly string[];
   resolvedSafeSymlinkDirectories?: readonly string[];
   onSymlinkDirectoriesDiscovered?: (directories: readonly string[], mode: SymlinkProbeMode) => void;
+  onSymlinksDiscovered?: (links: readonly string[], missing: readonly string[], watched: readonly string[]) => void;
   onPathCheckProgress?: (current: number, total: number) => void;
   globReaddir?: DirentReaddir;
 };
@@ -319,7 +332,7 @@ for (const definition of PROJECT_FILE_DEFINITIONS) {
  * do not record 120000 still need this name heuristic: no extension, a bundle
  * directory marker such as `App.xcodeproj`, or a literal directory name such as `.idea`.
  */
-function couldBeDirectorySymlink(filePath: string): boolean {
+export function couldBeDirectorySymlink(filePath: string): boolean {
   const basename = path.posix.basename(normalizePath(filePath));
   if (DIRECTORY_METADATA_BASENAMES.has(basename.toLowerCase())) return true;
   const extension = path.posix.extname(basename);
@@ -511,7 +524,8 @@ async function readDirectoryWithFileTypes(
   state: DiscoveryContext | undefined,
 ): Promise<fs.Dirent[]> {
   if (!state) return fsp.readdir(directory, { withFileTypes: true });
-  const key = fileIdentityKey(directory);
+  // A crawl names a directory with a trailing separator and a walk without one: both read the same listing.
+  const key = fileIdentityKey(directory.replace(/[\\/]+$/, ""));
   const cached = state.readdirCache.get(key);
   if (cached) return cached;
   const pending = fsp.readdir(directory, { withFileTypes: true });
@@ -1173,8 +1187,15 @@ async function listProjectFilesInternal(
     const { gitCandidates, gitignoreIndex } = await loadDiscoveryIgnoreState(root, realRoot, options, discovery);
     // Git returns a candidate set, not a filtered result: the pattern, include,
     // default-ignore, and gitignore checks below still decide what is indexable.
+    const linkedOnly = options?.linkedOnly;
+    // The paths whose symlinks are screened: the caller's for a linked-only listing, otherwise Git's candidates.
+    const screenedPaths = linkedOnly?.candidates ?? gitCandidates?.symlinkCandidatePaths;
     let files: string[];
-    if (gitCandidates) {
+    if (linkedOnly) {
+      // A symlink that is a file is an ordinary candidate of a Git listing, so it meets the filters below as in a full
+      // listing; a filesystem scan lists no file symlink.
+      files = gitCandidates ? [...(screenedPaths ?? [])] : [];
+    } else if (gitCandidates) {
       files = gitCandidates.files;
     } else {
       emitDiscoveryActivity(options?.onDiscoveryProgress, "Scanning project files");
@@ -1198,7 +1219,7 @@ async function listProjectFilesInternal(
     // Running the scan anyway would also re-add paths Git excluded through its own
     // exclude files, contradicting the rule that Git's ignores still win here.
     const includedOverrideFiles =
-      includeGlobs.length && !gitCandidates
+      includeGlobs.length && !gitCandidates && !linkedOnly
         ? await globPaths(translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, includeGlobs), {
             cwd: root,
             dot: true,
@@ -1217,13 +1238,14 @@ async function listProjectFilesInternal(
       : undefined;
     const symlinkOptions = {
       globRoot,
-      ...(gitCandidates ? { candidatePaths: gitCandidates.symlinkCandidatePaths } : {}),
-      ...(options?.knownSymlinkDirectories !== undefined
+      ...(screenedPaths ? { candidatePaths: screenedPaths } : {}),
+      ...(options?.knownSymlinkDirectories !== undefined && !linkedOnly
         ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
         : {}),
       ...(options?.onSymlinkDirectoriesDiscovered
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
+      ...(options?.onSymlinksDiscovered ? { onSymlinksDiscovered: options.onSymlinksDiscovered } : {}),
       ...(reportSourceSymlinkChecks ? { onPathCheckProgress: reportSourceSymlinkChecks } : {}),
       ...globReaddirField(discovery),
     };
@@ -1374,42 +1396,71 @@ export async function filterDiscoveredProjectFileCandidates(
     .map(({ path: filePath }) => filePath);
 }
 
+type SymlinkScreening = "outside" | "missing" | "unreadable" | "not-a-link" | "directory" | "link" | "safe-directory";
+
 /**
- * Whether `linkPath` is a directory symlink that is safe to crawl for project files.
+ * What `linkPath` is: a symlink, and when it is, whether it is a directory symlink that is safe to crawl for project
+ * files. A link whose target is missing, is not a directory, or resolves outside the root is a `link` that is not
+ * safe: it can become safe when its target changes, which no Git listing reports.
  *
  * `lstat` runs before `realpath` and `stat` so a candidate that is not a symlink costs
  * one syscall rather than three. That matters for callers screening a broad candidate
  * list, where nearly every entry is an ordinary file, and costs nothing for callers
  * passing entries a walk already identified as links.
  */
-async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
+async function screenSymlinkCandidate(root: string, linkPath: string, realRoot: string): Promise<SymlinkScreening> {
+  if (!isRelativePathInside(path.relative(root, linkPath))) return "outside";
+  let stats: fs.Stats;
   try {
-    if (!isRelativePathInside(path.relative(root, linkPath))) return false;
-    if (!(await fsp.lstat(linkPath)).isSymbolicLink()) return false;
+    stats = await fsp.lstat(linkPath);
+  } catch (error) {
+    // A path that cannot be read is neither a link nor gone, so nothing below it is retired.
+    return isMissingPathError(error) ? "missing" : "unreadable";
+  }
+  if (!stats.isSymbolicLink()) return stats.isDirectory() ? "directory" : "not-a-link";
+  try {
     const [realPath, targetStats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
-    if (!targetStats.isDirectory()) return false;
-    if (!isFilePathWithinRoot(realRoot, realPath)) return false;
-    return normalizePath(realPath) !== normalizePath(realRoot);
+    if (!targetStats.isDirectory()) return "link";
+    if (!isFilePathWithinRoot(realRoot, realPath)) return "link";
+    return normalizePath(realPath) === normalizePath(realRoot) ? "link" : "safe-directory";
   } catch {
-    return false;
+    return "link";
   }
 }
 
-async function verifySafeSymlinkDirectories(
+type ScreenedSymlinks = {
+  /** The directory symlinks that are safe to crawl. */
+  safeDirectories: string[];
+  /** Every screened path that is a symlink, safe or not. */
+  links: string[];
+  /** Every screened path where nothing exists: a symlink that returns there is a link again. */
+  missing: string[];
+  /** Every screened path that holds a directory or could not be read: a symlink may return there. */
+  watched: string[];
+};
+
+async function screenSymlinkCandidates(
   root: string,
   realRoot: string,
   paths: readonly string[],
   onPathCheckProgress: ((current: number, total: number) => void) | undefined,
-): Promise<string[]> {
+): Promise<ScreenedSymlinks> {
   const reportPathCheck = createPathCheckProgressReporter(paths.length, onPathCheckProgress);
-  const verified = await mapLimitSemaphore(Array.from(paths), REALPATH_FILTER_CONCURRENCY, async (linkPath) => {
+  const screened = await mapLimitSemaphore(Array.from(paths), REALPATH_FILTER_CONCURRENCY, async (linkPath) => {
     try {
-      return (await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null;
+      return { linkPath, screening: await screenSymlinkCandidate(root, linkPath, realRoot) };
     } finally {
       reportPathCheck();
     }
   });
-  return verified.filter((entry): entry is string => entry !== null);
+  const pathsScreenedAs = (...screenings: SymlinkScreening[]): string[] =>
+    screened.filter(({ screening }) => screenings.includes(screening)).map(({ linkPath }) => linkPath);
+  return {
+    safeDirectories: pathsScreenedAs("safe-directory"),
+    links: pathsScreenedAs("link", "safe-directory"),
+    missing: pathsScreenedAs("missing"),
+    watched: pathsScreenedAs("directory", "unreadable"),
+  };
 }
 
 /**
@@ -1431,14 +1482,15 @@ async function resolveSafeSymlinkDirectories(
   options: SafeSymlinkDirectoryCrawlOptions,
 ): Promise<string[]> {
   if (options.knownSymlinkDirectories !== undefined) {
-    const resolved = await verifySafeSymlinkDirectories(
+    const resolved = await screenSymlinkCandidates(
       root,
       realRoot,
       Array.from(new Set(options.knownSymlinkDirectories)),
       options.onPathCheckProgress,
     );
-    options.onSymlinkDirectoriesDiscovered?.(resolved, "known");
-    return resolved;
+    options.onSymlinksDiscovered?.(resolved.links, resolved.missing, resolved.watched);
+    options.onSymlinkDirectoriesDiscovered?.(resolved.safeDirectories, "known");
+    return resolved.safeDirectories;
   }
   if (options.candidatePaths !== undefined) {
     const ignoreMatchers = ignore
@@ -1451,11 +1503,12 @@ async function resolveSafeSymlinkDirectories(
       if (ignoreMatchers.some((matcher) => matcher(relativePath))) return false;
       return true;
     });
-    const discovered = await verifySafeSymlinkDirectories(root, realRoot, candidatePaths, options.onPathCheckProgress);
-    options.onSymlinkDirectoriesDiscovered?.(discovered, "git-candidates");
-    return discovered;
+    const discovered = await screenSymlinkCandidates(root, realRoot, candidatePaths, options.onPathCheckProgress);
+    options.onSymlinksDiscovered?.(discovered.links, discovered.missing, discovered.watched);
+    options.onSymlinkDirectoriesDiscovered?.(discovered.safeDirectories, "git-candidates");
+    return discovered.safeDirectories;
   }
-  const discovered = await verifySafeSymlinkDirectories(
+  const discovered = await screenSymlinkCandidates(
     root,
     realRoot,
     await findSymbolicLinks(root, {
@@ -1464,8 +1517,9 @@ async function resolveSafeSymlinkDirectories(
     }),
     options.onPathCheckProgress,
   );
-  options.onSymlinkDirectoriesDiscovered?.(discovered, "filesystem");
-  return discovered;
+  options.onSymlinksDiscovered?.(discovered.links, discovered.missing, discovered.watched);
+  options.onSymlinkDirectoriesDiscovered?.(discovered.safeDirectories, "filesystem");
+  return discovered.safeDirectories;
 }
 
 async function listEntriesFromSafeSymlinkDirectories(

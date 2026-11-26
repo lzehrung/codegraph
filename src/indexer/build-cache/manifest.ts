@@ -151,14 +151,14 @@ export type IndexManifest = {
    */
   transientFiles?: string[];
   /**
-   * Symlinked directories discovered under the project root as of the last full scan.
-   * Absent on manifests written before this field existed, or whenever the set is not
-   * yet known; discovery then probes the tree once and backfills it on the next write.
-   * An empty array is meaningful (no symlinked directories) and lets discovery skip its
-   * second full-tree walk entirely.
+   * Symlinks screened under the project root by the last listing, stored project-relative, with the screened paths
+   * where nothing existed (a symlink that returns there is found again). An update keeps every path recorded before,
+   * because Git reports no change when a tracked link returns to what the last commit holds. Git lists neither the
+   * files below a symlinked directory nor a link whose target changes, so an update screens these paths again and lists
+   * what they reach as full discovery does. An empty array proves the project had none; absent (a build that did not
+   * list the project) is unknown, which an update settles by listing the project again.
    */
-  symlinkDirectories?: string[];
-  symlinkDirectoriesRootMtimeMs?: number;
+  symlinks?: string[];
 };
 
 export function transformManifestEntries(
@@ -296,24 +296,6 @@ function resolveRecordedRelativePaths(projectRoot: string, stored: unknown): str
   return resolved;
 }
 
-function resolveManifestSymlinkDirectories(
-  projectRoot: string,
-  storedProjectRoot: string,
-  directories: unknown,
-): string[] | undefined {
-  if (directories === undefined) return undefined;
-  if (!Array.isArray(directories)) return undefined;
-  const resolvedDirectories = new Set<string>();
-  for (const directory of directories) {
-    if (typeof directory !== "string") continue;
-    const storedDirectory = cacheAbsolutePath(storedProjectRoot, directory);
-    if (!isFilePathWithinRoot(storedProjectRoot, storedDirectory)) continue;
-    const relativeDirectory = cacheRelativePath(storedProjectRoot, storedDirectory);
-    resolvedDirectories.add(cacheAbsolutePath(projectRoot, relativeDirectory));
-  }
-  return [...resolvedDirectories];
-}
-
 /**
  * Re-anchor a stored declared-container index against the current project root. Entries whose
  * declaring files no longer fall under either root are dropped, which makes the next build treat
@@ -430,16 +412,14 @@ export async function loadManifest(
     const oldFiles = parsed.files ?? {};
     const relativeFiles =
       parsed.version === 3 ? transformManifestEntries(parsed.projectRoot, oldFiles, true) : oldFiles;
-    const symlinkDirectories = resolveManifestSymlinkDirectories(
-      projectRoot,
-      parsed.projectRoot,
-      parsed.symlinkDirectories,
-    );
+    // A recorded `symlinkDirectories` hint from an earlier version is not read, and its keys are not carried forward:
+    // only a root-level change refreshed it.
     const {
       declaredContainers: storedDeclaredContainers,
       gitDirtyFiles: storedGitDirtyFiles,
       gitDirtySubmodules: storedGitDirtySubmodules,
       gitFlaggedFiles: storedGitFlaggedFiles,
+      symlinks: storedSymlinks,
       ...parsedWithoutDerivedPaths
     } = parsed;
     // A recorded path list is usable only when every entry stays inside the project root.
@@ -451,6 +431,7 @@ export async function loadManifest(
     const gitDirtyFiles = sanitizeRecordedPaths(storedGitDirtyFiles);
     const gitDirtySubmodules = sanitizeRecordedPaths(storedGitDirtySubmodules);
     const gitFlaggedFiles = resolveRecordedRelativePaths(projectRoot, storedGitFlaggedFiles);
+    const symlinks = resolveRecordedRelativePaths(projectRoot, storedSymlinks);
     const declaredContainers = resolveManifestDeclaredContainers(
       projectRoot,
       parsed.projectRoot,
@@ -462,12 +443,14 @@ export async function loadManifest(
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       files: transformManifestEntries(projectRoot, relativeFiles, false),
       transientFiles: sanitizeManifestTransientFilesForRoot(projectRoot, parsed.projectRoot, parsed.transientFiles),
-      ...(symlinkDirectories !== undefined ? { symlinkDirectories } : {}),
+      ...(symlinks !== undefined ? { symlinks } : {}),
       ...(declaredContainers !== undefined ? { declaredContainers } : {}),
       ...(gitDirtyFiles !== undefined ? { gitDirtyFiles } : {}),
       ...(gitDirtySubmodules !== undefined ? { gitDirtySubmodules } : {}),
       ...(gitFlaggedFiles !== undefined ? { gitFlaggedFiles } : {}),
     };
+    Reflect.deleteProperty(migrated, "symlinkDirectories");
+    Reflect.deleteProperty(migrated, "symlinkDirectoriesRootMtimeMs");
     return migrated;
   } catch (error) {
     const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";

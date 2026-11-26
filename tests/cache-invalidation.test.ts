@@ -4446,7 +4446,7 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  it("persists discovered symlink directories in the manifest for reuse on the next full build", async () => {
+  it("records the symlinks a full build screened in the manifest", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-persist-");
     const packageDir = path.join(root, "packages", "core");
     const linkedPackage = path.join(root, "linked-core");
@@ -4463,10 +4463,10 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { cache: "disk" });
     const manifest = await readManifest(root);
 
-    expect(manifest.symlinkDirectories).toContain("linked-core");
+    expect(manifest.symlinks).toContain("linked-core");
   });
 
-  it("prunes stale symlink directory hints from the manifest after warm re-verification", async () => {
+  it("drops a removed symlink from the manifest record on the next build", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-prune-stale-");
     const packageDir = path.join(root, "packages", "core");
     const linkedPackage = path.join(root, "linked-core");
@@ -4481,28 +4481,26 @@ describe("Cache invalidation and strict hashing", () => {
     }
 
     await buildProjectIndex(root, { cache: "disk" });
-    const staleManifest = await readManifest(root);
-    expect(staleManifest.symlinkDirectories).toContain("linked-core");
+    const recordedManifest = await readManifest(root);
+    expect(recordedManifest.symlinks).toContain("linked-core");
 
     await fsp.rm(linkedPackage, { recursive: true, force: true });
     await buildProjectIndex(root, { cache: "disk" });
     const refreshedManifest = await readManifest(root);
 
-    expect(refreshedManifest.symlinkDirectories).toEqual([]);
+    expect(refreshedManifest.symlinks).toEqual([]);
   });
 
-  it("re-probes for symlinks under --cache-strict even when the manifest hint says none exist", async () => {
+  it("discovers a symlinked directory created after the manifest recorded none on a default full build", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-force-reprobe-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
 
     await buildProjectIndex(root, { cache: "disk" });
-    const staleManifest = await readManifest(root);
-    expect(staleManifest.symlinkDirectories).toEqual([]);
+    const recordedManifest = await readManifest(root);
+    expect(recordedManifest.symlinks).toEqual([]);
 
-    // A symlinked directory created after the "no symlinks" hint was recorded (e.g. an
-    // `npm link`) must still be discovered on the next full build when the user asks for
-    // maximum correctness, rather than being silently skipped because the stale hint
-    // disables probing entirely.
+    // A symlinked directory created after the "no symlinks" record was written (e.g. an `npm link`)
+    // must be discovered by the next full build whatever the options, not skipped because of the record.
     const packageDir = path.join(root, "packages", "core");
     const linkedPackage = path.join(root, "linked-core");
     await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
@@ -4514,13 +4512,13 @@ describe("Cache invalidation and strict hashing", () => {
       throw error;
     }
 
-    const rebuilt = await buildProjectIndex(root, { cache: "disk", cacheStrict: true });
+    const rebuilt = await buildProjectIndex(root, { cache: "disk" });
 
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
     const refreshedManifest = await readManifest(root);
-    expect(refreshedManifest.symlinkDirectories).toContain("linked-core");
+    expect(refreshedManifest.symlinks).toContain("linked-core");
   });
-  it("discovers a new in-root symlink directory on a default warm build", async () => {
+  it("ignores the symlinked-directory hint a manifest from an earlier version recorded", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-warm-discovery-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
     await buildProjectIndex(root, { cache: "disk" });
@@ -4535,42 +4533,48 @@ describe("Cache invalidation and strict hashing", () => {
       throw error;
     }
 
-    // Old manifests do not have a root-mtime freshness hint. They must trigger one
-    // full discovery instead of treating their possibly empty list as authoritative.
-    const legacyManifest = await readManifest(root);
-    delete legacyManifest.symlinkDirectoriesRootMtimeMs;
+    // An earlier version recorded `symlinkDirectories` with the project root's mtime and trusted the list while the
+    // mtime held. The record is not read: the rebuilt index holds the link, and the rewritten manifest no longer has it.
+    const legacyManifest = JSON.parse(await fsp.readFile(manifestPathFor(root), "utf8")) as Record<string, unknown>;
+    delete legacyManifest.symlinks;
+    legacyManifest.symlinkDirectories = [];
+    legacyManifest.symlinkDirectoriesRootMtimeMs = (await fsp.stat(root)).mtimeMs;
     await fsp.writeFile(manifestPathFor(root), JSON.stringify(legacyManifest, null, 2), "utf8");
 
     const rebuilt = await buildProjectIndex(root, { cache: "disk" });
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
+    const rewritten = JSON.parse(await fsp.readFile(manifestPathFor(root), "utf8")) as Record<string, unknown>;
+    expect(rewritten.symlinkDirectories).toBeUndefined();
+    expect(rewritten.symlinkDirectoriesRootMtimeMs).toBeUndefined();
+    expect(rewritten.symlinks).toEqual(["linked-core"]);
   });
 
-  it("persists an empty symlinkDirectories list for projects without symlinks", async () => {
+  it("records an empty symlink list for projects without symlinks", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-empty-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
 
     await buildProjectIndex(root, { cache: "disk" });
     const manifest = await readManifest(root);
 
-    expect(manifest.symlinkDirectories).toEqual([]);
+    expect(manifest.symlinks).toEqual([]);
   });
 
-  it("rebuilds successfully from a pre-existing manifest that predates the symlinkDirectories field", async () => {
+  it("rebuilds successfully from a pre-existing manifest that predates the symlinks field", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-migration-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
     await fsp.mkdir(path.join(root, ".codegraph", "cache", "index-v1"), { recursive: true });
     const oldSchemaManifest = createManifest(root);
-    expect("symlinkDirectories" in oldSchemaManifest).toBe(false);
+    expect("symlinks" in oldSchemaManifest).toBe(false);
     expect("transientFiles" in oldSchemaManifest).toBe(false);
     await fsp.writeFile(manifestPathFor(root), JSON.stringify(oldSchemaManifest, null, 2), "utf8");
 
     // graphOptions mismatch (missing on the fixture manifest) forces a full rebuild path,
-    // exercising exactly the branch that reads a possibly-absent symlinkDirectories hint.
+    // exercising exactly the branch that reads a possibly-absent symlink record.
     const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
     expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(root, "a.ts"))))).toBe(true);
 
     const backfilledManifest = await readManifest(root);
-    expect(backfilledManifest.symlinkDirectories).toEqual([]);
+    expect(backfilledManifest.symlinks).toEqual([]);
     expect(backfilledManifest.transientFiles).toEqual([]);
   });
 
@@ -4694,7 +4698,7 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
-  it("reuses symlink directory hints after moving a project tree", async () => {
+  it("reuses the recorded symlinks after moving a project tree", async () => {
     const sourceRoot = await mkTmpDir("dg-cache-move-symlink-source-");
     const movedRoot = `${sourceRoot}-moved`;
     const sourcePackage = path.join(sourceRoot, "packages", "core");
@@ -4711,7 +4715,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(sourceRoot, { cache: "disk", threads: 1 });
     const persisted = await readManifest(sourceRoot);
-    expect(persisted.symlinkDirectories).toEqual(["linked-core"]);
+    expect(persisted.symlinks).toEqual(["linked-core"]);
 
     await renameProjectTree(sourceRoot, movedRoot);
     const movedPackage = path.join(movedRoot, "packages", "core");
