@@ -1,0 +1,1 @@
+Ruby type-name calls keep instance methods of classes that may forward class calls, alias or define new as custom constructors, skip conditionally opened bodies, ignore top-level def self, and decline module_function edges beside own or private class methods.

@@ -8,7 +8,7 @@ import {
   rubyMethodNameMayReferTo,
   rubyReferenceFamilyUnproven,
   rubyTypeNameMayReach,
-  rubyTypeNameCalls,
+  rubyTypeNameCall,
   rubyUnplacedSelfCallMayReach,
 } from "../../util/ruby-tree.js";
 import {
@@ -49,38 +49,45 @@ const METHOD_ACCESS: MemberAccessRules = {
 
 /**
  * A call through a type's name (`Config.build`) runs the last class method of that name the type declares, as a later
- * `def` replaces an earlier one, or else its last instance method, which `module_function` or `extend self` may hand to
- * the type; a local variable of the type's body or of one of its methods is no member. A call in the same file that
- * runs while the type body loads sees only the definitions before it.
+ * `def` replaces an earlier one, or else its last instance method that something may hand to the type (`module_function`
+ * or `extend self` in a module); an instance method of a class runs only on its instances, so the type name reaches none.
+ * A local variable of the type's body or of one of its methods is no member. A call in the same file that runs while the
+ * type body loads sees only the definitions before it.
  */
 function typeNameMembers(
   candidates: readonly SymbolDef[],
   context: ParsedFileContext,
   sameFileUse: SyntaxNodeLike | undefined,
 ): readonly SymbolDef[] {
-  if (candidates.length < 2) return candidates;
+  const reachable: SymbolDef[] = [];
   let last: SymbolDef | undefined;
   let lastStart = -1;
   let lastClassMethod: SymbolDef | undefined;
   let lastClassMethodStart = -1;
   for (const candidate of candidates) {
-    if (candidate.kind !== SymbolKind.Function) continue;
+    if (candidate.kind !== SymbolKind.Function) {
+      reachable.push(candidate);
+      continue;
+    }
     const start = candidate.range.start.index;
     const end = candidate.range.end.index;
     if (start === undefined || end === undefined) return candidates;
     const declaration = context.tree.rootNode.descendantForIndex(start, end);
+    const call = rubyTypeNameCall(declaration);
+    if (call === "none") continue;
+    reachable.push(candidate);
     if (sameFileUse && rubyMethodIsPendingAt(declaration, sameFileUse)) continue;
     if (start > lastStart) {
       last = candidate;
       lastStart = start;
     }
-    if (start > lastClassMethodStart && rubyTypeNameCalls(declaration)) {
+    if (start > lastClassMethodStart && call === "class-method") {
       lastClassMethod = candidate;
       lastClassMethodStart = start;
     }
   }
   const selected = lastClassMethod ?? last;
-  return selected ? [selected] : candidates;
+  return selected ? [selected] : reachable;
 }
 
 export const rubyMemberLookupPolicy: MemberLookupPolicy = {

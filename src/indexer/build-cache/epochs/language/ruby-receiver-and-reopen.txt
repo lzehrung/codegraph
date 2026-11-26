@@ -1,0 +1,1 @@
+Ruby method visibility excludes sibling types, the member policy drops class instance methods from type-name calls, and the reference rules scan receiver calls of singleton defs.

@@ -1,0 +1,1 @@
+Ruby singleton defs on objects scan receiver calls, constructor results ignore class-method siblings and custom new, reopened bodies share ownership and redefinitions, type-name calls select among same-named methods without class instance methods, heritage reach is directed, and module_function calls record edges.

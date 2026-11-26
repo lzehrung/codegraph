@@ -87,6 +87,10 @@ import {
   rubyCallDependsOnSelf,
   rubyIsBareRead,
   rubyIsOperatorOnLocal,
+  rubyFileMayHandModuleMethods,
+  rubyModuleCallReachesInstanceMethod,
+  rubyDeclaredTypePath,
+  rubyModuleFunctionDeclaredAt,
   rubyNamesLocalVariable,
   rubyOtherFileMethodReaches,
 } from "../../util/ruby-tree.js";
@@ -98,6 +102,7 @@ import {
   type ReceiverAncestorEmbed,
   type ReceiverAncestryRelation,
 } from "../../util/member-access-tables.js";
+import { localExportsNamed } from "../../indexer/reference-query-index.js";
 import { resolveRustImportPath } from "../../util/resolution/rust.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
@@ -1171,6 +1176,51 @@ function recordRubyCall(
   return true;
 }
 
+/** The declaration a definition of the walked file names, read from that file's tree. */
+function sameFileDeclaration(context: EdgePassContext, def: SymbolDef): SyntaxNodeLike | null {
+  const start = def.range.start.index;
+  const end = def.range.end.index;
+  if (start === undefined || end === undefined) return null;
+  if (fileIdentityKey(def.file) !== fileIdentityKey(context.moduleEntry.file)) return null;
+  return context.tree.rootNode.descendantForIndex(start, end);
+}
+
+/** Whether another indexed file opens the constant path of the class or module declared at `typeName`. */
+function rubyTypeOpenedElsewhere(context: EdgePassContext, typeName: SyntaxNodeLike): boolean {
+  const path = rubyDeclaredTypePath(typeName);
+  if (path === null) return true;
+  const fileKey = fileIdentityKey(context.moduleEntry.file);
+  return localExportsNamed(context.index, path).some(({ module }) => fileIdentityKey(module.file) !== fileKey);
+}
+
+/**
+ * A call on a constant naming a module of this file whose body hands the module its own instance methods
+ * (`module_function`, `extend self`), and that declares no method of the module itself of that name (`Tools.calculate`),
+ * can only run an instance method, which the receiver lookup of the module's own methods misses. Navigation resolves the
+ * call after the walk, and it is recorded when the method found is one that module declares and hands to itself. A
+ * module that another file opens may get a method of its own of that name there, so its calls record none.
+ */
+function recordRubyModuleFunctionCall(
+  context: EdgePassContext,
+  access: ReceiverCallAccess,
+  fromId: string,
+): false | (() => Promise<void>) {
+  const receiver = access.receiver;
+  if (receiver.type !== "constant" || !rubyFileMayHandModuleMethods(context.tree.rootNode)) return false;
+  const owner = context.resolveIdentifier(sliceText(receiver, context.source), receiver);
+  const typeName = owner ? sameFileDeclaration(context, owner) : null;
+  const member = invokedMemberName(context.sup, access.property, context.source);
+  if (!typeName || !member || !rubyModuleCallReachesInstanceMethod(typeName, member)) return false;
+  if (rubyTypeOpenedElsewhere(context, typeName)) return false;
+  return async () => {
+    const target = await context.resolveMemberAccessTarget(access.property);
+    const declaration = target?.kind === SymbolKind.Function ? sameFileDeclaration(context, target) : null;
+    if (!target || !declaration || !rubyModuleFunctionDeclaredAt(typeName, declaration)) return;
+    const edge = await dottedCallEdge(context, target, access.accessNode);
+    if (edge) recordDefEdge(context, fromId, target, edge, access.property);
+  };
+}
+
 const fileFunctionNamesByContext = new WeakMap<EdgePassContext, ReadonlySet<string>>();
 
 /**
@@ -1334,6 +1384,7 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
       return !context.mayNameCallable(invokedMemberName(context.sup, access.property, context.source));
     },
     nodeVisitor: rubyNodeVisitor,
+    onReceiverCall: recordRubyModuleFunctionCall,
     onCall: recordRubyCall,
   },
   swift: {

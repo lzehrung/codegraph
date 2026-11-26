@@ -1672,6 +1672,37 @@ async function isTypeFileMemberExport(index: ProjectIndex, owner: SymbolDef, hit
   return !!ownerName && !!memberName && mayReach(ownerName, memberName);
 }
 
+/**
+ * The member the type `owner` names among several same-named functions of its file (`def Foo.name` beside another type's
+ * `def self.name`), where the language tells which of them a type name reaches: those it reaches, narrowed as direct
+ * members are, or none while several remain.
+ */
+async function typeFileMember(
+  index: ProjectIndex,
+  owner: SymbolDef,
+  member: string,
+  sameFileUse: SyntaxNodeLike | undefined,
+): Promise<SymbolDef | undefined> {
+  const ownerModule = index.byFile.get(fileIdentityKey(owner.file));
+  if (!ownerModule) return undefined;
+  const context = await ensureParsedContextForIndex(index, owner.file);
+  const policy = memberLookupPolicyFor(context.sup.id);
+  const mayReach = policy.typeNameMayReachFileMember;
+  const ownerName = mayReach ? nameNodeForDef(context, owner) : null;
+  if (!mayReach || !ownerName) return undefined;
+  const normalize = context.sup.normalizeIdentifier;
+  const normalizedMember = normalize(member);
+  const candidates: SymbolDef[] = [];
+  for (const local of memberLocalsNamed(ownerModule.locals, normalizedMember, context, normalize)) {
+    if (local.kind !== SymbolKind.Function || normalize(local.localName) !== normalizedMember) continue;
+    if (isGeneratedMember(context.sup, context.tree, local)) continue;
+    const memberName = nameNodeForDef(context, local);
+    if (memberName && mayReach(ownerName, memberName)) candidates.push(local);
+  }
+  const reachable = policy.typeNameMembers?.(candidates, context, sameFileUse) ?? candidates;
+  return reachable.length === 1 ? reachable[0] : undefined;
+}
+
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
   mod: ModuleIndex;
@@ -2085,6 +2116,9 @@ export async function resolveMemberAccessDefinition(params: {
             if (memberDef) return { kind: "resolved", def: memberDef };
             const localHit = resolveExport(index, base.def.file, memberName);
             if (localHit && (await isTypeFileMemberExport(index, base.def, localHit))) return localHit;
+            // Several same-named functions leave the export ambiguous; the type's name may still reach one of them.
+            const fileMember = localHit ? undefined : await typeFileMember(index, base.def, memberName, sameFileUse);
+            if (fileMember) return { kind: "resolved", def: fileMember };
           }
           return null;
         }

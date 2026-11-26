@@ -552,45 +552,180 @@ function definesMethod(statement: SyntaxNodeLike, name: string, level: SelfLevel
   return statementName?.text === name && declarationKind(statementName) === level;
 }
 
+/** The definitions of one method, and the code between them, in the order the bodies of its type run them. */
+type RedefinitionWalk = {
+  definition: SyntaxNodeLike;
+  name: string;
+  level: SelfLevel | "other";
+  latest: SyntaxNodeLike | null;
+  codeSinceLatest: boolean;
+  liveDefinitions: number;
+  definitionLive: boolean;
+  sawDefinition: boolean;
+};
+
+function redefinitionWalk(definition: SyntaxNodeLike, nameNode: SyntaxNodeLike): RedefinitionWalk {
+  return {
+    definition,
+    name: nameNode.text,
+    level: declarationKind(nameNode),
+    latest: null,
+    codeSinceLatest: false,
+    liveDefinitions: 0,
+    definitionLive: false,
+    sawDefinition: false,
+  };
+}
+
+/** Notes one statement of a body of the method's type: a definition of the method, or code (any but a `def` or comment). */
+function noteBodyStatement(walk: RedefinitionWalk, statement: SyntaxNodeLike): void {
+  if (definesMethod(statement, walk.name, walk.level)) {
+    if (walk.latest && walk.codeSinceLatest) {
+      walk.liveDefinitions += 1;
+      walk.definitionLive ||= sameNode(walk.latest, walk.definition);
+    }
+    walk.latest = statement;
+    walk.codeSinceLatest = false;
+    walk.sawDefinition ||= sameNode(statement, walk.definition);
+  } else if (statement.type !== "comment" && !NAMED_DEFINITIONS.has(statement.type)) {
+    walk.codeSinceLatest = true;
+  }
+}
+
 /**
- * Whether `definition` is a `def` that runs beside another `def` of the same body that redefines the method for the same
- * `self`: the body runs code (any statement but a `def` or a comment) while each is the latest one, or after the last,
- * so a call in a method or block body may reach either. A `def` that the next one replaces before any code runs is never
- * called.
+ * Walks, in the order they run, the statements of every body of the file that opens the constant path `path` (`class
+ * Calc` twice), and the code between them: the other statements of the program and of each namespace around the path.
+ * The body of another type counts as code.
+ */
+function walkTypeBodies(walk: RedefinitionWalk, statements: readonly SyntaxNodeLike[], path: string): void {
+  for (const statement of statements) {
+    const opensType = statement.type === "class" || statement.type === "module";
+    const statementPath = opensType ? declaredTypePath(statement) : null;
+    const opensPath = statementPath === path;
+    const enclosesPath = !opensPath && statementPath !== null && path.startsWith(`${statementPath}::`);
+    if (opensPath || enclosesPath) {
+      const bodyStatements = statement.childForFieldName("body")?.namedChildren ?? [];
+      if (opensPath) for (const bodyStatement of bodyStatements) noteBodyStatement(walk, bodyStatement);
+      else walkTypeBodies(walk, bodyStatements, path);
+    } else if (statement.type !== "comment" && !NAMED_DEFINITIONS.has(statement.type)) {
+      walk.codeSinceLatest = true;
+    }
+  }
+}
+
+/**
+ * Whether `definition` is a `def` that runs beside another `def` of its type that redefines the method for the same
+ * `self`, in the same body or in another body of the file that reopens the type: code runs (in those bodies or between
+ * them) while each is the latest one, or after the last, so a call in a method or block body may reach either. A `def`
+ * that the next one replaces before any code runs is never called.
  */
 function runsBesideRedefinition(definition: SyntaxNodeLike): boolean {
   if (!NAMED_DEFINITIONS.has(definition.type)) return false;
   const nameNode = definition.childForFieldName("name");
   const body = definition.parent;
   if (!nameNode || !body) return false;
-  const name = nameNode.text;
-  const level = declarationKind(nameNode);
-  let latest: SyntaxNodeLike | null = null;
-  let codeSinceLatest = false;
-  let liveDefinitions = 0;
-  let definitionLive = false;
-  for (const statement of body.namedChildren) {
-    if (definesMethod(statement, name, level)) {
-      if (latest && codeSinceLatest) {
-        liveDefinitions += 1;
-        definitionLive ||= sameNode(latest, definition);
-      }
-      latest = statement;
-      codeSinceLatest = false;
-    } else if (statement.type !== "comment" && !NAMED_DEFINITIONS.has(statement.type)) {
-      codeSinceLatest = true;
-    }
+  let walk = redefinitionWalk(definition, nameNode);
+  const type = body.parent;
+  const path = type?.type === "class" || type?.type === "module" ? declaredTypePath(type) : null;
+  if (path !== null) walkTypeBodies(walk, programOf(body).namedChildren, path);
+  if (!walk.sawDefinition) {
+    walk = redefinitionWalk(definition, nameNode);
+    for (const statement of body.namedChildren) noteBodyStatement(walk, statement);
   }
-  if (!latest) return false;
-  // Every call that runs after the body runs the last definition.
-  liveDefinitions += 1;
-  definitionLive ||= sameNode(latest, definition);
-  return definitionLive && liveDefinitions > 1;
+  if (!walk.latest) return false;
+  // Every call that runs after the bodies runs the last definition.
+  walk.liveDefinitions += 1;
+  walk.definitionLive ||= sameNode(walk.latest, definition);
+  return walk.definitionLive && walk.liveDefinitions > 1;
+}
+
+/** A `def` that defines a method on a constant from outside its body: `def Foo.name`, or one in `class << Foo`. */
+const OUTSIDE_CLASS_METHOD = /\bdef\s+[A-Z][\w:]*\.|\bclass\s*<<\s*[A-Z]/u;
+
+/** A method of a type itself, keyed by the type's last name and the method's, and whether a body of the type holds it. */
+type ClassMethodSite = { key: string; outside: boolean };
+
+/**
+ * Which type's own method `definition` declares: one of the type around it (`def self.name`, a `def` in `class <<
+ * self`), or one defined on a constant from outside the constant's body (`def Foo.name`, a `def` in `class << Foo`).
+ */
+function classMethodSite(definition: SyntaxNodeLike): ClassMethodSite | null {
+  const nameNode = definition.childForFieldName("name");
+  if (!nameNode) return null;
+  const kind = declarationKind(nameNode);
+  if (kind === "other") {
+    const definedOn = objectDefinedOn(nameNode);
+    return definedOn ? { key: `${definedOn}\u0000${nameNode.text}`, outside: true } : null;
+  }
+  const owner = kind === "class" ? enclosingType(nameNode) : null;
+  const typeName = owner ? typeNameOf(owner) : null;
+  return typeName ? { key: `${typeName}\u0000${nameNode.text}`, outside: false } : null;
+}
+
+const classMethodDefinitionsByProgram = new WeakMap<SyntaxNodeLike, ReadonlyMap<string, readonly SyntaxNodeLike[]>>();
+
+/** Every definition of a type's own method in a file that defines one from outside a body, by {@link classMethodSite}. */
+function classMethodDefinitions(program: SyntaxNodeLike): ReadonlyMap<string, readonly SyntaxNodeLike[]> {
+  const cached = classMethodDefinitionsByProgram.get(program);
+  if (cached) return cached;
+  const definitions = new Map<string, SyntaxNodeLike[]>();
+  const pending: SyntaxNodeLike[] = OUTSIDE_CLASS_METHOD.test(program.text) ? [program] : [];
+  while (pending.length) {
+    const node = pending.pop()!;
+    for (const child of node.namedChildren) pending.push(child);
+    const site = NAMED_DEFINITIONS.has(node.type) ? classMethodSite(node) : null;
+    if (!site) continue;
+    const known = definitions.get(site.key);
+    if (known) known.push(node);
+    else definitions.set(site.key, [node]);
+  }
+  classMethodDefinitionsByProgram.set(program, definitions);
+  return definitions;
+}
+
+/**
+ * Whether the type's own method `definition` declares has another definition in its file that a call may run instead:
+ * one in a body of the type against one from outside it (`def self.bar` and `def Foo.bar`), or two from outside in
+ * different bodies. Definitions in the same body follow {@link runsBesideRedefinition}.
+ */
+function redefinedOutsideItsBody(definition: SyntaxNodeLike): boolean {
+  const own = classMethodSite(definition);
+  if (!own) return false;
+  const others = classMethodDefinitions(programOf(definition)).get(own.key) ?? [];
+  const body = definition.parent;
+  for (const other of others) {
+    if (sameNode(other, definition)) continue;
+    if (classMethodSite(other)?.outside !== own.outside) return true;
+    const inAnotherBody = !body || !sameNode(other.parent, body);
+    if (own.outside && inAnotherBody) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the type of the method `definition` declares has a body that the file opens under a condition, a block, or
+ * another wrapper (`class Calc ... end if ready?`), and another body of the type defines the method for the same `self`:
+ * whether the wrapped body runs, and so which definition a call reaches, is not known.
+ */
+function redefinedBesideConditionalBody(definition: SyntaxNodeLike): boolean {
+  const nameNode = NAMED_DEFINITIONS.has(definition.type) ? definition.childForFieldName("name") : null;
+  const type = definition.parent?.parent;
+  const opensType = type?.type === "class" || type?.type === "module";
+  if (!nameNode || !type || !opensType) return false;
+  const path = declaredTypePath(type);
+  if (path === null || !typeFamilies(programOf(type)).conditionalPaths.has(path)) return false;
+  const level = declarationKind(nameNode);
+  for (const body of typeBodiesOf(type)) {
+    if (sameNode(body, type)) continue;
+    const statements = body.childForFieldName("body")?.namedChildren ?? [];
+    if (statements.some((statement) => definesMethod(statement, nameNode.text, level))) return true;
+  }
+  return false;
 }
 
 /**
  * Unsupported module singletons, separate local assignment bindings, `initialize`, which `new` and `super` call without
- * naming it, and a method that runs beside a redefinition in its own body leave reference completeness unproven.
+ * naming it, and a method that runs beside a redefinition of its type leave reference completeness unproven.
  */
 export function rubyReferenceFamilyUnproven(declaration: SyntaxNodeLike): boolean {
   let method = declaration.parent;
@@ -598,6 +733,8 @@ export function rubyReferenceFamilyUnproven(declaration: SyntaxNodeLike): boolea
   if (method?.type === "singleton_method" && enclosingType(declaration)?.type === "module") return true;
   if (method?.type === "method" && declaration.text === "initialize") return true;
   if (method && runsBesideRedefinition(method)) return true;
+  if (method && redefinedOutsideItsBody(method)) return true;
+  if (method && redefinedBesideConditionalBody(method)) return true;
   if (!rubyDeclaresLocalVariable(declaration)) return false;
   const scope = localScopeOf(declaration);
   const sites = localSitesOf(scope).get(declaration.text);
@@ -774,14 +911,42 @@ function enclosingType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /**
- * Whether the method declared at `declaration` belongs to the very class or module whose body holds `use`, or both are
- * at the top level of the file, where a top-level `def` runs in the same order as the code around it.
+ * Whether the method declared at `declaration` belongs to the class or module whose body holds `use`, whichever body of
+ * the file that opens its constant path declares it (`class Foo` twice), or both are at the top level of the file, where
+ * a top-level `def` runs in the same order as the code around it.
  */
 export function rubyMethodIsOwnedAt(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
   const owner = enclosingType(declaration);
   const user = enclosingType(use);
   if (!owner || !user) return !owner && !user && isTopLevelMethod(declaration);
-  return sameNode(owner, user);
+  return sameType(owner, user);
+}
+
+/** Whether two class or module bodies of one file are the same type: one body, or two that open one constant path. */
+function sameType(left: SyntaxNodeLike, right: SyntaxNodeLike): boolean {
+  if (sameNode(left, right)) return true;
+  // A body opened under a condition may never run, so it is not known to be part of the type.
+  if (!opensUnconditionally(left) || !opensUnconditionally(right)) return false;
+  const name = typeNameOf(left);
+  if (name === null || name !== typeNameOf(right)) return false;
+  const path = declaredTypePath(left);
+  return path !== null && path === declaredTypePath(right);
+}
+
+/** The nodes a class or module may sit in and still be opened whenever its file loads: the program and namespace bodies. */
+const UNCONDITIONAL_TYPE_PARENTS: ReadonlySet<string> = new Set(["program", "body_statement", "class", "module"]);
+
+/**
+ * Whether the class or module `type` is opened whenever its file loads: it sits in the program or in namespace bodies,
+ * not under a condition, a block, a method, or another wrapper (`class Calc ... end if ready?`). A type that a block
+ * builds (`Base = Struct.new(:a) do`) counts as opened.
+ */
+function opensUnconditionally(type: SyntaxNodeLike): boolean {
+  if (type.type !== "class" && type.type !== "module") return true;
+  for (let current = type.parent; current; current = current.parent) {
+    if (!UNCONDITIONAL_TYPE_PARENTS.has(current.type)) return false;
+  }
+  return true;
 }
 
 /** Whether `node` is the name a `def` declares (`def name`, `def self.name`), which names that definition itself. */
@@ -855,35 +1020,75 @@ function objectDefinedOn(method: SyntaxNodeLike): string | null {
 }
 
 /**
- * Whether a call through the name of the type declared at `typeName` may run the method declared at `method`: one
- * defined on the type's constant (`def Foo.name`, a `def` in `class << Foo`), one of that type's body, of another body
- * of the file that reopens the same constant path (`class Foo` twice), or of a type the file's superclasses, mixins,
- * and modules handed to a call connect to it (`extend Helpers`, `register Helpers`). A method defined on an object that
- * is no constant (`def klass.name`), or in a block that may run in another type (`Foo.singleton_class.class_eval do`, a
- * DSL body), may be the type's. A top-level `def` is private to every object, and a type that merely encloses the
- * declaration (`module Outer; class Inner`) gives it nothing.
+ * Whether a call through the name of the type declared at `typeName` may run the method declared at `method`, at a level
+ * a type name reaches (see {@link rubyTypeNameCall}): one defined on the type's constant (`def Foo.name`, a `def` in
+ * `class << Foo`), one of that type's body, of another body of the file that reopens the same constant path (`class
+ * Foo` twice), or of a type the file's superclasses, mixins, and modules handed to a call lead the type to (`extend
+ * Helpers`, `register Helpers`), never one of a subclass or a sibling. A method defined on an object that is no constant
+ * (`def klass.name`), or in a block that may run in another type (`Foo.singleton_class.class_eval do`, a DSL body), may
+ * be the type's. A top-level `def` is private to every object, and a type that merely encloses the declaration (`module
+ * Outer; class Inner`) gives it nothing.
  */
 export function rubyTypeNameMayReach(typeName: SyntaxNodeLike, method: SyntaxNodeLike): boolean {
   const type = typeDeclaredAt(typeName);
-  if (!type) return false;
+  if (!type || rubyTypeNameCall(method) === "none") return false;
   const definedOn = objectDefinedOn(method);
   if (definedOn === ANOTHER_OBJECT) return true;
   if (definedOn !== null) return definedOn === typeNameOf(type);
   const owner = enclosingType(method);
   if (!owner) return !isTopLevelMethod(method);
-  if (sameNode(type, owner)) return true;
+  if (sameType(type, owner)) return true;
   if (definedInReboundBlock(method, owner)) return true;
-  const path = declaredTypePath(type);
-  if (path !== null && path === declaredTypePath(owner)) return true;
-  return typeMayHaveMethodsOf(type, owner, typeNameOf(owner));
+  return typeMayHaveMethodsOf(type, owner, typeNameOf(owner), false);
 }
 
 /**
- * Whether a call through the name of the type around the method declared at `declaration` (`Config.build`) runs it: a
- * method of the class itself (`def self.build`, a `def` in `class << self`), not an instance method.
+ * How a call through a type's name (`Config.build`) may run a method: as a method of the type itself, as an instance
+ * method that something may hand to the type, or not at all.
  */
-export function rubyTypeNameCalls(declaration: SyntaxNodeLike): boolean {
-  return declarationKind(declaration) === "class";
+export type RubyTypeNameCall = "class-method" | "instance-method" | "none";
+
+/**
+ * How a call through a type's name may run the method declared at `declaration`: as a method of the class itself
+ * (`def self.build`, a `def` in `class << self`) or one defined on an object (`def Config.build`, a `def` in
+ * `class << Config`, `def klass.build`); as an instance method of a module, which `module_function`, `extend self`, or
+ * `extend` may hand to a type, of a core type every class has (`class Object; def try`), of a `def` whose type the file
+ * does not show (one in a block that may run with another `self`, such as `Foo.instance_eval do`), or of a class that
+ * may answer the call with it (see {@link classMayAnswerWithInstanceMethod}); or not at all: an instance method of any
+ * other class runs only on its instances, a method of a singleton class (`def self.name` in `class << self`) only on that
+ * singleton class, and a top-level `def self.name` only on the main object.
+ */
+export function rubyTypeNameCall(declaration: SyntaxNodeLike): RubyTypeNameCall {
+  const kind = declarationKind(declaration);
+  if (kind === "class") return isMainObjectMethod(declaration) ? "none" : "class-method";
+  if (kind === "other") return objectDefinedOn(declaration) === null ? "none" : "class-method";
+  if (kind === "singleton-class") return "none";
+  const owner = enclosingType(declaration);
+  if (!owner || isModuleType(owner)) return "instance-method";
+  if (definedInReboundBlock(declaration, owner)) return "instance-method";
+  const ownerName = typeNameOf(owner);
+  if (ownerName && UNIVERSAL_TYPES.has(ownerName)) return "instance-method";
+  return classMayAnswerWithInstanceMethod(owner, declaration.text) ? "instance-method" : "none";
+}
+
+/**
+ * Whether the class `owner` may answer a call through its name with its instance method `name`, by what its file shows
+ * or leaves out: a superclass or mixin the file does not declare (`class Current < ActiveSupport::CurrentAttributes`),
+ * levels it shares (`method_missing`, `extend self`, an `extend` of a module the file does not declare), or a call in a
+ * `class << self` body that names the method (`delegate :collect?, to: :instance`).
+ */
+function classMayAnswerWithInstanceMethod(owner: SyntaxNodeLike, name: string): boolean {
+  if (!levelEvidencePaths(owner) || typeSharesLevels(owner)) return true;
+  for (const body of typeBodiesOf(owner)) {
+    for (const statement of body.childForFieldName("body")?.namedChildren ?? []) {
+      if (statement.type !== "singleton_class" || !singletonClassOpensSelf(statement)) continue;
+      for (const call of statement.childForFieldName("body")?.namedChildren ?? []) {
+        const named = call.type === "call" ? (call.childForFieldName("arguments")?.namedChildren ?? []) : [];
+        if (named.some((argument) => namesMethod(argument, name))) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Whether the call named at `property` is the target of a compound assignment: `x.total += 1`, `x.total ||= 2`. */
@@ -959,6 +1164,12 @@ type TypeFamilies = {
   mixedIntoUnknown: ReadonlySet<string>;
   /** The superclass and mixins each type names, by the type's name: a reopened type adds to the same entry. */
   heritage: ReadonlyMap<string, readonly string[]>;
+  /** The modules of the file that a call in each type's body hands along (`register Helpers`), by the type's name. */
+  handed: ReadonlyMap<string, readonly string[]>;
+  /** Every class and module body of the file, by the constant path it opens. */
+  bodies: ReadonlyMap<string, readonly SyntaxNodeLike[]>;
+  /** The constant paths the file opens under a condition, a block, or another wrapper (`class C ... end if ready?`). */
+  conditionalPaths: ReadonlySet<string>;
 };
 const typeFamiliesByProgram = new WeakMap<SyntaxNodeLike, TypeFamilies>();
 
@@ -972,6 +1183,8 @@ function typeFamilies(program: SyntaxNodeLike): TypeFamilies {
   if (cached) return cached;
   const declared: Array<{ start: number; name: string; heritage: string[]; isModule: boolean }> = [];
   const mixedIntoUnknown = new Set<string>();
+  const bodies = new Map<string, SyntaxNodeLike[]>();
+  const conditionalPaths = new Set<string>();
   // A module a call passes along (`klass.extend Mixin`, `helpers Mixin`) may be mixed in by it, into the type around the
   // call, or into a target the file does not show when no type surrounds it or the call has a receiver.
   const passed: Array<{ owner: string | null; name: string }> = [];
@@ -999,6 +1212,11 @@ function typeFamilies(program: SyntaxNodeLike): TypeFamilies {
           heritage: heritageNames(node),
           isModule: node.type === "module",
         });
+      const path = declaredTypePath(node);
+      const pathBodies = path === null ? undefined : bodies.get(path);
+      if (pathBodies) pathBodies.push(node);
+      else if (path !== null) bodies.set(path, [node]);
+      if (path !== null && !opensUnconditionally(node)) conditionalPaths.add(path);
     }
     for (const child of node.namedChildren) pending.push(child);
   }
@@ -1018,12 +1236,16 @@ function typeFamilies(program: SyntaxNodeLike): TypeFamilies {
     }
   }
   const modules = new Set(declared.filter((type) => type.isModule).map((type) => type.name));
+  const handed = new Map<string, string[]>();
   for (const { owner, name } of passed) {
     if (!modules.has(name)) continue;
     if (owner === null || !known.has(owner)) {
       mixedIntoUnknown.add(name);
       continue;
     }
+    const handedByOwner = handed.get(owner);
+    if (handedByOwner) handedByOwner.push(name);
+    else handed.set(owner, [name]);
     const left = rootOf(owner);
     const right = rootOf(name);
     if (left !== right) parentOf.set(left, right);
@@ -1045,9 +1267,16 @@ function typeFamilies(program: SyntaxNodeLike): TypeFamilies {
     if (named) named.push(...type.heritage);
     else heritage.set(type.name, [...type.heritage]);
   }
-  const table = { families, mixedIntoUnknown, heritage };
+  const table = { families, mixedIntoUnknown, heritage, handed, bodies, conditionalPaths };
   typeFamiliesByProgram.set(program, table);
   return table;
+}
+
+/** Every body of the file that opens the constant path of the class or module `type`, `type` itself included. */
+function typeBodiesOf(type: SyntaxNodeLike): readonly SyntaxNodeLike[] {
+  const path = declaredTypePath(type);
+  const bodies = path === null ? undefined : typeFamilies(programOf(type)).bodies.get(path);
+  return bodies ?? [type];
 }
 
 /** The root node of the tree that holds `node`. */
@@ -1057,27 +1286,88 @@ function programOf(node: SyntaxNodeLike): SyntaxNodeLike {
   return top;
 }
 
+const descendantsByProgram = new WeakMap<SyntaxNodeLike, ReadonlyMap<string, ReadonlySet<string>>>();
+
 /**
- * Whether the methods of `owner`, a class or module of the same file as `user`, may be methods of `user`: the file's
- * superclasses, mixins, and modules handed to a call connect the two (either direction), mix the owner into a type the
- * file does not show, or leave either type unplaced. A core type's methods belong to every object.
+ * Each type name of a file mapped to the type names whose superclasses, mixins, and handed modules lead to it, itself
+ * included: the types that have its methods, by what the file shows.
  */
-function typeMayHaveMethodsOf(user: SyntaxNodeLike, owner: SyntaxNodeLike, ownerName: string | null): boolean {
+function typeDescendants(program: SyntaxNodeLike): ReadonlyMap<string, ReadonlySet<string>> {
+  const cached = descendantsByProgram.get(program);
+  if (cached) return cached;
+  const { heritage, handed } = typeFamilies(program);
+  const descendants = new Map<string, Set<string>>();
+  for (const name of heritage.keys()) {
+    const seen = new Set<string>([name]);
+    const pending = [name];
+    const visit = (base: string): void => {
+      if (seen.has(base)) return;
+      seen.add(base);
+      pending.push(base);
+    };
+    while (pending.length) {
+      const ancestor = pending.pop()!;
+      const below = descendants.get(ancestor);
+      if (below) below.add(name);
+      else descendants.set(ancestor, new Set([name]));
+      heritage.get(ancestor)?.forEach(visit);
+      handed.get(ancestor)?.forEach(visit);
+    }
+  }
+  descendantsByProgram.set(program, descendants);
+  return descendants;
+}
+
+/** Whether two sets share a member, walking the smaller one. */
+function setsIntersect(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  const leftIsSmaller = left.size <= right.size;
+  const smaller = leftIsSmaller ? left : right;
+  const larger = leftIsSmaller ? right : left;
+  for (const name of smaller) {
+    if (larger.has(name)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the methods of `owner`, a class or module of the same file as `user`, may be methods of `user`. A core type's
+ * methods belong to every object, a module the file mixes into a type it does not show may be anyone's, and a type the
+ * file's heritage does not place leaves the answer open. Otherwise the file's superclasses, mixins, and handed modules
+ * must lead from `user` to `owner`, or, where `user` may be one of several types (the `self` of a bare name), from some
+ * type of the file to both: the base calls a method its subclass declares, a mixin one of its includer or of another
+ * mixin of it. Two classes that only share a base or a mixin never reach each other's methods.
+ */
+function typeMayHaveMethodsOf(
+  user: SyntaxNodeLike,
+  owner: SyntaxNodeLike,
+  ownerName: string | null,
+  anyTypeOfSelf: boolean,
+): boolean {
   if (ownerName && UNIVERSAL_TYPES.has(ownerName)) return true;
-  const { families, mixedIntoUnknown } = typeFamilies(programOf(user));
+  const program = programOf(user);
+  const { families, mixedIntoUnknown } = typeFamilies(program);
   if (ownerName && mixedIntoUnknown.has(ownerName)) return true;
   const ownerFamily = families.get(owner.startIndex);
   const userFamily = families.get(user.startIndex);
-  return ownerFamily === undefined || userFamily === undefined || ownerFamily === userFamily;
+  if (ownerFamily === undefined || userFamily === undefined) return true;
+  if (ownerFamily !== userFamily) return false;
+  const userName = typeNameOf(user);
+  if (!ownerName || !userName) return true;
+  const descendants = typeDescendants(program);
+  const haveOwnerMethods = descendants.get(ownerName);
+  if (!haveOwnerMethods || haveOwnerMethods.has(userName)) return true;
+  if (!anyTypeOfSelf) return false;
+  const haveUserMethods = descendants.get(userName);
+  return !haveUserMethods || setsIntersect(haveOwnerMethods, haveUserMethods);
 }
 
 /**
  * Whether a bare name at `use` can call the method declared at `declaration`. Every class and module of a file shares
  * the file scope, so a method named in one would bind the same name in an unrelated type that comes before or after
  * it. A top-level method belongs to every object; a method of a type is named from inside that type, or from a type that
- * the file's superclasses and mixins connect to it (the base calls a method its subclass declares, the including
- * module one of its includer). At the top level only a module's method can be mixed into `main`. A type the file's
- * heritage does not place leaves the answer open, as the file cannot show an unrelated type.
+ * the file's superclasses and mixins relate to it (see {@link typeMayHaveMethodsOf}). At the top level only a module's
+ * method can be mixed into `main`. A type the file's heritage does not place leaves the answer open, as the file cannot
+ * show an unrelated type.
  */
 export function rubyMethodVisibleAt(declaration: SyntaxNodeLike, use: SyntaxNodeLike): boolean {
   const owner = enclosingType(declaration);
@@ -1086,8 +1376,191 @@ export function rubyMethodVisibleAt(declaration: SyntaxNodeLike, use: SyntaxNode
   if (ownerName && UNIVERSAL_TYPES.has(ownerName)) return true;
   const user = enclosingType(use);
   if (!user) return isModuleType(owner);
-  if (sameNode(owner, user)) return true;
-  return typeMayHaveMethodsOf(user, owner, ownerName);
+  if (sameType(owner, user)) return true;
+  return typeMayHaveMethodsOf(user, owner, ownerName, true);
+}
+
+/**
+ * Syntax that may give a class its own `new`: `def self.new`, `def Foo.new`, a `def new` in `class << self`, an alias to
+ * `new` (`alias_method :new, :build`, `alias new build`), or a method defined as `new` (`define_singleton_method(:new)`).
+ */
+const CLASS_NEW_DEFINITION =
+  /\bdef\s+(?:[\w:]+\.)?new\b|\balias(?:_method)?\s*\(?\s*:?["']?new\b|\bdefine_(?:singleton_)?method\s*\(?\s*:?["']?new\b/u;
+const customConstructorsByProgram = new WeakMap<SyntaxNodeLike, ReadonlySet<string>>();
+
+/** The calls that define or alias a method their first argument names: `define_singleton_method(:new) { }`. */
+const METHOD_DEFINING_CALLS: ReadonlySet<string> = new Set([
+  "alias_method",
+  "define_method",
+  "define_singleton_method",
+]);
+
+/** Whether an alias or a defining call names a method `new`: `alias new build`, `alias_method :new, :build`. */
+function definesNewByName(node: SyntaxNodeLike): boolean {
+  if (node.type === "alias") {
+    const destination = node.namedChildren[0];
+    return !!destination && (destination.text === "new" || namesMethod(destination, "new"));
+  }
+  if (node.type !== "call") return false;
+  const method = node.childForFieldName("method")?.text;
+  if (!method || !METHOD_DEFINING_CALLS.has(method)) return false;
+  const first = node.childForFieldName("arguments")?.namedChildren[0];
+  return !!first && namesMethod(first, "new");
+}
+
+/**
+ * The types of a file that may declare their own `new` (`def self.new`, a `def new` in `class << self`, `def Foo.new`,
+ * `alias_method :new, :build`, `define_singleton_method(:new)`), by last name, with {@link ANOTHER_OBJECT} for one
+ * defined on an object that is no constant (`def klass.new`) or where the file does not name the object.
+ */
+function customConstructorTypes(program: SyntaxNodeLike): ReadonlySet<string> {
+  const cached = customConstructorsByProgram.get(program);
+  if (cached) return cached;
+  const types = new Set<string>();
+  const pending: SyntaxNodeLike[] = CLASS_NEW_DEFINITION.test(program.text) ? [program] : [];
+  while (pending.length) {
+    const node = pending.pop()!;
+    for (const child of node.namedChildren) pending.push(child);
+    if (definesNewByName(node)) {
+      // The type whose `self` the alias or call works on; a `self` the file does not name may be any type's.
+      types.add((node.type === "call" ? receiverTypeName(node) : selfTypeNameAt(node)) ?? ANOTHER_OBJECT);
+      continue;
+    }
+    const name = NAMED_DEFINITIONS.has(node.type) ? node.childForFieldName("name") : null;
+    if (name?.text !== "new") continue;
+    const kind = declarationKind(name);
+    if (kind === "other") {
+      const definedOn = objectDefinedOn(name);
+      if (definedOn !== null) types.add(definedOn);
+    } else if (kind === "class") {
+      const owner = enclosingType(name);
+      const ownerName = owner ? typeNameOf(owner) : null;
+      if (ownerName) types.add(ownerName);
+    }
+  }
+  customConstructorsByProgram.set(program, types);
+  return types;
+}
+
+/**
+ * Whether `Name.new` may return something other than a new instance of the constant `name` names: its file declares a
+ * `new` of that type's own, or of a superclass or mixin the file gives it, or one on an object it does not name.
+ */
+export function rubyConstructorMayBeCustom(name: SyntaxNodeLike): boolean {
+  const program = programOf(name);
+  const custom = customConstructorTypes(program);
+  if (!custom.size) return false;
+  const typeName = constantName(name);
+  // A `new` defined on an object the file does not name may be any type's.
+  if (!typeName || custom.has(ANOTHER_OBJECT)) return true;
+  if (custom.has(typeName)) return true;
+  const descendants = typeDescendants(program);
+  for (const type of custom) {
+    if (descendants.get(type)?.has(typeName)) return true;
+  }
+  return false;
+}
+
+/** Whether `statement` is a bare `module_function` or one naming methods, which hands methods of a module to itself. */
+function isModuleFunctionStatement(statement: SyntaxNodeLike): boolean {
+  if (statement.type === "identifier") return statement.text === "module_function";
+  if (statement.type !== "call" || statement.childForFieldName("receiver")) return false;
+  return statement.childForFieldName("method")?.text === "module_function";
+}
+
+const moduleFunctionFilesByProgram = new WeakMap<SyntaxNodeLike, boolean>();
+
+/** Whether a file may hand a module its own instance methods (`module_function`, `extend self`), by its text alone. */
+export function rubyFileMayHandModuleMethods(program: SyntaxNodeLike): boolean {
+  let known = moduleFunctionFilesByProgram.get(program);
+  if (known === undefined) {
+    known = /\bmodule_function\b|\bextend\s+self\b/u.test(program.text);
+    moduleFunctionFilesByProgram.set(program, known);
+  }
+  return known;
+}
+
+/** Whether `statement` is `extend self`, which hands every instance method of a module to the module. */
+function isExtendSelfStatement(statement: SyntaxNodeLike): boolean {
+  if (statement.type !== "call" || statement.childForFieldName("receiver")) return false;
+  if (statement.childForFieldName("method")?.text !== "extend") return false;
+  return !!statement.childForFieldName("arguments")?.namedChildren.some((argument) => argument.type === "self");
+}
+
+/** Whether `statement` of a type body declares a method of the type itself named `name` (`def self.name`). */
+function declaresOwnMethodNamed(statement: SyntaxNodeLike, name: string): boolean {
+  if (definesMethod(statement, name, "class")) return true;
+  if (statement.type !== "singleton_class" || !singletonClassOpensSelf(statement)) return false;
+  return !!statement.childForFieldName("body")?.namedChildren.some((child) => definesMethod(child, name, "class"));
+}
+
+/** Whether `statement` makes the module's own method `name` private: `private_class_method :name`. */
+function hidesClassMethod(statement: SyntaxNodeLike, name: string): boolean {
+  if (statement.type !== "call" || statement.childForFieldName("receiver")) return false;
+  if (statement.childForFieldName("method")?.text !== "private_class_method") return false;
+  return !!statement.childForFieldName("arguments")?.namedChildren.some((argument) => namesMethod(argument, name));
+}
+
+/**
+ * Whether a call through the name of the module declared at `typeName` to `member` (`Tools.calculate`) can only run an
+ * instance method of the module: a body of the module in its file hands its instance methods to it (`extend self`,
+ * `module_function`), no body declares a method of the module itself named `member` or makes it private
+ * (`private_class_method :member`), and the file defines none from outside a body (`def Tools.member`). Another file may
+ * still open the module, which only the caller can check.
+ */
+export function rubyModuleCallReachesInstanceMethod(typeName: SyntaxNodeLike, member: string): boolean {
+  const type = typeDeclaredAt(typeName);
+  if (type?.type !== "module") return false;
+  let handsOwnMethods = false;
+  for (const body of typeBodiesOf(type)) {
+    for (const statement of body.childForFieldName("body")?.namedChildren ?? []) {
+      if (declaresOwnMethodNamed(statement, member) || hidesClassMethod(statement, member)) return false;
+      handsOwnMethods ||= isModuleFunctionStatement(statement) || isExtendSelfStatement(statement);
+    }
+  }
+  if (!handsOwnMethods) return false;
+  const definitions = classMethodDefinitions(programOf(type)).get(`${typeNameOf(type)}\u0000${member}`) ?? [];
+  return !definitions.some((definition) => classMethodSite(definition)?.outside);
+}
+
+/** The constant path that the class or module declared at `typeName` opens (`Outer::Tools`), or null. */
+export function rubyDeclaredTypePath(typeName: SyntaxNodeLike): string | null {
+  const type = typeDeclaredAt(typeName);
+  return type ? declaredTypePath(type) : null;
+}
+
+/** Whether a literal argument names the method `name`: `:name` or `"name"` (`module_function :name`, `delegate :name`). */
+function namesMethod(argument: SyntaxNodeLike, name: string): boolean {
+  if (argument.type === "simple_symbol") return argument.text.slice(1) === name;
+  const content = argument.type === "string" ? argument.namedChildren : [];
+  return content.length === 1 && content[0]!.type === "string_content" && content[0]!.text === name;
+}
+
+/**
+ * Whether `declaration` is an instance method of the module declared at `typeName`, in the same file, that the module
+ * hands to itself: its body runs `extend self`, a bare `module_function` before the `def`, or a `module_function` that
+ * names it (`module_function :calculate`).
+ */
+export function rubyModuleFunctionDeclaredAt(typeName: SyntaxNodeLike, declaration: SyntaxNodeLike): boolean {
+  const type = typeDeclaredAt(typeName);
+  if (type?.type !== "module") return false;
+  const method = declaration.parent;
+  const body = method?.type === "method" ? method.parent : null;
+  if (!method || !body?.parent) return false;
+  if (!sameType(type, body.parent)) return false;
+  const name = declaration.text;
+  for (const statement of body.namedChildren) {
+    if (isExtendSelfStatement(statement)) return true;
+    if (!isModuleFunctionStatement(statement)) continue;
+    const handsLaterDefinitions = statement.type === "identifier";
+    if (handsLaterDefinitions) {
+      if (statement.startIndex < method.startIndex) return true;
+      continue;
+    }
+    const named = statement.childForFieldName("arguments")?.namedChildren ?? [];
+    if (named.some((argument) => namesMethod(argument, name))) return true;
+  }
+  return false;
 }
 
 const typeBuildersByProgram = new WeakMap<SyntaxNodeLike, boolean>();
@@ -1633,9 +2106,25 @@ export function rubyUnplacedSelfCallMayReach(declaration: SyntaxNodeLike, use: S
  * method, so it belongs to every object. A `def` in a block belongs to whatever type the block builds or evaluates in.
  */
 function isTopLevelMethod(declaration: SyntaxNodeLike): boolean {
-  let definition = declaration.parent;
-  if (definition?.type === "setter") definition = definition.parent;
-  if (definition?.type !== "method") return false;
+  const definition = definitionOf(declaration);
+  return definition?.type === "method" && outsideEveryBody(definition);
+}
+
+/** Whether `declaration` names a top-level `def self.name`: a method of the main object, which no type name reaches. */
+function isMainObjectMethod(declaration: SyntaxNodeLike): boolean {
+  const definition = definitionOf(declaration);
+  if (definition?.type !== "singleton_method") return false;
+  return definition.childForFieldName("object")?.type === "self" && outsideEveryBody(definition);
+}
+
+/** The `def` whose name `declaration` is, through the `setter` of `def name=(value)`. */
+function definitionOf(declaration: SyntaxNodeLike): SyntaxNodeLike | null {
+  const parent = declaration.parent;
+  return parent?.type === "setter" ? parent.parent : parent;
+}
+
+/** Whether `definition` sits in no class, module, block, or other method. */
+function outsideEveryBody(definition: SyntaxNodeLike): boolean {
   for (let current = definition.parent; current; current = current.parent) {
     if (NOT_TOP_LEVEL_PARENTS.has(current.type)) return false;
   }
