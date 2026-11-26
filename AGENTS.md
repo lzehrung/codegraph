@@ -133,6 +133,20 @@ using syntax and facts proven from source. It must not emulate the full language
 - When a gap is fixed in one language, check the same capability in the other supported languages.
 - Include this bar in review acceptance criteria, so reviewers report wrong answers and
   common-code misses, not every language-specification gap.
+- Add or widen a resolution rule only with evidence from real code: wrong or missed answers measured
+  on a real-corpus differential, or a confident wrong answer (including a `safe` rename that breaks
+  the program) in an ordinary form. A form found only by synthetic or adversarial probes gets the
+  conservative answer (`partial` coverage, unsafe rename, or `not_found`) and a line in
+  `docs/language-parity.md`, never a new rule. Reviews report such forms as P2 limits, not
+  blockers, unless the change made the answer worse than the base build.
+- Dynamic languages (Ruby, Python, PHP, JavaScript): do not model runtime dispatch, such as open or
+  reopened classes, eigenclasses, mixin order, `method_missing`/`__getattr__`/`__call`, monkey
+  patching, `send`/`getattr`/dynamic property access, or definition order. Resolve what syntax
+  proves (lexical bindings, imports, a proven receiver's own declaration); where the receiver or
+  owner is not proven, return `not_found` and keep the method's references `partial` with an
+  unsafe rename.
+- Stop a fix after one review round when the remaining findings are rare forms. Merge what is
+  proven and record the rest as limits.
 
 ## Parsing and Language Support
 
