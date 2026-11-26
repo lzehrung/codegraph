@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import {
   buildProjectIndex,
@@ -27,12 +26,7 @@ import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveExport, resolveModuleExports } from "../src/indexer/navigation-resolve.js";
 import { getCompilationUnitPeers } from "../src/indexer/compilation-units.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
-import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-  return dir;
-}
+import { mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
 describe("Import Resolution", () => {
   it("should resolve .js imports to .ts source files", async () => {

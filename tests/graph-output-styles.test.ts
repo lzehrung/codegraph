@@ -1,12 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { collectGraph, graphToMermaid, graphToDOT } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("Graph output styles", () => {
   it("Mermaid uses dotted arrows for type-only edges; DOT uses style=dotted", async () => {

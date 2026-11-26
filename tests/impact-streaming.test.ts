@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import {
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
@@ -12,10 +12,6 @@ import { impactItemEmissionKey } from "../src/impact/streaming.js";
 import { buildProjectIndex } from "../src/index.js";
 import * as navigation from "../src/indexer/navigation.js";
 import { runGit as git } from "./helpers/git.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 async function firstStreamError(stream: AsyncGenerator<ImpactStreamChunk>): Promise<string | undefined> {
   for await (const chunk of stream) {

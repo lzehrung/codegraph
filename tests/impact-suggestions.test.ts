@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
 import { buildProjectIndex } from "../src/index.js";
+import { createTestIndexFromPath } from "./test-utils.js";
 
 const samplePath = path.resolve(process.cwd(), "tests", "samples", "impact-suggestions");
 
@@ -21,7 +22,7 @@ async function buildSampleReport(
     testCommandTemplate?: string;
   },
 ): Promise<ImpactReport> {
-  const index = await buildProjectIndex(samplePath);
+  const index = await createTestIndexFromPath(samplePath);
   const report = (await analyzeImpactFromDiff(samplePath, index, {
     provider: "raw",
     diffText,
@@ -67,9 +68,6 @@ async function buildReportForRoot(
   return report;
 }
 
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 describe("Impact Suggestions", () => {
   it("detects missing imports, exports, and declarations in changed lines", async () => {
     const diffText = `diff --git a/main.ts b/main.ts

@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { listProjectFiles, buildProjectIndexFromFiles } from "../src/index.js";
+import { listProjectFiles } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { createTestIndexFromFiles } from "./test-utils.js";
 
 describe("Multi-root scanning", () => {
   it("indexes files across multiple roots and merges into one graph", async () => {
@@ -13,7 +14,7 @@ describe("Multi-root scanning", () => {
     const jsFiles = await listProjectFiles(jsRoot);
     const files = Array.from(new Set([...tsFiles, ...jsFiles])).map((f) => f.replace(/\\/g, "/"));
 
-    const index = await buildProjectIndexFromFiles(commonRoot, files);
+    const index = await createTestIndexFromFiles(commonRoot, files);
 
     // Expect modules from both roots to be present
     const tsMain = path.join(tsRoot, "main.ts").replace(/\\/g, "/");

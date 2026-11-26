@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import {
   buildProjectIndex,
   buildSymbolGraph,
@@ -42,10 +42,6 @@ describe("graph edge provenance", () => {
     expect(edges[0]?.confidence).toBe(1);
   });
 });
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("Circular re-exports resolution", () => {
   it("resolves through re-export chains without recursion issues", async () => {

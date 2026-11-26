@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import {
   buildProjectIndex,
   buildProjectIndexIncremental,
@@ -14,10 +14,6 @@ import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../src/native/source-limits.js"
 import type { BuildOptions, BuildReport, ProjectIndex } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
 const frameworkSamplePath = (...parts: string[]): string =>

@@ -1,14 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { buildProjectIndex } from "../src/indexer.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import type { BuildReport } from "../src/indexer/types.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
 

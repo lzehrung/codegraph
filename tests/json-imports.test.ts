@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
-import { buildProjectIndex, goToDefinition, type ProjectIndex } from "../src/index.js";
+import { goToDefinition, type ProjectIndex } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
+import { createTestIndexFromPath } from "./test-utils.js";
 
 const projectRoot = path.resolve(process.cwd(), "tests", "samples", "json-imports");
 const normalize = (p: string) => p.replace(/\\/g, "/");
@@ -45,7 +46,7 @@ describe("JSON module imports", () => {
   const configNameImportPos = positionOf(jsSource, "configName", 1);
 
   beforeAll(async () => {
-    index = await buildProjectIndex(projectRoot);
+    index = await createTestIndexFromPath(projectRoot);
   });
 
   it("creates stub modules with default exports for JSON files", () => {

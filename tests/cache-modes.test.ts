@@ -1,16 +1,12 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex } from "../src/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("Incremental cache modes", () => {
   const normalize = (p: string) => p.replace(/\\/g, "/");
