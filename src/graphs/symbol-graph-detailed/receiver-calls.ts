@@ -16,6 +16,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import { rootNodeOf, sliceText } from "../../util/ast.js";
 import { foldPhpIdentifierCase, XID_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
+import { rubyConstructorMayBeCustom } from "../../util/ruby-tree.js";
 import {
   anonymousOwnerBodyType,
   anonymousOwnerForm,
@@ -664,9 +665,11 @@ export function memberContainerDef(mod: ModuleIndex, container: SyntaxNodeLike):
   return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
+/** The constant of `Name.new`, which constructs that type unless the file shows a `new` of its own for it. */
 function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
   if (!new RegExp(String.raw`^(?:${RUBY_CONSTANT_SOURCE})\.new$`, "u").test(sliceText(node, source))) return null;
-  return node.namedChildren.find((child) => isReceiverNameNode(sup, child.type) || child.type === "constant") ?? null;
+  const name = node.namedChildren.find((child) => isReceiverNameNode(sup, child.type) || child.type === "constant");
+  return name && !rubyConstructorMayBeCustom(name) ? name : null;
 }
 
 const NULLISH_TYPE_TEXT = new Set(["undefined", "null", "void"]);
@@ -1241,7 +1244,8 @@ export function declarationNodeIsStatic(node: SyntaxNodeLike, source: string): b
   for (let childIndex = 0; ; childIndex += 1) {
     const child = node.child(childIndex);
     if (!child) return false;
-    if (nodeDeclaresStatic(child, source)) return true;
+    // A child that declares its own method (`def self.name` in a Ruby class body) is static itself, not a modifier.
+    if (child.type !== "singleton_method" && nodeDeclaresStatic(child, source)) return true;
   }
 }
 

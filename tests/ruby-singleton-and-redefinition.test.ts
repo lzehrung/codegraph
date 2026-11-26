@@ -567,7 +567,8 @@ it("keeps both levels open in modules that use module_function", async () => {
   await withFixture(source, async (fixture) => {
     expect(await fixture.gotoLine(3, "helper")).toBe(2);
     expect(await fixture.gotoLine(11, "assist")).toBe(10);
-    expect((await fixture.references(2, "helper")).lines).toEqual([2, 3]);
+    // `module_function :helper` in the reopened body names the method the first body declares.
+    expect((await fixture.references(2, "helper")).lines).toEqual([2, 3, 6]);
     expect(await fixture.references(10, "assist")).toEqual({ lines: [10, 11], coverage: "complete" });
   });
 });

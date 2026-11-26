@@ -1488,7 +1488,8 @@ export const RUBY_SCOPE_REFERENCES: ReadonlyArray<
       ["statics.rb", 20, ":kind"],
       ["statics.rb", 27, "kind"],
     ],
-    "partial",
+    // `Tool.kind` calls the class, which has no reader `kind`, so it is no site of the instance accessor.
+    "complete",
   ],
   [
     ["wrapped.rb", 2, ":reserve"],

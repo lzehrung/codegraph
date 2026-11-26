@@ -42,7 +42,8 @@ it("keeps another constant's constructor out of module singleton references", as
     expect(receiver.status === "ok" && receiver.definition.range.start.line).toBe(9);
     const refs = await findReferences(index, site(file, source, 2, "new"));
     expect(refs.status === "ok" && refs.referenceCoverage.state).toBe("partial");
-    expect(refs.status === "ok" && refs.references.map((ref) => ref.range.start.line)).toEqual([2]);
+    // `self.new` and `Tools.new` name the module's own `new`; `DontCall.new` does not.
+    expect(refs.status === "ok" && refs.references.map((ref) => ref.range.start.line)).toEqual([2, 4, 5]);
     const preview = await previewRenameWithSession(
       createAgentSession({ root, useConfig: false, buildOptions: options }),
       {

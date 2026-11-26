@@ -1,0 +1,1 @@
+Ruby method ownership skips class bodies opened under a condition, and the member policy keeps forwarded class instance methods while dropping top-level def self from type-name calls.

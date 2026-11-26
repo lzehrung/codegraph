@@ -71,7 +71,9 @@ it.each([
     else expect(answer.status === "ok" && answer.definition.range.start.line).toBe(2);
     const refs = await findReferences(index, site(file, source, 2, "calculate"));
     expect(refs.status === "ok" && refs.referenceCoverage.state).toBe("partial");
-    expect(refs.status === "ok" && refs.references.map((ref) => ref.range.start.line)).toEqual([2, 4]);
+    // A literal visibility symbol names the singleton method; a splatted one stays unproven.
+    const namedLines = visibility.includes("*") ? [2, 4] : [2, 3, 4];
+    expect(refs.status === "ok" && refs.references.map((ref) => ref.range.start.line)).toEqual(namedLines);
     const preview = await previewRenameWithSession(
       createAgentSession({ root, useConfig: false, buildOptions: options }),
       {
@@ -81,7 +83,7 @@ it.each([
       },
     );
     expect(preview.safe).toBe(false);
-    expect(preview.edits.map((edit) => edit.range.start.line)).toEqual([2, 4]);
+    expect(preview.edits.map((edit) => edit.range.start.line)).toEqual(namedLines);
     const graph = await buildSymbolGraphDetailed(index);
     expect(
       graph.edges
