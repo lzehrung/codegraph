@@ -29,8 +29,11 @@ export type GitWorktreeListing = {
   trackedPaths: (() => ReadonlySet<string>) | undefined;
 };
 
-/** Changed paths of one diff, with the submodule (gitlink) paths among them. */
-export type GitChangedEntries = { files: string[]; gitlinks: string[] };
+/**
+ * Changed paths of one diff, with the submodule (gitlink) paths among them and the paths that are symlinks after the
+ * change. Modes identify both, so the `--name-only` form reports neither.
+ */
+export type GitChangedEntries = { files: string[]; gitlinks: string[]; symlinks: string[] };
 
 /** Git facts shared only by callers in the same discovery operation. */
 export type GitDiscoveryCache = {
@@ -757,6 +760,7 @@ export async function listChangedFileEntries(
 }
 
 const GIT_GITLINK_MODE = "160000";
+const GIT_SYMLINK_MODE = "120000";
 
 /** Parse `git diff --name-only -z`. The trailing split segment is empty, and a real filename can start or end with whitespace. */
 function parseNameOnlyDiffEntries(projectRoot: string, stdout: string): GitChangedEntries {
@@ -765,7 +769,7 @@ function parseNameOnlyDiffEntries(projectRoot: string, stdout: string): GitChang
     const abs = rel ? normalizePath(path.resolve(projectRoot, rel)) : "";
     if (abs) files.add(abs);
   }
-  return { files: Array.from(files), gitlinks: [] };
+  return { files: Array.from(files), gitlinks: [], symlinks: [] };
 }
 
 /**
@@ -776,6 +780,7 @@ function parseRawDiffEntries(projectRoot: string, stdout: string): GitChangedEnt
   const fields = stdout.split("\0");
   const files = new Set<string>();
   const gitlinks = new Set<string>();
+  const symlinks = new Set<string>();
   for (let index = 0; index < fields.length; index += 1) {
     const meta = fields[index];
     if (!meta?.startsWith(":")) continue;
@@ -787,8 +792,9 @@ function parseRawDiffEntries(projectRoot: string, stdout: string): GitChangedEnt
     if (!abs) continue;
     files.add(abs);
     if (sourceMode === GIT_GITLINK_MODE || destinationMode === GIT_GITLINK_MODE) gitlinks.add(abs);
+    if (destinationMode === GIT_SYMLINK_MODE) symlinks.add(abs);
   }
-  return { files: Array.from(files), gitlinks: Array.from(gitlinks) };
+  return { files: Array.from(files), gitlinks: Array.from(gitlinks), symlinks: Array.from(symlinks) };
 }
 
 async function listChangedFileEntriesUncached(
@@ -817,7 +823,7 @@ async function listChangedFileEntriesUncached(
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
-    return { files: [], gitlinks: [] };
+    return { files: [], gitlinks: [], symlinks: [] };
   }
   // A rename reports only its destination; dirty history must also retain the deleted source.
   if (opts.includeRenameSources) {

@@ -249,9 +249,6 @@ async function seedAbsoluteManifestV3(root: string): Promise<void> {
     ...(manifest.transientFiles
       ? { transientFiles: manifest.transientFiles.map((file) => absoluteProjectPath(root, file)) }
       : {}),
-    ...(manifest.symlinkDirectories
-      ? { symlinkDirectories: manifest.symlinkDirectories.map((file) => absoluteProjectPath(root, file)) }
-      : {}),
   };
   await fsp.writeFile(manifestPath(root), JSON.stringify(seeded, null, 2), "utf8");
 }

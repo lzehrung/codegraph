@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { CodegraphConfig } from "../config.js";
@@ -306,32 +305,6 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
   // process (MCP/server/watch) must not reuse a prior invocation's file list after the tree
   // changes. One CliProjectContext equals one CLI command invocation.
   const discoveryWalkCache = new Map<string, Promise<string[]>>();
-  let knownSymlinkDirectories: readonly string[] | undefined;
-  let symlinkHintResolved = false;
-
-  const resolveKnownSymlinkDirectories = async (): Promise<readonly string[] | undefined> => {
-    if (symlinkHintResolved) return knownSymlinkDirectories;
-    symlinkHintResolved = true;
-    try {
-      const { loadManifest } = await import("../indexer/build-cache.js");
-      const symlinkHintManifest = await loadManifest(projectRootFs, {
-        ...(config.cache?.location ? { cacheLocation: config.cache.location } : {}),
-      });
-      if (
-        symlinkHintManifest?.symlinkDirectories !== undefined &&
-        symlinkHintManifest.symlinkDirectoriesRootMtimeMs !== undefined
-      ) {
-        const rootMtime = (await fsp.stat(projectRootFs)).mtimeMs;
-        if (rootMtime === symlinkHintManifest.symlinkDirectoriesRootMtimeMs) {
-          knownSymlinkDirectories = symlinkHintManifest.symlinkDirectories;
-        }
-      }
-    } catch {
-      knownSymlinkDirectories = undefined;
-    }
-    return knownSymlinkDirectories;
-  };
-
   const discoveryWalkCacheKey = (
     scanRoot: string,
     patterns: string[] | undefined,
@@ -353,17 +326,12 @@ export async function loadCliProjectContext(base: CliBaseContext): Promise<CliPr
     patterns: string[] | undefined,
     options: ProjectFileDiscoveryOptions,
   ): Promise<string[]> => {
-    const symlinkDirectories = await resolveKnownSymlinkDirectories();
-    const walkOptions: ProjectFileDiscoveryOptions = {
-      ...options,
-      ...(symlinkDirectories !== undefined ? { knownSymlinkDirectories: symlinkDirectories } : {}),
-    };
-    const key = discoveryWalkCacheKey(scanRoot, patterns, walkOptions);
+    const key = discoveryWalkCacheKey(scanRoot, patterns, options);
     let pending = discoveryWalkCache.get(key);
     if (!pending) {
       pending = (async () => {
         const { listProjectFilesWithGitCandidates } = await loadProjectFilesHelpers();
-        return await listProjectFilesWithGitCandidates(scanRoot, patterns, walkOptions);
+        return await listProjectFilesWithGitCandidates(scanRoot, patterns, options);
       })();
       discoveryWalkCache.set(key, pending);
     }

@@ -51,7 +51,8 @@ export type ProjectFileDiscoveryOptions = {
   /**
    * Previously discovered symlinked directories under the project root. When provided
    * (including an empty array), discovery re-verifies each entry directly and skips the
-   * probe on warm runs. Omit it to probe once and report the result through
+   * probe, so a directory link missing from the list is not found: the caller keeps it
+   * current. Omit it to probe once and report the result through
    * `onSymlinkDirectoriesDiscovered`. The callback mode distinguishes persisted hints,
    * Git candidate screening, and the non-Git filesystem fallback.
    */

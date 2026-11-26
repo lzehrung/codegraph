@@ -24,8 +24,11 @@ import { fileIdentityKey, isFileIdentityCaseInsensitive, normalizePath, pathExis
 import { mapLimit } from "../util/concurrency.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, stripKnownResolutionExtension } from "../util/resolution-candidates.js";
 import {
+  couldBeDirectorySymlink,
+  createDiscoveredFileMatcher,
   createProjectDiscoveryContext,
   filterDiscoveredProjectFileCandidates,
+  listProjectFilesWithGitCandidates,
   DEFAULT_PROJECT_PATTERNS,
   type ProjectFileDiscoveryOptions,
   type ProjectDiscoveryContext,
@@ -511,6 +514,281 @@ export async function listUntrackedProjectFiles(
   });
 }
 
+/** What a full listing reaches through symlinks, against what the manifest indexed. */
+export type LinkedFilesPlan = {
+  /** The files the listing reaches through symlinks: below each safe symlinked directory, and symlinks that are files. */
+  files: string[];
+  /** Manifest entries a symlink reached or was, which the listing no longer reaches. */
+  retiredFiles: string[];
+  /**
+   * The next manifest's record: the symlinks the listing screened, the screened paths with nothing at them, and the
+   * paths recorded before.
+   */
+  links: string[];
+};
+
+const NO_LINKED_FILES: LinkedFilesPlan = { files: [], retiredFiles: [], links: [] };
+
+/**
+ * The manifest entries below, or equal to, any of `links`: the files a symlinked directory reached, and a symlink that
+ * is indexed as a file. Paths compare by identity key. Without links it costs nothing; with them, one lookup per path
+ * segment of each entry.
+ */
+export function findLinkedManifestEntries(entries: Iterable<string>, links: Iterable<string>): string[] {
+  const linkKeys = new Set<string>();
+  for (const link of links) linkKeys.add(fileIdentityKey(link));
+  if (!linkKeys.size) return [];
+  const isLinked = (key: string): boolean => {
+    for (let end = key.length; end > 0; end = key.lastIndexOf("/", end - 1)) {
+      if (linkKeys.has(key.slice(0, end))) return true;
+    }
+    return false;
+  };
+  return Array.from(entries).filter((entry) => isLinked(fileIdentityKey(entry)));
+}
+
+/** The manifest entries a symlink reached or was (`findLinkedManifestEntries`) that `listed` does not hold. */
+function findRetiredLinkedEntries(
+  entries: Iterable<string>,
+  links: Iterable<string>,
+  listed: Iterable<string>,
+): string[] {
+  const linked = findLinkedManifestEntries(entries, links);
+  if (!linked.length) return linked;
+  const listedKeys = new Set(Array.from(listed, fileIdentityKey));
+  return linked.filter((entry) => !listedKeys.has(fileIdentityKey(entry)));
+}
+
+/**
+ * The paths to screen for symlinks that the manifest's record cannot be trusted to hold: the recorded paths, the paths
+ * Git's diff since the manifest's commit reports as symlinks, and the paths whose name a directory link can bear
+ * (`couldBeDirectorySymlink`) among the diff's and the untracked listing's. Undefined when Git's signals cannot name
+ * every such path (no record, no diff base, or a changed submodule, whose files its own listing names): the caller
+ * screens the paths a full listing screens.
+ */
+async function findSymlinkCandidates(args: {
+  projectRoot: string;
+  manifest: Pick<IndexManifest, "lastCommit" | "symlinks">;
+  untracked: readonly string[];
+  context: ProjectDiscoveryContext;
+}): Promise<string[] | undefined> {
+  const { manifest } = args;
+  if (!manifest.symlinks || !manifest.lastCommit) return undefined;
+  const changed = await listChangedFileEntries(args.projectRoot, {
+    base: manifest.lastCommit,
+    head: "WORKTREE",
+    includeRenameSources: true,
+    includeHiddenSubmoduleChanges: true,
+    discoveryCache: args.context.git,
+  });
+  if (changed.gitlinks.length) return undefined;
+  return Array.from(
+    new Set([
+      ...manifest.symlinks,
+      ...changed.symlinks,
+      ...changed.files.filter(couldBeDirectorySymlink),
+      ...args.untracked.filter(couldBeDirectorySymlink),
+    ]),
+  );
+}
+
+/**
+ * Manifest entries that Git lists untracked and discovery would index, but that the untracked listing's filter did not
+ * accept: an untracked file replaced by a symlink to a path outside the root, or to nothing, stays in the manifest,
+ * and an existence probe still finds it. The filter ran on every untracked candidate already, so nothing is probed.
+ */
+function findRejectedUntrackedEntries(args: {
+  projectRoot: string;
+  discovery: ProjectFileDiscoveryOptions | undefined;
+  untracked: readonly string[];
+  accepted: readonly string[];
+  trackedEntries: Record<string, ManifestFileEntry>;
+}): string[] {
+  // Most updates have none: an untracked file the manifest holds that the listing's filter did not accept.
+  const indexed = args.untracked.filter((file) => Object.hasOwn(args.trackedEntries, file));
+  if (!indexed.length) return indexed;
+  const accepted = new Set(args.accepted.map(fileIdentityKey));
+  const notAccepted = indexed.filter((file) => !accepted.has(fileIdentityKey(file)));
+  if (!notAccepted.length) return notAccepted;
+  const matchesDiscovery = createDiscoveredFileMatcher(
+    args.projectRoot,
+    args.discovery?.globRoot ?? args.projectRoot,
+    DEFAULT_PROJECT_PATTERNS,
+    args.discovery,
+  );
+  return notAccepted.filter((file) => matchesDiscovery(file));
+}
+
+/**
+ * The record an update writes. Links stay while they are links. A path that held a link but now holds nothing, a
+ * directory, or something unreadable stays only while Git tracks it: Git reports no change when a tracked link returns
+ * to what the last commit holds, and says nothing of an untracked path that is gone.
+ */
+function nextSymlinkRecord(args: {
+  links: readonly string[];
+  absent: readonly string[];
+  recorded: readonly string[];
+  tracked: (() => ReadonlySet<string>) | undefined;
+}): string[] {
+  const links = new Set(args.links);
+  const undecided = Array.from(new Set([...args.absent, ...args.recorded])).filter((file) => !links.has(file));
+  if (!undecided.length) return Array.from(links);
+  const tracked = args.tracked?.();
+  if (!tracked) return [...links, ...undecided];
+  const trackedKeys = new Set(Array.from(tracked, fileIdentityKey));
+  return [...links, ...undecided.filter((file) => trackedKeys.has(fileIdentityKey(file)))];
+}
+
+/**
+ * Manifest entries that discovery would index and the complete listing does not hold, and that are symlinks now: a
+ * tracked file replaced by a link to a path outside the root stays in the manifest, and an existence probe still finds
+ * it. The set is empty unless a file left the listing, so an update without such a file reads nothing.
+ */
+async function findUnlistedSymlinkEntries(args: {
+  projectRoot: string;
+  discovery: ProjectFileDiscoveryOptions | undefined;
+  trackedEntries: Record<string, ManifestFileEntry>;
+  listed: readonly string[];
+}): Promise<string[]> {
+  const listedKeys = new Set(args.listed.map(fileIdentityKey));
+  const unlisted = Object.keys(args.trackedEntries).filter((file) => !listedKeys.has(fileIdentityKey(file)));
+  if (!unlisted.length) return unlisted;
+  const matchesDiscovery = createDiscoveredFileMatcher(
+    args.projectRoot,
+    args.discovery?.globRoot ?? args.projectRoot,
+    DEFAULT_PROJECT_PATTERNS,
+    args.discovery,
+  );
+  const candidates = unlisted.filter((file) => matchesDiscovery(file));
+  const symlinks = await mapLimit(candidates, PATH_EXISTS_PROBE_CONCURRENCY, async (file) => {
+    const stats = await fsp.lstat(file).catch(() => undefined);
+    return !!stats?.isSymbolicLink();
+  });
+  return candidates.filter((_, index) => symlinks[index]);
+}
+
+/**
+ * Lists what a full listing reaches through symlinks, and the manifest entries it no longer reaches. Git lists neither
+ * the files below a symlinked directory nor a link whose target changed, so an update that reads Git's changes alone
+ * keeps a file whose link was retargeted, misses one added below a link, and cannot find a link that returned.
+ *
+ * With `gitSignals` the update screens the manifest's recorded symlinks and the paths Git's changes name
+ * (`findSymlinkCandidates`): an update of a project without symlinks reads nothing more. Otherwise, or when those
+ * cannot name every candidate, it screens the paths a full listing screens. An untracked file that became a link to
+ * nowhere indexable is no candidate by name, so the untracked listing's rejections retire it
+ * (`findRejectedUntrackedEntries`).
+ */
+export async function reconcileLinkedFiles(args: {
+  projectRoot: string;
+  manifest: Pick<IndexManifest, "lastCommit" | "symlinks">;
+  trackedEntries: Record<string, ManifestFileEntry>;
+  opts: BuildOptions | undefined;
+  context: ProjectDiscoveryContext;
+  /** Whether Git's diff and untracked listing can name the symlinks that appeared since the manifest was written. */
+  gitSignals: boolean;
+  /** The untracked files the update's discovery accepted. */
+  untrackedFiles: readonly string[];
+}): Promise<LinkedFilesPlan> {
+  let candidates: string[] | undefined;
+  let rejected: string[] = [];
+  let tracked: (() => ReadonlySet<string>) | undefined;
+  if (args.gitSignals) {
+    const listing = await listUntrackedAndFlaggedFiles(args.projectRoot, {
+      respectGitignore: args.opts?.discovery?.useGitignore !== false,
+      discoveryCache: args.context.git,
+    });
+    tracked = listing.trackedPaths;
+    candidates = await findSymlinkCandidates({ ...args, untracked: listing.untracked });
+    rejected = findRejectedUntrackedEntries({
+      projectRoot: args.projectRoot,
+      discovery: args.opts?.discovery,
+      untracked: listing.untracked,
+      accepted: args.untrackedFiles,
+      trackedEntries: args.trackedEntries,
+    });
+  }
+  if (candidates && !candidates.length) return { ...NO_LINKED_FILES, retiredFiles: rejected };
+  let links: readonly string[] = [];
+  let missing: readonly string[] = [];
+  let watched: readonly string[] = [];
+  const files = await listProjectFilesWithGitCandidates(
+    args.projectRoot,
+    [...DEFAULT_PROJECT_PATTERNS, ...languageExtensionPatterns(args.opts?.languageExtensions)],
+    {
+      ...args.opts?.discovery,
+      ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+      discoveryContext: args.context,
+      linkedOnly: candidates ? { candidates } : {},
+      onSymlinksDiscovered: (screenedLinks, screenedMissing, screenedWatched) => {
+        links = screenedLinks;
+        missing = screenedMissing;
+        watched = screenedWatched;
+      },
+    },
+  );
+  // A file below a path that holds a link, or nothing, and that the listing does not reach is gone. A path that holds
+  // anything else is ordinary, and Git reports its files.
+  const screened = [...links, ...missing];
+  const unreached = findRetiredLinkedEntries(Object.keys(args.trackedEntries), screened, files);
+  const record = nextSymlinkRecord({
+    links,
+    absent: [...missing, ...watched],
+    recorded: args.gitSignals ? (args.manifest.symlinks ?? []) : [],
+    tracked,
+  });
+  return { files, retiredFiles: Array.from(new Set([...unreached, ...rejected])), links: record };
+}
+
+/**
+ * The counterpart of `reconcileLinkedFiles` for an update that lists the whole project itself (a project without Git,
+ * or `--cache-strict`): the manifest entries that listing does not hold although a symlink reached or was them, and, in
+ * a Git project, the untracked files it rejected (`findRejectedUntrackedEntries`) and the files it lacks that are
+ * symlinks now (`findUnlistedSymlinkEntries`).
+ */
+export async function reconcileListedFiles(args: {
+  projectRoot: string;
+  manifest: Pick<IndexManifest, "symlinks">;
+  trackedEntries: Record<string, ManifestFileEntry>;
+  opts: BuildOptions | undefined;
+  context: ProjectDiscoveryContext;
+  gitAvailable: boolean;
+  /** The files the listing holds. */
+  listed: readonly string[];
+  /** The symlinks the listing screened, and the screened paths with nothing at them. */
+  links: readonly string[];
+  /** The screened paths that hold a directory or could not be read. */
+  watched: readonly string[];
+}): Promise<LinkedFilesPlan> {
+  const unreached = findRetiredLinkedEntries(Object.keys(args.trackedEntries), args.links, args.listed);
+  if (!args.gitAvailable) {
+    return { files: [], retiredFiles: unreached, links: [...args.links, ...args.watched] };
+  }
+  const listing = await listUntrackedAndFlaggedFiles(args.projectRoot, {
+    respectGitignore: args.opts?.discovery?.useGitignore !== false,
+    discoveryCache: args.context.git,
+  });
+  const rejected = findRejectedUntrackedEntries({
+    projectRoot: args.projectRoot,
+    discovery: args.opts?.discovery,
+    untracked: listing.untracked,
+    accepted: args.listed,
+    trackedEntries: args.trackedEntries,
+  });
+  const unlisted = await findUnlistedSymlinkEntries({
+    projectRoot: args.projectRoot,
+    discovery: args.opts?.discovery,
+    trackedEntries: args.trackedEntries,
+    listed: args.listed,
+  });
+  const record = nextSymlinkRecord({
+    links: args.links,
+    absent: args.watched,
+    recorded: args.manifest.symlinks ?? [],
+    tracked: listing.trackedPaths,
+  });
+  return { files: [], retiredFiles: Array.from(new Set([...unreached, ...rejected, ...unlisted])), links: record };
+}
+
 /**
  * What the untracked listing's Git child reports about tracked files: those Git cannot compare, and each path's
  * spelling. Each is read on first use.
@@ -945,9 +1223,24 @@ export async function resolveIncrementalFilePlan(
 
     const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
     const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();
+    // Git lists neither the files below a symlinked directory nor a link's changed target: a full listing's own
+    // reading of the symlinks supplies them, and names the manifest files that no symlink reaches any more.
+    const linked = await reconcileLinkedFiles({
+      projectRoot,
+      manifest,
+      trackedEntries,
+      opts,
+      context,
+      gitSignals: true,
+      untrackedFiles,
+    });
+    // A retired file can still be a diff candidate that exists: its link now points outside the root.
+    const retiredLinked = new Set(linked.retiredFiles);
+    for (const file of retiredLinked) trackedFiles.delete(file);
     const files = new Set<string>(trackedFiles);
-    for (const file of workingTreeDiffFiles) if (existence.get(file)) files.add(file);
-    for (const file of untrackedFiles) if (existence.get(file)) files.add(file);
+    for (const file of workingTreeDiffFiles) if (existence.get(file) && !retiredLinked.has(file)) files.add(file);
+    for (const file of untrackedFiles) if (existence.get(file) && !retiredLinked.has(file)) files.add(file);
+    for (const file of linked.files) files.add(file);
     return {
       files: Array.from(files).sort(),
       manifestUpdatedAt: manifest.updatedAt,
