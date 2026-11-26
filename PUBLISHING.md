@@ -6,7 +6,7 @@ codegraph publishes three top-level npm packages:
 - `@lzehrung/codegraph-core`: the slim TypeScript library install without MCP/CLI/viewer assets
 - `@lzehrung/codegraph-native`: the required native Tree-sitter meta package plus per-platform binary packages
 
-The main package depends on the native package as a regular dependency. When no matching native binary loads, codegraph commands fail with an error that points to `codegraph doctor`; there is no reduced or regex fallback mode.
+The main package depends on the native package as a regular dependency. For the runtime requirement and the missing-addon failure, see [Installation](./docs/installation.md#requirements).
 
 ## Local Release Commands
 
@@ -88,15 +88,15 @@ SHA256SUMS
 ```
 
 Each archive contains a target-matching Node.js runtime, the built CLI, production dependencies, matching native packages, the bundled skill, licenses/notices, relative launchers, and `manifest.json`. The manifest records `schemaVersion: 1`, `channel: "standalone-preview"`, version, target, native suffix, Node version, source revision, and per-file SHA-256 records.
-The Linux standalone archives bundle glibc Node and GNU native targets. The bootstrap rejects musl hosts; musl remains supported through the certified package channel, not these standalone assets.
+The Linux standalone archives bundle glibc Node and GNU native targets. The bootstrap rejects musl hosts.
 
-The standalone matrix assembles archives from the released immutable package candidates plus a target-matching Node runtime. Five targets run versioned installation plus `version` and `doctor`; `win32-arm64` receives structural bundle verification only and must not be described as runtime-certified.
+The standalone matrix assembles archives from the released immutable package candidates plus a target-matching Node runtime. Five targets run versioned installation plus `version` and `doctor`; `win32-arm64` receives structural bundle verification only.
 
 Only archives that pass their matrix gate are uploaded as `standalone-smoked-*`. The aggregation job copies those exact archives without rebuilding, adds `install.sh` and `install.ps1` from the tagged source revision, and generates one combined `SHA256SUMS`.
 
 The standalone publish job attaches that post-smoke artifact to the existing GitHub Release. It does not rebuild or repackage standalone assets after smoke. Package publication happens first; if standalone assembly fails, the published packages remain available while the overall `release` workflow reports the standalone failure.
 
-The bootstrap scripts preview their target and user-owned paths, confirm interactively or require explicit `-Yes`/`--yes`, verify the selected archive against `SHA256SUMS`, reject unsafe archive entries, and run bundled `version` and `doctor`. For a same-version root, bundled Node verifies both roots and requires exact target, native suffix, source revision, Node version, and per-file path, size, and SHA-256 manifest matches before reuse; a mismatch leaves the launcher and install manifest unchanged. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
+The bootstrap scripts follow the [standalone install](./docs/installation.md#install-the-standalone-preview) flow and reject unsafe archive entries. For a same-version root, bundled Node verifies both roots and requires exact target, native suffix, source revision, Node version, and per-file path, size, and SHA-256 manifest matches before reuse; a mismatch leaves the launcher and install manifest unchanged. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
 
 Checksums prove integrity only after the release download is trusted. Until signing or attestation is wired into this channel, retain the `standalone-preview` label and do not describe the assets as signed.
 
@@ -136,7 +136,6 @@ After that release, configure `lzehrung/codegraph` `release.yml` as an `npm publ
 - `@lzehrung/codegraph`
   - Publishes `dist/`, the CLI, MCP docs/skill/viewer assets, and depends on `@lzehrung/codegraph-core`.
   - Loads `@lzehrung/codegraph-native` (required).
-  - Fails with a `codegraph doctor` pointer when native is unavailable.
 - `@lzehrung/codegraph-core`
   - Publishes the staged library `dist/` subset (no MCP SDK, installer-only deps, or viewer/skill assets).
   - Versions with the root package and is packed/published whenever root is released.
@@ -156,7 +155,7 @@ These steps do not produce `CertificationReportV1` and do not establish that pub
 npm run build
 ```
 
-`npm run build` rebuilds `dist/` and requires the native workspace build to succeed when Cargo is available. Use `npm run build:native` when you want to rebuild the native addon without rebuilding `dist/`, or when release/publish flows should fail fast if Rust is missing.
+`npm run build` rebuilds `dist/` and requires the native workspace build to succeed when Cargo is available. Use `npm run build:native` to rebuild the native addon without rebuilding `dist/`, or to fail fast when Rust is missing; see [source checkout](./docs/installation.md#use-a-source-checkout).
 
 2. Create the per-target npm package directories:
 
@@ -224,4 +223,4 @@ Do not claim updates are universally lock-free. The supported claim is that code
 
 - `@lzehrung/codegraph` and `@lzehrung/codegraph-native` version independently.
 - `src/native/binding-loader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
-- If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback; if native loading still fails, commands stop with an error, and a failed native query is reported as `queryFailure`.
+- If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback.
