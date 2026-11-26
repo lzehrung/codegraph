@@ -15,7 +15,8 @@ Move the language-specific operation into the existing language-owned data row o
 instead of adding an identity wrapper, singleton-language flag, or baseline entry. After removing
 sites, run `node scripts/language-check-inventory.mjs --write-baseline`; regeneration refuses
 additions to an existing baseline. See the [migration plan](docs/plans/2026-11-24-language-checks-to-hooks.md)
-for the narrow format, registry, and target-file grammar-safety exemptions.
+for the narrow format, registry, and target-file grammar-safety exemptions, and the
+[stage plan](docs/plans/2026-11-25-language-stage-strategies.md) for how the remaining sites move.
 
 ## Change records
 

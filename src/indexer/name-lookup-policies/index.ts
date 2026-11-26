@@ -27,6 +27,10 @@ import { rustReferenceHooks } from "./rust-references.js";
 import { scssReferenceHooks } from "./scss-references.js";
 import { swiftGraphImportHooks, swiftReferenceHooks } from "./swift-references.js";
 import { typescriptReferenceHooks } from "./typescript-references.js";
+import { cNamedImportStage, cppNamedImportStage } from "../name-import-stages/c-family.js";
+import { csharpNamedImportStage } from "../name-import-stages/csharp.js";
+import { kotlinNamedImportStage } from "../name-import-stages/kotlin.js";
+import { pythonNamedImportStage } from "../name-import-stages/python.js";
 
 /** Whether a function shares its name with another function in its file (an overload set). */
 function hasSameNameSiblings(module: ModuleIndex, def: SymbolDef): boolean {
@@ -130,11 +134,17 @@ const zigLookupPolicy: NameLookupPolicy = {
 const NO_POLICY: NameLookupPolicy = {};
 
 const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
-  c: { ...cLookupPolicy, imports: importNamePolicyFor("c"), references: cReferenceHooks },
-  cpp: { ...cppLookupPolicy, references: cppReferenceHooks },
+  c: {
+    ...cLookupPolicy,
+    imports: importNamePolicyFor("c"),
+    namedImports: cNamedImportStage,
+    references: cReferenceHooks,
+  },
+  cpp: { ...cppLookupPolicy, namedImports: cppNamedImportStage, references: cppReferenceHooks },
   csharp: {
     ...csharpLookupPolicy,
     imports: { ...importNamePolicyFor("csharp"), ...csharpGraphImportHooks },
+    namedImports: csharpNamedImportStage,
     references: csharpReferenceHooks,
   },
   css: { imports: importNamePolicyFor("css") },
@@ -145,10 +155,16 @@ const POLICIES: Readonly<Record<string, NameLookupPolicy>> = {
   kotlin: {
     ...kotlinLookupPolicy,
     imports: { ...importNamePolicyFor("kotlin"), ...kotlinGraphImportHooks },
+    namedImports: kotlinNamedImportStage,
     references: kotlinReferenceHooks,
   },
   php: { ...phpLookupPolicy, references: phpReferenceHooks },
-  python: { ...pythonLookupPolicy, imports: importNamePolicyFor("python"), references: pythonReferenceHooks },
+  python: {
+    ...pythonLookupPolicy,
+    imports: importNamePolicyFor("python"),
+    namedImports: pythonNamedImportStage,
+    references: pythonReferenceHooks,
+  },
   ruby: { ...rubyLookupPolicy, imports: importNamePolicyFor("ruby"), references: rubyReferenceHooks },
   rust: { ...rustLookupPolicy, references: rustReferenceHooks },
   swift: {

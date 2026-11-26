@@ -54,12 +54,8 @@ import {
   resolveSwiftNestedTypePath,
   memberLookupDeps,
 } from "./navigation-goto.js";
-import {
-  definitionForBinding,
-  getOrBuildScopeIndex,
-  laterLocalShadowsUse,
-  resolveNamedDefinition,
-} from "./navigation-local.js";
+import { definitionForBinding, getOrBuildScopeIndex, laterLocalShadowsUse } from "./navigation-local.js";
+import { genericNamedImportStage } from "./navigation-named-core.js";
 import { findClosestScopeBinding } from "./scope-lookup.js";
 
 import { okGoToResult } from "./navigation-provenance.js";
@@ -166,7 +162,7 @@ function resolveQualifiedJvmName(
  *
  * Shared order: language pre-lexical steps, closest scope binding, its definition (with
  * overloads chosen by arity), a local declared later in the same scope, then cross-module
- * lookup (imports, compilation-unit peers, star imports) through {@link resolveNamedDefinition}.
+ * lookup (imports, compilation-unit peers, star imports) through the language's named/import stage.
  */
 export function resolveBareName(
   use: BareNameUse,
@@ -242,7 +238,8 @@ export function resolveBareName(
     const beforeCrossModule = policy.beforeCrossModule?.(state);
     if (beforeCrossModule !== undefined) return beforeCrossModule;
     if (!sup.supportsCrossModuleSymbols) return null;
-    const resolved = resolveNamedDefinition(
+    const namedImports = policy.namedImports ?? genericNamedImportStage;
+    const resolved = namedImports(
       index,
       mod,
       file,

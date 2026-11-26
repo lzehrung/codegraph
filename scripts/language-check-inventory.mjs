@@ -110,7 +110,7 @@ const parserSafetySites = new Set([
   'src/indexer/member-lookup-policies/csharp-owner.ts::csharpPartialExportIdentity::languageId !== "csharp"',
   'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::retained?.sup?.id === "csharp"',
   'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::sup.id !== "csharp"',
-  'src/util/resolution/namespace-specifiers.ts::acceptsFile::supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp"',
+  'src/util/resolution/csharp.ts::csharpSpecifierAcceptsFile::supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp"',
 ]);
 const ownerFiles = {
   A: [

@@ -18,7 +18,7 @@ import {
   resolveVisibleCppCallableName,
   resolveCppVisibleStaticCallableName,
 } from "../navigation-cpp.js";
-import { resolveNamedDefinition } from "../navigation-local.js";
+import { cppNamedImportStage } from "../name-import-stages/c-family.js";
 import { okGoToResult } from "../navigation-provenance.js";
 import type { ParsedFileContext } from "../parse-context.js";
 import type { GoToResult } from "../types.js";
@@ -79,7 +79,7 @@ function lookupCppQualifiedName(use: BareNameUse, qualifiedName: string): GoToRe
     if (!staticMember) return { status: "not_found", reason: AMBIGUOUS_CPP_OVERLOAD_REASON };
     return okGoToResult(index, staticMember, { resolution: "exact", confidence: "high" });
   }
-  return resolveNamedDefinition(index, mod, file, parsed.sup, qualifiedName) ?? undefined;
+  return cppNamedImportStage(index, mod, file, parsed.sup, qualifiedName) ?? undefined;
 }
 
 /** Qualifier lookup is lexical before the direct textual path can name a global declaration. */
@@ -118,7 +118,7 @@ export const cppLookupPolicy: NameLookupPolicy = {
     const visible = resolveVisibleCppCallableName(index, mod, target, node, parsed.source, loadParsed(use));
     if (visible) return okGoToResult(index, visible, { resolution: "import", confidence: "high" });
     if (visible === undefined) {
-      const resolved = resolveNamedDefinition(index, mod, file, parsed.sup, target);
+      const resolved = cppNamedImportStage(index, mod, file, parsed.sup, target);
       if (resolved) return resolved;
     }
     return { status: "not_found", reason: AMBIGUOUS_CPP_USING_DECLARATION_REASON };

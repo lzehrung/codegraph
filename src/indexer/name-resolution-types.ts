@@ -10,6 +10,7 @@ import type { ParsedFileProvider } from "./parsed-cache.js";
 import type { Binding, ScopeIndex } from "./scope-types.js";
 import type { GoToResult, ImportBinding, ModuleIndex, ProjectIndex, ReferenceCoverage, SymbolDef } from "./types.js";
 import type { ImportNameRules } from "./import-name-types.js";
+import type { NamedImportStage } from "./name-import-stage-types.js";
 import type { ParameterReferenceScanFilter } from "./reference-scan-types.js";
 
 /** A lookup step that needs async member resolution before its answer is known. */
@@ -121,6 +122,10 @@ export type BindingHooks = Readonly<{
 export type ImportNameHooks = ImportNameRules &
   Readonly<{
     resolveAlias?: (use: BareNameUse, binding: ImportBinding) => NameResolution | null | undefined;
+    /** A named import may name a module its target declares (Rust `use crate::module`), checked before its exports. */
+    moduleNamedImports?: true;
+    /** A star-only name declared in another language's file takes that language's spelling as its alias key. */
+    starNamesUseTargetSpelling?: true;
   }>;
 
 /** Existing state needed to plan references to one definition. */
@@ -189,6 +194,8 @@ export type NameLookupPolicy = {
   bindingResolution?: BindingHooks;
   /** Language-specific import and alias lookup; absent keeps the generic stages. */
   imports?: ImportNameHooks;
+  /** The cross-module local-export, import and star arbitration; absent keeps the generic named/import stage. */
+  namedImports?: NamedImportStage;
   /** Reference planning additions; absent keeps the generic reference plan. */
   references?: ReferenceHooks;
   lookupName?(use: BareNameUse): string;

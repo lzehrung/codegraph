@@ -131,8 +131,10 @@ import {
   definitionForBinding,
   getOrBuildScopeIndex,
   laterLocalShadowsUse,
-  resolveNamedDefinition,
 } from "./navigation-local.js";
+import { genericNamedImportStage } from "./navigation-named-core.js";
+import { namedImportStageFor } from "./name-import-stages/index.js";
+import type { NamedImportStage } from "./name-import-stage-types.js";
 import { csharpQualifiedNameNode, findClosestScopeBinding } from "./scope-lookup.js";
 import { definitionWithoutDeferredSteps, type JvmTypeNameResolver } from "./name-resolution-types.js";
 import { csharpUsingStaticTypeCandidates } from "./name-lookup-policies/csharp-using-static.js";
@@ -493,7 +495,6 @@ export const memberLookupDeps: MemberLookupDeps = {
   resolveQualifiedCppOwner: resolveCppQualifiedMemberContainer,
   resolveRubyConstantReference,
   resolveJvmQualifiedPath,
-  namedDefinition: (index, mod, sup, name) => resolveNamedDefinition(index, mod, mod.file, sup, name),
   getScopeIndex: (index, mod, source, sup, tree) => getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree),
   pythonImportAtUse,
   pythonDottedPhraseAtUse,
@@ -2092,7 +2093,7 @@ export async function resolveMemberAccessDefinition(params: {
               if (embedded.includes(memberName)) {
                 const ownerModule = index.byFile.get(fileIdentityKey(receiver.def.file));
                 const named = ownerModule
-                  ? resolveNamedDefinition(index, ownerModule, ownerModule.file, context.sup, memberName)
+                  ? namedImportStageFor(context.sup.id)(index, ownerModule, ownerModule.file, context.sup, memberName)
                   : null;
                 if (named?.status === "ok") {
                   const type = asMemberContainer(index, named.definition);
@@ -3400,6 +3401,7 @@ async function baseRefsFromContainer(
     return typeNameKey ? typeNameKey(normalized) : normalized;
   };
   const parsed: ParsedFileContext = { source, tree, sup };
+  const namedImports = namedImportStageFor(sup.id);
   for (const base of bases) {
     // An unreadable base contributes no members; the walk never substitutes another type for it.
     if (base.kind === "unproven") continue;
@@ -3426,7 +3428,7 @@ async function baseRefsFromContainer(
     }
     if (!def && base.kind === "simple" && sup.id !== "php") {
       const scope = sup.id === "python" ? getOrBuildScopeIndex(index, mod.file, source, sup, mod, tree) : undefined;
-      const named = resolveNamedDefinition(
+      const named = namedImports(
         index,
         mod,
         mod.file,
@@ -3921,6 +3923,9 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
   const leftContext = await ensureParsedContextForIndex(index, left.file).catch(ignoreQueryParseFailure);
   if (!leftContext) return false;
   const policy = memberLookupPolicyFor(leftContext.sup.id);
+  const leftNamedImports = namedImportStageFor(leftContext.sup.id);
+  // The right declaration's file loads on its first spelling that needs resolution; its stage is selected there once.
+  let rightNamedImports: NamedImportStage | undefined;
   for (let at = 0; at < leftTypes.length; at += 1) {
     const text = leftTypes[at]!;
     // A position the inherited member spells with a type its implementer chooses fits whatever the other spells there.
@@ -3953,8 +3958,9 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
     const leftModule = index.byFile.get(fileIdentityKey(left.file));
     const rightModule = index.byFile.get(fileIdentityKey(right.file));
     if (!rightContext || !leftModule || !rightModule) return false;
+    rightNamedImports ??= namedImportStageFor(rightContext.sup.id);
     // Resolve at each declaration so a C# spelling reads its own namespace region.
-    const leftType = resolveNamedDefinition(
+    const leftType = leftNamedImports(
       index,
       leftModule,
       left.file,
@@ -3963,7 +3969,7 @@ export async function sameParameterTypes(index: ProjectIndex, left: SymbolDef, r
       undefined,
       left.range.start.index,
     );
-    const rightType = resolveNamedDefinition(
+    const rightType = rightNamedImports(
       index,
       rightModule,
       right.file,
@@ -4299,7 +4305,7 @@ async function csharpDeclaredBaseRef(
         resolveCsharpQualifiedReceiverType(index, module, typeNode, context.source, scopeIndex, files),
       );
     } else {
-      const resolved = resolveNamedDefinition(
+      const resolved = namedImportStageFor(context.sup.id)(
         index,
         module,
         file,
@@ -5059,7 +5065,7 @@ export function resolveRubyVisibleConstant(
   typeName: string,
 ): SymbolDef | null {
   if (sup.id !== "ruby") return null;
-  const resolved = resolveNamedDefinition(index, mod, mod.file, sup, typeName);
+  const resolved = genericNamedImportStage(index, mod, mod.file, sup, typeName);
   if (resolved?.status !== "ok") return null;
   return declaresMembers(resolved.definition) ? resolved.definition : null;
 }
@@ -5218,7 +5224,7 @@ async function followSwiftAlias(
     const named = target ? unwrapNamedType(target, context.sup) : null;
     if (!named || target?.namedChildren.length !== 1) return undefined;
     const targetName = sliceText(named, context.source);
-    const namedTarget = resolveNamedDefinition(
+    const namedTarget = genericNamedImportStage(
       index,
       mod,
       mod.file,
@@ -5383,7 +5389,7 @@ async function resolveReceiverDefinition(
       };
     }
     if (sup.id === "go") {
-      const named = resolveNamedDefinition(index, mod, mod.file, sup, typeName, undefined, constructor.startIndex);
+      const named = genericNamedImportStage(index, mod, mod.file, sup, typeName, undefined, constructor.startIndex);
       const peer = named?.status === "ok" ? asMemberContainer(index, named.definition) : undefined;
       if (peer) return { def: peer, memberScope: "any" };
     }
@@ -5407,7 +5413,7 @@ async function resolveReceiverDefinition(
       };
     }
     if (syntax.policy?.declaredReceiverUsesNameLookup) {
-      const named = resolveNamedDefinition(
+      const named = namedImportStageFor(sup.id)(
         index,
         mod,
         mod.file,
@@ -5426,7 +5432,7 @@ async function resolveReceiverDefinition(
       if (type) return { def: type, memberScope: "instance" };
     }
     // Ruby `require` exposes a class as a namespace import. A bare constant already
-    // resolves through resolveNamedDefinition; `Klass.new` must use that same path
+    // resolves through the named/import stage; `Klass.new` must use that same path
     // so goto, references, and call edges agree. Same-file classes returned above.
     if (sup.id === "ruby" && typedLocals.length === 0) {
       const rubyType = resolveRubyVisibleConstant(index, mod, sup, typeName);

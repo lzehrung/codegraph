@@ -1,3 +1,3 @@
 import type { GraphHooks } from "./types.js";
 
-export const javaGraphHooks: GraphHooks = { memberVisibility: "not-exported" };
+export const javaGraphHooks: GraphHooks = { memberVisibility: "not-exported", importResolverVisibility: true };

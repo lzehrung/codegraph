@@ -71,7 +71,7 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import { JAVA_SUPPORT } from "../src/languages.js";
-import { resolveNamedDefinition } from "../src/indexer/navigation-local.js";
+import { namedImportStageFor } from "../src/indexer/name-import-stages/index.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { clearTsconfigCache } from "../src/util/resolution/tsconfig.js";
@@ -3384,7 +3384,7 @@ describe("Go to Definition", () => {
         expect(imported).toBeDefined();
         if (!module || !imported || imported.kind !== "named") return;
         imported.local = "help\u200cer";
-        const result = resolveNamedDefinition(index, module, consumerFile, JAVA_SUPPORT, "helper");
+        const result = namedImportStageFor(JAVA_SUPPORT.id)(index, module, consumerFile, JAVA_SUPPORT, "helper");
 
         expect(result?.status).toBe("ok");
         if (result?.status === "ok") {

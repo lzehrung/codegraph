@@ -1,7 +1,8 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { normalizeKotlinIdentifier } from "../util/identifiers.js";
 import { fileIdentityKey } from "../util/paths.js";
-import { definitionForBinding, getOrBuildScopeIndex, resolveNamedDefinition } from "./navigation-local.js";
+import { definitionForBinding, getOrBuildScopeIndex } from "./navigation-local.js";
+import { namedImportStageFor } from "./name-import-stages/index.js";
 import { findClosestScopeBinding } from "./scope-lookup.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import {
@@ -109,9 +110,10 @@ async function acceptsLambdaType(
   const scopeIndex = getOrBuildScopeIndex(index, mod.file, parsed.source, parsed.sup, mod, parsed.tree);
   const binding = findClosestScopeBinding(scopeIndex, name.text, name, parsed.sup, true);
   const local = binding ? definitionForBinding(binding, mod.file, name, parsed.sup, parsed.source, parsed.tree) : null;
+  // The declaration's own file selects its stage: a type alias may lead into another loaded file.
   const resolved = local
     ? null
-    : resolveNamedDefinition(
+    : namedImportStageFor(parsed.sup.id)(
         index,
         mod,
         mod.file,

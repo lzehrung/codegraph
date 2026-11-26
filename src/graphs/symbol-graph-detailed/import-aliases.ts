@@ -21,7 +21,6 @@ import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "../../indexer/python-dotted-imports.js";
-import { normalizeKotlinIdentifier } from "../../util/identifiers.js";
 import { graphImportRulesFor } from "../../indexer/name-lookup-policies/reference-rules.js";
 
 export type ImportAliasMaps = {
@@ -82,7 +81,10 @@ export function buildImportAliasMaps(
   const aliasToTargetModule = new Map<string, string>();
   const languageSupport = supportForFileWithoutHeaderSample(moduleEntry.file, index.languageExtensions);
   const languageId = languageSupport?.id ?? "";
-  const aliasKey = graphImportRulesFor(languageId).aliasKey ?? ((name: string): string => name);
+  const graphImportRules = graphImportRulesFor(languageId);
+  const aliasKey = graphImportRules.aliasKey ?? ((name: string): string => name);
+  const moduleNamedImports = !!graphImportRules.moduleNamedImports;
+  const starNamesUseTargetSpelling = !!graphImportRules.starNamesUseTargetSpelling;
   const precedence = starImportPrecedence(languageId);
   const sourceOrderedBindings = precedence === "last-wins";
   const pythonLocalStartIndexes = new Map<string, number>();
@@ -169,7 +171,7 @@ export function buildImportAliasMaps(
         // A Rust `use crate::mod_name;` binding indexes as a named import pointing at the
         // crate root, not at an export; the module itself is a separate indexed namespace
         // import there (`pub mod mod_name;`). Checking this first matches navigation's order.
-        if (languageId === "rust") {
+        if (moduleNamedImports) {
           const moduleFile = resolveRustModuleNamespace(index, imp);
           if (moduleFile) {
             aliasToTargetModule.set(key, normalizePath(moduleFile));
@@ -226,10 +228,14 @@ export function buildImportAliasMaps(
     const decision = resolveStarImportedName(index, moduleEntry, languageId, name);
     if (decision.status !== "resolved") continue;
     // An alias of the same identifier blocks the star even when the directive spells it `@B`
-    // and the star publishes `B`, so the comparison goes through the language's alias key.
-    const targetLanguage = supportForFileWithoutHeaderSample(decision.definition.file, index.languageExtensions)?.id;
+    // and the star publishes `B`, so the comparison goes through the language's alias key. A
+    // star name declared in another language's file (a Java star import of a Kotlin package)
+    // is spelled as that language spells it.
+    const targetSupport = starNamesUseTargetSpelling
+      ? supportForFileWithoutHeaderSample(decision.definition.file, index.languageExtensions)
+      : undefined;
     const nameKey =
-      languageId === "java" && targetLanguage === "kotlin" ? normalizeKotlinIdentifier(name) : aliasKey(name);
+      targetSupport && targetSupport.id !== languageId ? targetSupport.normalizeIdentifier(name) : aliasKey(name);
     const effectiveBinding = effectiveExplicitOrLocalBinding(
       moduleEntry.imports,
       languageId,
