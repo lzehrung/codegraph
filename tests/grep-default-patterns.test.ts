@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
-import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 import { astGrep, textGrep } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("grep default patterns", () => {
   it("includes Kotlin files in default text and AST grep", async () => {

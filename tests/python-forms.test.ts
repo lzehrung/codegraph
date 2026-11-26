@@ -1,12 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { collectGraph, buildProjectIndex, resolveExport } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("Python import and __all__ forms", () => {
   it("parses multiline from-import and resolves package edge", async () => {

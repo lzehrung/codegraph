@@ -1,13 +1,9 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 import { resolveGoImportPath } from "../src/util.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("go.work multi-module import resolution", () => {
   it("resolves imports across modules listed in go.work", async () => {

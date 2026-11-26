@@ -1,13 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { logWithLevel } from "../src/logging.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("logging behavior", () => {
   it("suppresses manifest mismatch warnings when logLevel is silent", async () => {

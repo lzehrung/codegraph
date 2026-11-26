@@ -27,12 +27,13 @@ import {
   readOnlySamplePath,
   withCopiedFixture,
 } from "../helpers/filesystem.js";
+import { createTestIndexFromPath } from "../test-utils.js";
 
 const fixtureRoot = normalizePath(readOnlySamplePath("terraform"));
 let fixtureIndex: ProjectIndex;
 
 beforeAll(async () => {
-  fixtureIndex = await buildProjectIndex(fixtureRoot);
+  fixtureIndex = await createTestIndexFromPath(fixtureRoot);
 });
 
 function fixtureFile(relativePath: string): string {

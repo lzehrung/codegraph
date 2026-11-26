@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { buildProjectIndex, buildSymbolGraphDetailed } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-  return dir;
-}
 
 function norm(p: string): string {
   return p.replace(/\\/g, "/");

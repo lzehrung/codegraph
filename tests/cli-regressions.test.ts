@@ -9,7 +9,7 @@ import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../src/cli/sk
 import packageJson from "../package.json" with { type: "json" };
 import { runGit as git } from "./helpers/git.js";
 import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
-import { copyFixtureSubset, createTwoCommitCycleProject, readOnlySamplePath } from "./helpers/filesystem.js";
+import { copyFixtureSubset, createTwoCommitCycleProject, mkTmpDir, readOnlySamplePath } from "./helpers/filesystem.js";
 import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compact-graph.js";
 import { cacheRoot } from "../src/indexer/build-cache/location.js";
 
@@ -2395,10 +2395,6 @@ index e69de29..4b825dc 100644
    }
  }
 `;
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 function initGitRepo(root: string): void {
   git(root, ["init"]);

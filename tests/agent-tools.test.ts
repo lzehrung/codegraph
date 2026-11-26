@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import * as codegraph from "../src/index.js";
 import {
@@ -16,14 +15,10 @@ import {
   tool_impactJSON,
   tool_impactFromDiffText,
 } from "../src/agent-tools.js";
-import { copyFixtureSubset, readOnlySamplePath } from "./helpers/filesystem.js";
+import { copyFixtureSubset, mkTmpDir, readOnlySamplePath } from "./helpers/filesystem.js";
 import * as projectFilesModule from "../src/util/project-files.js";
 import * as loadCurrentIndexModule from "../src/indexer/load-current-index.js";
 import * as navigationModule from "../src/indexer/navigation.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("Agent Tools", () => {
   let samplePath = "";

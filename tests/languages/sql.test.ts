@@ -23,6 +23,7 @@ import { findRenameReferences, findUsageReferences } from "../../src/indexer/nav
 import type { FindReferencesResult, GoToResult } from "../../src/indexer/types.js";
 import { fileIdentityKey } from "../../src/util/paths.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/tree-sitter-languages.js";
+import { createTestIndexFromFiles, createTestIndexFromPath } from "../test-utils.js";
 
 it("registers SQL files as language support", () => {
   expect(supportForFile("schema.sql")?.id).toBe("sql");
@@ -77,7 +78,7 @@ it("keeps T-SQL batches and nested CTE fixtures as SQL facts", async () => {
 it("indexes SQL object definitions as language symbols", async () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
   const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
-  const index = await buildProjectIndexFromFiles(samplePath, [schemaFile]);
+  const index = await createTestIndexFromFiles(samplePath, [schemaFile]);
 
   expect(listSymbols(index, { file: schemaFile })).toContainEqual(
     expect.objectContaining({
@@ -121,7 +122,7 @@ it("includes discovered SQL files in the normal repository index", async () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
   const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
   const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
-  const index = await buildProjectIndex(samplePath);
+  const index = await createTestIndexFromPath(samplePath);
 
   expect(index.byFile.has(fileIdentityKey(schemaFile))).toBe(true);
   expect(index.byFile.has(fileIdentityKey(reportFile))).toBe(true);

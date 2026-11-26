@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildReviewReport } from "../src/index.js";
 import type { ReviewBuildReport } from "../src/review/types.js";
 import { runGit } from "./helpers/git.js";
-async function tempProject(prefix: string): Promise<string> {
-  return await mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 describe("PR4 review audit regressions", () => {
   it("preserves modeChanged in review transport data and skips duplicate work", async () => {
-    const root = await tempProject("cg-review-mode-transport-");
+    const root = await mkTmpDir("cg-review-mode-transport-");
     try {
       await writeFile(path.join(root, "script.ts"), "export const value = 1;\n", "utf8");
       const report = await buildReviewReport(root, {
@@ -26,7 +23,7 @@ describe("PR4 review audit regressions", () => {
   });
 
   it("does not create duplicate work for a pure rename", async () => {
-    const root = await tempProject("cg-review-rename-duplicate-");
+    const root = await mkTmpDir("cg-review-rename-duplicate-");
     try {
       await writeFile(path.join(root, "old.ts"), "export const value = 1;\n", "utf8");
       await writeFile(path.join(root, "new.ts"), "export const value = 1;\n", "utf8");
@@ -48,7 +45,7 @@ describe("PR4 review audit regressions", () => {
   });
 
   it("only creates duplicate tasks for updated summaries", async () => {
-    const root = await tempProject("cg-review-status-duplicate-");
+    const root = await mkTmpDir("cg-review-status-duplicate-");
     try {
       const source = [
         "export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {",
@@ -108,7 +105,7 @@ describe("PR4 review audit regressions", () => {
   });
 
   it("normalizes negative public candidate limits instead of widening results", async () => {
-    const root = await tempProject("cg-review-negative-candidates-");
+    const root = await mkTmpDir("cg-review-negative-candidates-");
     try {
       await writeFile(path.join(root, "changed.ts"), "export const value = 1;\n", "utf8");
       await writeFile(path.join(root, "changed.test.ts"), "import { value } from './changed.js';\nvalue;\n", "utf8");

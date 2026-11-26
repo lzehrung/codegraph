@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { analyzeImpactFromDiff, buildProjectIndex } from "../src/index.js";
 import type { ProjectIndex } from "../src/indexer.js";
+import { createTestIndexFromPath } from "./test-utils.js";
 
 describe("Impact diagnostics", () => {
   it("includes diagnostics counters and direct-impact confidence", async () => {
     const root = path.resolve("tests/samples/typescript");
-    const index = await buildProjectIndex(root);
+    const index = await createTestIndexFromPath(root);
 
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -37,7 +38,7 @@ index 1111111..2222222 100644
 
   it("does not count deleted-file symbol mapping as parser failures", async () => {
     const root = path.resolve("tests/samples/typescript");
-    const index = await buildProjectIndex(root);
+    const index = await createTestIndexFromPath(root);
 
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..0000000 100644

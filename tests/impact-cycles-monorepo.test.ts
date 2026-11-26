@@ -1,14 +1,10 @@
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { describe, expect, it } from "vitest";
 import { buildProjectIndex } from "../src/index.js";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 describe("impact cycles and monorepo manifest modeling", () => {
   it("surfaces relevant dependency cycles in impact reports", async () => {

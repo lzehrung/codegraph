@@ -1,12 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import {
-  collectGraph,
-  buildProjectIndexFromFiles,
-  buildSymbolGraph,
-  graphToMermaidSymbolsWithFiles,
-} from "../src/index.js";
-import { getSamplePath } from "./test-utils.js";
+import { collectGraph, buildSymbolGraph, graphToMermaidSymbolsWithFiles } from "../src/index.js";
+import { createTestIndexFromFiles, getSamplePath } from "./test-utils.js";
 
 type EdgeTo = { type: "file"; path: string } | { type: "external"; name: string };
 const toStr = (to: EdgeTo) => (to.type === "file" ? to.path : to.name);
@@ -183,7 +178,7 @@ describe("Dependency Graph", () => {
         path.join(samplePath, "utils.ts").replace(/\\/g, "/"),
       ];
       const graph = await collectGraph(samplePath, files);
-      const index = await buildProjectIndexFromFiles(samplePath, files);
+      const index = await createTestIndexFromFiles(samplePath, files);
       const sgraph = await buildSymbolGraph(index);
       const mermaid = graphToMermaidSymbolsWithFiles(sgraph, graph, samplePath);
       expect(mermaid).toContain("flowchart LR");

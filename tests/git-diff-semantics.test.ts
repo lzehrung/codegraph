@@ -1,16 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { gitDiffArgs, getUnifiedDiff, listChangedFiles, listUntrackedFiles } from "../src/util.js";
 import { decodeGitPath, runGit, setGitExecutableForTests } from "../src/util/git.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
-import { isSymlinkUnavailable } from "./helpers/filesystem.js";
-
-function makeGitTempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 
 async function removeGitTempDir(root: string): Promise<void> {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -18,7 +13,7 @@ async function removeGitTempDir(root: string): Promise<void> {
 
 describe("git diff semantics", () => {
   it("uses explicit base..head ranges", async () => {
-    const root = await makeGitTempDir("codegraph-git-range-");
+    const root = await mkTmpDir("codegraph-git-range-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -46,7 +41,7 @@ describe("git diff semantics", () => {
   });
 
   it("uses changedSince as git diff <rev> against working tree/index", async () => {
-    const root = await makeGitTempDir("codegraph-git-since-");
+    const root = await mkTmpDir("codegraph-git-since-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -71,7 +66,7 @@ describe("git diff semantics", () => {
   });
 
   it("supports WORKTREE as a base/head sentinel against the working tree", async () => {
-    const root = await makeGitTempDir("codegraph-git-worktree-");
+    const root = await mkTmpDir("codegraph-git-worktree-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -101,7 +96,7 @@ describe("git diff semantics", () => {
   });
 
   it("supports STAGED and INDEX as base/head sentinels against the current index", async () => {
-    const root = await makeGitTempDir("codegraph-git-index-");
+    const root = await mkTmpDir("codegraph-git-index-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -133,8 +128,8 @@ describe("git diff semantics", () => {
   });
 
   it.each([false, true])("confines changed paths to a nested project root (alias=%s)", async (alias) => {
-    const root = await makeGitTempDir("codegraph-git-nested-diff-");
-    const aliasParent = await makeGitTempDir("codegraph-git-nested-diff-alias-");
+    const root = await mkTmpDir("codegraph-git-nested-diff-");
+    const aliasParent = await mkTmpDir("codegraph-git-nested-diff-alias-");
     const project = path.join(root, "project");
     let scanRoot = project;
     try {
@@ -178,7 +173,7 @@ describe("git diff semantics", () => {
   });
 
   it("surfaces invalid git revisions instead of returning empty results", async () => {
-    const root = await makeGitTempDir("codegraph-git-invalid-");
+    const root = await mkTmpDir("codegraph-git-invalid-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -211,7 +206,7 @@ describe("git diff semantics", () => {
 
 describe("git diff semantics: non-ASCII, space, and rename path handling (C12)", () => {
   it("returns non-ASCII, space, and leading/trailing-space filenames as real UTF-8, not git's quoted/escaped form", async () => {
-    const root = await makeGitTempDir("codegraph-git-c12-names-");
+    const root = await mkTmpDir("codegraph-git-c12-names-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -245,7 +240,7 @@ describe("git diff semantics: non-ASCII, space, and rename path handling (C12)",
   });
 
   it("propagates a rename to a non-ASCII (quoted) path through listChangedFiles and the parsed diff", async () => {
-    const root = await makeGitTempDir("codegraph-git-c12-rename-");
+    const root = await mkTmpDir("codegraph-git-c12-rename-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -274,7 +269,7 @@ describe("git diff semantics: non-ASCII, space, and rename path handling (C12)",
 
 describe("git diff semantics: rename detection is deterministic regardless of user config (C4)", () => {
   it("still reports a pure rename with diff.renames=false configured locally", async () => {
-    const root = await makeGitTempDir("codegraph-git-c4-renames-config-");
+    const root = await mkTmpDir("codegraph-git-c4-renames-config-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -333,7 +328,7 @@ describe("git subprocess stdout decoding across chunk boundaries", () => {
   });
 
   it("reassembles a multibyte UTF-8 sequence split across separate stdout writes", async () => {
-    const root = await makeGitTempDir("codegraph-git-chunk-split-");
+    const root = await mkTmpDir("codegraph-git-chunk-split-");
     try {
       // The emoji U+1F600 encodes as 4 UTF-8 bytes (F0 9F 98 80); writing the first two
       // bytes, then yielding a macrotask before writing the rest, forces two independent
@@ -366,7 +361,7 @@ describe("bounded and safe git diff execution (I7 and I8)", () => {
   });
 
   it("I7 rejects oversized stderr while retaining only a bounded diagnostic tail", async () => {
-    const root = await makeGitTempDir("codegraph-git-stderr-bound-");
+    const root = await mkTmpDir("codegraph-git-stderr-bound-");
     try {
       setGitExecutableForTests(process.execPath);
       const script = "process.stderr.write('x'.repeat(4096));";
@@ -380,7 +375,7 @@ describe("bounded and safe git diff execution (I7 and I8)", () => {
   });
 
   it("bounds diagnostics from one large stderr write", async () => {
-    const root = await makeGitTempDir("codegraph-git-large-stderr-chunk-");
+    const root = await mkTmpDir("codegraph-git-large-stderr-chunk-");
     try {
       setGitExecutableForTests(process.execPath);
       const maxBuffer = 64;
@@ -399,7 +394,7 @@ describe("bounded and safe git diff execution (I7 and I8)", () => {
     }
   });
   it("trims stderr at a UTF-8 boundary while retaining the newest tail", async () => {
-    const root = await makeGitTempDir("codegraph-git-stderr-utf8-bound-");
+    const root = await mkTmpDir("codegraph-git-stderr-utf8-bound-");
     try {
       setGitExecutableForTests(process.execPath);
       const maxBuffer = 7;
@@ -430,7 +425,7 @@ describe("bounded and safe git diff execution (I7 and I8)", () => {
 
 describe("listUntrackedFiles", () => {
   it("lists new files Git has not been told to track", async () => {
-    const root = await makeGitTempDir("codegraph-git-untracked-");
+    const root = await mkTmpDir("codegraph-git-untracked-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -453,7 +448,7 @@ describe("listUntrackedFiles", () => {
   });
 
   it("excludes gitignored untracked files by default and includes them when respectGitignore is false", async () => {
-    const root = await makeGitTempDir("codegraph-git-untracked-ignore-");
+    const root = await mkTmpDir("codegraph-git-untracked-ignore-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -477,7 +472,7 @@ describe("listUntrackedFiles", () => {
   });
 
   it("returns an empty list without invoking Git when gitAvailable is false", async () => {
-    const root = await makeGitTempDir("codegraph-git-untracked-unavailable-");
+    const root = await mkTmpDir("codegraph-git-untracked-unavailable-");
     try {
       // No `git init`: any accidental git invocation here would throw, not return [].
       const untracked = await listUntrackedFiles(root, { gitAvailable: false });
@@ -488,7 +483,7 @@ describe("listUntrackedFiles", () => {
   });
 
   it("surfaces Git failures instead of silently returning an empty list", async () => {
-    const root = await makeGitTempDir("codegraph-git-untracked-not-a-repo-");
+    const root = await mkTmpDir("codegraph-git-untracked-not-a-repo-");
     try {
       // No `git init`, so `git ls-files` fails; callers decide their own fallback policy.
       await expect(listUntrackedFiles(root)).rejects.toThrow();

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
+import { mkTmpDir } from "./helpers/filesystem.js";
 import { clearImportResolutionCaches, resolveImportSpecifier, resolvePythonModule } from "../src/util.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { resolveCsharpNamespaceImportPaths } from "../src/util/resolution/csharp.js";
@@ -17,10 +17,6 @@ import { resolveJvmImportPath } from "../src/util/resolution/jvm.js";
 import { resolvePhpImportPath } from "../src/util/resolution/php.js";
 import { createTestIndexFromFiles } from "./test-utils.js";
 import { buildProjectIndex, goToDefinition } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 function posix(filePath: string): string {
   return filePath.replace(/\\/g, "/");
