@@ -42,7 +42,7 @@ Index caches store project-relative paths, so a cache can be moved with its proj
 
 ## Native runtime
 
-The CLI requires the native Tree-sitter addon. The `--native` flag is removed. If the addon cannot load, the command fails; run `codegraph doctor` to inspect runtime health. Doctor exits non-zero when the addon cannot load. A source file over the native size limit is skipped with `sourceTooLarge` in the backend report. A native query failure is reported as `queryFailure` without regex recovery. Graph-only document and stylesheet formats retain their supported extraction paths.
+The CLI requires the native Tree-sitter addon; [Installation](./installation.md#requirements) covers the runtime requirement and `codegraph doctor`. The `--native` flag is removed. If the addon cannot load, the command fails. A source file over the native size limit is skipped with `sourceTooLarge` in the backend report. A native query failure is reported as `queryFailure` without regex recovery. Graph-only document and stylesheet formats retain their supported extraction paths.
 
 ## Index and cache guidance
 
@@ -50,7 +50,7 @@ Current-state, index-backed commands validate freshness automatically and defaul
 
 `codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
 
-Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. Disk cache requires Node.js 22.16 or newer; older 22.x builds that load `node:sqlite` without the statement APIs Codegraph needs disable disk cache after one warning. `--cache-verify` validates manifest entries before reuse and `--cache-strict` adds content hashing plus full rediscovery; both trade speed for certainty when cache or manifest state is in use. With `--cache off`, there is no reusable state to validate, so `--cache-strict` has no effect. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
+Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. Disk cache needs the Node.js version in [Installation](./installation.md#requirements); without it, disk cache is disabled after one warning. `--cache-verify` validates manifest entries before reuse and `--cache-strict` adds content hashing plus full rediscovery; both trade speed for certainty when cache or manifest state is in use. With `--cache off`, there is no reusable state to validate, so `--cache-strict` has no effect. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
 
 Lifecycle exceptions (`src/cli/options.ts` `LIFECYCLE_BUILD_OPTIONS` / `STATUS_BUILD_*`): `init`/`status`/`sync` omit `--cache` because they always use the disk cache path. `status` also omits `--cache-verify`, `--progress`, `--no-progress`, `--workers`, and `--threads` because it only hashes config/build options and lists project files for signature hashing (no index build).
 

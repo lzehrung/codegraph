@@ -30,17 +30,7 @@ codegraph install
 codegraph explore "build review report" --root .
 ```
 
-No Node.js or npm? The standalone installers download a self-contained bundle with Node.js, the CLI, and the matching native runtime:
-
-```powershell
-irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
-```
-
-```bash
-curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
-```
-
-Use codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for npm, standalone, and source-checkout paths.
+No Node.js or npm? Use the standalone installers described in [Installation](./docs/installation.md). Use codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and codegraph fills in the cross-file repository map between them.
 
 ## Table of contents
 
@@ -315,7 +305,7 @@ Disk caching avoids repository-wide source reads on exact warm text-search hits.
 The honest boundaries matter:
 
 - codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed. When a result would need expression type inference, overload ranking beyond arity, or build-system membership, codegraph reports `not_found` or `partial` coverage rather than a guessed target.
-- Precise navigation depends on successful native parsing and language queries. A missing native addon is an error; run `codegraph doctor` to diagnose it. Files over the native size limit are skipped with a `sourceTooLarge` report, and failed native queries are reported as `queryFailure` without regex recovery. Document and stylesheet graph-only extraction remains supported.
+- Precise navigation depends on successful native parsing and language queries. A missing native addon is an error; see [Installation](./docs/installation.md#requirements). Files over the native size limit are skipped with a `sourceTooLarge` report, and failed native queries are reported as `queryFailure` without regex recovery. Document and stylesheet graph-only extraction remains supported.
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
@@ -327,7 +317,7 @@ Mitigations are explicit too:
 - A generated [fixture test matrix](./docs/benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` status and test counts per language, with no hand-authored goldens involved.
 - Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 
-Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
+Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
 
 ## Development
 
