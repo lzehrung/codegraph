@@ -1,6 +1,6 @@
-import { supportForFileWithoutHeaderSample } from "../../languages.js";
 import { getImportableLanguageExtensions } from "../resolution-candidates.js";
 import {
+  csharpSpecifierAcceptsFile,
   csharpTypeNameQualifierDeclared,
   resolveCsharpDottedTypeImportPath,
   resolveCsharpNamespaceImportPaths,
@@ -9,9 +9,7 @@ import type { SpecifierTargetPolicy } from "./language-policy-types.js";
 
 export const CSHARP_SPECIFIER_POLICY: SpecifierTargetPolicy = {
   representativeBindingTarget: true,
-  // A using target cannot name a file parsed by another grammar.
-  acceptsFile: (file, metadata) =>
-    supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp",
+  acceptsFile: csharpSpecifierAcceptsFile,
   async resolve(file, specifier, metadata, deps, policy) {
     if (specifier.includes("<") || specifier.includes(">")) {
       return { files: [], externalName: metadata.rawSpecifier ?? specifier };

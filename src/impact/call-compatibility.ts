@@ -2,7 +2,9 @@ import path from "node:path";
 import { findUsageReferences, getCppEquivalentCallableDefinitions, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContextForIndex, rethrowStaleQuerySource } from "../indexer/parsed-cache.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
-import { getOrBuildScopeIndex, resolveNamedDefinition } from "../indexer/navigation-local.js";
+import { getOrBuildScopeIndex } from "../indexer/navigation-local.js";
+import { cppNamedImportStage } from "../indexer/name-import-stages/c-family.js";
+import { pythonNamedImportStage } from "../indexer/name-import-stages/python.js";
 import { findClosestScopeBinding } from "../indexer/scope-lookup.js";
 import { cppEquivalentCallableBindings } from "../indexer/cpp-callables.js";
 import { getCachedReferenceCandidateFiles } from "../indexer/navigation-references.js";
@@ -445,9 +447,10 @@ function cppUnqualifiedCallTarget(
     return module.locals.find((local) => sameRangeStart(local.range, range)) ?? null;
   }
   // A local variable or parameter shadows the function; member expressions and
-  // ambiguous overload sets cannot be recovered as unqualified calls.
+  // ambiguous overload sets cannot be recovered as unqualified calls. Only C++ links
+  // callables through qualified owners, so this file reads the C++ named stage.
   if (binding && !binding.import) return null;
-  const resolved = resolveNamedDefinition(index, module, file, parsed.sup, name);
+  const resolved = cppNamedImportStage(index, module, file, parsed.sup, name);
   if (resolved?.status !== "ok" || resolved.definition.kind !== SymbolKind.Function) return null;
   return resolved.definition;
 }
@@ -766,7 +769,7 @@ function callBindingForm(input: {
   if (receiver.type === "identifier") {
     const module = index.byFile.get(fileIdentityKey(file));
     if (module) {
-      const resolved = resolveNamedDefinition(index, module, file, parsedCallsite.sup, receiverText);
+      const resolved = pythonNamedImportStage(index, module, file, parsedCallsite.sup, receiverText);
       if (resolved?.status === "ok" && resolved.definition.kind === SymbolKind.Class) {
         return "unbound";
       }

@@ -39,7 +39,8 @@ import {
   supportsReceiverMemberNavigation,
 } from "./navigation-goto.js";
 import { isPythonReceiverAttributeAssignmentName } from "../languages/definitions/python.js";
-import { findClosestBinding, findDeclarationNameNode, getOrBuildScopeIndex, toModuleRef } from "./navigation-local.js";
+import { findClosestBinding, findDeclarationNameNode, getOrBuildScopeIndex } from "./navigation-local.js";
+import { toModuleRef } from "./navigation-named-core.js";
 import { findClosestScopeBinding } from "./scope-lookup.js";
 import { typescriptCallableCandidatesInContainer } from "./ts-callables.js";
 import { headerParameterOwner, isExplicitMethodCall, scopeNodesFor } from "./scope-nodes.js";

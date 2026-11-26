@@ -12,3 +12,6 @@ export const kotlinReferenceHooks: ReferenceHooks = {
 };
 
 export const kotlinGraphImportHooks: ImportNameHooks = { aliasKey: normalizeKotlinIdentifier };
+
+/** A Java star import of a Kotlin package exposes Kotlin-spelled names. */
+export const javaGraphImportHooks: ImportNameHooks = { starNamesUseTargetSpelling: true };

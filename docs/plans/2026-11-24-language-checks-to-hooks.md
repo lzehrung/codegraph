@@ -209,9 +209,9 @@ Exemptions are per-site in the inventory, never permission to add a fresh semant
 5. Dynamic native-addon support sets, the CLI/call-compatibility provider registries, and the set of unsupported languages being reported are runtime membership/metadata, not literals selecting a language semantic rule. The inventory records these individually as `runtime-dependent`.
 
 The eight relocated target-file safety checks in `member-lookup-policies/cpp-receiver.ts`,
-`member-lookup-policies/csharp-owner.ts`, and `util/resolution/namespace-specifiers.ts` also
-qualify under exemption 4. The inventory lists their exact function/expression pairs, not whole files.
-`npm run language-checks:check` ratchets the remaining 232 non-exempt sites using normalized
+`member-lookup-policies/csharp-owner.ts`, and `util/resolution/csharp.ts` also qualify under
+exemption 4. The inventory lists their exact function/expression pairs, not whole files.
+`npm run language-checks:check` ratchets the remaining non-exempt sites using normalized
 function/condition/expression fingerprints and occurrence counts in `scripts/language-check-baseline.json`.
 After a site moves, run `node scripts/language-check-inventory.mjs --write-baseline` to remove its
 stale entry; the command refuses new sites. This interim ratchet does not replace the final

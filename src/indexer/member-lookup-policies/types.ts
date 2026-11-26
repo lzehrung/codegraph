@@ -58,7 +58,6 @@ export type MemberLookupDeps = {
     path: readonly string[],
     typeOnly: boolean,
   ): SymbolDef | null;
-  namedDefinition(index: ProjectIndex, module: ModuleIndex, support: LanguageSupport, name: string): GoToResult | null;
   getScopeIndex(
     index: ProjectIndex,
     module: ModuleIndex,
@@ -320,6 +319,8 @@ export type GraphHooks = Readonly<{
   callableBindingGroups?: "canonical-name" | "equivalent-signature";
   callableNameForm?: "case-folded" | "normalized";
   aliasExportOptions?: ImportNameResolutionOptions;
+  /** The import resolver enforces this language's member visibility, so a named import of its declarations uses it. */
+  importResolverVisibility?: true;
   collapseLocalAliases?: <T>(
     group: readonly T[],
     identityOf: (entry: T) => CallableIdentity | undefined,

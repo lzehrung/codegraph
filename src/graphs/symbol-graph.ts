@@ -6,6 +6,8 @@ import {
   resolveModuleExports,
 } from "../indexer/navigation-resolve.js";
 import { importIdRoleSegment, importNodeId, phpNamedImportRole } from "../indexer/import-types.js";
+import { graphRulesFor } from "../indexer/member-lookup-policies/graph-rules.js";
+import type { GraphHooks } from "../indexer/member-lookup-policies/types.js";
 import { supportForFileWithoutHeaderSample } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { FileId, Range } from "../types.js";
@@ -123,6 +125,8 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   const includedFiles = normalizeFileFilter(opts?.files);
   const exportResolutions = new Map<string, SymbolDef | null>();
   const moduleExportResolutions = new Map<string, ReadonlyMap<string, ResolvedExport>>();
+  // The target's language decides whether its locals are importable and who enforces its visibility.
+  const targetGraphRules = new Map<string, GraphHooks>();
 
   const shouldIncludeFile = (file: FileId): boolean => {
     if (!includedFiles) return true;
@@ -143,18 +147,25 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     label: string,
     imp?: Extract<ImportBinding, { kind: "named" }>,
   ): boolean => {
-    const languageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
-    const allowLocalFallback = languageId !== "c" && languageId !== "cpp";
+    const targetKey = fileIdentityKey(targetFile);
+    let targetRules = targetGraphRules.get(targetKey);
+    if (!targetRules) {
+      targetRules = graphRulesFor(supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id ?? "");
+      targetGraphRules.set(targetKey, targetRules);
+    }
+    const allowLocalFallback = targetRules.aliasExportOptions?.allowLocalFallback ?? true;
     const roleSegment = imp ? importIdRoleSegment(imp) : undefined;
-    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}::${imp?.jvmTypeOwnerStartIndex ?? ""}::${imp?.jvmStaticWildcardName ?? ""}::${imp?.jvmSamePackage ? "same-jvm-package" : "other-jvm-package"}`;
+    const resolutionKey = `${targetKey}::${exportedName}::${roleSegment ?? ""}::${allowLocalFallback ? "local" : "export"}::${imp?.jvmTypeOwnerStartIndex ?? ""}::${imp?.jvmStaticWildcardName ?? ""}::${imp?.jvmSamePackage ? "same-jvm-package" : "other-jvm-package"}`;
     let def: SymbolDef | null;
     if (exportResolutions.has(resolutionKey)) {
       def = exportResolutions.get(resolutionKey)!;
     } else if (
       imp &&
-      (phpNamedImportRole(imp) !== undefined || imp.jvmTypeOwnerStartIndex !== undefined || languageId === "java")
+      (phpNamedImportRole(imp) !== undefined ||
+        imp.jvmTypeOwnerStartIndex !== undefined ||
+        targetRules.importResolverVisibility)
     ) {
-      // Import resolution also enforces Java member visibility.
+      // Import resolution also enforces the target's member visibility (Java).
       const resolved = resolveImported(index, imp, exportedName, { allowLocalFallback });
       def = resolved && !("namespace" in resolved) ? resolved : null;
       exportResolutions.set(resolutionKey, def);

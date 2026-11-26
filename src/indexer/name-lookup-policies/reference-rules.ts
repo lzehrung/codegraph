@@ -1,10 +1,15 @@
 import { cReferenceHooks, cppReferenceHooks } from "./c-family-references.js";
 import { csharpGraphImportHooks, csharpReferenceHooks } from "./csharp-references.js";
-import { javaReferenceHooks, kotlinGraphImportHooks, kotlinReferenceHooks } from "./jvm-references.js";
+import {
+  javaGraphImportHooks,
+  javaReferenceHooks,
+  kotlinGraphImportHooks,
+  kotlinReferenceHooks,
+} from "./jvm-references.js";
 import { phpReferenceHooks } from "./php-references.js";
 import { pythonReferenceHooks } from "./python-references.js";
 import { rubyReferenceHooks } from "./ruby-references.js";
-import { rustReferenceHooks } from "./rust-references.js";
+import { rustGraphImportHooks, rustReferenceHooks } from "./rust-references.js";
 import { scssReferenceHooks } from "./scss-references.js";
 import { swiftGraphImportHooks, swiftReferenceHooks } from "./swift-references.js";
 import { typescriptReferenceHooks } from "./typescript-references.js";
@@ -30,7 +35,9 @@ const REFERENCE_RULES: Readonly<Record<string, ReferenceHooks>> = {
 const NO_GRAPH_IMPORT_RULES: ImportNameHooks = {};
 const GRAPH_IMPORT_RULES: Readonly<Record<string, ImportNameHooks>> = {
   csharp: csharpGraphImportHooks,
+  java: javaGraphImportHooks,
   kotlin: kotlinGraphImportHooks,
+  rust: rustGraphImportHooks,
   swift: swiftGraphImportHooks,
 };
 

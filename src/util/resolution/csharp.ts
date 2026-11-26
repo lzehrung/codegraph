@@ -20,6 +20,7 @@ import { DEFAULT_NATIVE_SOURCE_MAX_BYTES } from "../../native/source-limits.js";
 import type { BuildReport } from "../../indexer/types.js";
 import type { ParsedFileContext } from "../../indexer/parse-context.js";
 import { CSHARP_FILE_LOCAL_PREFIX, collectCsharpNamespaceFacts, type CsharpNamespaceFacts } from "../csharp-tree.js";
+import type { SpecifierTargetMetadata } from "./specifier-target-types.js";
 import { parseSyntaxTree } from "../syntax-tree.js";
 
 type CsharpProjectNamespaceIndexResult = {
@@ -223,6 +224,11 @@ function slashPath(filePath: string): string {
  */
 function isActiveCsharpFile(file: string, languageExtensions: LanguageExtensionMap | undefined): boolean {
   return !languageExtensions || supportForFileWithoutHeaderSample(file, languageExtensions)?.id === "csharp";
+}
+
+/** A using target cannot name a file parsed by another grammar. */
+export function csharpSpecifierAcceptsFile(file: string, metadata: SpecifierTargetMetadata): boolean {
+  return supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp";
 }
 
 async function confineCsharpTypeFiles(
