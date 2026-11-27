@@ -110,6 +110,10 @@ const parserSafetySites = new Set([
   'src/indexer/member-lookup-policies/csharp-owner.ts::csharpPartialExportIdentity::languageId !== "csharp"',
   'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::retained?.sup?.id === "csharp"',
   'src/indexer/member-lookup-policies/csharp-owner.ts::parseCsharpOwnerFile::sup.id !== "csharp"',
+  'src/indexer/member-lookup-policies/go-owner.ts::goPackageFile::context.sup.id === "go"',
+  'src/indexer/member-lookup-policies/python-owner.ts::readPythonClassRef::context.sup.id !== "python"',
+  'src/indexer/member-lookup-policies/swift-type-names.ts::swiftNestedType::ref?.context.sup.id !== "swift"',
+  'src/indexer/member-lookup-policies/swift-type-names.ts::followSwiftAlias::context.sup.id !== "swift"',
   'src/util/resolution/csharp.ts::csharpSpecifierAcceptsFile::supportForFileWithoutHeaderSample(file, metadata.languageExtensions)?.id === "csharp"',
 ]);
 const ownerFiles = {

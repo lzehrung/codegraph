@@ -466,8 +466,14 @@ export const swiftMemberLookupPolicy: MemberLookupPolicy = {
     lookup: { hierarchy: true },
     memberHidden: swiftCrossFileMemberHidden,
     sharedMemberHidden: swiftCrossFileMemberHidden,
+    aliasesReachDeclarations: true,
+    nestedTypePaths: true,
   },
-  receiverResolution: { implicit: { names: "all" }, ownMemberMissReason: "No matching Swift member definition" },
+  receiverResolution: {
+    implicit: { names: "all" },
+    ownMemberMissReason: "No matching Swift member definition",
+    access: { unitPeerNames: true },
+  },
   async callEdge(index, member, callee, source, deps) {
     // A call of a type constructs it.
     if (deps.declaresMembers(member)) return "instantiates";

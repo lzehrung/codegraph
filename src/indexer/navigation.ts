@@ -289,7 +289,7 @@ async function goToDefinitionInternal(
   }
 
   if (sup.id === "ruby" && node.type === "super") {
-    const target = await resolveRubySuperDefinition(index, mod, node, source, sup);
+    const target = await resolveRubySuperDefinition(index, mod, node, source);
     if (!target) return { status: "not_found", reason: "No matching Ruby superclass method" };
     return okGoToResult(index, target, { resolution: "member-access", confidence: "medium" });
   }

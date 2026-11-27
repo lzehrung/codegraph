@@ -6,6 +6,7 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../../languages/types.js";
 import type { MemberAccessRow } from "../../util/member-access-tables.js";
 import type { FileId, Range } from "../../types.js";
 import type { MemberScope, MemberSelectionOptions } from "../member-selection-types.js";
+import type { MemberModel } from "../member-selection.js";
 import type { JvmTypeNameResolver } from "../name-resolution-types.js";
 import type { ImportNameResolutionOptions } from "../import-name-types.js";
 import type { ParsedFileContext } from "../parse-context.js";
@@ -137,6 +138,22 @@ export type MemberLookupDeps = {
     name: string,
     normalize: (name: string) => string,
   ): SymbolDef | undefined;
+  /** Appends to `matches` the locals named `name` that `container` declares directly, as keyword lookup reads them. */
+  appendDirectKeywordMembers(
+    locals: readonly SymbolDef[],
+    name: string,
+    container: SyntaxNodeLike,
+    context: ParsedFileContext,
+    normalize: (name: string) => string,
+    predicate: ((local: SymbolDef) => boolean) | undefined,
+    matches: SymbolDef[],
+  ): void;
+  /** The selection model of one owner's indexed candidate members, with their callable facts. */
+  indexedMemberModel(
+    index: ProjectIndex,
+    members: readonly SymbolDef[],
+    languageId: string,
+  ): MemberModel<SymbolDef, SymbolDef>;
 };
 
 /** A type that declares members: where it is written, and the syntax of its body. */
@@ -247,6 +264,65 @@ export type ResolvedReceiver = {
   runtimeTypeOnly?: true;
 };
 
+/**
+ * How a constructed receiver (`new T()`, `T()`, `T.new`) names its type where the language departs from the generic
+ * local, expression, and named lookup.
+ */
+export type ReceiverConstructionRules = Readonly<{
+  /** A qualified type resolves through namespace-aware qualified lookup, any other through the receiver expression. */
+  namespaceQualifiedTypes?: true;
+  /** A scope path (`a::B`) names the owner the qualified owner lookup proves, before any other lookup. */
+  scopePathTypes?: true;
+  /** The type resolves through the namespace symbol table before any other lookup. */
+  namespaceSymbolTypes?: true;
+  /** A type no local declares resolves through the file's named lookup, which reaches the package's other files. */
+  namedPeerTypes?: true;
+  /** A type no local declares resolves as a constant that a `require` made visible. */
+  visibleConstantTypes?: true;
+}>;
+
+/**
+ * How a member access (`a.b.c`) resolves its receiver chain and member where the language departs from the generic
+ * lexical, import, local, star, receiver, and member path of `resolveMemberAccessDefinition`.
+ */
+export type AccessTraversalRules = Readonly<{
+  /** A name that ends a constant path (`Outer::Tool`) names that constant first; an unproven or undeclared qualifier misses. */
+  constantPaths?: true;
+  /** The last name of a qualified type in a type position is decided by the JVM type-name lookup. */
+  qualifiedTypeNames?: true;
+  /** A receiver of this node type is a type name (`Outer.Inner` as a user type), resolved by the JVM type-name lookup. */
+  typeNameType?: string;
+  /**
+   * Names follow enclosing-namespace lookup: a nearer lexical name or enclosing member hides an alias, aliases and
+   * `using` directives apply per namespace block, `X::` reads aliases only, and an unbound dotted root is a namespace.
+   */
+  namespaceScopes?: true;
+  /** A typed parameter's annotation (`x: T`) names `T` as a type, outside its synthetic parameter binding. */
+  annotationTypes?: true;
+  /** The import binding in force at a use decides it, in source order; a local value never falls back to an import. */
+  positionedImports?: true;
+  /** An unaliased dotted import (`import a.b`) binds the package `a`, and its dotted phrases name the modules. */
+  dottedImports?: true;
+  /** The innermost namespace import of a name binds it first, then a named or default import. */
+  innermostNamespaceImports?: true;
+  /** A named import of a module (`use crate::util`) names that module's namespace. */
+  moduleNamedImports?: true;
+  /** An unbound name may name a declaration of the same package or module. */
+  unitPeerNames?: true;
+  /** A selector that names an embedded field (`outer.Inner`) resolves to the embedded type. */
+  embeddedFieldTypes?: true;
+  /** A member of a named type resolves on the type, then among the type file's functions that its name reaches. */
+  typeFileMembers?: true;
+  /** Node types of a scoped name (`a.b.C`) whose scope and name fields read as a receiver chain. */
+  scopedNameTypes?: Readonly<Record<string, true>>;
+  /** A receiver member resolves through the class hierarchy, where instance attributes and properties take part. */
+  classAttributeMembers?: true;
+  /** A property access of this node type inside a trait may name a property that a class using the trait declares. */
+  traitPropertyAccessType?: string;
+  /** A scope-qualified member of this node type (`Owner::member`) resolves on the owner its qualifier names. */
+  scopedMemberType?: string;
+}>;
+
 /** Language-specific receiver paths; undefined continues the generic lookup. */
 export type ReceiverHooks = Readonly<{
   ownMemberMissReason?: string;
@@ -255,6 +331,10 @@ export type ReceiverHooks = Readonly<{
   implicit?: ImplicitReceiverRules;
   memberUse?: MemberUseSyntax;
   syntax?: ReceiverSyntaxRules;
+  construction?: ReceiverConstructionRules;
+  access?: AccessTraversalRules;
+  /** A call's trailing lambda must fit a callable's last parameter, so a member that cannot take one rejects the call. */
+  trailingLambdaCalls?: true;
   resolveAccess?: (context: ReceiverAccessContext) => Promise<GoToResult | null | undefined>;
   resolveReceiver?: (context: ReceiverResolutionContext) => Promise<ResolvedReceiver | null | undefined>;
 }>;
@@ -300,6 +380,41 @@ export type OwnerHooks = Readonly<{
     owner: MemberOwnerRef,
     deps: MemberLookupDeps,
   ) => Promise<readonly MemberOwnerRef[] | undefined>;
+  /** A typealias names the declaration it provably reaches, so a base or receiver that names one reads that type. */
+  aliasesReachDeclarations?: true;
+  /** How a base clause spells its bases, where the grammar departs from the generic name and member-access walk. */
+  heritage?: Readonly<{
+    /** Base lists hold scope paths (`a::B`) behind access and `virtual` specifiers; each path names a qualified owner. */
+    scopePaths?: true;
+    /** Node type of a base spelled as a constant path (`Outer::Base`), read through the lexical constant scopes. */
+    constantPathType?: string;
+  }>;
+  /** A qualified owner (`Outer.Inner`) is the type declared in the body of the type its first segment names. */
+  nestedTypePaths?: true;
+  /** A type's bases come from all of its parts; an interface offers its base interfaces only to an own receiver. */
+  basesFromParts?: true;
+  /** A simple base's named lookup reads the module scope, whose bindings depend on where the class body runs. */
+  scopedBaseNames?: true;
+  /**
+   * Declaration type of an owner composed into a class body (a trait): selection reads composed owners, to any depth,
+   * before the parent, and a supertype walk reads them only past its first, class-only level.
+   */
+  composedOwnerType?: string;
+  /**
+   * The member of the receiver type `receiverDef` that its own body does not declare: a method of a Rust `impl` block,
+   * a Go method or embedded member across the package, or a Kotlin extension function of the type's file. `context`
+   * and `locals` belong to the type's file, and the lookup runs once the body and its parts declare no such member.
+   */
+  receiverMembers?: (
+    index: ProjectIndex,
+    receiverDef: SymbolDef,
+    member: string,
+    context: ParsedFileContext,
+    locals: readonly SymbolDef[],
+    normalizeIdentifier: (name: string) => string,
+    knownArgumentCount: number | undefined,
+    deps: MemberLookupDeps,
+  ) => SymbolDef | undefined | Promise<SymbolDef | undefined>;
 }>;
 
 /** Existing graph-pass state used by language-specific graph additions. */
@@ -356,6 +471,11 @@ export type GraphHooks = Readonly<{
 }>;
 
 export type MemberLookupPolicy = {
+  /**
+   * A class name resolves through the file's class-role `use` aliases and the namespace symbol table, never through the
+   * generic import, local, and named lookup.
+   */
+  namespaceClassNames?: true;
   /** Member scopes are distinct for this language; absent means false. */
   separateMemberScopes?: boolean;
   /** Existing selector options shared by navigation and graph consumers. */

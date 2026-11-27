@@ -93,7 +93,15 @@ function typeNameMembers(
 export const rubyMemberLookupPolicy: MemberLookupPolicy = {
   separateMemberScopes: true,
   selection: { firstDeclarationWins: true },
-  ownerResolution: { lookup: { hierarchy: true }, qualified: rubyQualifiedOwner },
+  receiverResolution: {
+    construction: { visibleConstantTypes: true },
+    access: { constantPaths: true, typeFileMembers: true },
+  },
+  ownerResolution: {
+    lookup: { hierarchy: true },
+    qualified: rubyQualifiedOwner,
+    heritage: { constantPathType: "scope_resolution" },
+  },
   typeNameMembers,
   typeNameMayReachFileMember: rubyTypeNameMayReach,
   memberAccessRules: () => METHOD_ACCESS,
