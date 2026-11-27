@@ -54,6 +54,10 @@ V8 profiles bracket only the named operation on the main isolate. They include n
 
 Environment metadata records Node, npm, platform, CPU, memory, and both Codegraph revisions/versions. The manifest scopes are source-family representatives, not a performance claim for every language or graph-only format. A timing verdict is not semantic validation: optimization reviews still need detailed-graph, go-to-definition, and reference/coverage differentials over samples, edge corpora, and real projects.
 
+## Single-operation profiles
+
+`scripts/benchmarks/profile-operation.mjs` runs one operation of one checkout in a fresh process, including incremental updates, MCP refresh and freshness checks, search sidecar builds, and every agent query batch. It records process CPU, wall time, `fs` and Git call counts, and memory, and optionally writes a CPU profile, precise call counts, or a sampling heap profile; `scripts/benchmarks/summarize-profile.mjs` maps those to `src/` lines. It ranks costs and gives no regression verdict; [the performance ROI analysis](../plans/2026-11-27-performance-roi.md) lists the commands per item.
+
 ## Answer snapshots for reviews
 
 `npm run answers:snapshot:check` checks committed answers for every sample project and edge-corpus scenario, alongside `graph:snapshot:check` in `npm run check` and in CI. `npm run answers:snapshot` regenerates them; classify every changed answer against base/head evidence before committing. Each file records goto targets and public `via=`/`prov=` metadata, plus references for every indexed declaration and deduplicated goto target (including parameters, local/type parameters, aliases, and Rust modules); there is no sampling or result cap.
