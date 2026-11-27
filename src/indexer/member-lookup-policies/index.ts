@@ -56,6 +56,7 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
       access: { embeddedFieldTypes: true },
     },
     ownerResolution: { receiverMembers: selectGoReceiverMember },
+    graph: graphRulesFor("go"),
   },
   js: { separateMemberScopes: true, ownerResolution: javascriptOwnerResolution },
   ts: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution, graph: graphRulesFor("ts") },
@@ -117,9 +118,10 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
   rust: {
     receiverResolution: { access: { moduleNamedImports: true } },
     ownerResolution: { receiverMembers: selectRustReceiverMember },
+    graph: graphRulesFor("rust"),
   },
   swift: { ...swiftMemberLookupPolicy, graph: graphRulesFor("swift") },
-  zig: { receiverResolution: { access: { innermostNamespaceImports: true } } },
+  zig: { receiverResolution: { access: { innermostNamespaceImports: true } }, graph: graphRulesFor("zig") },
 };
 
 export function memberLookupPolicyFor(languageId: string): MemberLookupPolicy {

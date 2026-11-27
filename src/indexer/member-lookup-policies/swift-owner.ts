@@ -109,6 +109,7 @@ export const swiftSharedOwnerRules: SharedOwnerRules = {
   containerTypes: new Set(["class_declaration", "protocol_declaration"]),
   identity: swiftOwnerIdentity,
   isExtension: isSwiftExtensionContainer,
+  isConstrainedExtension: isSwiftConstrainedExtension,
   memberVisible: (ownerFile, peerFile, name) =>
     !!name && !isSwiftCrossFileHiddenSharedOwnerMember("swift", ownerFile, peerFile, name),
 };

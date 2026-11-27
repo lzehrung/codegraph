@@ -20,5 +20,7 @@ export type SharedOwnerRules = Readonly<{
   declarationsAreEquivalent?: boolean;
   unitOptions?: { csharpQualifiedName: true };
   isExtension?: (container: SyntaxNodeLike, source: string) => boolean;
+  /** Whether an extension carries constraints, so it donates its members only to receivers with those constraints. */
+  isConstrainedExtension?: (container: SyntaxNodeLike, source: string) => boolean;
   memberVisible?: (ownerFile: string, peerFile: string, name: SyntaxNodeLike | null) => boolean;
 }>;

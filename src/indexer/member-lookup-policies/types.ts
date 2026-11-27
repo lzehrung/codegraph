@@ -335,6 +335,11 @@ export type ReceiverHooks = Readonly<{
   access?: AccessTraversalRules;
   /** A call's trailing lambda must fit a callable's last parameter, so a member that cannot take one rejects the call. */
   trailingLambdaCalls?: true;
+  /**
+   * `this` inside a lambda that may have a receiver, or labeled (`this@label`), can name that receiver rather than the
+   * enclosing type, which only the lambda-receiver lookup proves.
+   */
+  lambdaReceiverThis?: true;
   resolveAccess?: (context: ReceiverAccessContext) => Promise<GoToResult | null | undefined>;
   resolveReceiver?: (context: ReceiverResolutionContext) => Promise<ResolvedReceiver | null | undefined>;
 }>;
@@ -465,6 +470,39 @@ export type GraphHooks = Readonly<{
       methodName: string;
     }>;
   }>;
+  /**
+   * Node type of a scope path (`ns::Type::name`). The shared lookup resolves one by its joined segments, a base spelled
+   * with one names the owner the qualified-owner lookup proves, and a call whose callee carries a `::` qualifier names a
+   * type-scoped member or a free function.
+   */
+  scopePathType?: string;
+  /** A member is never called by its bare name, even inside its own type: the call needs a receiver (`Self.helper()`). */
+  membersNeedReceiver?: true;
+  /**
+   * Where a member declared outside its type's own body names its owner: the receiver parameter of a method declaration
+   * (`func (t T) m()`, read before any enclosing body), a qualified declarator (`void T::m()`), an extension receiver
+   * (`fun T.m()`), the self type of an `impl` block, or the declaration a struct body is assigned to
+   * (`const T = struct { ... }`).
+   */
+  memberOwnerSyntax?:
+    | "receiver-parameter"
+    | "qualified-declarator"
+    | "extension-receiver"
+    | "impl-self-type"
+    | "assigned-struct";
+  /** A qualified type name (`pkg.Type{}`, `ns.Type{}`) names the declaration its member chain reaches. */
+  qualifiedTypeChains?: true;
+  /** A call or construction through the name of a same-file namespace (`N.f()`, `new N.C()`) names its member. */
+  namespaceDeclarationMembers?: true;
+  /**
+   * The file-wide alias tables answer for a name only where the positioned lookup agrees: a value hides an alias only in
+   * an expression, a deferred lookup settles first, and a star import of an incomplete package may bind any other name.
+   */
+  positionedAliasProof?: true;
+  /** A call of a type's name constructs it, so a deferred call that settles on a type records `instantiates`. */
+  typeCallsInstantiate?: true;
+  /** A receiver call of an implementation that has overload signatures must fit the argument count of one of them. */
+  overloadSignaturesGateCalls?: true;
   declaration?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
   owner?: (context: GraphHookContext, owner: MemberOwnerRef) => void | Promise<void>;
   call?: (context: GraphHookContext, node: SyntaxNodeLike, definition: SymbolDef) => void | Promise<void>;
@@ -476,6 +514,11 @@ export type MemberLookupPolicy = {
    * generic import, local, and named lookup.
    */
   namespaceClassNames?: true;
+  /**
+   * An import binds its name in one role (class, function, or constant): a use takes the role of the import that covers
+   * it, and an alias names a declaration of its own role only.
+   */
+  roleQualifiedImports?: true;
   /** Member scopes are distinct for this language; absent means false. */
   separateMemberScopes?: boolean;
   /** Existing selector options shared by navigation and graph consumers. */

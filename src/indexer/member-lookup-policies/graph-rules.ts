@@ -7,6 +7,9 @@ import { swiftGraphHooks } from "./swift-graph.js";
 import { kotlinGraphHooks } from "./kotlin-graph.js";
 import { rubyGraphHooks } from "./ruby-graph.js";
 import { typescriptGraphHooks } from "./typescript-graph.js";
+import { goGraphHooks } from "./go-graph.js";
+import { rustGraphHooks } from "./rust-graph.js";
+import { zigGraphHooks } from "./zig-graph.js";
 import type { GraphHooks } from "./types.js";
 
 const NO_GRAPH_RULES: GraphHooks = {};
@@ -21,6 +24,9 @@ const GRAPH_RULES: Readonly<Record<string, GraphHooks>> = {
   ruby: rubyGraphHooks,
   ts: typescriptGraphHooks,
   tsx: typescriptGraphHooks,
+  go: goGraphHooks,
+  rust: rustGraphHooks,
+  zig: zigGraphHooks,
 };
 
 /** Leaf selection for graph consumers that the full member-policy registry depends on. */

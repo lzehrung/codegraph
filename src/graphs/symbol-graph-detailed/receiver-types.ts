@@ -14,5 +14,4 @@ export type ReceiverBinding =
       /** Syntax proving the type, including imported qualified types. */
       typeNode: SyntaxNodeLike;
       memberScope: ReceiverMemberScope;
-      constructed?: boolean;
     };

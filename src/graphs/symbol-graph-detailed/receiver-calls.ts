@@ -1372,7 +1372,6 @@ export function classifyReceiver(
       typeName: sliceText(typeNode, source),
       typeNode,
       memberScope: hasStaticMemberDistinction(sup.id) ? "instance" : "any",
-      constructed: origin === "constructor",
     };
   }
   if (importProof === "static-type") {

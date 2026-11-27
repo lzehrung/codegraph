@@ -51,16 +51,13 @@ import {
 } from "../../indexer/navigation-resolve.js";
 import { resolveEcmaPrivateName, selectMember } from "../../indexer/member-selection.js";
 import type { MemberCallEdge } from "../../indexer/member-lookup-policies/index.js";
-import type { GraphHooks, MemberLookupPolicy } from "../../indexer/member-lookup-policies/types.js";
+import type { GraphHooks, MemberLookupPolicy, OwnerHooks } from "../../indexer/member-lookup-policies/types.js";
 import { kotlinThisNeedsScopeProof } from "../../indexer/kotlin-lambda-receiver.js";
 import { kotlinHasTrailingLambda } from "../../indexer/kotlin-call-compatibility.js";
 import { effectiveExplicitBinding } from "../../indexer/star-import-precedence.js";
-import {
-  isSwiftConstrainedExtension,
-  isSwiftExtensionContainer,
-} from "../../indexer/member-lookup-policies/swift-owner.js";
+import { isSwiftExtensionContainer } from "../../indexer/member-lookup-policies/swift-owner.js";
 import { selectCsharpPartialRepresentative } from "../../indexer/member-lookup-policies/csharp-owner.js";
-import { kotlinMayNameClassBare, kotlinSupertypeEntry } from "../../indexer/member-lookup-policies/kotlin-owner.js";
+import { kotlinMayNameClassBare } from "../../indexer/member-lookup-policies/kotlin-owner.js";
 import type { LanguageSupport } from "../../languages.js";
 import { isJsTsLanguage } from "../../languages/js-family.js";
 import {
@@ -96,6 +93,7 @@ import {
 } from "../../util/ruby-tree.js";
 import { foldPhpIdentifierCase } from "../../util/identifiers.js";
 import { isSwiftQualifiedTypeSuffix, isSwiftSubscriptAccess } from "../../util/swift-tree.js";
+import { isJvmLanguage } from "../../util/syntax-tree.js";
 import {
   MEMBER_ACCESS_ROWS,
   type ReceiverAncestorClause,
@@ -157,6 +155,13 @@ type EdgePassContext = ReceiverSyntaxContext & {
   preservedBaseSpecifierTypes: GraphHooks["preservedBaseSpecifierTypes"];
   singleSuperclass: GraphHooks["singleSuperclass"];
   callableNameForm: GraphHooks["callableNameForm"];
+  scopePathType: GraphHooks["scopePathType"];
+  membersNeedReceiver: GraphHooks["membersNeedReceiver"];
+  memberOwnerSyntax: GraphHooks["memberOwnerSyntax"];
+  qualifiedTypeChains: GraphHooks["qualifiedTypeChains"];
+  namespaceDeclarationMembers: GraphHooks["namespaceDeclarationMembers"];
+  positionedAliasProof: GraphHooks["positionedAliasProof"];
+  typeCallsInstantiate: GraphHooks["typeCallsInstantiate"];
   memberCallEdge: MemberLookupPolicy["callEdge"];
   dottedCallsUseMemberLookup: boolean | undefined;
   graphDeclarationParameters: GraphParameterShapes | undefined;
@@ -317,7 +322,8 @@ function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?
 
 /** Records an edge for a resolvable target node. Returns whether a target was resolved. */
 function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: string, label: string): boolean {
-  if (context.sup.id === "cpp" && node.type === "qualified_identifier") {
+  const scopePathType = context.scopePathType;
+  if (scopePathType && node.type === scopePathType) {
     const name = cppQualifiedNameSegments(node, context.source).join("::");
     const target = context.resolveIdentifier(name, node);
     if (target) {
@@ -334,9 +340,9 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name, node);
     if (target) {
-      // Zig struct declarations require an explicit type receiver (`Self.helper()`).
-      // An unqualified identifier is not a call to a member of its enclosing struct.
-      if (label === "calls" && context.sup.id === "zig" && target.isMember) return false;
+      // A member that needs a receiver (Zig `Self.helper()`) is never the call of an unqualified identifier, even
+      // inside its own struct.
+      if (label === "calls" && context.membersNeedReceiver && target.isMember) return false;
       recordDefEdge(context, fromId, target, label, node);
       return true;
     }
@@ -598,14 +604,15 @@ async function emitSharedOwnerMembershipEdges(
 ): Promise<void> {
   const container = owner.container;
   if (!container) return;
-  if (context.sup.id !== "csharp" && context.sup.id !== "swift") return;
-  const isExtension = context.sup.id === "swift" && isSwiftExtensionContainer(container, context.source);
+  const shared = context.policy?.ownerResolution?.shared;
+  if (!shared) return;
+  const isExtension = !!shared.isExtension?.(container, context.source);
   // Swift base types already own their full member set; only extensions and C#
   // partials reach across owner declarations. Non-partial C# containers resolve
   // to no peers inside the shared-owner relation.
   // Constrained extensions can use nominal members but cannot donate their own
   // members to every instance of the nominal type without proving the where clause.
-  const constrained = context.sup.id === "swift" && isSwiftConstrainedExtension(container, context.source);
+  const constrained = !!shared.isConstrainedExtension?.(container, context.source);
   if (constrained && context.sharedOwnerAccessibleMembers.has(defNodeId(owner.def))) return;
   const cacheKey = `${fileIdentityKey(context.moduleEntry.file)}\u0000${container.startIndex}\u0000${container.endIndex}`;
   let peers = context.sharedOwnerPeers.get(cacheKey);
@@ -642,7 +649,7 @@ async function emitSharedOwnerMembershipEdges(
     context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(anchor ? anchor.def : owner.def));
     return;
   }
-  if (context.sup.id === "csharp" && peerDefs.length) {
+  if (shared.declarationsAreEquivalent && peerDefs.length) {
     const representative = selectCsharpPartialRepresentative([owner.def, ...peerDefs.map((peer) => peer.def)]);
     context.sharedOwnerAnchors.set(defNodeId(owner.def), defNodeId(representative));
   }
@@ -682,7 +689,8 @@ async function memberOwner(
   classNodes: DetailedClassNode[],
 ): Promise<MemberOwner | null> {
   if (!isClassMemberFunction(fn)) return null;
-  if (context.sup.id === "go" && fn.node.type === "method_declaration") {
+  const ownerSyntax = context.memberOwnerSyntax;
+  if (ownerSyntax === "receiver-parameter" && fn.node.type === "method_declaration") {
     const def = goMethodReceiverTypeDef(context, fn.node);
     return def ? { def, container: null, cppOutOfLine: false } : null;
   }
@@ -695,14 +703,14 @@ async function memberOwner(
     if (!isDirectKeywordMemberDeclaration(fn.node, owners[0].node)) return null;
     return { def: owners[0].def, container: owners[0].node, cppOutOfLine: false };
   }
-  if (context.sup.id === "cpp") {
+  if (ownerSyntax === "qualified-declarator") {
     const ownerPath = cppOutOfLineOwnerPath(fn.node, context.source, context.sup, receiverSyntaxDeps);
     const def = ownerPath
       ? await resolveCppQualifiedMemberContainer(context.index, context.moduleEntry, ownerPath, context.loadParsedFile)
       : null;
     return def ? { def, container: null, cppOutOfLine: true } : null;
   }
-  if (context.sup.id === "kotlin") {
+  if (ownerSyntax === "extension-receiver") {
     // `fun Widget.describe()` is a top-level declaration outside Widget's own body, so it is
     // never one of `owners` above; its receiver-type prefix is the only proof of ownership.
     const receiverTypeNode = kotlinExtensionReceiverTypeNode(fn.node, context.sup);
@@ -710,7 +718,7 @@ async function memberOwner(
     const def = resolveNamedType(context, sliceText(receiverTypeNode, context.source), receiverTypeNode);
     return def ? { def, container: null, cppOutOfLine: false } : null;
   }
-  if (context.sup.id === "rust") {
+  if (ownerSyntax === "impl-self-type") {
     // A Rust impl method sits beside its self type, not inside it (like Go's receiver type);
     // the `impl` block's self type is the owner, and only direct impl members count.
     const container = nearestMemberContainer(fn.node);
@@ -721,7 +729,7 @@ async function memberOwner(
     const def = nameNode ? resolveNamedType(context, sliceText(nameNode, context.source), nameNode) : null;
     return def ? { def, container, cppOutOfLine: false } : null;
   }
-  if (context.sup.id !== "zig") return null;
+  if (ownerSyntax !== "assigned-struct") return null;
   const container = nearestMemberContainer(fn.node);
   if (container?.type !== "struct_declaration") return null;
   const name = container.parent?.namedChildren.find((child) => child.type === "identifier");
@@ -782,13 +790,10 @@ function unwrapGoNamedType(node: SyntaxNodeLike): SyntaxNodeLike | null {
 }
 
 /** Type-like defs only, so a PHP `use function` alias cannot steal `Example::m()`. */
-function resolveNamedType(
-  context: EdgePassContext,
-  name: string,
-  node: SyntaxNodeLike,
-  rubyConstructed = false,
-): SymbolDef | null {
-  if (context.sup.id === "csharp" && csharpQualifiedNameNode(node)) {
+function resolveNamedType(context: EdgePassContext, name: string, node: SyntaxNodeLike): SymbolDef | null {
+  const construction = context.policy?.receiverResolution?.construction;
+  const namespaceQualifiedTypes = !!construction?.namespaceQualifiedTypes;
+  if (namespaceQualifiedTypes && csharpQualifiedNameNode(node)) {
     return resolveCsharpQualifiedReceiverType(
       context.index,
       context.moduleEntry,
@@ -801,13 +806,13 @@ function resolveNamedType(
   // A Go composite literal or Zig struct initializer can name a qualified cross-file type
   // (`pkg.Type{}` / `ns.Type{}`); the receiver's typeName is then dotted text, not one
   // identifier, so resolve the chain directly instead of treating it as a plain name.
-  if ((context.sup.id === "go" || context.sup.id === "zig") && context.optionalMemberTypes.has(node.type)) {
+  if (context.qualifiedTypeChains && context.optionalMemberTypes.has(node.type)) {
     const qualified = context.resolveMemberChainTarget(node);
     return qualified && declaresMembers(qualified) ? qualified : null;
   }
   // A type parameter shadows a same-named class, and it declares no members.
   if (bindsTypeParameter(name, node, context.source, context.sup)) return null;
-  if (context.sup.id === "python") {
+  if (context.policy?.receiverResolution?.access?.annotationTypes) {
     const annotation = pythonAnnotationTypeAtUse(
       context.index,
       context.moduleEntry,
@@ -821,8 +826,8 @@ function resolveNamedType(
   }
   const target = context.resolveIdentifier(name, node);
   if (target && declaresMembers(target)) return target;
-  // C# type roots, including generic arity, are settled by the shared positioned lookup.
-  if (context.sup.id === "csharp") return null;
+  // Namespace-aware type roots, including C# generic arity, are settled by the shared positioned lookup.
+  if (namespaceQualifiedTypes) return null;
   // A parameter/annotation type name is a closer scope binding than the class it names.
   const normalized = context.sup.normalizeIdentifier(name);
   const typed = context.moduleEntry.locals.filter(
@@ -831,12 +836,10 @@ function resolveNamedType(
   if (typed.length === 1) return typed[0]!;
   const imported = context.aliasToTargetDef.get(context.aliasKey(name));
   if (imported && context.aliasTableAnswers(name, node) && declaresMembers(imported)) return imported;
-  // A constructed `Klass.new` type, or (Ruby only) a bare capitalized constant receiver
-  // (`Calc.add(1, 2)`), uses Ruby's bare-constant visibility, and only when this file does not
-  // already have several classes of that name. Inheritance names stay on resolveIdentifier so
-  // an unproven superclass is not invented.
-  const triesRubyVisibleConstant = rubyConstructed || context.sup.id === "ruby";
-  if (!triesRubyVisibleConstant || typed.length > 1) return null;
+  // A type no local declares may be a constant that a `require` made visible (Ruby `Klass.new`, or a bare capitalized
+  // constant receiver `Calc.add(1, 2)`), only when this file does not already have several classes of that name.
+  // Inheritance names stay on resolveIdentifier so an unproven superclass is not invented.
+  if (!construction?.visibleConstantTypes || typed.length > 1) return null;
   return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
 }
 
@@ -903,7 +906,7 @@ function recordGoEmbeddedFieldReceiverCall(
     hasLexicalBinding,
   );
   if (ownerBinding?.kind !== "named-type") return false;
-  const ownerDef = resolveNamedType(context, ownerBinding.typeName, ownerBinding.typeNode, ownerBinding.constructed);
+  const ownerDef = resolveNamedType(context, ownerBinding.typeName, ownerBinding.typeNode);
   if (!ownerDef || fileIdentityKey(ownerDef.file) !== fileIdentityKey(context.moduleEntry.file)) return false;
   const embeds = MEMBER_ACCESS_ROWS.go?.receiverAncestry?.embeds;
   if (!embeds) return false;
@@ -1013,8 +1016,7 @@ function resolveTypeScriptNamespaceMember(
   receiverNode: SyntaxNodeLike,
   property: SyntaxNodeLike,
 ): SymbolDef | null | undefined {
-  if ((context.sup.id !== "ts" && context.sup.id !== "tsx") || !isIdentifierType(context.sup, receiverNode.type))
-    return undefined;
+  if (!context.namespaceDeclarationMembers || !isIdentifierType(context.sup, receiverNode.type)) return undefined;
   const receiver = context.resolveIdentifier(sliceText(receiverNode, context.source), receiverNode);
   if (!receiver || fileIdentityKey(receiver.file) !== fileIdentityKey(context.moduleEntry.file)) return undefined;
   const member = sliceText(property, context.source);
@@ -1344,6 +1346,7 @@ type SpecializedEdgePassRow = {
     access: ReceiverCallAccess,
     fromId: string,
     hasLexicalBinding: (callee: SyntaxNodeLike) => boolean,
+    call: SyntaxNodeLike,
   ) => boolean | (() => Promise<void>);
   onCall?: (
     context: EdgePassContext,
@@ -1394,6 +1397,14 @@ export const SPECIALIZED_EDGE_PASSES: Readonly<Record<string, SpecializedEdgePas
       return recordSwiftCapitalizedConstruction(context, node, fromId) ? true : undefined;
     },
   },
+  zig: {
+    onReceiverCall(context, access, fromId, _hasLexicalBinding, call) {
+      return (
+        context.optionalMemberTypes.has(access.receiver.type) &&
+        recordZigQualifiedTypeReceiverCall(context, call, access, fromId)
+      );
+    },
+  },
 };
 
 export async function emitFunctionBodyEdges(
@@ -1405,6 +1416,25 @@ export async function emitFunctionBodyEdges(
   const caseInsensitiveCallableNames = context.callableNameForm === "case-folded";
   const normalizeCallableName = context.callableNameForm === "normalized" ? context.sup.normalizeIdentifier : undefined;
   const dottedCallsUseMemberLookup = context.dottedCallsUseMemberLookup;
+  // The rules the walk reads, selected once for the module's language.
+  const receiverRules = context.policy?.receiverResolution;
+  const accessRules = receiverRules?.access;
+  const namespaceScopes = !!accessRules?.namespaceScopes;
+  const dottedImports = !!accessRules?.dottedImports;
+  const classAttributeMembers = !!accessRules?.classAttributeMembers;
+  const trailingLambdaCalls = !!receiverRules?.trailingLambdaCalls;
+  const invokableProperties = !!receiverRules?.callablePropertyArity;
+  const lambdaReceiverThis = !!receiverRules?.lambdaReceiverThis;
+  const roleQualifiedImports = !!context.policy?.roleQualifiedImports;
+  // A qualified type that the JVM type-name lookup decides is a receiver only member access lookup proves, and that
+  // lookup or the namespace-aware lookup decides the qualified types a construction names.
+  const qualifiedConstructionReceivers = !!accessRules?.qualifiedTypeNames;
+  const qualifiedConstructionLookup =
+    qualifiedConstructionReceivers || !!receiverRules?.construction?.namespaceQualifiedTypes;
+  const qualifiedExpressionType = context.access?.qualifiedAccess?.expressionType;
+  const jvmQualifiedTypes = isJvmLanguage(context.sup.id);
+  const positionedAliasProof = context.positionedAliasProof;
+  const typeScopedCalls = !!context.scopePathType;
   let deferredSpecializedCalls: Array<() => Promise<void>> | undefined;
   const qualifiedConstructionTargets: Array<{
     fromId: string;
@@ -1500,9 +1530,9 @@ export async function emitFunctionBodyEdges(
 
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;
-      if (context.sup.id === "csharp" && context.sup.isDeclarationName(node)) return;
+      if (namespaceScopes && context.sup.isDeclarationName(node)) return;
       const name = sliceText(node, context.source);
-      if (context.sup.id === "php") {
+      if (roleQualifiedImports) {
         // Resolve the occurrence's namespace; a plain-name map cannot distinguish PHP roles.
         const importType = inferPhpQualifiedReferenceImportType(node) ?? "const";
         const aliasName = importType === "const" ? name : foldPhpIdentifierCase(name);
@@ -1522,11 +1552,10 @@ export async function emitFunctionBodyEdges(
       }
       const nameKey = context.aliasKey(name);
       const tableDef = context.aliasToTargetDef.get(nameKey);
-      const jvmLanguage = context.sup.id === "java" || context.sup.id === "kotlin";
       const qualifiedType = isQualifiedTypeSuffix(context.access?.qualifiedAccess, node);
       let qualifiedExpression = false;
       let valueReceiver = false;
-      if (context.sup.id === "kotlin" && node.parent?.type === "navigation_expression") {
+      if (qualifiedExpressionType && node.parent?.type === qualifiedExpressionType) {
         const first = name[0];
         const capitalized = !!first && first === first.toUpperCase() && first !== first.toLowerCase();
         const importedName = !!tableDef || context.aliasToTargetModule.has(nameKey);
@@ -1552,7 +1581,7 @@ export async function emitFunctionBodyEdges(
           qualifiedExpression = !valueReceiver;
         }
       }
-      const resolvableQualifiedType = qualifiedType && (jvmLanguage || !!tableDef);
+      const resolvableQualifiedType = qualifiedType && (jvmQualifiedTypes || !!tableDef);
       if (resolvableQualifiedType || qualifiedExpression) {
         // The shared lookup may prove the qualified target, but the bare alias cannot.
         const qualified = context.resolveIdentifier(name, node);
@@ -1560,7 +1589,7 @@ export async function emitFunctionBodyEdges(
         return;
       }
       if (seenAliases.has(nameKey)) return;
-      if (tableDef && context.sup.id === "csharp" && csharpTypeOnlyName(node, true)) {
+      if (tableDef && namespaceScopes && csharpTypeOnlyName(node, true)) {
         const target = context.resolveIdentifier(name, node);
         if (target && declaresMembers(target)) {
           seenAliases.add(nameKey);
@@ -1569,8 +1598,8 @@ export async function emitFunctionBodyEdges(
         return;
       }
       let positionedResolution: NameResolution | null | undefined;
-      const kotlinExpression = context.sup.id === "kotlin" && node.parent?.type !== "user_type";
-      if (tableDef && kotlinExpression) {
+      const expressionAlias = positionedAliasProof && node.parent?.type !== "user_type";
+      if (tableDef && expressionAlias) {
         positionedResolution = context.resolveName(name, node, valueReceiver);
         if (positionedResolution?.status === "deferred") {
           deferredAliasUses.push({ node, name, resolution: positionedResolution, target: tableDef });
@@ -1595,12 +1624,10 @@ export async function emitFunctionBodyEdges(
           }
           // An unaliased Python `import a.b` makes `a.b` the submodule, whatever `a`'s `__init__` declares as `b`.
           const namesDottedModule =
-            !!exportedName &&
-            context.sup.id === "python" &&
-            context.aliasToTargetModule.has(`${nameKey}.${exportedName}`);
+            !!exportedName && dottedImports && context.aliasToTargetModule.has(`${nameKey}.${exportedName}`);
           if (exportedName && !namesDottedModule) {
             target = context.resolveExportFrom(modFile, exportedName);
-            if (!target && (context.sup.id !== "go" || !memberNamePattern || memberNamePattern.test(exportedName))) {
+            if (!target && (!memberNamePattern || memberNamePattern.test(exportedName))) {
               const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
               target = (targetModule?.locals ?? []).find((local) => local.localName === exportedName) ?? null;
             }
@@ -1621,7 +1648,7 @@ export async function emitFunctionBodyEdges(
     };
 
     const classifyImport = (name: string, node: SyntaxNodeLike): "module-import" | "static-type" | null => {
-      if (context.sup.id === "csharp") {
+      if (namespaceScopes) {
         const alias = csharpAliasAt(context.index, context.moduleEntry, name, node);
         if (alias?.kind === "named" && context.moduleAliasIsUnshadowed(name, node)) {
           const target = context.resolveIdentifier(name, node);
@@ -1680,7 +1707,7 @@ export async function emitFunctionBodyEdges(
           context.tree,
         );
       const pythonInstanceReceiver =
-        context.sup.id === "python" &&
+        classAttributeMembers &&
         ((binding.kind === "own-type" && sliceText(access.receiver, context.source) === "self") ||
           (binding.kind === "named-type" && binding.proof !== "static-type"));
       if (binding.kind === "module-import" || binding.kind === "unknown") return;
@@ -1692,7 +1719,7 @@ export async function emitFunctionBodyEdges(
         ? getCallArgumentCount({ languageId: context.sup.id, source: context.source, call: node })
         : null;
       if (binding.kind === "named-type") {
-        const typeDef = resolveNamedType(context, binding.typeName, binding.typeNode, binding.constructed);
+        const typeDef = resolveNamedType(context, binding.typeName, binding.typeNode);
         if (!typeDef) return;
         context.receiverCalls.push({
           callerId: fromId,
@@ -1701,12 +1728,10 @@ export async function emitFunctionBodyEdges(
           memberName,
           argumentCount,
           site,
-          ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(access.property)
-            ? { kotlinTrailingLambda: true }
-            : {}),
+          ...(trailingLambdaCalls && kotlinHasTrailingLambda(access.property) ? { kotlinTrailingLambda: true } : {}),
           memberScope: forcedMemberScope ?? binding.memberScope,
           ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
-          ...(context.sup.id === "go" && memberNamePattern && !memberNamePattern.test(memberName)
+          ...(memberNamePattern && !memberNamePattern.test(memberName)
             ? { goPackagePeerFiles: getCompilationUnitPeers(context.index, context.moduleEntry.file).files }
             : {}),
           caseInsensitiveMemberName: caseInsensitiveCallableNames,
@@ -1738,8 +1763,8 @@ export async function emitFunctionBodyEdges(
           (candidate) => candidate.def,
           (candidate) => !declarationNodeIsStatic(candidate.node, context.source),
         );
-        const hasKotlinPropertyCollision =
-          context.sup.id === "kotlin" &&
+        const hasPropertyCollision =
+          invokableProperties &&
           !!container &&
           context.moduleEntry.locals.some((local) => {
             if (local.kind !== SymbolKind.Variable || local.localName !== memberName) return false;
@@ -1748,7 +1773,7 @@ export async function emitFunctionBodyEdges(
             const nameNode = context.tree.rootNode.descendantForIndex(start, start);
             return isDirectKeywordMemberDeclaration(nameNode, container);
           });
-        if (declared.length === 1 && !hasKotlinPropertyCollision) {
+        if (declared.length === 1 && !hasPropertyCollision) {
           const unique = declared[0]!;
           recordDefEdge(context, fromId, unique.def, "calls", access.property);
           // File-hidden Swift members stay off cross-file shared owners. Skipping the
@@ -1772,9 +1797,7 @@ export async function emitFunctionBodyEdges(
         memberName,
         argumentCount,
         site,
-        ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(access.property)
-          ? { kotlinTrailingLambda: true }
-          : {}),
+        ...(trailingLambdaCalls && kotlinHasTrailingLambda(access.property) ? { kotlinTrailingLambda: true } : {}),
         memberScope: binding.memberScope,
         ...(pythonInstanceReceiver ? { pythonInstanceReceiver: true } : {}),
         ...(hideGenerated ? { hideGeneratedMembers: true } : {}),
@@ -1815,7 +1838,7 @@ export async function emitFunctionBodyEdges(
         memberName,
         argumentCount,
         site: { file: context.moduleEntry.file, range: toRange(callee) },
-        ...(context.sup.id === "kotlin" && kotlinHasTrailingLambda(callee) ? { kotlinTrailingLambda: true } : {}),
+        ...(trailingLambdaCalls && kotlinHasTrailingLambda(callee) ? { kotlinTrailingLambda: true } : {}),
         // A static caller can only reach a static bare member; an instance caller
         // may bare-call either, matching C#'s unqualified invocation rules.
         memberScope: nodeInStaticMemberContext(fn.node, context.source) ? "static" : "any",
@@ -1857,10 +1880,9 @@ export async function emitFunctionBodyEdges(
           return;
         }
         if (recordTypeScriptNamespaceCall(context, node, access, fromId)) return;
-        const typeScopedCppCall =
-          context.sup.id === "cpp" &&
-          context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
-        if (typeScopedCppCall) {
+        const typeScopedCall =
+          typeScopedCalls && context.source.slice(access.receiver.endIndex, access.property.startIndex).includes("::");
+        if (typeScopedCall) {
           const qualifiedName = cppQualifiedNameSegments(access.accessNode, context.source).join("::");
           const qualifiedTarget = context.resolveIdentifier(qualifiedName, access.property);
           // Whether the owner is a class, and whether the caller has an implicit `this` of that class,
@@ -1892,18 +1914,18 @@ export async function emitFunctionBodyEdges(
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
-        const scopedCsharpAlias =
-          context.sup.id === "csharp" &&
+        const scopedAlias =
+          namespaceScopes &&
           isIdentifierType(context.sup, access.receiver.type) &&
           !context.aliasTableAnswers(sliceText(access.receiver, context.source), access.receiver);
-        if (scopedCsharpAlias) {
+        if (scopedAlias) {
           // Let the shared member resolver select the alias in scope, not a file-wide receiver type.
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
-        // A Kotlin `this` inside a lambda that may have a receiver, or `this@label`, names a receiver or type that only
-        // the shared member lookup can prove, as navigation does.
-        if (context.sup.id === "kotlin" && kotlinThisNeedsScopeProof(access.receiver)) {
+        // A `this` inside a lambda that may have a receiver, or `this@label`, names a receiver or type that only the
+        // shared member lookup can prove, as navigation does.
+        if (lambdaReceiverThis && kotlinThisNeedsScopeProof(access.receiver)) {
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
@@ -1916,33 +1938,24 @@ export async function emitFunctionBodyEdges(
           return;
         }
         if (tryResolveChain(context, access.accessNode, fromId, "calls")) return;
-        if (
-          context.sup.id === "zig" &&
-          context.optionalMemberTypes.has(access.receiver.type) &&
-          recordZigQualifiedTypeReceiverCall(context, node, access, fromId)
-        ) {
-          return;
-        }
-        const specializedCall = specialized?.onReceiverCall?.(context, access, fromId, hasLexicalBinding);
+        const specializedCall = specialized?.onReceiverCall?.(context, access, fromId, hasLexicalBinding, node);
         if (specializedCall) {
           if (typeof specializedCall !== "boolean") (deferredSpecializedCalls ??= []).push(specializedCall);
           return;
         }
-        const javaConstructionType =
-          context.sup.id === "java" && access.receiver.type === "object_creation_expression"
+        const qualifiedConstructionType =
+          qualifiedConstructionReceivers && access.receiver.type === "object_creation_expression"
             ? constructionTypeName(access.receiver, context.source, context.sup, context)
             : null;
-        if (
-          context.sup.id === "java" &&
-          javaConstructionType &&
-          isMemberAccessNode(context.sup, javaConstructionType)
-        ) {
+        if (qualifiedConstructionType && isMemberAccessNode(context.sup, qualifiedConstructionType)) {
           dottedReceiverCalls.push({ fromId, access });
           return;
         }
+        // A receiver name or qualified expression that no lexical binding resolves may spell a package or type path
+        // (`a.b.C.m()`) that only the shared member lookup proves.
         if (
-          context.sup.id === "kotlin" &&
-          (isIdentifierType(context.sup, access.receiver.type) || access.receiver.type === "navigation_expression") &&
+          qualifiedExpressionType &&
+          (isIdentifierType(context.sup, access.receiver.type) || access.receiver.type === qualifiedExpressionType) &&
           !context.resolveIdentifier(sliceText(access.receiver, context.source), access.receiver)
         ) {
           dottedReceiverCalls.push({ fromId, access });
@@ -1998,7 +2011,7 @@ export async function emitFunctionBodyEdges(
             const property = isMemberAccessNode(context.sup, target)
               ? getMemberAccessParts(context.sup, target).property
               : null;
-            if ((context.sup.id === "java" || context.sup.id === "csharp") && property) {
+            if (qualifiedConstructionLookup && property) {
               qualifiedConstructionTargets.push({ fromId, member: property, target });
             } else {
               tryResolveNode(context, target, fromId, "instantiates");
@@ -2031,8 +2044,8 @@ export async function emitFunctionBodyEdges(
     walkFunctionBody(fn.node, true);
     for (const call of deferredCalls) {
       const target = await context.settleName(call.name, call.callee, call.resolution);
-      // Swift `Foo()` whose deferred lookup settles on a type is construction.
-      const label = context.sup.id === "swift" && target && declaresMembers(target) ? "instantiates" : "calls";
+      // A deferred `Foo()` that settles on a type is construction where calling a type constructs it.
+      const label = context.typeCallsInstantiate && target && declaresMembers(target) ? "instantiates" : "calls";
       if (target) recordDefEdge(context, fromId, target, label, call.callee);
     }
     for (const use of deferredAliasUses) {
@@ -2300,9 +2313,9 @@ async function resolveBareBase(context: EdgePassContext, identifier: SyntaxNodeL
     return await context.settleName(name, identifier, context.resolveName(name, identifier));
   }
   const target = context.resolveIdentifier(name, identifier);
-  // Ruby `require` publishes a top-level constant, not a nested one. Reuse the
+  // A constant that `require` published is a top-level one, not a nested one. Reuse the
   // same visibility as goto so `class Worker < Base` follows the required class.
-  if (!target && context.sup.id === "ruby") {
+  if (!target && context.policy?.receiverResolution?.construction?.visibleConstantTypes) {
     return resolveRubyVisibleConstant(context.index, context.moduleEntry, context.sup, name);
   }
   return target;
@@ -2317,7 +2330,7 @@ async function resolveQualifiedPathBase(
   context: EdgePassContext,
   qualified: SyntaxNodeLike,
 ): Promise<SymbolDef | null> {
-  if (context.sup.id === "ruby") {
+  if (context.policy?.ownerResolution?.heritage?.constantPathType) {
     const reference = readRubyConstantReference(qualified, context.index, context.moduleEntry);
     return reference ? resolveRubyConstantReference(context.index, context.moduleEntry, reference) : null;
   }
@@ -2337,7 +2350,8 @@ async function resolveQualifiedPathBase(
 }
 
 async function resolveBaseSpecifier(context: EdgePassContext, identifier: SyntaxNodeLike): Promise<SymbolDef | null> {
-  if (context.sup.id === "cpp" && identifier.type === "qualified_identifier") {
+  const scopePathType = context.scopePathType;
+  if (scopePathType && identifier.type === scopePathType) {
     const qualifiedPath = cppQualifiedNameSegments(identifier, context.source);
     const container = await resolveCppQualifiedMemberContainer(
       context.index,
@@ -2376,11 +2390,14 @@ async function recordIdentifierRelations(
     context.preservedBaseSpecifierTypes,
   );
   const seen = new Set<string>();
+  // A base that names a typealias is the declaration the alias provably reaches, and that declaration's kind decides
+  // whether the clause conforms to it.
+  const basesReachThroughAliases = !!context.policy?.ownerResolution?.aliasesReachDeclarations;
   for (const [index, identifier] of identifiers.entries()) {
     let target = await resolveBaseSpecifier(context, identifier);
     if (!target) continue;
     let swiftBase: SwiftBase | null = null;
-    if (context.sup.id === "swift") {
+    if (basesReachThroughAliases) {
       swiftBase = await resolveSwiftBase(context, target);
       if (!swiftBase) continue;
       target = swiftBase.target;
@@ -2468,8 +2485,9 @@ async function kotlinBaseRelation(
   declaring: DeclaringType,
   target: SymbolDef,
   identifier: SyntaxNodeLike,
+  supertypeEntry: NonNullable<OwnerHooks["supertypeEntry"]>,
 ): Promise<InheritanceRelation | null> {
-  const entry = kotlinSupertypeEntry(identifier);
+  const entry = supertypeEntry(identifier);
   if (entry === "invoked") return "extends";
   if (!kotlinMayNameClassBare(declaring.node)) return "implements";
   if (!entry) return null;
@@ -2498,7 +2516,8 @@ async function baseClauseRelation(
 ): Promise<InheritanceRelation | null> {
   if (label !== "superclass-first") return label;
   if (declaring.isInterface) return "extends";
-  if (context.sup.id === "kotlin") return await kotlinBaseRelation(context, declaring, target, identifier);
+  const supertypeEntry = context.policy?.ownerResolution?.supertypeEntry;
+  if (supertypeEntry) return await kotlinBaseRelation(context, declaring, target, identifier, supertypeEntry);
   if (target.kind === SymbolKind.Interface || index > 0) return "implements";
   return "extends";
 }
@@ -2535,13 +2554,18 @@ export async function emitClassInheritanceEdges(
   const singleSuperclassDeclaration = context.singleSuperclass?.declarationType;
   const singleSuperclassHeritage = context.singleSuperclass?.heritageType;
   const singleSuperclassClause = context.singleSuperclass?.clauseType;
+  const ownerRules = context.policy?.ownerResolution;
+  // Owners composed into a class body (traits) adapt or hide members, and an unproven one hides them all.
+  const composesOwners = !!ownerRules?.composedOwnerType;
+  const extensionContainer = ownerRules?.shared?.isExtension;
+  const constrainedExtension = ownerRules?.shared?.isConstrainedExtension;
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     markImplementationTarget(context, fromId, cls.node, context.source, cls.def);
     const declaring: DeclaringType = { node: cls.node, isInterface: declaredSupertypeKind(cls.node) === "interface" };
     if (declaring.isInterface) markInterfaceNode(context, fromId);
-    if (context.sup.id === "php") {
+    if (composesOwners) {
       const adapted = phpUnresolvedTraitMemberNames(context.index, context.moduleEntry.file, cls.node, context.source);
       if (adapted.size) context.phpAdaptedTraitMembers?.set(fromId, adapted);
       const parsed = { source: context.source, tree: context.tree };
@@ -2550,7 +2574,7 @@ export async function emitClassInheritanceEdges(
       }
     }
     let extensionNominal: SymbolDef | null | undefined;
-    if (context.sup.id === "swift" && isSwiftExtensionContainer(cls.node, context.source)) {
+    if (extensionContainer?.(cls.node, context.source)) {
       extensionNominal = null;
       const name = cls.node.childForFieldName("name");
       const singleType = name?.namedChildren.length === 1 ? name.namedChildren[0] : undefined;
@@ -2558,7 +2582,7 @@ export async function emitClassInheritanceEdges(
         const target = context.resolveIdentifier(sliceText(singleType, context.source), singleType);
         if (target && declaresMembers(target)) {
           recordDefEdge(context, fromId, target, "uses", singleType);
-          const conditional = isSwiftConstrainedExtension(cls.node, context.source);
+          const conditional = !!constrainedExtension?.(cls.node, context.source);
           if (!conditional) extensionNominal = await swiftExtendedNominal(context, target);
         }
       }

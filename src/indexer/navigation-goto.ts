@@ -5098,6 +5098,7 @@ function memberDeclaringLocals(mod: ModuleIndex, typeName: string, normalize: (n
 /**
  * Ruby constant visible the same way go-to-definition resolves a bare `Widget`:
  * a same-file declaration, or the class a `require` brought in. Not project-wide.
+ * Every caller selects it from a Ruby-only fact (`visibleConstantTypes`, `constantPaths`) or the Ruby graph pass.
  */
 export function resolveRubyVisibleConstant(
   index: ProjectIndex,
@@ -5105,7 +5106,6 @@ export function resolveRubyVisibleConstant(
   sup: LanguageSupport,
   typeName: string,
 ): SymbolDef | null {
-  if (sup.id !== "ruby") return null;
   const resolved = genericNamedImportStage(index, mod, mod.file, sup, typeName);
   if (resolved?.status !== "ok") return null;
   return declaresMembers(resolved.definition) ? resolved.definition : null;
