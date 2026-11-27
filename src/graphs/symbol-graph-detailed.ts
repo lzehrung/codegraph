@@ -25,7 +25,6 @@ import { cjsRequireValueBinding, resolveExport } from "../indexer/navigation-res
 import { typescriptOverloadImplementationAcceptsCount } from "../indexer/ts-callables.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { isExportedDeclaration, languageHasDeclarationVisibility } from "../indexer/declaration-visibility.js";
-import { kotlinPropertyInvocationArity } from "../indexer/member-lookup-policies/kotlin-receiver.js";
 import { getPackageDeclarationName } from "../indexer/compilation-units.js";
 
 import {
@@ -75,6 +74,7 @@ import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { replaceContents } from "../util/collections.js";
 import { foldPhpIdentifierCase } from "../util/identifiers.js";
 import { isQualifiedTypeSuffix } from "../util/member-access.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
 import { buildSymbolGraph, defNodeId, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
@@ -225,13 +225,16 @@ export async function buildSymbolGraphDetailed(
     fileSupports.set(key, support);
     return support;
   };
+  // Each module's member policy, selected once from its file. A class name that resolves through the namespace symbol
+  // table needs that table before the synchronous walks below read it.
+  const memberPoliciesByFile = new Map<string, MemberLookupPolicy>();
   let hasPhpModules = false;
   for (const moduleEntry of index.byFile.values()) {
-    if (supportForIndexedFile(moduleEntry.file)?.id !== "php") continue;
-    hasPhpModules = true;
-    await ensurePhpNamespaceSymbolIndex(index);
-    break;
+    const memberPolicy = memberLookupPolicyFor(supportForIndexedFile(moduleEntry.file)?.id ?? "");
+    memberPoliciesByFile.set(fileIdentityKey(moduleEntry.file), memberPolicy);
+    if (memberPolicy.namespaceClassNames) hasPhpModules = true;
   }
+  if (hasPhpModules) await ensurePhpNamespaceSymbolIndex(index);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const configuredMaxEdges =
     typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? Math.floor(opts.maxEdges) : undefined;
@@ -330,18 +333,18 @@ export async function buildSymbolGraphDetailed(
     if (targetDef) return targetDef;
     const memberSupport = supportForFileWithoutHeaderSample(file ?? startFile, index.languageExtensions);
     const languageId = memberSupport?.id;
-    if (
-      languageId === "c" ||
-      languageId === "cpp" ||
-      (languageId && (isJsTsLanguage(languageId) || languageHasDeclarationVisibility(languageId)))
-    )
-      return null;
-
+    // A member file whose exports are explicit, whose declarations carry their own visibility, or whose named imports
+    // never fall back to its locals exposes no local that its exports do not name.
+    if (languageId && (isJsTsLanguage(languageId) || languageHasDeclarationVisibility(languageId))) return null;
     const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
+    const localFallbackClosed =
+      !!fileKey && memberPoliciesByFile.get(fileKey)?.graph?.aliasExportOptions?.allowLocalFallback === false;
+    if (localFallbackClosed) return null;
+
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
     const lastName = names[0];
     const memberNamePattern = memberSupport?.exportedNamePattern;
-    if (languageId === "go" && (!lastName || (memberNamePattern && !memberNamePattern.test(lastName)))) return null;
+    if (memberNamePattern && (!lastName || !memberNamePattern.test(lastName))) return null;
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
   };
 
@@ -349,7 +352,6 @@ export async function buildSymbolGraphDetailed(
     resolveExportDef(file, exportedName);
 
   const receiverCalls: ReceiverCallCandidate[] = [];
-  const memberPoliciesByFile = new Map<string, MemberLookupPolicy>();
   const phpAdaptedTraitMembers = hasPhpModules ? new Map<string, ReadonlySet<string>>() : undefined;
   const phpAbstractTraitMembers = hasPhpModules ? new Set<string>() : undefined;
   const phpUnprovenTraitOwners = hasPhpModules ? new Set<string>() : undefined;
@@ -411,8 +413,11 @@ export async function buildSymbolGraphDetailed(
       return names.phpFolded?.has(foldPhpIdentifierCase(candidate.memberName)) ?? false;
     if (names.exact.has(candidate.memberName)) return true;
     if (!names.swiftNormalized?.size) return false;
-    const support = supportForIndexedFile(candidate.site.file);
-    return support?.id === "swift" && names.swiftNormalized.has(support.normalizeIdentifier(candidate.memberName));
+    // Only a use whose language compares callable names normalized can match a normalized spelling.
+    const siteFile = candidate.site.file;
+    if (memberPoliciesByFile.get(fileIdentityKey(siteFile))?.graph?.callableNameForm !== "normalized") return false;
+    const support = supportForIndexedFile(siteFile);
+    return !!support && names.swiftNormalized.has(support.normalizeIdentifier(candidate.memberName));
   };
   // Function-valued bindings (`const helper = () => 1`) index as variables, so the
   // kind scan above cannot see them; the detailed pass mirrors each name it proves
@@ -434,8 +439,6 @@ export async function buildSymbolGraphDetailed(
   for (const indexedModule of index.byFile.values()) {
     const moduleEntry = withCsharpGlobalUsings(index, indexedModule);
     const file = moduleEntry.file;
-    const memberPolicy = memberLookupPolicyFor(supportForIndexedFile(file)?.id ?? "");
-    memberPoliciesByFile.set(fileIdentityKey(file), memberPolicy);
     if (optionFileKeys && !optionFileKeys.has(fileIdentityKey(file))) continue;
     assertQuerySourceForIndex(index, file);
     if (scopeMode === "imported") {
@@ -460,7 +463,20 @@ export async function buildSymbolGraphDetailed(
       if (!sup.supportsCrossModuleSymbols) continue;
       const memberNamePattern = sup.exportedNamePattern;
       const graphRules = graphRulesFor(sup.id);
+      const memberPolicy = memberPoliciesByFile.get(fileKey)!;
       const lexicalBinding = memberPolicy.lexicalBinding;
+      // The rules the module's walks read, selected once for its language.
+      const receiverRules = memberPolicy.receiverResolution;
+      const accessRules = receiverRules?.access;
+      const namespaceScopes = !!accessRules?.namespaceScopes;
+      const positionedImports = !!accessRules?.positionedImports;
+      const classAttributeMembers = !!accessRules?.classAttributeMembers;
+      // A namespace alias binds only through the innermost namespace import in scope at its use.
+      const scopedNamespaceImports = namespaceScopes || !!accessRules?.innermostNamespaceImports;
+      const lambdaReceiverThis = !!receiverRules?.lambdaReceiverThis;
+      const roleQualifiedImports = !!memberPolicy.roleQualifiedImports;
+      const positionedAliasProof = !!graphRules.positionedAliasProof;
+      const jsTsModule = isJsTsLanguage(sup.id);
       const graphDeclarationParameters = getCallableArityProfile(sup.id)?.graphDeclarationParameters;
       ownershipParsedContexts.set(fileKey, Promise.resolve(parsed));
 
@@ -472,14 +488,16 @@ export async function buildSymbolGraphDetailed(
         resolveExportFrom,
         scopeIndex,
       );
-      // C# binds a member of an enclosing type (own, partial, or inherited) before an alias of its name. The member
-      // lookup is asynchronous and the walks below read alias facts synchronously, so it runs once per module here.
-      // The same holds for the types a type root can reach through other partial parts and base classes.
-      const hiddenAliasUses =
-        sup.id === "csharp" ? await csharpAliasUsesHiddenByMembers(index, moduleEntry, parsed, scopeIndex) : undefined;
-      if (sup.id === "csharp") await warmCsharpOwnerChains(index, moduleEntry, parsed);
+      // Where names follow enclosing-namespace lookup, a member of an enclosing type (own, partial, or inherited) binds
+      // before an alias of its name. The member lookup is asynchronous and the walks below read alias facts
+      // synchronously, so it runs once per module here. The same holds for the types a type root can reach through
+      // other partial parts and base classes.
+      const hiddenAliasUses = namespaceScopes
+        ? await csharpAliasUsesHiddenByMembers(index, moduleEntry, parsed, scopeIndex)
+        : undefined;
+      if (namespaceScopes) await warmCsharpOwnerChains(index, moduleEntry, parsed);
       const aliasToSpecifier = new Map<string, string>();
-      if (isJsTsLanguage(sup.id)) {
+      if (jsTsModule) {
         for (const imp of moduleEntry.imports) {
           if (imp.kind !== "namespace" || typeof imp.resolved !== "string") continue;
           const target = aliasToTargetModule.get(aliasKey(imp.localNS));
@@ -528,7 +546,7 @@ export async function buildSymbolGraphDetailed(
           }
         }
       }
-      const hasPythonDottedImports = sup.id === "python" && moduleEntry.imports.some(isPythonDottedImportBinding);
+      const hasDottedImports = !!accessRules?.dottedImports && moduleEntry.imports.some(isPythonDottedImportBinding);
 
       const memberResolver = createMemberChainResolver({
         sup,
@@ -538,23 +556,23 @@ export async function buildSymbolGraphDetailed(
         aliasKey,
         resolveMemberPathFromModule,
         resolveNamespaceAlias: (alias: string, useNode: SyntaxNodeLike): string | undefined => {
-          if (sup.id === "python") {
+          if (positionedImports) {
             const binding = pythonImportAtUse(moduleEntry, useNode, src, tree, sup, scopeIndex);
             if (!binding || binding.kind !== "namespace") return undefined;
             if (isPythonDottedImportBinding(binding)) return pythonDottedImportPackageFile(index, binding);
             return typeof binding.resolved === "string" ? binding.resolved : undefined;
           }
           const imported =
-            sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)
+            scopedNamespaceImports || jsTsModule
               ? innermostNamespaceImport(moduleEntry.imports, alias, useNode, sup.normalizeIdentifier)
               : undefined;
           if (hiddenAliasUses?.has(useNode.startIndex)) return undefined;
           if (!moduleAliasIsUnshadowed(bareNameUse(alias, useNode), imported?.from ?? aliasToSpecifier.get(alias))) {
             return undefined;
           }
-          if (sup.id === "zig" || sup.id === "csharp" || isJsTsLanguage(sup.id)) {
+          if (scopedNamespaceImports || jsTsModule) {
             if (
-              isJsTsLanguage(sup.id) &&
+              jsTsModule &&
               imported?.mechanism === "cjs" &&
               typeof imported.resolved === "string" &&
               cjsRequireValueBinding(index, imported.resolved)
@@ -562,11 +580,11 @@ export async function buildSymbolGraphDetailed(
               return undefined;
             }
             if (typeof imported?.resolved === "string") return imported.resolved;
-            if (sup.id === "csharp" || sup.id === "zig") return undefined;
+            if (scopedNamespaceImports) return undefined;
           }
           return aliasToTargetModule.get(aliasKey(alias));
         },
-        ...(hasPythonDottedImports
+        ...(hasDottedImports
           ? {
               // A dotted spelling is usable only through the positioned package binding.
               resolveNamespacePhrase: (alias: string, names: readonly string[], useNode: SyntaxNodeLike) => {
@@ -601,11 +619,10 @@ export async function buildSymbolGraphDetailed(
       };
       const moduleParsed: ParsedFileContext = { source: src, tree, sup };
       const bareNameUse = (name: string, node: SyntaxNodeLike): BareNameUse => {
-        const phpImportType =
-          sup.id === "php"
-            ? (phpImportTypeAtPosition(moduleEntry.imports, node.startPosition.row, node.startPosition.column) ??
-              inferPhpQualifiedReferenceImportType(node))
-            : undefined;
+        const phpImportType = roleQualifiedImports
+          ? (phpImportTypeAtPosition(moduleEntry.imports, node.startPosition.row, node.startPosition.column) ??
+            inferPhpQualifiedReferenceImportType(node))
+          : undefined;
         return {
           index,
           mod: moduleEntry,
@@ -656,12 +673,12 @@ export async function buildSymbolGraphDetailed(
         return indexedOrNull(settled?.status === "ok" ? settled.definition : null);
       };
       const hasIncompleteJvmPackage =
-        sup.id === "kotlin" &&
+        positionedAliasProof &&
         moduleEntry.imports.some((imp) => imp.kind === "star" && imp.jvmPackageFiles && imp.jvmPackageIncomplete);
       // A type or member an enclosing type receives from another partial part or a base class binds a root name before
       // any import, so the file-wide import tables must not answer for it.
       const boundByOuterOwner = (name: string, node: SyntaxNodeLike): boolean =>
-        sup.id === "csharp" &&
+        namespaceScopes &&
         csharpTypeRootName(node) &&
         peekCsharpOuterMember(index, file, node, name)?.status === "member";
       const unshadowedModuleAlias = (name: string, node: SyntaxNodeLike): boolean =>
@@ -677,7 +694,7 @@ export async function buildSymbolGraphDetailed(
         positionedResolution?: NameResolution | null,
       ): boolean => {
         if (isQualifiedTypeSuffix(access?.qualifiedAccess, node)) return false;
-        if (sup.id === "csharp") {
+        if (namespaceScopes) {
           const key = aliasKey(name);
           // A name no import alias holds has nothing in the tables to contradict; the shared lookup orders it.
           if (!aliasToTargetDef.has(key) && !aliasToTargetModule.has(key)) return true;
@@ -689,7 +706,7 @@ export async function buildSymbolGraphDetailed(
           }
           return csharpAliasTableAnswers(index, moduleEntry, name, node) && unshadowedModuleAlias(name, node);
         }
-        if (sup.id !== "kotlin") return true;
+        if (!positionedAliasProof) return true;
         const target = aliasToTargetDef.get(aliasKey(name));
         if (!target) return !hasIncompleteJvmPackage;
         const resolved = positionedResolution === undefined ? resolveName(name, node) : positionedResolution;
@@ -716,6 +733,13 @@ export async function buildSymbolGraphDetailed(
         preservedBaseSpecifierTypes: graphRules.preservedBaseSpecifierTypes,
         singleSuperclass: graphRules.singleSuperclass,
         callableNameForm: graphRules.callableNameForm,
+        scopePathType: graphRules.scopePathType,
+        membersNeedReceiver: graphRules.membersNeedReceiver,
+        memberOwnerSyntax: graphRules.memberOwnerSyntax,
+        qualifiedTypeChains: graphRules.qualifiedTypeChains,
+        namespaceDeclarationMembers: graphRules.namespaceDeclarationMembers,
+        positionedAliasProof: graphRules.positionedAliasProof,
+        typeCallsInstantiate: graphRules.typeCallsInstantiate,
         memberCallEdge: memberPolicy.callEdge,
         dottedCallsUseMemberLookup: memberPolicy.dottedCallsUseMemberLookup,
         graphDeclarationParameters,
@@ -743,7 +767,7 @@ export async function buildSymbolGraphDetailed(
         },
         resolveMemberAccessTarget: async (node: SyntaxNodeLike): Promise<SymbolDef | null> => {
           const useNode = tree.rootNode.descendantForIndex(node.startIndex, node.endIndex);
-          if (sup.id === "kotlin") {
+          if (lambdaReceiverThis) {
             // `this` inside a lambda with a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
             const viaThis = await kotlinThisMemberResult(
               {
@@ -757,7 +781,7 @@ export async function buildSymbolGraphDetailed(
             );
             if (viaThis) return viaThis.status === "ok" ? viaThis.definition : null;
           }
-          if (sup.id === "python" && !pythonReceiverResolutionCache) {
+          if (classAttributeMembers && !pythonReceiverResolutionCache) {
             pythonReceiverResolutionCache = createPythonReceiverResolutionCache();
           }
           const resolved = await resolveMemberAccessDefinition({
@@ -781,7 +805,7 @@ export async function buildSymbolGraphDetailed(
               // The receiver lookup selects the alias in scope itself.
               const imported = aliasTableAnswers(name, expression) ? aliasToTargetDef.get(aliasKey(name)) : undefined;
               if (imported) return imported;
-              if (sup.id === "csharp" && findClosestScopeBinding(scopeIndex, name, expression, sup)?.import) {
+              if (namespaceScopes && findClosestScopeBinding(scopeIndex, name, expression, sup)?.import) {
                 return null;
               }
               return resolveIdentifier(name, expression);
@@ -809,7 +833,7 @@ export async function buildSymbolGraphDetailed(
         loadParsedFile,
         parsedFiles: resolutionFiles,
       };
-      if (sup.id === "python") {
+      if (classAttributeMembers) {
         pythonMemberAccessResolvers.set(fileIdentityKey(file), edgePassContext.resolveMemberAccessTarget);
       }
       SPECIALIZED_EDGE_PASSES[sup.id]?.beforeModule?.(edgePassContext, tree.rootNode);
@@ -830,21 +854,27 @@ export async function buildSymbolGraphDetailed(
   }
   const kotlinPropertyArities = new Map<string, CallableArity | null>();
   const kotlinPropertyMembers = new Map<string, Set<string>>();
+  // Receiver calls in a file whose language invokes properties may name a property that holds a function.
   const kotlinCallNames = new Set(
     receiverCalls
-      .filter((candidate) => supportForIndexedFile(candidate.site.file)?.id === "kotlin")
+      .filter(
+        (candidate) =>
+          !!memberPoliciesByFile.get(fileIdentityKey(candidate.site.file))?.receiverResolution?.callablePropertyArity,
+      )
       .map((candidate) => candidate.memberName),
   );
   if (kotlinCallNames.size) {
     for (const module of index.byFile.values()) {
-      if (supportForIndexedFile(module.file)?.id !== "kotlin") continue;
+      const propertyArity = memberPoliciesByFile.get(fileIdentityKey(module.file))?.receiverResolution
+        ?.callablePropertyArity;
+      if (!propertyArity) continue;
       for (const def of module.locals) {
         if (def.kind !== SymbolKind.Variable || !kotlinCallNames.has(def.localName)) continue;
         const parsed = await loadParsedFile(def.file);
         const start = def.range.start.index;
         if (!parsed || start === undefined) continue;
         const nameNode = parsed.tree.rootNode.descendantForIndex(start, start);
-        const arity = kotlinPropertyInvocationArity(nameNode);
+        const arity = propertyArity(nameNode);
         if (arity === undefined) continue;
         const container = nearestMemberContainer(nameNode);
         if (!container || !isDirectKeywordMemberDeclaration(nameNode, container)) continue;
@@ -859,7 +889,7 @@ export async function buildSymbolGraphDetailed(
         members.add(defNodeId(def));
         kotlinPropertyMembers.set(ownerId, members);
         kotlinPropertyArities.set(defNodeId(def), arity);
-        if (!isExportedDeclaration("kotlin", nameNode)) fileHiddenMemberIds.add(defNodeId(def));
+        if (!isExportedDeclaration(parsed.sup.id, nameNode)) fileHiddenMemberIds.add(defNodeId(def));
         noteCallableName(def.localName);
       }
     }
@@ -888,9 +918,9 @@ export async function buildSymbolGraphDetailed(
   let typeScriptReceiverNames: Set<string> | undefined;
   for (const candidate of callableReceiverCalls) {
     if (candidate.argumentCount === null) continue;
-    const languageId = supportForIndexedFile(candidate.site.file)?.id;
-    if (languageId !== "ts" && languageId !== "tsx") continue;
-    (typeScriptReceiverFiles ??= new Set()).add(fileIdentityKey(candidate.site.file));
+    const siteKey = fileIdentityKey(candidate.site.file);
+    if (!memberPoliciesByFile.get(siteKey)?.graph?.overloadSignaturesGateCalls) continue;
+    (typeScriptReceiverFiles ??= new Set()).add(siteKey);
     (typeScriptReceiverNames ??= new Set()).add(candidate.memberName);
   }
   const typeScriptReceiverTargets = typeScriptReceiverNames?.size
@@ -899,9 +929,9 @@ export async function buildSymbolGraphDetailed(
   if (typeScriptReceiverTargets && typeScriptReceiverNames) {
     for (const node of nodes.values()) {
       if (!typeScriptReceiverNames.has(node.name)) continue;
-      const targetLanguageId = supportForIndexedFile(node.file)?.id;
-      if (targetLanguageId !== "ts" && targetLanguageId !== "tsx") continue;
-      const module = index.byFile.get(fileIdentityKey(node.file));
+      const nodeKey = fileIdentityKey(node.file);
+      if (!memberPoliciesByFile.get(nodeKey)?.graph?.overloadSignaturesGateCalls) continue;
+      const module = index.byFile.get(nodeKey);
       const def = module?.locals.find((candidate) => defNodeId(candidate) === node.id);
       if (!module || !def || def.kind !== SymbolKind.Function) continue;
       if (
@@ -940,14 +970,19 @@ export async function buildSymbolGraphDetailed(
     for (const candidate of callableReceiverCalls) {
       names.add(candidate.memberName);
       if (!hasSwiftCallableNames) continue;
-      const support = supportForIndexedFile(candidate.site.file);
-      if (support?.id === "swift") {
-        (swiftNames ??= new Set()).add(support.normalizeIdentifier(candidate.memberName));
+      // A use whose language compares callable names normalized looks them up by that spelling.
+      if (memberPoliciesByFile.get(fileIdentityKey(candidate.site.file))?.graph?.callableNameForm !== "normalized") {
+        continue;
       }
+      const support = supportForIndexedFile(candidate.site.file);
+      if (support) (swiftNames ??= new Set()).add(support.normalizeIdentifier(candidate.memberName));
     }
     for (const mod of index.byFile.values()) {
-      const support = swiftNames ? supportForIndexedFile(mod.file) : undefined;
-      const normalizeSwiftName = support?.id === "swift" ? support.normalizeIdentifier : undefined;
+      const modulePolicy = swiftNames ? memberPoliciesByFile.get(fileIdentityKey(mod.file)) : undefined;
+      const normalizeSwiftName =
+        modulePolicy?.graph?.callableNameForm === "normalized"
+          ? supportForIndexedFile(mod.file)?.normalizeIdentifier
+          : undefined;
       for (const def of mod.locals) {
         if (!def.callable) continue;
         if (!names.has(def.localName)) {
@@ -955,7 +990,10 @@ export async function buildSymbolGraphDetailed(
         }
         const id = defNodeId(def);
         memberIdentities.set(id, def.callable);
-        if (trailingLambdaNames.has(def.localName) && supportForIndexedFile(def.file)?.id === "kotlin") {
+        const targetChecksTrailingLambdas =
+          trailingLambdaNames.has(def.localName) &&
+          !!memberPoliciesByFile.get(fileIdentityKey(def.file))?.receiverResolution?.trailingLambdaCalls;
+        if (targetChecksTrailingLambdas) {
           if (!(await kotlinCallableAcceptsTrailingLambda(index, def))) lambdaRejectedTargets.add(id);
         }
         receiverMemberDefinitions?.set(id, def);
@@ -1012,7 +1050,11 @@ export async function buildSymbolGraphDetailed(
           if (!member?.javaPackagePrivate || member.javaProtectedMember) return true;
           const useLanguage = supportForFileWithoutHeaderSample(useFile, index.languageExtensions)?.id;
           const memberPackage = getPackageDeclarationName(index, member.file, "java");
-          const usePackage = getPackageDeclarationName(index, useFile, useLanguage === "kotlin" ? "kotlin" : "java");
+          const usePackage = getPackageDeclarationName(
+            index,
+            useFile,
+            isJvmLanguage(useLanguage) ? useLanguage : "java",
+          );
           return memberPackage === usePackage;
         }
       : undefined,

@@ -3,6 +3,8 @@ import type { GraphHooks } from "./types.js";
 
 export const kotlinGraphHooks: GraphHooks = {
   memberVisibility: "not-exported",
+  memberOwnerSyntax: "extension-receiver",
+  positionedAliasProof: true,
   declarationShapes: {
     propertyAccessors: {
       declarationType: "property_declaration",

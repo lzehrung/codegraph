@@ -131,7 +131,7 @@ Slice 2 implements G3-G6 as rows of the existing member policies, read where the
 - The base and keyword walks read `ownerResolution.heritage`, `basesFromParts`, `scopedBaseNames`, `composedOwnerType`, `aliasesReachDeclarations` and `nestedTypePaths` from the declaring or current owner's policy, and reuse the graph rows' `ignoredBaseSpecifierTypes` and `abstractMemberOwnerType`.
 - `findReceiverMemberDefinition` calls the target policy's `ownerResolution.receiverMembers`; the Rust, Go and Kotlin traversals live in `member-lookup-policies/`.
 - Python class bodies, Swift alias chains and nested types, and Go package files moved to language-owned modules with four exact target-grammar exemptions.
-- `resolveRubyVisibleConstant` keeps its guard: the detailed graph's `resolveNamedType` calls it for constructed receivers of every language, so G8 must select it per module first.
+- `resolveRubyVisibleConstant` kept its guard, because the detailed graph's `resolveNamedType` called it for constructed receivers of every language; slice 3 selects it per module and removes the guard.
 
 ### G7: graph module and namespace resolution
 
@@ -170,6 +170,13 @@ type CallablePrefilterStage = (candidate: ReceiverCallCandidate) => boolean;
 `CallablePrefilterStage` is the existing `hasCallableNamed` closure, already called by the existing filter. Choose the completion traversal once after module emission; read source/target semantic capabilities from the existing per-file support or member-policy entries at the points the old code inspected them. The generic path uses exact names and the existing member selector; Kotlin, Swift and TS/TSX add only their current property-arity, normalized spelling and overload/visibility work.
 
 Do not group or sort candidates by language, add a project scan, select a registry inside the candidate loop, or create new candidate records. Reuse existing per-module passes and already allocated candidate/context records only when they were already created; keep a capability lazy when the old check was lazy. Preserve Swift name normalization, Kotlin call/property and trailing-lambda facts, TS/TSX overload proof, use-versus-target package identity, edge insertion and removal order, and absent-support behavior.
+
+Slice 3 implements G7-G9 as rows selected once per module, or read from the member policies already selected per file:
+
+- The module walks copy graph-only facts from the `GraphHooks` row of the parsed support: `scopePathType`, `membersNeedReceiver`, `memberOwnerSyntax`, `qualifiedTypeChains`, `namespaceDeclarationMembers`, `positionedAliasProof` and `typeCallsInstantiate`. Go, Rust and Zig gain graph rows for them. The walks read C, C++, JS and TS facts only from this row, because an unmapped `.h` header and an embedded component script can parse as another language than their extension names.
+- Facts navigation already reads decide the rest, from the module's member policy: `namespaceScopes`, `namespaceQualifiedTypes`, `positionedImports`, `dottedImports`, `annotationTypes`, `classAttributeMembers`, `innermostNamespaceImports`, `qualifiedTypeNames`, `visibleConstantTypes`, `trailingLambdaCalls`, `callablePropertyArity`, `supertypeEntry`, `constantPathType`, `composedOwnerType`, `aliasesReachDeclarations` and the shared-owner rules. The new `lambdaReceiverThis` and `roleQualifiedImports` facts name behavior that navigation's matching checks share, for slice 4 to read.
+- The pre-graph scan selects every module's member policy once (moved from the module loop) and prepares the PHP namespace table when a policy sets `namespaceClassNames`. The completed-graph passes and the member-path fallback read those per-file policies, never a registry per candidate.
+- Zig's static-receiver call moved into its `SPECIALIZED_EDGE_PASSES` row. `resolveRubyVisibleConstant` lost its guard, because every caller now selects it from a Ruby-only fact, and `resolveNamedType` lost its `rubyConstructed` flag, which only reached that guard.
 
 ### G10: graph import and target arbitration
 

@@ -5,4 +5,6 @@ export const cppGraphHooks: GraphHooks = {
   aliasExportOptions: { allowLocalFallback: false },
   namedNodeTypes: { operator_name: true, destructor_name: true },
   preservedBaseSpecifierTypes: { qualified_identifier: true },
+  scopePathType: "qualified_identifier",
+  memberOwnerSyntax: "qualified-declarator",
 };

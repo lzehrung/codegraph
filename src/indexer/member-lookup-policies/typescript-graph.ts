@@ -12,4 +12,6 @@ export const typescriptGraphHooks: GraphHooks = {
     splitMethodName: typescriptSplitMethodName,
     objectTypeAlias: { declarationType: "type_alias_declaration", valueType: "object_type" },
   },
+  namespaceDeclarationMembers: true,
+  overloadSignaturesGateCalls: true,
 };
