@@ -12,8 +12,13 @@ export const phpMemberLookupPolicy: MemberLookupPolicy = {
   selection: { caseInsensitiveCallableNames: true },
   compareMemberNames: comparePhpReferenceNames,
   staticDeclarationTypes: { const_declaration: true, enum_case: true },
-  receiverResolution: { syntax: phpReceiverSyntax },
-  ownerResolution: { lookup: { hierarchy: true } },
+  receiverResolution: {
+    syntax: phpReceiverSyntax,
+    construction: { namespaceSymbolTypes: true },
+    access: { traitPropertyAccessType: "member_access_expression" },
+  },
+  ownerResolution: { lookup: { hierarchy: true }, composedOwnerType: "trait_declaration" },
+  namespaceClassNames: true,
   // PHP method names fold case, so a method named like its class or trait (`$this->deep()` in `class Deep`) would
   // otherwise match that declaration's own name.
   excludesContainerNameFromMembers: true,

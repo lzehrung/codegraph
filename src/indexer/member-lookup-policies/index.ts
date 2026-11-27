@@ -12,10 +12,12 @@ import { javaImplicitReceiverRules, javaMemberUseSyntax } from "./java-receiver.
 import { kotlinReceiverHooks } from "./kotlin-receiver.js";
 import { cppQualifiedOwner } from "./cpp-receiver.js";
 import { goReceiverSyntax } from "./go-receiver.js";
+import { selectGoReceiverMember } from "./go-owner.js";
 import { jvmCrossFileMemberHidden, jvmQualifiedOwner } from "./jvm-owner.js";
 import { javascriptOwnerResolution, typescriptOwnerResolution } from "./typescript-owner.js";
 import { pythonQualifiedOwner } from "./python-owner.js";
-import { kotlinOwnerSyntax } from "./kotlin-owner.js";
+import { kotlinExtensionMember, kotlinOwnerSyntax } from "./kotlin-owner.js";
+import { selectRustReceiverMember } from "./rust-owner.js";
 import { graphRulesFor } from "./graph-rules.js";
 import { javaUnprovenReferenceCandidate } from "../../util/java-designators.js";
 import { fileIdentityKey } from "../../util/paths.js";
@@ -40,10 +42,21 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
   c: { graph: graphRulesFor("c") },
   csharp: { ...csharpMemberLookupPolicy, graph: graphRulesFor("csharp") },
   cpp: {
-    ownerResolution: { lookup: { hierarchy: true }, qualified: cppQualifiedOwner },
+    receiverResolution: {
+      construction: { scopePathTypes: true },
+      access: { scopedMemberType: "qualified_identifier" },
+    },
+    ownerResolution: { lookup: { hierarchy: true }, qualified: cppQualifiedOwner, heritage: { scopePaths: true } },
     graph: graphRulesFor("cpp"),
   },
-  go: { receiverResolution: { syntax: goReceiverSyntax } },
+  go: {
+    receiverResolution: {
+      syntax: goReceiverSyntax,
+      construction: { namedPeerTypes: true },
+      access: { embeddedFieldTypes: true },
+    },
+    ownerResolution: { receiverMembers: selectGoReceiverMember },
+  },
   js: { separateMemberScopes: true, ownerResolution: javascriptOwnerResolution },
   ts: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution, graph: graphRulesFor("ts") },
   tsx: { separateMemberScopes: true, ownerResolution: typescriptOwnerResolution, graph: graphRulesFor("tsx") },
@@ -56,12 +69,21 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
       lookup: { hierarchy: true },
       memberHidden: jvmCrossFileMemberHidden,
       qualified: jvmQualifiedOwner("kotlin"),
+      receiverMembers: kotlinExtensionMember,
     },
     graph: graphRulesFor("kotlin"),
   },
   java: {
     selection: { inheritOverloads: true },
-    receiverResolution: { implicit: javaImplicitReceiverRules, memberUse: javaMemberUseSyntax },
+    receiverResolution: {
+      implicit: javaImplicitReceiverRules,
+      memberUse: javaMemberUseSyntax,
+      access: {
+        qualifiedTypeNames: true,
+        unitPeerNames: true,
+        scopedNameTypes: { scoped_identifier: true, scoped_type_identifier: true },
+      },
+    },
     ownerResolution: {
       lookup: { hierarchy: true, directFallback: true },
       memberHidden: jvmCrossFileMemberHidden,
@@ -85,9 +107,19 @@ export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>
     },
   },
   php: { ...phpMemberLookupPolicy, graph: graphRulesFor("php") },
-  python: { ownerResolution: { qualified: pythonQualifiedOwner } },
+  python: {
+    receiverResolution: {
+      access: { annotationTypes: true, positionedImports: true, dottedImports: true, classAttributeMembers: true },
+    },
+    ownerResolution: { qualified: pythonQualifiedOwner, scopedBaseNames: true },
+  },
   ruby: { ...rubyMemberLookupPolicy, graph: graphRulesFor("ruby") },
+  rust: {
+    receiverResolution: { access: { moduleNamedImports: true } },
+    ownerResolution: { receiverMembers: selectRustReceiverMember },
+  },
   swift: { ...swiftMemberLookupPolicy, graph: graphRulesFor("swift") },
+  zig: { receiverResolution: { access: { innermostNamespaceImports: true } } },
 };
 
 export function memberLookupPolicyFor(languageId: string): MemberLookupPolicy {

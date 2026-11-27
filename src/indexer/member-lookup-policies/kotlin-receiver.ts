@@ -40,4 +40,6 @@ export const kotlinReceiverHooks: ReceiverHooks = {
   memberUse: kotlinMemberUseSyntax,
   callablePropertyArity: kotlinPropertyInvocationArity,
   namedOwnMemberMissReason: AMBIGUOUS_RECEIVER_MEMBER_REASON,
+  trailingLambdaCalls: true,
+  access: { typeNameType: "user_type", unitPeerNames: true },
 };

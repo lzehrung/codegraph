@@ -1,4 +1,10 @@
+import { kotlinExtensionReceiverTypeNode } from "../../graphs/symbol-graph-detailed/receiver-calls.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
+import { sliceText } from "../../util/ast.js";
+import { selectMember } from "../member-selection.js";
+import type { ParsedFileContext } from "../parse-context.js";
+import { findLocalsWithinNode } from "../shared.js";
+import type { SymbolDef } from "../types.js";
 import type { OwnerHooks } from "./types.js";
 
 /** Members of Any are implicit in each Kotlin type, not indexed project declarations. */
@@ -48,3 +54,62 @@ export function kotlinSupertypeEntry(identifier: SyntaxNodeLike): KotlinSupertyp
   if (!entry || !KOTLIN_SUPERTYPE_ENTRY_TYPES[entry.type]) return null;
   return "bare";
 }
+
+/**
+ * Kotlin extension functions declared `fun Type.member()` for a receiver type, searched across the receiver type's own
+ * declaring file. An ordinary class member never carries a receiver-type prefix, so this never matches a real member
+ * and cannot shadow one.
+ */
+function kotlinExtensionFunctionsNamedOnType(
+  locals: readonly SymbolDef[],
+  member: string,
+  typeName: string,
+  targetContext: ParsedFileContext,
+  normalizeIdentifier: (name: string) => string,
+): SymbolDef[] {
+  const matches: SymbolDef[] = [];
+  const normalizedType = normalizeIdentifier(typeName);
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.type === "function_declaration") {
+      const receiverType = kotlinExtensionReceiverTypeNode(node, targetContext.sup);
+      if (receiverType && normalizeIdentifier(sliceText(receiverType, targetContext.source)) === normalizedType) {
+        for (const local of findLocalsWithinNode(locals, member, node, normalizeIdentifier)) {
+          if (!matches.includes(local)) matches.push(local);
+        }
+      }
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(targetContext.tree.rootNode);
+  return matches;
+}
+
+/** The extension function `member` that the file of the Kotlin type `receiverDef` declares for that type. */
+export const kotlinExtensionMember: NonNullable<OwnerHooks["receiverMembers"]> = (
+  index,
+  receiverDef,
+  member,
+  context,
+  locals,
+  normalizeIdentifier,
+  knownArgumentCount,
+  deps,
+) => {
+  const extensionMatches = kotlinExtensionFunctionsNamedOnType(
+    locals,
+    member,
+    receiverDef.localName,
+    context,
+    normalizeIdentifier,
+  );
+  if (!extensionMatches.length) return undefined;
+  const selected = selectMember([receiverDef], deps.indexedMemberModel(index, extensionMatches, context.sup.id), {
+    name: member,
+    argumentCount: knownArgumentCount ?? null,
+    scope: "any",
+    useFile: receiverDef.file,
+    keepUniqueArityMismatch: true,
+  });
+  return selected.status === "unique" ? selected.member : undefined;
+};

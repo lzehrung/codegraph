@@ -125,6 +125,14 @@ Move each complete Ruby, Swift, Go or Python helper, its helper-specific cache, 
 
 The ratchet already exempts eight exact target-grammar boundaries. Seven are inside C++/C# owned helpers: preserve the three C++ checks in `cppOutOfLineOwnerPath`, `cppOutOfLineMemberName`, and `cppOutOfLineMemberDeclarationNode`, and the four C# checks in `parsedContextForIdentity`, `csharpPartialExportIdentity`, and `parseCsharpOwnerFile`. The eighth is the C# `acceptsFile` predicate in the mixed namespace-specifier module: move the complete predicate into `util/resolution/csharp.ts`, retain the identical target-file check, and move its exemption to that exact owned function. Do not widen an exemption to a file or remove a safety check just to change the count.
 
+Slice 2 implements G3-G6 as rows of the existing member policies, read where the old code compared the language:
+
+- `resolveMemberAccessDefinition` reads `receiverResolution.access` from the use policy it already selects, and `resolveReceiverDefinition` reads `receiverResolution.construction` from the receiver syntax context.
+- The base and keyword walks read `ownerResolution.heritage`, `basesFromParts`, `scopedBaseNames`, `composedOwnerType`, `aliasesReachDeclarations` and `nestedTypePaths` from the declaring or current owner's policy, and reuse the graph rows' `ignoredBaseSpecifierTypes` and `abstractMemberOwnerType`.
+- `findReceiverMemberDefinition` calls the target policy's `ownerResolution.receiverMembers`; the Rust, Go and Kotlin traversals live in `member-lookup-policies/`.
+- Python class bodies, Swift alias chains and nested types, and Go package files moved to language-owned modules with four exact target-grammar exemptions.
+- `resolveRubyVisibleConstant` keeps its guard: the detailed graph's `resolveNamedType` calls it for constructed receivers of every language, so G8 must select it per module first.
+
 ### G7: graph module and namespace resolution
 
 ```ts

@@ -208,9 +208,10 @@ Exemptions are per-site in the inventory, never permission to add a fresh semant
 4. Actual same-language boundaries inside `src/indexer/kotlin-call-compatibility.ts`, `kotlin-callable-index.ts`, `kotlin-lambda-receiver.ts`, `navigation-cpp.ts`, `php-namespace-symbols.ts`, `swift-enum.ts`, `src/util/csharp-project-usings.ts`, `src/util/resolution/{csharp,php,terraform}.ts`, `src/terraform/resolution.ts`, `src/sql/classify-sql-file.ts`, the Swift member-policy modules, and the TypeScript policy in `name-lookup-policies/index.ts`. These specific checks validate the _target file_ before a language-owned routine reads its grammar. Do not turn those files into a blanket exemption for new unrelated language checks.
 5. Dynamic native-addon support sets, the CLI/call-compatibility provider registries, and the set of unsupported languages being reported are runtime membership/metadata, not literals selecting a language semantic rule. The inventory records these individually as `runtime-dependent`.
 
-The eight relocated target-file safety checks in `member-lookup-policies/cpp-receiver.ts`,
-`member-lookup-policies/csharp-owner.ts`, and `util/resolution/csharp.ts` also qualify under
-exemption 4. The inventory lists their exact function/expression pairs, not whole files.
+The relocated target-file safety checks in `member-lookup-policies/cpp-receiver.ts`,
+`csharp-owner.ts`, `go-owner.ts`, `python-owner.ts`, `swift-type-names.ts`, and
+`util/resolution/csharp.ts` also qualify under exemption 4. The inventory lists their exact
+function/expression pairs, not whole files.
 `npm run language-checks:check` ratchets the remaining non-exempt sites using normalized
 function/condition/expression fingerprints and occurrence counts in `scripts/language-check-baseline.json`.
 After a site moves, run `node scripts/language-check-inventory.mjs --write-baseline` to remove its
