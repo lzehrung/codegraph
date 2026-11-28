@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PY_SUPPORT } from "../../languages.js";
-import type { SyntaxTreeLike } from "../../languages/types.js";
+import type { SyntaxNodeLike } from "../../languages/types.js";
 import { ProjectedSyntaxTree } from "../../native/projected-tree.js";
 import { getNativeSyntaxTreeExecution, type NativeMatch } from "../../native/tree-sitter-native.js";
 import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../../util/comments.js";
+import { currentProbeCache, type FsProbeCache } from "../../util/fs-probe-cache.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
@@ -21,7 +22,8 @@ export type PythonImportExtractionContext = ImportBindingSink & {
   projectRoot: string;
   source: string;
   getBindings: () => ImportBinding[];
-  packageSources?: Map<string, PythonPackageSource | null>;
+  /** The package initializers this file's imports read, when no index build shares them across files. */
+  packageInitializers?: Map<string, PythonPackageInitializer | null>;
 };
 
 async function resolvePythonImportTarget(
@@ -56,29 +58,100 @@ async function pushStarImport(
   });
 }
 
-type PythonPackageSource = {
-  tree: SyntaxTreeLike;
-  moduleBindings: ReturnType<typeof buildScopeIndexFromSource>["allScopes"][number]["map"];
+type PythonInitializerImportItem = { readonly name: string | undefined; readonly local: string | undefined };
+
+/** A module-level import statement of a package initializer, with every aliased or dotted name it lists. */
+type PythonInitializerImport =
+  | {
+      readonly kind: "from";
+      readonly startIndex: number;
+      readonly specifier: string;
+      readonly items: readonly PythonInitializerImportItem[];
+    }
+  | { readonly kind: "import"; readonly startIndex: number; readonly items: readonly PythonInitializerImportItem[] };
+
+/** What a package initializer binds at module level, read once from its syntax tree. */
+type PythonPackageInitializer = {
+  /** The start index of each module-level definition, by normalized name. */
+  readonly definitions: ReadonlyMap<string, number>;
+  /** Module-level import statements in source order. */
+  readonly imports: readonly PythonInitializerImport[];
 };
 
-/** Inspect only the resolved package initializer, and only when a competing submodule exists. */
-function pythonPackageSource(context: PythonImportExtractionContext, file: string): PythonPackageSource | null {
-  context.packageSources ??= new Map();
-  if (context.packageSources.has(file)) return context.packageSources.get(file) ?? null;
-  let result: PythonPackageSource | null = null;
+/**
+ * The package initializers one index build has read, kept as long as the build's probe cache snapshot (a reset drops
+ * them, and the next build reads each file again).
+ */
+const buildPackageInitializers = new WeakMap<
+  FsProbeCache,
+  { id: number; initializers: Map<string, PythonPackageInitializer | null> }
+>();
+
+/** A build shares what it read of each initializer across its files; outside a build, the importing file keeps it. */
+function packageInitializerCache(context: PythonImportExtractionContext): Map<string, PythonPackageInitializer | null> {
+  const probes = currentProbeCache();
+  if (!probes) return (context.packageInitializers ??= new Map());
+  let cached = buildPackageInitializers.get(probes);
+  if (cached?.id !== probes.id) {
+    cached = { id: probes.id, initializers: new Map() };
+    buildPackageInitializers.set(probes, cached);
+  }
+  return cached.initializers;
+}
+
+function initializerImportItems(statement: SyntaxNodeLike): PythonInitializerImportItem[] {
+  const items: PythonInitializerImportItem[] = [];
+  for (const item of statement.namedChildren) {
+    if (item.type === "aliased_import") {
+      items.push({ name: item.childForFieldName("name")?.text, local: item.childForFieldName("alias")?.text });
+    } else if (item.type === "dotted_name") {
+      items.push({ name: item.text, local: item.text });
+    }
+  }
+  return items;
+}
+
+function readPythonPackageInitializer(file: string): PythonPackageInitializer | null {
+  let tree: ProjectedSyntaxTree;
+  const definitions = new Map<string, number>();
   try {
     const source = fs.readFileSync(file, "utf8");
     const syntax = getNativeSyntaxTreeExecution(source, PY_SUPPORT).tree;
-    if (syntax) {
-      const tree = new ProjectedSyntaxTree(source, syntax);
-      const scope = buildScopeIndexFromSource(file, source, PY_SUPPORT, [], { tree });
-      result = { tree, moduleBindings: scope.allScopes[0]!.map };
+    if (!syntax) return null;
+    tree = new ProjectedSyntaxTree(source, syntax);
+    const moduleScope = buildScopeIndexFromSource(file, source, PY_SUPPORT, [], { tree }).allScopes[0]!;
+    for (const [name, binding] of moduleScope.map) {
+      const start = binding.def?.start.index;
+      if (start !== undefined) definitions.set(name, start);
     }
   } catch {
     // A missing/unreadable initializer gives no proof that a submodule is safe to choose.
+    return null;
   }
-  context.packageSources.set(file, result);
-  return result;
+  const imports: PythonInitializerImport[] = [];
+  for (const statement of tree.rootNode.namedChildren) {
+    const startIndex = statement.startIndex;
+    if (statement.type === "import_from_statement") {
+      const specifier = statement.childForFieldName("module_name")?.text;
+      if (specifier) imports.push({ kind: "from", startIndex, specifier, items: initializerImportItems(statement) });
+    } else if (statement.type === "import_statement") {
+      imports.push({ kind: "import", startIndex, items: initializerImportItems(statement) });
+    }
+  }
+  return { definitions, imports };
+}
+
+/** Inspect only the resolved package initializer, and only when a competing submodule exists. */
+function pythonPackageInitializer(
+  context: PythonImportExtractionContext,
+  file: string,
+): PythonPackageInitializer | null {
+  const initializers = packageInitializerCache(context);
+  const cached = initializers.get(file);
+  if (cached !== undefined) return cached;
+  const initializer = readPythonPackageInitializer(file);
+  initializers.set(file, initializer);
+  return initializer;
 }
 
 async function pythonPackageMayBindAttribute(
@@ -90,40 +163,31 @@ async function pythonPackageMayBindAttribute(
   if (typeof resolved !== "string") return false;
   const basename = path.basename(resolved);
   if (basename !== "__init__.py" && basename !== "__init__.pyi") return false;
-  const packageSource = pythonPackageSource(context, resolved);
-  if (!packageSource) return true;
+  const initializer = pythonPackageInitializer(context, resolved);
+  if (!initializer) return true;
 
-  const localDefinition = packageSource.moduleBindings.get(PY_SUPPORT.normalizeIdentifier(imported))?.def?.start.index;
+  const localDefinition = initializer.definitions.get(PY_SUPPORT.normalizeIdentifier(imported));
   let attribute = localDefinition !== undefined;
   const submoduleKey = fileIdentityKey(submodule);
   const packageKey = fileIdentityKey(resolved);
-  for (const statement of packageSource.tree.rootNode.namedChildren) {
+  for (const statement of initializer.imports) {
     if (localDefinition !== undefined && statement.startIndex < localDefinition) continue;
-    if (statement.type === "import_from_statement") {
-      const specifier = statement.childForFieldName("module_name")?.text;
-      if (!specifier) continue;
-      const target = await resolvePythonImportTarget(context.projectRoot, resolved, specifier);
+    if (statement.kind === "from") {
+      const target = await resolvePythonImportTarget(context.projectRoot, resolved, statement.specifier);
       const targetKey = typeof target === "string" ? fileIdentityKey(target) : undefined;
       const loadsSubmodule = targetKey === submoduleKey;
       if (loadsSubmodule) attribute = false;
-      for (const item of statement.namedChildren) {
-        if (item.type !== "aliased_import" && item.type !== "dotted_name") continue;
-        const name = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
-        const local = item.type === "aliased_import" ? item.childForFieldName("alias")?.text : name;
+      for (const { name, local } of statement.items) {
         if (targetKey === packageKey && name === imported) attribute = false;
         else if (local === imported) attribute = true;
       }
-    } else if (statement.type === "import_statement") {
-      for (const item of statement.namedChildren) {
-        if (item.type !== "aliased_import" && item.type !== "dotted_name") continue;
-        const dotted = item.type === "aliased_import" ? item.childForFieldName("name")?.text : item.text;
-        if (!dotted) continue;
-        const target = await resolvePythonImportTarget(context.projectRoot, resolved, dotted);
-        if (typeof target === "string" && fileIdentityKey(target) === submoduleKey) attribute = false;
-        else if ((item.type === "aliased_import" ? item.childForFieldName("alias")?.text : dotted) === imported) {
-          attribute = true;
-        }
-      }
+      continue;
+    }
+    for (const { name: dotted, local } of statement.items) {
+      if (!dotted) continue;
+      const target = await resolvePythonImportTarget(context.projectRoot, resolved, dotted);
+      if (typeof target === "string" && fileIdentityKey(target) === submoduleKey) attribute = false;
+      else if (local === imported) attribute = true;
     }
   }
   return attribute;
