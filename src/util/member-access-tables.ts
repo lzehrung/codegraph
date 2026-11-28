@@ -138,6 +138,16 @@ export type MemberAccessRow = {
   memberAccessOmittedReason?: string;
   /** Kotlin fallback: a degraded `navigation_suffix` leaves the property as the expression's last named child. */
   navigationFallbackLastChild?: true;
+  /**
+   * Node that wraps a member's name inside its member access (`navigation_suffix`). Goto at a wrapped name checks the
+   * access for an unresolved receiver, as it does a name that is the access's own child.
+   */
+  memberNameWrapperType?: string;
+  /**
+   * Goto reports a member of an unresolved receiver as not found instead of reading it as a bare name, as in every
+   * language with receiver keywords, though this language has none.
+   */
+  unresolvedMemberMiss?: true;
   /** Identifiers that name the type declaring the calling member. */
   receiverKeywords?: ReceiverKeywords;
   /**
@@ -190,6 +200,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     receiverKeywordsOmittedReason:
       "C has no receiver keyword; member access always names an explicit object or pointer.",
     memberCallNamesFreeFunctionOmittedReason: "A member expression names a field of an object, not a free function.",
+    unresolvedMemberMiss: true,
   },
   cpp: {
     memberAccessShapes: [C_FIELD_ACCESS_SHAPE, CPP_QUALIFIED_ACCESS_SHAPE],
@@ -411,6 +422,7 @@ export const MEMBER_ACCESS_ROWS: Record<string, MemberAccessRow> = {
     memberAccessShapes: [
       { nodeTypes: ["navigation_expression"], object: { namedIndex: 0 }, property: { navigation: true } },
     ],
+    memberNameWrapperType: "navigation_suffix",
     receiverKeywords: SELF_RECEIVERS,
     receiverAncestry: {
       clauses: [

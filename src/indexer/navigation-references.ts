@@ -96,8 +96,9 @@ import { isPythonDottedImportBinding, pythonImportedModuleFiles } from "./python
 import { ECMASCRIPT_IDENTIFIER_SOURCE, ecmaPrivateNameKey, foldPhpIdentifierCase } from "../util/identifiers.js";
 import { JAVA_UNICODE_ESCAPE_BLOOM_TOKEN } from "../util/bloom-filter.js";
 import { compareStrings } from "../util/strings.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
 import { referenceRulesFor } from "./name-lookup-policies/reference-rules.js";
-import type { NamedNodeReferenceCollection } from "./name-resolution-types.js";
+import type { NamedNodeReferenceCollection, ReferenceHooks } from "./name-resolution-types.js";
 
 const EXPORT_FROM_PATTERN = new RegExp(String.raw`\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2`, "gu");
 const NAMESPACE_EXPORT_PATTERN = new RegExp(
@@ -250,9 +251,11 @@ export function getCachedScope(
   const scopeIndex = getOrBuildScopeIndex(index, fileId, parsedCtx.source, parsedCtx.sup, moduleIndex, parsedCtx.tree);
   if (filteredScopeOccurrences.has(scopeIndex)) return scopeIndex;
   filteredScopeOccurrences.add(scopeIndex);
+  // Where names live in roles, a scope occurrence names only a binding of its own role.
+  const roleScopedNames = !!MEMBER_LOOKUP_POLICIES[parsedCtx.sup.id]?.roleQualifiedImports;
   const keepOccurrence = (binding: Binding, occurrence: Range): boolean => {
     if (exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom) return false;
-    if (parsedCtx.sup.id !== "php" || !binding.def || occurrence.start.index === binding.def.start.index) return true;
+    if (!roleScopedNames || !binding.def || occurrence.start.index === binding.def.start.index) return true;
     const kind = bindingKindToSymbolKind(binding.kind);
     if (kind === SymbolKind.Variable) return true;
     const start = occurrence.start.index;
@@ -276,7 +279,8 @@ export function getCachedScope(
 async function readPhpDefinitionNames(index: ProjectIndex, definitionFile: string, def: SymbolDef): Promise<string[]> {
   try {
     const definitionParsed = await ensureParsedContextForIndex(index, definitionFile);
-    if (definitionParsed.sup.id !== "php") {
+    // Only a file whose language qualifies class names by namespace declares the namespace read here.
+    if (!MEMBER_LOOKUP_POLICIES[definitionParsed.sup.id]?.namespaceClassNames) {
       return [];
     }
     const phpNamespace = readPhpNamespaceFromRange(definitionParsed.tree, definitionParsed.source, def.range);
@@ -302,8 +306,13 @@ const phpNameEquivalenceGaps = new WeakMap<ProjectIndex, Set<string>>();
 /** Definitions a use in a class with an unindexed trait may name: an unindexed trait may declare the same name. */
 const phpUnindexedTraitGaps = new WeakMap<ProjectIndex, Set<string>>();
 
-function isPhpDefinition(index: ProjectIndex, def: SymbolDef): boolean {
-  return supportForFileWithoutHeaderSample(def.file, index.languageExtensions)?.id === "php";
+/**
+ * Whether the definition's language composes owners (traits) into a class body, where an unindexed one may declare
+ * any member.
+ */
+function definitionComposesOwners(index: ProjectIndex, def: SymbolDef): boolean {
+  const support = supportForFileWithoutHeaderSample(def.file, index.languageExtensions);
+  return !!support && !!MEMBER_LOOKUP_POLICIES[support.id]?.ownerResolution?.composedOwnerType;
 }
 
 function markPhpUnindexedTraitGap(index: ProjectIndex, def: SymbolDef): void {
@@ -643,10 +652,8 @@ async function collectNamedNodeReferences(
 }
 
 /** The last segment of a qualified constant read (`\App\LIMIT`): goto resolves that name, not the path before it. */
-function phpQualifiedConstantProbe(node: SyntaxNodeLike, parsed: ParsedFileContext): Range["start"] | null {
-  if (parsed.sup.id !== "php" || !isPhpQualifiedReferenceNode(node) || inferPhpQualifiedReferenceImportType(node)) {
-    return null;
-  }
+function phpQualifiedConstantProbe(node: SyntaxNodeLike): Range["start"] | null {
+  if (!isPhpQualifiedReferenceNode(node) || inferPhpQualifiedReferenceImportType(node)) return null;
   const last = node.namedChildren.at(-1);
   return last && isPhpConstantRead(last) ? toRange(last).start : null;
 }
@@ -741,7 +748,7 @@ async function receiverProofUnavailable(
         getScope,
         parsed.tree,
       );
-      if (parsed.sup.id === "php" && receiver.kind === "own-type") {
+      if (syntax.policy?.receiverResolution?.access?.traitPropertyAccessType && receiver.kind === "own-type") {
         const mayUseProperty = await phpTraitPropertyMayUseDefinition(
           index,
           fileId,
@@ -820,7 +827,13 @@ export async function collectVerifiedNamedNodeReferences(
   const policy = memberLookupPolicyFor(parsed.sup.id);
   if (await policy.hidesMemberFromFile?.(index, fileId, expectedDef, equivalentDefinitions.length > 0)) return [];
   if (nameEquivalenceUnavailable) markPhpNameEquivalenceGap(index, expectedDef);
-  const phpCanonicalNames = parsed.sup.id === "php" ? await phpCanonicalDefinitionNames(index, expectedDef) : undefined;
+  const phpCanonicalNames = policy.namespaceClassNames
+    ? await phpCanonicalDefinitionNames(index, expectedDef)
+    : undefined;
+  // Where names live in roles, a qualified constant read resolves at its last segment.
+  const probesQualifiedConstants = !!policy.roleQualifiedImports;
+  const skipsFunctionPointerFields = !!policy.functionPointerFields && expectedDef.kind === SymbolKind.Function;
+  let composesOwners: boolean | undefined;
   const phpExistingFunctionNames =
     phpCanonicalNames && expectedDef.kind === SymbolKind.Function
       ? (await ensurePhpNamespaceSymbolIndex(index)).functionNames
@@ -885,12 +898,12 @@ export async function collectVerifiedNamedNodeReferences(
       pushVerified({ range });
       continue;
     }
-    if (parsed.sup.id === "c" && expectedDef.kind === SymbolKind.Function) {
+    if (skipsFunctionPointerFields) {
       let enclosing = node.parent;
       while (enclosing && enclosing.type !== "field_declaration" && enclosing.type !== "translation_unit") {
         enclosing = enclosing.parent;
       }
-      // A C struct function-pointer field is not a declaration or use of a free function.
+      // A struct function-pointer field is not a declaration or use of a free function.
       if (enclosing?.type === "field_declaration") continue;
     }
     const exportFrom = exportFromIdentifier(index, fileId, range, parsed);
@@ -914,7 +927,7 @@ export async function collectVerifiedNamedNodeReferences(
       }
     }
     // A qualified constant read resolves at its last segment, the name PHP's namespace order decides.
-    const probe = phpQualifiedConstantProbe(node, parsed) ?? range.start;
+    const probe = (probesQualifiedConstants ? phpQualifiedConstantProbe(node) : null) ?? range.start;
     const resolved = await resolveDefinition({ file: fileId, line: probe.line, column: probe.column }, parsed);
     if (resolved.status === "ok" && resolved.definition) {
       if (matchesExpectedDefinition(resolved.definition)) {
@@ -929,7 +942,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (resolved.reason === CSHARP_NAMESPACE_NAME_REASON) continue;
     if (policy.unprovenReferenceCandidate && !policy.unprovenReferenceCandidate(node, expectedNameNode)) continue;
     let recoveredByLanguageFallback = false;
-    if (parsed.sup.id === "php" && expectedDef.isMember) {
+    if (phpCanonicalNames && expectedDef.isMember) {
       const memberMatch = await phpCaseInsensitiveReceiverMemberMatch(index, fileId, node, parsed, expectedDef);
       if (memberMatch === "matched") {
         pushVerified({ range, ...(exportFrom?.isExportFrom ? { via: { reexport: true } } : {}) });
@@ -983,7 +996,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (
       !recoveredByLanguageFallback &&
       resolved.reason === UNINDEXED_PHP_TRAIT_REASON &&
-      isPhpDefinition(index, expectedDef) &&
+      (composesOwners ??= definitionComposesOwners(index, expectedDef)) &&
       mayReferenceDefinition()
     ) {
       markPhpUnindexedTraitGap(index, expectedDef);
@@ -1157,7 +1170,8 @@ function jsNamespaceImportReachesDefinition(
 /**
  * Whether one import of a module can bind `def` or a namespace that reaches it. Candidate selection tests this on the
  * imports of the files it can reach, and the candidate-selection parity test runs it on every import of every module.
- * An unaliased Python `import a.b.c` names the packages `a` and `a.b` as well as the leaf its binding resolves to.
+ * `rules` are the definition language's reference rules. Where a package exposes its submodules, an unaliased dotted
+ * import (`import a.b.c`) names the packages `a` and `a.b` as well as the leaf its binding resolves to.
  */
 export function importCanReferenceDefinition(
   index: ProjectIndex,
@@ -1165,14 +1179,17 @@ export function importCanReferenceDefinition(
   def: SymbolDef,
   exportedNames: readonly string[],
   languageId: string,
+  rules: ReferenceHooks,
 ): boolean {
-  if (languageId === "python" && isPythonDottedImportBinding(imp)) {
+  if (rules.packageSubmodules && isPythonDottedImportBinding(imp)) {
     return pythonImportedModuleFiles(index, imp).some(({ file }) =>
-      importTargetCanReferenceDefinition(index, imp, file, def, exportedNames, languageId),
+      importTargetCanReferenceDefinition(index, imp, file, def, exportedNames, languageId, rules),
     );
   }
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
-  return !!targetFile && importTargetCanReferenceDefinition(index, imp, targetFile, def, exportedNames, languageId);
+  return (
+    !!targetFile && importTargetCanReferenceDefinition(index, imp, targetFile, def, exportedNames, languageId, rules)
+  );
 }
 
 function importTargetCanReferenceDefinition(
@@ -1182,20 +1199,21 @@ function importTargetCanReferenceDefinition(
   def: SymbolDef,
   exportedNames: readonly string[],
   languageId: string,
+  rules: ReferenceHooks,
 ): boolean {
   let cNamespace: "tag" | "ordinary" | undefined;
-  if (languageId === "c") cNamespace = def.cTag ? "tag" : "ordinary";
+  if (rules.separateTagNamespace) cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
   if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) return false;
 
   const targetLanguageId = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
-  const jvmTarget = targetLanguageId === "java" || targetLanguageId === "kotlin";
+  const jvmTarget = isJvmLanguage(targetLanguageId);
   const resolvesToDefinition = (exportedName: string): boolean => {
     const lookupName = jvmTarget ? normalizeKotlinIdentifier(exportedName) : exportedName;
     const hit = resolveExport(index, targetFile, lookupName, exportOptions);
     if (hit?.kind === "resolved") return sameDef(hit.def, def, index.languageExtensions);
     if (javaKotlinFunctionOverloadIncludes(index, targetFile, lookupName, def)) return true;
-    if (cppCanonicalStructuralExport(index, targetFile, lookupName, def, languageId)) {
+    if (cppCanonicalStructuralExport(index, targetFile, lookupName, def, rules)) {
       return true;
     }
     return imp.kind === "namespace" && fileIdentityKey(targetFile) === fileIdentityKey(def.file);
@@ -1210,7 +1228,7 @@ function importTargetCanReferenceDefinition(
     // an implicit submodule attribute instead (the same fallback `resolveImported` applies at
     // consumption time). Reusing that fallback here keeps candidate-file discovery in agreement
     // with the goto/reference-collection consumers that already resolve through it.
-    if (languageId !== "python") return false;
+    if (!rules.packageSubmodules) return false;
     const result = resolveImported(index, imp, imp.imported, exportOptions);
     return !!result && "namespace" in result && fileIdentityKey(result.namespace) === fileIdentityKey(def.file);
   }
@@ -1262,7 +1280,7 @@ function filesExportingDefinition(
   index: ProjectIndex,
   def: SymbolDef,
   exportedNames: readonly string[],
-  languageId: string,
+  rules: ReferenceHooks,
   universe: readonly ModuleIndex[],
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
@@ -1287,7 +1305,7 @@ function filesExportingDefinition(
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
-      if (cppCanonicalStructuralExport(index, fileId, exportedName, def, languageId)) {
+      if (cppCanonicalStructuralExport(index, fileId, exportedName, def, rules)) {
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
@@ -1404,6 +1422,8 @@ type ImporterSearch = {
   def: SymbolDef;
   exportedNames: readonly string[];
   languageId: string;
+  /** The definition language's reference rules, selected once for the search. */
+  rules: ReferenceHooks;
   /** The exporting files of `def` (its own included), as listed and as identity keys. */
   exportingFileIds: readonly string[];
   exportingFiles: ReadonlySet<string>;
@@ -1422,7 +1442,9 @@ type ImporterSearch = {
  * and nothing else; an index without an importer table keeps the scan of every module.
  */
 function importersReachingDefinition(search: ImporterSearch): Map<string, string> {
-  const { index, def, exportedNames, languageId, exportingFileIds, exportingFiles, reachKeys } = search;
+  const { index, def, exportedNames, languageId, rules, exportingFileIds, exportingFiles, reachKeys } = search;
+  // A namespace import that names directories can reach the definition through its directory.
+  const namespaceImportDirectories = !!rules.namespaceImportDirectories;
   const definitionKey = fileIdentityKey(def.file);
   const found = new Map<string, string>();
   const importerIndex = index.referenceCandidates;
@@ -1435,26 +1457,28 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
     importsExportingFile(moduleIndex) ||
     moduleIndex.imports.some(
       (imp) =>
-        (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
-        (typeof imp.resolved === "string" && importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
+        (namespaceImportDirectories && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
+        (typeof imp.resolved === "string" &&
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId, rules)),
     );
   // Where an import can reach the definition without naming an exporting file, it names a file that answers for the
-  // definition (`reachKeys`), a JVM package wildcard that lists its files, or, in C#, a namespace directory.
-  const indirectKeys: ReadonlySet<string> =
-    languageId === "python" ? new Set([...reachKeys, ...pythonSubmodulePackageKeys(def.file)]) : reachKeys;
+  // definition (`reachKeys`), a JVM package wildcard that lists its files, or a namespace directory.
+  const indirectKeys: ReadonlySet<string> = rules.packageSubmodules
+    ? new Set([...reachKeys, ...pythonSubmodulePackageKeys(def.file)])
+    : reachKeys;
   const importNamesAnsweringFile = (imp: ImportBinding): boolean =>
-    languageId === "csharp" ||
+    namespaceImportDirectories ||
     (imp.kind === "star" && !!imp.jvmPackageFiles) ||
     (typeof imp.resolved === "string" && indirectKeys.has(fileIdentityKey(imp.resolved)));
   const reachesThroughIndirectImport = (moduleIndex: ModuleIndex): boolean =>
     moduleIndex.imports.some(
       (imp) =>
-        (languageId === "csharp" && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
+        (namespaceImportDirectories && csharpNamespaceImportTargetsDefinition(index, imp, def)) ||
         ((imp.kind === "star" ||
           imp.kind === "namespace" ||
           (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
           importNamesAnsweringFile(imp) &&
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId, rules)),
     );
 
   if (!importerIndex) {
@@ -1490,7 +1514,7 @@ function importersReachingDefinition(search: ImporterSearch): Map<string, string
     if (exportingFiles.has(targetKey)) continue;
     for (const importer of candidateFilesImportingTarget(importerIndex, targetKey) ?? []) collectIndirect(importer);
   }
-  if (languageId === "csharp") {
+  if (namespaceImportDirectories) {
     const definitionDirectory = fileIdentityKey(path.posix.dirname(normalizePath(def.file)));
     for (const importer of csharpNamespaceImporters(index).get(definitionDirectory) ?? [])
       collectIndirect(importer.file);
@@ -1565,7 +1589,8 @@ export function getCachedReferenceCandidateFiles(
   const key = `${languageId}:${referenceCandidateCacheKey(index, def, exportedNames)}`;
   const cached = cache.get(key);
   if (cached) return cached;
-  const unitPeerOptions = referenceRulesFor(languageId).unitPeerOptions;
+  const rules = referenceRulesFor(languageId);
+  const unitPeerOptions = rules.unitPeerOptions;
 
   const definitionKey = fileIdentityKey(def.file);
   const candidates = new Map<string, string>();
@@ -1580,31 +1605,31 @@ export function getCachedReferenceCandidateFiles(
       candidates.set(fileIdentityKey(unitPeer), unitPeer);
     }
   }
-  if (languageId === "csharp") {
+  if (rules.globalImports) {
     for (const importer of csharpGlobalUsingImporters(index, def)) {
       if (fileIdentityKey(importer.file) !== definitionKey)
         candidates.set(fileIdentityKey(importer.file), importer.file);
     }
   }
   const reach = reverseReachableModules(index, [def.file], { danglingNames: exportedNames });
-  const exportingFileIds = filesExportingDefinition(index, def, exportedNames, languageId, reach.modules);
+  const exportingFileIds = filesExportingDefinition(index, def, exportedNames, rules, reach.modules);
   const exportingFiles = new Set(exportingFileIds.map((file) => fileIdentityKey(file)));
   for (const fileId of exportingFileIds) {
     if (fileIdentityKey(fileId) !== definitionKey) {
       candidates.set(fileIdentityKey(fileId), fileId);
     }
   }
-  // A C `resolveExport` under a tag or ordinary namespace walks the includes of the file it starts from,
+  // An export lookup in a separate tag or ordinary namespace walks the includes of the file it starts from,
   // so every file that includes the definition's, directly or not, can answer for it.
-  const reachKeys =
-    languageId === "c"
-      ? reverseReachableModules(index, [def.file], { danglingNames: exportedNames, throughImports: true }).keys
-      : reach.keys;
+  const reachKeys = rules.separateTagNamespace
+    ? reverseReachableModules(index, [def.file], { danglingNames: exportedNames, throughImports: true }).keys
+    : reach.keys;
   const importers = importersReachingDefinition({
     index,
     def,
     exportedNames,
     languageId,
+    rules,
     exportingFileIds,
     exportingFiles,
     reachKeys,
@@ -1612,8 +1637,9 @@ export function getCachedReferenceCandidateFiles(
   for (const [importerKey, importer] of importers) candidates.set(importerKey, importer);
 
   // A fully package-qualified use needs no import, even from another compilation unit.
-  // Probe both its package root and member name; Java Unicode escapes can hide either spelling.
-  if (languageId === "java" || languageId === "kotlin") {
+  // Probe both its package root and member name; a Unicode escape, which a language that records source markers in
+  // its filter (Java) marks, can hide either spelling.
+  if (isJvmLanguage(languageId)) {
     const packageName = getPackageDeclarationName(index, def.file, languageId);
     const rootName = packageName?.split(".")[0];
     if (rootName) {
@@ -1633,7 +1659,7 @@ export function getCachedReferenceCandidateFiles(
             !canProbeRoot ||
             !canProbeName ||
             (filter.mightContain(rootProbe) && filter.mightContain(nameProbe)) ||
-            (jvmModule.languageId === "java" && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
+            (!!jvmModule.support.bloomSourceTokens && filter.mightContain(JAVA_UNICODE_ESCAPE_BLOOM_TOKEN))
           ) {
             candidates.set(jvmModule.key, jvmModule.file);
           }
@@ -1643,7 +1669,7 @@ export function getCachedReferenceCandidateFiles(
   }
   // A plain package import does not prove its child's attribute, but a same-name use
   // through that package must be checked before coverage can claim completeness.
-  if (languageId === "python" && !def.isMember) {
+  if (rules.packageSubmodules && !def.isMember) {
     for (const moduleIndex of pythonParentPackageImporters(index, def.file)) {
       candidates.set(fileIdentityKey(moduleIndex.file), moduleIndex.file);
     }
@@ -1880,15 +1906,15 @@ function structurallyExportsDefinition(
   return false;
 }
 
-/** Recover C++ overload candidates through real exports, never the unresolved-import name shortcut. */
+/** Recover overload candidates through real exports, never the unresolved-import name shortcut. */
 export function cppCanonicalStructuralExport(
   index: ProjectIndex,
   targetFile: string,
   exportedName: string,
   def: SymbolDef,
-  languageId: string,
+  rules: ReferenceHooks,
 ): boolean {
-  if (languageId !== "cpp") return false;
+  if (!rules.structuralOverloadExports) return false;
   return structurallyExportsDefinition(index, targetFile, exportedName, def, []);
 }
 
@@ -1898,6 +1924,7 @@ function isUnresolvedIndexedImport(
   def: SymbolDef,
   exportedNames: readonly string[],
   languageId: string,
+  rules: ReferenceHooks,
 ): boolean {
   if (typeof imp.resolved !== "string") return false;
   let importedName: string;
@@ -1905,7 +1932,7 @@ function isUnresolvedIndexedImport(
   else if (imp.kind === "default") importedName = "default";
   else return false;
   if (!structurallyExportsDefinition(index, imp.resolved, importedName, def, exportedNames)) return false;
-  return !importCanReferenceDefinition(index, imp, def, exportedNames, languageId);
+  return !importCanReferenceDefinition(index, imp, def, exportedNames, languageId, rules);
 }
 
 /**
@@ -2039,7 +2066,8 @@ export function buildIndexedCandidateCoverage(args: {
     for (const file of degraded.files) addAffected(file);
   }
 
-  if (referenceRulesFor(languageId).parseErrorCoverage !== "ignore") {
+  const referenceRules = referenceRulesFor(languageId);
+  if (referenceRules.parseErrorCoverage !== "ignore") {
     // tree-sitter-scss reports ERROR on supported module syntax; revisit after the planned grammar fork.
     const parseErrorFiles = flaggedScanFiles(
       index,
@@ -2060,7 +2088,11 @@ export function buildIndexedCandidateCoverage(args: {
     const indexedModule = index.byFile.get(fileIdentityKey(fileId));
     if (!indexedModule) continue;
     const moduleIndex = withCsharpGlobalUsings(index, indexedModule);
-    if (moduleIndex.imports.some((imp) => isUnresolvedIndexedImport(index, imp, def, exportedNames, languageId))) {
+    if (
+      moduleIndex.imports.some((imp) =>
+        isUnresolvedIndexedImport(index, imp, def, exportedNames, languageId, referenceRules),
+      )
+    ) {
       unresolvedFiles.push(fileId);
     }
   }

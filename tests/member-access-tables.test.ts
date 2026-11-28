@@ -53,6 +53,7 @@ function declaredNodeTypeLists(row: MemberAccessRow): Array<{ field: string; typ
   if (row.memberExpressionType) lists.push({ field: "memberExpressionType", types: [row.memberExpressionType] });
   if (row.extraTraversalTypes) lists.push({ field: "extraTraversalTypes", types: row.extraTraversalTypes });
   if (row.extraMemberAccessTypes) lists.push({ field: "extraMemberAccessTypes", types: row.extraMemberAccessTypes });
+  if (row.memberNameWrapperType) lists.push({ field: "memberNameWrapperType", types: [row.memberNameWrapperType] });
   const qualified = row.qualifiedAccess;
   for (const field of [
     "containingTypes",
@@ -97,6 +98,8 @@ function declaredCapabilityFields(row: MemberAccessRow): string[] {
   if (row.extraMemberAccessTypes) fields.push("extraMemberAccessTypes");
   if (row.memberAccessShapes) fields.push("memberAccessShapes");
   if (row.navigationFallbackLastChild) fields.push("navigationFallbackLastChild");
+  if (row.memberNameWrapperType) fields.push("memberNameWrapperType");
+  if (row.unresolvedMemberMiss) fields.push("unresolvedMemberMiss");
   if (row.receiverKeywords) fields.push("receiverKeywords");
   if (row.receiverAncestry) fields.push("receiverAncestry");
   if (row.anonymousOwners) fields.push("anonymousOwners");

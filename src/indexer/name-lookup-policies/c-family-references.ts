@@ -4,6 +4,7 @@ import { AMBIGUOUS_CPP_OVERLOAD_REASON } from "../ambiguous-resolution.js";
 export const cReferenceHooks: ReferenceHooks = {
   callableVerification: "all",
   callableEquivalence: { links: "includes" },
+  separateTagNamespace: true,
 };
 
 export const cppReferenceHooks: ReferenceHooks = {
@@ -15,4 +16,5 @@ export const cppReferenceHooks: ReferenceHooks = {
     functionType: "function_definition",
     containerTypes: { class_specifier: true, struct_specifier: true, union_specifier: true },
   },
+  structuralOverloadExports: true,
 };
