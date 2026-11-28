@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs.js";
-import { workspaceSymbolsInSnapshot } from "../src/agent/workspace-symbols.js";
+import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspace-symbols.js";
 import { resolveSemanticSymbol } from "../src/agent/semantic-symbols.js";
 import { tool_workspaceSymbols } from "../src/agent-tools.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
@@ -24,9 +24,13 @@ import {
   __setNativeTreeSitterBindingForTests,
 } from "../src/native/tree-sitter-native.js";
 import { loadBinding } from "../src/native/runtime.js";
-import { MAX_WORKSPACE_SYMBOL_LIMIT, workspaceSymbols } from "../src/indexer/workspace-symbols.js";
+import {
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+  workspaceSymbols,
+  type WorkspaceSymbolsRequest,
+} from "../src/indexer/workspace-symbols.js";
 import { SymbolKind, type ProjectIndex } from "../src/indexer/types.js";
-import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
   fileIdentityKey,
   isFileIdentityCaseInsensitive,
@@ -529,6 +533,207 @@ describe("workspace symbol lookup", () => {
     const pastLimit = await workspaceSymbols(index, { query: "Service", limit: total - 1 });
     expect(pastLimit.symbols).toHaveLength(total - 1);
     expect(pastLimit.omitted).toBe(1);
+  });
+
+  it("returns matches that a caller can change without affecting later answers", async () => {
+    const imported = await workspaceSymbols(index, { query: "LocalService", includeImports: true });
+    const local = await workspaceSymbols(index, { query: "Service", limit: 1 });
+    for (const symbol of [...imported.symbols, ...local.symbols]) {
+      symbol.name = "Changed";
+      symbol.file = "changed.ts";
+      symbol.exported = !symbol.exported;
+    }
+
+    const importedAgain = await workspaceSymbols(index, { query: "LocalService", includeImports: true });
+    const localAgain = await workspaceSymbols(index, { query: "Service", limit: 1 });
+    expect(importedAgain.symbols).toHaveLength(1);
+    expect(importedAgain.symbols[0]).toMatchObject({ name: "LocalService", file: "src/importer.ts", exported: false });
+    expect(localAgain.symbols[0]).toMatchObject({ name: "Service", file: "src/other.ts", exported: true });
+  });
+});
+
+describe("workspace symbol candidates per index snapshot", () => {
+  const symbolNames = (result: { symbols: readonly { name: string }[] }): string[] =>
+    result.symbols.map((symbol) => symbol.name);
+
+  it("answers a warm session after an edit, a delete, and an add as a fresh session does", async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-snapshots-"));
+    const sourceDir = path.join(project, "src");
+    const original = {
+      "alpha.ts": "export function alphaHelper() { return 1; }\nexport class AlphaService {}\n",
+      "beta.ts": "export function betaWorker() { return 2; }\nfunction betaInternal() { return 3; }\n",
+      "gamma.ts": "export const gammaValue = 4;\n",
+    };
+    const requests: WorkspaceSymbolsRequest[] = [
+      { query: "alpha" },
+      { query: "beta" },
+      { query: "src/beta.ts::betaWorker" },
+      { query: "delta" },
+      { query: "", kinds: [SymbolKind.Function] },
+      { query: "", fileGlob: "src/**" },
+    ];
+    const buildOptions = { cache: "disk" as const, cacheDir: path.join(project, ".cache") };
+    const writeSources = async (sources: Record<string, string>): Promise<void> => {
+      for (const [name, text] of Object.entries(sources)) await fs.writeFile(path.join(sourceDir, name), text);
+    };
+    const answer = async (session: AgentSession) => {
+      const answers = [];
+      for (const request of requests) {
+        const response = await workspaceSymbolsWithSession(session, { root: project, ...request });
+        const { query, symbols, totalCandidates, omittedCounts } = response;
+        answers.push({ query, symbols, totalCandidates, omittedCounts });
+      }
+      return answers;
+    };
+    try {
+      await fs.mkdir(sourceDir);
+      await writeSources(original);
+      const warm = createAgentSession({ root: project, buildOptions, freshness: { policy: "auto" } });
+      const before = await answer(warm);
+      expect(symbolNames(before[0]!)).toEqual(["alphaHelper", "AlphaService"]);
+      expect(symbolNames(before[2]!)).toEqual(["betaWorker"]);
+      expect(symbolNames(before[3]!)).toEqual([]);
+      expect(symbolNames(before[4]!)).toEqual(["alphaHelper", "betaWorker", "betaInternal"]);
+
+      await writeSources({
+        "alpha.ts":
+          "export function alphaRenamed() { return 1; }\nexport class AlphaService {}\n" +
+          "export function deltaFromAlpha() { return 5; }\n",
+        "delta.ts": "export class DeltaService {}\nexport function betaWorker() { return 6; }\n",
+      });
+      await fs.rm(path.join(sourceDir, "beta.ts"));
+      warm.markChanged?.();
+      const edited = await answer(warm);
+      const fresh = createAgentSession({ root: project, buildOptions, freshness: { policy: "auto" } });
+      expect(edited).toEqual(await answer(fresh));
+      expect(symbolNames(edited[0]!)).toEqual(["alphaRenamed", "AlphaService", "deltaFromAlpha"]);
+      expect(edited[1]!.symbols.map((symbol) => `${symbol.location.file}:${symbol.name}`)).toEqual([
+        "src/delta.ts:betaWorker",
+      ]);
+      expect(symbolNames(edited[2]!)).toEqual([]);
+      expect(symbolNames(edited[3]!)).toEqual(["deltaFromAlpha", "DeltaService"]);
+      expect(symbolNames(edited[4]!)).toEqual(["alphaRenamed", "deltaFromAlpha", "betaWorker"]);
+
+      await fs.rm(path.join(sourceDir, "delta.ts"));
+      await writeSources(original);
+      warm.markChanged?.();
+      expect(await answer(warm)).toEqual(before);
+      warm.invalidate();
+      fresh.invalidate();
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the candidates of each index snapshot apart", async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-index-snapshots-"));
+    try {
+      const file = path.join(project, "service.ts");
+      await fs.writeFile(file, "export function firstName() { return 1; }\n");
+      const first = await buildProjectIndexFromFiles(project, [file], { cache: "off" });
+      expect(symbolNames(await workspaceSymbols(first, { query: "Name" }))).toEqual(["firstName"]);
+
+      await fs.writeFile(file, "export function secondName() { return 2; }\n");
+      const second = await buildProjectIndexFromFiles(project, [file], { cache: "off" });
+      expect(symbolNames(await workspaceSymbols(second, { query: "Name" }))).toEqual(["secondName"]);
+      expect(symbolNames(await workspaceSymbols(first, { query: "Name" }))).toEqual(["firstName"]);
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("compares qualified names ignoring case over the whole name and tokens over both alias names", async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-symbol-casing-"));
+    try {
+      const greek = path.join(project, "src", "greek.ts");
+      const alias = path.join(project, "src", "alias.ts");
+      await fs.mkdir(path.dirname(greek), { recursive: true });
+      await fs.writeFile(greek, "export const \u03a3 = 1;\n");
+      await fs.writeFile(alias, "function internalName() { return 1; }\nexport { internalName as PublicName };\n");
+      const casingIndex = await buildProjectIndexFromFiles(project, [greek, alias], { cache: "off" });
+      const names = async (query: string): Promise<string[]> =>
+        symbolNames(await workspaceSymbols(casingIndex, { query }));
+
+      // A capital sigma (U+03A3) that ends a word lowercases to a final sigma (U+03C2), so the lowercase qualified name
+      // ends in one while the name alone lowercases to a plain sigma (U+03C3).
+      expect(await names("src/greek.ts::\u03c2")).toEqual(["\u03a3"]);
+      expect(await names("src/greek.ts::\u03c3")).toEqual([]);
+      expect(await names("internal public")).toEqual(["PublicName"]);
+      expect(await names("internal private")).toEqual([]);
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lowercase mappings that workspace symbol ranking relies on", () => {
+  // Ranking skips work on three facts about `String.prototype.toLowerCase` in the running Node: no code point lowercases
+  // to a shorter string, none but `:` lowercases to text holding `:` (so only a query holding `::` can equal a qualified
+  // name in any case), and only the capital sigma lowercases differently next to other characters (so a file's
+  // lowercase `path::` prefix starts the lowercase qualified name of every symbol in it). A Unicode or ICU update that
+  // breaks one of them must fail here rather than change answers.
+  it("never shortens a code point, never produces a colon, and depends on context only for the capital sigma", () => {
+    // A NUL ends every casing context, so each code point between two NULs lowercases as it does alone.
+    const separator = "\0";
+    const capitalSigma = "\u03a3";
+    const codePoints: string[] = [];
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint += 1) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue;
+      codePoints.push(String.fromCodePoint(codePoint));
+    }
+    const lowered = codePoints.map((codePoint) => codePoint.toLowerCase());
+    const shortened: string[] = [];
+    const colonProducing: string[] = [];
+    const scanned: string[] = [];
+    const scannedLowered: string[] = [];
+    for (let at = 0; at < codePoints.length; at += 1) {
+      const codePoint = codePoints[at]!;
+      const lowercase = lowered[at]!;
+      if (lowercase.length < codePoint.length) shortened.push(codePoint);
+      if (codePoint !== ":" && lowercase.includes(":")) colonProducing.push(codePoint);
+      if (codePoint === separator || codePoint === capitalSigma) continue;
+      scanned.push(codePoint);
+      scannedLowered.push(lowercase);
+    }
+    expect(codePoints).toHaveLength(0x110000 - 0x800);
+    expect(shortened).toEqual([]);
+    expect(colonProducing).toEqual([]);
+    expect(":".toLowerCase()).toBe(":");
+
+    // The code points whose lowercase between `before` and `after` differs from their lowercase alone.
+    const contextDependent = (
+      pieces: readonly string[],
+      lowercases: readonly string[],
+      before: string,
+      after: string,
+    ): string[] => {
+      const actual = `${before}${pieces.join(`${after}${separator}${before}`)}${after}${separator}`.toLowerCase();
+      const lowerBefore = before.toLowerCase();
+      const lowerAfter = after.toLowerCase();
+      const expected = `${lowerBefore}${lowercases.join(`${lowerAfter}${separator}${lowerBefore}`)}${lowerAfter}${separator}`;
+      if (actual === expected) return [];
+      const actualParts = actual.split(separator);
+      const expectedParts = expected.split(separator);
+      return pieces.filter((_, at) => actualParts[at] !== expectedParts[at]);
+    };
+    // A cased letter before, a cased letter after, and both across the `::` of a qualified name.
+    const contexts: [string, string][] = [
+      ["A", ""],
+      ["", "b"],
+      ["A::", ""],
+      ["", "::b"],
+    ];
+    for (const [before, after] of contexts) {
+      expect(contextDependent(scanned, scannedLowered, before, after)).toEqual([]);
+    }
+    // The same comparison finds the capital sigma: after a cased letter, also across a `::`, and with no cased letter
+    // after it, it lowercases to a final sigma.
+    const sigmaInContext = (before: string, after: string): string[] =>
+      contextDependent([capitalSigma], [capitalSigma.toLowerCase()], before, after);
+    expect(sigmaInContext("A", "")).toEqual([capitalSigma]);
+    expect(sigmaInContext("A::", "")).toEqual([capitalSigma]);
+    expect(sigmaInContext("", "b")).toEqual([]);
+    expect(sigmaInContext("", "::b")).toEqual([]);
   });
 });
 

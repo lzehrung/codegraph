@@ -92,6 +92,8 @@ References choose the files they verify from the importers of each file, which e
 
 An unresolved import slot may require verifying every occurrence of the requested name in its file. `findReferences` reuses that scan for other unresolved slots within the same file and query, preserving the first import attribution and reference coverage. `findRenameReferences` and `rename_preview` separately check bindings whose aliases must stay unchanged.
 
+`workspaceSymbols`, behind `codegraph symbols` and the MCP `workspace_symbols` tool, derives each symbol's display path, exported name, and lowercase names on the first query of an index. Later queries compare those values and build matches only for the results they return. Like the reference tables, the values belong to one index object, so a refresh after an edit derives them again for its new index.
+
 Query-time syntax uses two per-index least-recently-used caches:
 
 - Compact source, native columns, query facts, and byte-offset maps have a 4 GiB estimated budget.
