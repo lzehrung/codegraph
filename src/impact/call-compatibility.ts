@@ -17,10 +17,11 @@ import {
   CALLABLE_VARIABLE_VALUE_NODE_TYPES,
   getCallableArity,
   getCallableArityFromParameterText,
+  getCallableArityProfile,
   getCallableDeclarationKind,
   getCallArgumentCount,
   getCallArgumentCountFromArgumentText,
-  memberLookupBinding,
+  type CallableArityLanguageProfile,
   type CallableBinding,
   type CallableDeclarationKind,
 } from "../languages/callable-arity.js";
@@ -717,16 +718,17 @@ function ownerTypeNameOf(declaration: SyntaxNodeLike, source: string): string | 
 }
 
 /**
- * Resolve which receiver binding form a callsite uses. Python bare calls reach the plain function
- * and pass the receiver explicitly; Python member calls on a provably class-valued receiver do the
- * same only for instance methods, because class and static methods bind (or declare) no instance
- * receiver. Rust `Type::target(...)` calls are unbound UFCS forms. C# follows the shared member
- * lookup rule: resolved extension callsites are static-class (`Ext.M(value)`, `Alias.Ext.M(value)`)
- * or bare calls inside the class, all of which pass the `this` receiver explicitly.
- * Everything else supplies the receiver through the call form.
+ * Resolve which receiver binding form a callsite uses, from the callsite language's arity profile. A callee of one of
+ * its `unboundCalleeTypes` (Rust `Type::target(...)`, an unbound UFCS form) passes the receiver. A language whose
+ * resolved member calls use one binding follows it: C# resolves an extension method only through its static class
+ * (`Ext.M(value)`, `Alias.Ext.M(value)`) or a bare call inside the class, all of which pass the `this` receiver
+ * explicitly. Where the receiver is a scope-gated first parameter (Python), a bare call reaches the plain function and
+ * passes the receiver explicitly, and a member call on a provably class-valued receiver does the same only for instance
+ * methods, because class and static methods bind (or declare) no instance receiver. Everything else supplies the
+ * receiver through the call form.
  */
 function callBindingForm(input: {
-  languageId: string;
+  profile: CallableArityLanguageProfile | null;
   callNode: SyntaxNodeLike;
   source: string;
   parsedCallsite: ParsedFileContext;
@@ -735,15 +737,17 @@ function callBindingForm(input: {
   declarationKind: CallableDeclarationKind | null;
   ownerTypeName: string | null;
 }): CallableBinding {
-  const { languageId, callNode, source, parsedCallsite, file, index, declarationKind, ownerTypeName } = input;
+  const { profile, callNode, source, parsedCallsite, file, index, declarationKind, ownerTypeName } = input;
   const callee = callTargetNode(callNode);
-  if (languageId === "rust") {
-    return callee?.type === "scoped_identifier" ? "unbound" : "bound";
+  const unboundCallees = profile?.unboundCalleeTypes;
+  if (unboundCallees) {
+    return callee && unboundCallees[callee.type] ? "unbound" : "bound";
   }
-  if (languageId === "csharp") {
-    return memberLookupBinding(languageId);
+  const memberCallBinding = profile?.memberLookupBinding;
+  if (memberCallBinding) {
+    return memberCallBinding;
   }
-  if (languageId !== "python" || !callee) {
+  if (!profile?.receiver.scopedFirstParameter || !callee) {
     return "bound";
   }
   if (callee.type === "identifier") {
@@ -843,7 +847,7 @@ async function buildCallCompatibilityHintForReference(input: {
     const callNode = parsedCallsite.tree ? locateCallsiteCallNode(callsiteRequest) : null;
     const binding = callNode
       ? callBindingForm({
-          languageId: parsedCallsite.sup.id,
+          profile: getCallableArityProfile(parsedCallsite.sup.id),
           callNode,
           source: parsedCallsite.source,
           parsedCallsite,

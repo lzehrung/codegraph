@@ -94,6 +94,7 @@ export const rubyMemberLookupPolicy: MemberLookupPolicy = {
   separateMemberScopes: true,
   selection: { firstDeclarationWins: true },
   receiverResolution: {
+    syntax: { superCallType: "super" },
     construction: { visibleConstantTypes: true },
     access: { constantPaths: true, typeFileMembers: true },
   },

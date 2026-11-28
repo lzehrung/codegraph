@@ -1,3 +1,3 @@
 import type { ReferenceHooks } from "../name-resolution-types.js";
 
-export const scssReferenceHooks: ReferenceHooks = { parseErrorCoverage: "ignore" };
+export const scssReferenceHooks: ReferenceHooks = { parseErrorCoverage: "ignore", scopedStylesheetNames: true };

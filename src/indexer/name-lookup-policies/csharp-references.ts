@@ -4,6 +4,8 @@ import type { ImportNameHooks, ReferenceHooks } from "../name-resolution-types.j
 export const csharpReferenceHooks: ReferenceHooks = {
   unitPeerOptions: { csharpQualifiedName: true },
   namespaceBindingScope: "lexical-alias",
+  namespaceImportDirectories: true,
+  globalImports: true,
 };
 
 export const csharpGraphImportHooks: ImportNameHooks = { aliasKey: normalizeCsharpIdentifier };

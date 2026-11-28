@@ -1,7 +1,9 @@
 import { isGeneratedMember } from "../languages/generated-members.js";
 import { withCsharpGlobalUsings } from "./csharp-global-usings.js";
 import { MEMBER_LOOKUP_POLICIES, memberLookupPolicyFor } from "./member-lookup-policies/index.js";
+import type { AccessTraversalRules } from "./member-lookup-policies/types.js";
 import { referenceRulesFor } from "./name-lookup-policies/reference-rules.js";
+import type { ReferenceHooks } from "./name-resolution-types.js";
 import path from "node:path";
 import { supportForFileWithoutHeaderSample, type LanguageExtensionMap, type LanguageSupport } from "../languages.js";
 import { isUnsupportedParserInputError } from "../languages/file-prep.js";
@@ -160,6 +162,7 @@ import { resolveCppQualifiedName } from "./name-lookup-policies/c-family.js";
 import { kotlinCalleeUnderImplicitReceiver, kotlinThisMemberResult } from "./kotlin-lambda-receiver.js";
 import { createUnionFind, pushAll, replaceContents } from "../util/collections.js";
 import { compareStrings } from "../util/strings.js";
+import { isJvmLanguage } from "../util/syntax-tree.js";
 import {
   isPythonDottedImportBinding,
   pythonImportedModuleFiles,
@@ -252,7 +255,11 @@ async function goToDefinitionInternal(
   const sup = context.sup;
   const source = context.source;
   const tree = context.tree;
-  if (sup.id === "php") await ensurePhpNamespaceSymbolIndex(index);
+  // The member rules the positioned stages below read, selected once for the query's language.
+  const memberPolicy = MEMBER_LOOKUP_POLICIES[sup.id];
+  const receiverRules = memberPolicy?.receiverResolution;
+  const roleQualifiedNames = !!memberPolicy?.roleQualifiedImports;
+  if (memberPolicy?.namespaceClassNames) await ensurePhpNamespaceSymbolIndex(index);
 
   const pos = toTreeSitterPosition({ line, column });
   let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
@@ -288,25 +295,23 @@ async function goToDefinitionInternal(
     return { status: "not_found", reason };
   }
 
-  if (sup.id === "ruby" && node.type === "super") {
+  const superCallType = receiverRules?.syntax?.superCallType;
+  if (superCallType && node.type === superCallType) {
     const target = await resolveRubySuperDefinition(index, mod, node, source);
     if (!target) return { status: "not_found", reason: "No matching Ruby superclass method" };
     return okGoToResult(index, target, { resolution: "member-access", confidence: "medium" });
   }
-  if (sup.id === "php") {
-    const keywordConstruction = MEMBER_LOOKUP_POLICIES[sup.id]?.receiverResolution?.syntax?.keywordConstruction;
-    const keyword = keywordConstruction?.(node, source, sup, receiverSyntaxDeps);
-    if (keyword) {
-      const created = resolvePhpObjectCreationTarget(index, mod, keyword, source, sup);
-      if (!created) return { status: "not_found", reason: "No matching PHP class" };
-      return okGoToResult(index, created, { resolution: "member-access", confidence: "medium" });
-    }
+  const keyword = receiverRules?.syntax?.keywordConstruction?.(node, source, sup, receiverSyntaxDeps);
+  if (keyword) {
+    const created = resolvePhpObjectCreationTarget(index, mod, keyword, source, sup);
+    if (!created) return { status: "not_found", reason: "No matching PHP class" };
+    return okGoToResult(index, created, { resolution: "member-access", confidence: "medium" });
   }
 
   const shorthandId = sup.nodeTypes.shorthandPropertyIdentifier ?? [];
   const isId = sup.nodeTypes.identifier.includes(node.type) || shorthandId.includes(node.type);
   let name: string | null = isId ? sliceText(node, source) : null;
-  const phpQualifiedReference = sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
+  const phpQualifiedReference = roleQualifiedNames ? getPhpQualifiedReference(node, source) : null;
 
   if (!name) {
     const declNameNode = findDeclarationNameNode(sup, node);
@@ -315,10 +320,9 @@ async function goToDefinitionInternal(
     }
   }
 
-  const phpImportType =
-    sup.id === "php"
-      ? (phpImportTypeAtPosition(mod.imports, pos.row, pos.column) ?? inferPhpQualifiedReferenceImportType(node))
-      : undefined;
+  const phpImportType = roleQualifiedNames
+    ? (phpImportTypeAtPosition(mod.imports, pos.row, pos.column) ?? inferPhpQualifiedReferenceImportType(node))
+    : undefined;
 
   if (node && sup.supportsExportFromReferences && index.projectRoot) {
     const exportFrom = exportFromIdentifier(index, file, toRange(node), context);
@@ -373,7 +377,9 @@ async function goToDefinitionInternal(
     ) {
       memberAccessNode = node.parent.parent;
     }
-    if (sup.id === "cpp") {
+    // A position inside nested scope paths (`a::C::run`) reads the outermost one.
+    const scopedMembers = !!receiverRules?.access?.scopedMemberType;
+    if (scopedMembers) {
       while (memberAccessNode?.parent && isMemberAccessNode(sup, memberAccessNode.parent)) {
         memberAccessNode = memberAccessNode.parent;
       }
@@ -382,7 +388,7 @@ async function goToDefinitionInternal(
     // it is a bare name, so the shared lookup (implicit members, imports, package) decides it.
     const receiverless = !!memberAccessNode && isReceiverlessMemberCall(sup, memberAccessNode);
     const scopeIndex = memberAccessNode ? getOrBuildScopeIndex(index, file, source, sup, mod, tree) : null;
-    if (sup.id === "kotlin" && scopeIndex && !receiverless) {
+    if (receiverRules?.lambdaReceiverThis && scopeIndex && !receiverless) {
       // `this` inside a lambda that has a receiver, and `this@label`, name a receiver the lookup of `this` would miss.
       const viaThis = await kotlinThisMemberResult(
         {
@@ -429,7 +435,7 @@ async function goToDefinitionInternal(
     if (memberAccessResult) {
       return memberAccessResult;
     }
-    if (sup.id === "cpp" && scopeIndex && memberAccessNode) {
+    if (scopedMembers && scopeIndex && memberAccessNode) {
       const files = createLoadingParsedFileProvider(index, { file, parsed: context });
       const qualifiedName = cppQualifiedNameSegments(memberAccessNode, source).join("::");
       const qualified = await withParsedFiles(files, () =>
@@ -442,7 +448,7 @@ async function goToDefinitionInternal(
     }
   }
 
-  if (sup.id === "php" && phpQualifiedReference && index.projectRoot) {
+  if (phpQualifiedReference && index.projectRoot) {
     const normalizedQualifiedReference = normalizePhpQualifiedReference(phpQualifiedReference, source, tree, node);
     if (normalizedQualifiedReference?.includes("\\")) {
       const qualifiedImportType = phpImportType;
@@ -450,7 +456,7 @@ async function goToDefinitionInternal(
         index.projectRoot,
         file,
         normalizedQualifiedReference,
-        "php",
+        sup.id,
         {
           ...(qualifiedImportType ? { phpImportType: qualifiedImportType } : {}),
         },
@@ -518,18 +524,22 @@ function isReceiverlessMemberCall(sup: LanguageSupport, access: SyntaxNodeLike):
   return !!property && (!object || object.startIndex === property.startIndex);
 }
 
-function swiftNavigationMemberAccess(sup: LanguageSupport, node: SyntaxNodeLike): SyntaxNodeLike | null {
-  if (sup.id !== "swift" || node.parent?.type !== "navigation_suffix") return null;
+/** The member access a name belongs to where the language wraps member names in `wrapperType` nodes. */
+function wrappedMemberAccess(sup: LanguageSupport, wrapperType: string, node: SyntaxNodeLike): SyntaxNodeLike | null {
+  if (node.parent?.type !== wrapperType) return null;
   const access = node.parent.parent;
   return access && isMemberAccessNode(sup, access) ? access : null;
 }
 
 function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
-  const parent = swiftNavigationMemberAccess(sup, node) ?? node.parent;
-  if (!parent || (!supportsReceiverMemberNavigation(sup.id) && sup.id !== "c") || !isMemberAccessNode(sup, parent)) {
-    return false;
-  }
-  const { object, property } = getMemberAccessParts(sup, parent);
+  // The query language's member-access shape, selected before the parent walk.
+  const accessRow = MEMBER_ACCESS_ROWS[sup.id];
+  const wrapperType = accessRow?.memberNameWrapperType;
+  const parent = (wrapperType ? wrappedMemberAccess(sup, wrapperType, node) : null) ?? node.parent;
+  if (!parent) return false;
+  if (!supportsReceiverMemberNavigation(sup.id) && !accessRow?.unresolvedMemberMiss) return false;
+  if (!isMemberAccessNode(sup, parent)) return false;
+  const { object, property } = getMemberAccessParts(sup, parent, accessRow);
   if (!property || node.id !== property.id) return false;
   // Unqualified calls reuse member-call nodes with the name in both slots.
   if (!object || object.startIndex === property.startIndex) return false;
@@ -739,9 +749,12 @@ export async function canonicalizePythonReceiverAttributeDefinition(
     column: def.range.start.column,
   },
 ): Promise<GoToResult | null> {
-  if (supportForFileWithoutHeaderSample(position.file, index.languageExtensions)?.id !== "python") return null;
+  // Only a language whose receiver attributes are class members canonicalizes them; it is decided from the file name
+  // before parsing, and the parsed file must use that language's grammar.
+  const support = supportForFileWithoutHeaderSample(position.file, index.languageExtensions);
+  if (!support || !MEMBER_LOOKUP_POLICIES[support.id]?.receiverResolution?.access?.classAttributeMembers) return null;
   const context = await ensureParsedContextForIndex(index, position.file);
-  if (context.sup.id !== "python") return null;
+  if (context.sup.id !== support.id) return null;
   const nodePosition = { row: position.line - 1, column: position.column - 1 };
   const node = context.tree.rootNode.descendantForPosition(nodePosition, nodePosition);
   if (!isPythonReceiverAttributeAssignmentName(node)) return null;
@@ -907,12 +920,16 @@ async function findReferencesInternal(
   const unprobeableNameScan = referenceRules.unprobeableNameScan;
   const callableLinkMode = referenceRules.callableEquivalence?.links;
   let cNamespace: "tag" | "ordinary" | undefined;
-  if (parsedContext.sup.id === "c") cNamespace = def.cTag ? "tag" : "ordinary";
+  if (referenceRules.separateTagNamespace) cNamespace = def.cTag ? "tag" : "ordinary";
   const exportOptions = cNamespace ? { cNamespace } : undefined;
 
   const indexed = index.byFile.get(fileIdentityKey(definitionFile));
   if (!indexed) return { status: "not_found", reason: "Module not found" };
   const mod = withCsharpGlobalUsings(index, indexed);
+  // The definition language's member rules, selected once for the query.
+  const memberPolicy = memberLookupPolicyFor(parsedContext.sup.id);
+  const receiverRules = memberPolicy.receiverResolution;
+  const accessRules = receiverRules?.access;
 
   const refs: Reference[] = [];
   const seenRefs = new Map<string, number>();
@@ -959,14 +976,14 @@ async function findReferencesInternal(
   const privateName = privateResolution !== null;
   const receiverMemberDefinition = isReceiverMemberDefinition(definition, parsedContext, !!family.receiverOwner);
   const csharpPartialEquivalents =
-    parsedContext.sup.id === "csharp" &&
+    memberPolicy.ownerResolution?.shared?.declarationsAreEquivalent &&
     !definition.isMember &&
     (definition.kind === SymbolKind.Class ||
       definition.kind === SymbolKind.Interface ||
       definition.kind === SymbolKind.TypeAlias)
       ? await findCsharpPartialTypeEquivalents(index, definition)
       : [];
-  const rubyReopen = parsedContext.sup.id === "ruby" ? findRubyReopenedConstantParts(index, definition) : undefined;
+  const rubyReopen = referenceRules.reopenedTypes ? findRubyReopenedConstantParts(index, definition) : undefined;
   const equivalentDefinitions = [
     ...family.equivalents,
     ...csharpPartialEquivalents,
@@ -1009,7 +1026,8 @@ async function findReferencesInternal(
       ? reverseReachableModules(
           index,
           [definition, ...equivalentDefinitions].map((candidate) => candidate.file),
-          { throughImports: parsedContext.sup.id === "c" },
+          // An export lookup in a separate tag namespace also walks the includes.
+          { throughImports: cNamespace !== undefined },
         ).modules
       : [];
   for (const candidateModule of aliasProbeModules) {
@@ -1074,22 +1092,20 @@ async function findReferencesInternal(
 
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, definition);
-  const parameterCallName =
-    memberLookupPolicyFor(parsedContext.sup.id).parameterNamedAtCall?.(definition, parsedContext) ?? null;
+  const parameterCallName = memberPolicy.parameterNamedAtCall?.(definition, parsedContext) ?? null;
   const scansNamedArgumentReferences = parameterCallName !== null;
   const parameterProbeName = parameterCallName ?? undefined;
   const parameterCallDigest =
     parameterProbeName && isBloomIdentifierToken(parameterProbeName)
       ? BloomFilter.digestOf(parameterProbeName)
       : undefined;
-  const parameterFilter = scansNamedArgumentReferences
-    ? memberLookupPolicyFor(parsedContext.sup.id).parameterReferenceScanFilter
-    : undefined;
+  const parameterFilter = scansNamedArgumentReferences ? memberPolicy.parameterReferenceScanFilter : undefined;
   const scansReceiverReferences =
     !privateName &&
-    (scansNamedArgumentReferences || shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition));
+    (scansNamedArgumentReferences ||
+      shouldScanVerifiedReferences(definition, parsedContext, receiverMemberDefinition, referenceRules));
   const scansNamespaceReferences =
-    parsedContext.sup.id === "csharp" &&
+    !!accessRules?.namespaceScopes &&
     !definition.isMember &&
     (definition.kind === SymbolKind.Class ||
       definition.kind === SymbolKind.Interface ||
@@ -1140,9 +1156,7 @@ async function findReferencesInternal(
     callableVerification === "all" && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
   // A language may also require verification across overloads in another unit peer.
   const policyVerifiedCallable =
-    memberLookupPolicyFor(parsedContext.sup.id).verifiesCallableReferences &&
-    definition.kind === SymbolKind.Function &&
-    !receiverMemberDefinition;
+    memberPolicy.verifiesCallableReferences && definition.kind === SymbolKind.Function && !receiverMemberDefinition;
   // A header parameter's uses also go through a language policy (members of other parts, binders the scope does not
   // model), which scope occurrences cannot reproduce: goto decides each one.
   const requiresHeaderParameterVerifiedScan =
@@ -1162,7 +1176,7 @@ async function findReferencesInternal(
     receiverProofNeedsVerifiedScan;
   let sameFileVerifiedScanExecuted = false;
   const receiverProofUnavailableFiles = new Map<string, FileId>();
-  if (memberLookupPolicyFor(parsedContext.sup.id).referenceFamilyUnproven?.(referenceDefinitionName)) {
+  if (memberPolicy.referenceFamilyUnproven?.(referenceDefinitionName)) {
     receiverProofUnavailableFiles.set(fileIdentityKey(definitionFile), definitionFile);
   }
   let memberCallOccurrencesNeedVerification = false;
@@ -1174,22 +1188,24 @@ async function findReferencesInternal(
     !requiresOverloadVerifiedScan
   ) {
     const verifyMemberCalls = memberSyntaxNamesFreeFunction(parsedContext.sup.id);
+    const qualifiedConstantPaths = !!accessRules?.constantPaths;
+    const implicitReceiverCalls = !!receiverRules?.lambdaReceiverThis;
     for (const occurrence of localBinding.occurrences) {
       if (hasReachedCollectionLimit()) break;
-      let rubyQualifiedConstant = false;
-      if (parsedContext.sup.id === "ruby") {
+      let qualifiedConstant = false;
+      if (qualifiedConstantPaths) {
         const position = toTreeSitterPosition(occurrence.start);
         const node = parsedContext.tree.rootNode.descendantForPosition(position, position);
-        rubyQualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
+        qualifiedConstant = node.type === "constant" && node.parent?.type === "scope_resolution";
       }
-      // A bare Kotlin call under a lambda or extension body may bind to that implicit receiver instead of this scope.
-      if (isKotlinReceiverClaimableCall(parsedContext, occurrence)) {
+      // A bare call under a lambda or extension body may bind to that implicit receiver instead of this scope.
+      if (implicitReceiverCalls && isKotlinReceiverClaimableCall(parsedContext, occurrence)) {
         memberCallOccurrencesNeedVerification = true;
         continue;
       }
       // A scope occurrence is not proof of a member call. Languages that invoke a free
       // function that way verify the site; an unresolvable receiver stays unavailable.
-      if (rubyQualifiedConstant || (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence))) {
+      if (qualifiedConstant || (verifyMemberCalls && isMemberAccessPropertyRange(parsedContext, occurrence))) {
         memberCallOccurrencesNeedVerification = true;
         continue;
       }
@@ -1268,7 +1284,7 @@ async function findReferencesInternal(
     for (const unitPeer of getCompilationUnitPeers(index, candidate.file, unitPeerOptions).files) {
       unitPeerKeys.add(fileIdentityKey(unitPeer));
     }
-    if (parsedContext.sup.id === "csharp") {
+    if (referenceRules.globalImports) {
       for (const importer of csharpGlobalUsingImporters(index, candidate)) {
         unitPeerKeys.add(fileIdentityKey(importer.file));
       }
@@ -1354,6 +1370,10 @@ async function findReferencesInternal(
     if (graphLinkedOrphans.size) candidateFiles.sort((left, right) => compareStrings(left, right));
   }
 
+  // Definition-language rules the candidate scan reads, selected once for the query.
+  const packageSubmodules = !!referenceRules.packageSubmodules;
+  const namespaceImportDirectories = !!referenceRules.namespaceImportDirectories;
+  const jvmDefinition = isJvmLanguage(parsedContext.sup.id);
   for (const fileId of candidateFiles) {
     if (hasReachedCollectionLimit()) break;
     const indexedCandidate = index.byFile.get(fileIdentityKey(fileId));
@@ -1366,6 +1386,8 @@ async function findReferencesInternal(
 
     let scopeIndex: ScopeIndex | null = null;
     let candidateParsedContext: ParsedFileContext | null = null;
+    // The candidate language's access rules, selected once when the candidate is parsed.
+    let candidateAccess: AccessTraversalRules | undefined;
     let candidateParseFailed = false;
     const ensureCandidateParsed = async (): Promise<ParsedFileContext | null> => {
       if (candidateParseFailed) return null;
@@ -1377,6 +1399,7 @@ async function findReferencesInternal(
           candidateParseFailed = true;
           return null;
         }
+        candidateAccess = MEMBER_LOOKUP_POLICIES[candidateParsedContext.sup.id]?.receiverResolution?.access;
       }
       return candidateParsedContext;
     };
@@ -1486,14 +1509,13 @@ async function findReferencesInternal(
       }
     }
 
-    const loadedSubmodules =
-      parsedContext.sup.id === "python" ? pythonLoadedSubmodules(index, module.imports) : undefined;
+    const loadedSubmodules = packageSubmodules ? pythonLoadedSubmodules(index, module.imports) : undefined;
     const memberNamePattern = fileSupport?.exportedNamePattern;
     for (const { imp, packageView } of importScanViews(index, module.imports)) {
       if (hasReachedCollectionLimit()) break;
       if (cNamespace && imp.kind === "named" && (imp.cNamespace ?? "ordinary") !== cNamespace) continue;
       const targetFile = importScanTarget(index, imp, packageView);
-      if (!targetFile && parsedContext.sup.id === "csharp" && imp.kind === "namespace") {
+      if (!targetFile && namespaceImportDirectories && imp.kind === "namespace") {
         const namespaceTargets = csharpNamespaceImportDirectories(index).get(imp) ?? [];
         const targetDirectories = new Set(
           namespaceTargets.map((target) => fileIdentityKey(path.posix.dirname(normalizePath(target)))),
@@ -1650,6 +1672,10 @@ async function findReferencesInternal(
             module.imports,
             scope,
           );
+          // Goto proves each use where the import in force at the use decides it, or an enclosing member can hide
+          // the alias that names the namespace.
+          const memberUsesNeedProof =
+            !!candidateAccess?.positionedImports || (!!candidateAccess?.namespaceScopes && !!imp.localRange);
           for (const range of ranges) {
             if (hasReachedCollectionLimit()) break;
             const loadedImports = loadedSubmodules?.get(fileIdentityKey(targetFile))?.get(exportedName);
@@ -1658,7 +1684,7 @@ async function findReferencesInternal(
               const use = parsed.tree.rootNode.descendantForPosition(position, position);
               if (loadedImports.some((binding) => pythonImportPrecedesUse(binding, use, parsed.tree))) continue;
             }
-            if ((parsed.sup.id === "csharp" && imp.localRange) || parsed.sup.id === "python") {
+            if (memberUsesNeedProof) {
               const proof = await goToDefinition(
                 index,
                 { file: fileId, line: range.start.line, column: range.start.column },
@@ -1680,7 +1706,7 @@ async function findReferencesInternal(
             targetFile,
             exportedName,
             definition,
-            parsedContext.sup.id,
+            referenceRules,
           );
           if (matchesDef || matchesStructural) {
             if (hasExpandedNamedImport(module, targetFile, exportedName)) {
@@ -1716,6 +1742,8 @@ async function findReferencesInternal(
           const namespaceExports = resolveModuleExports(index, targetFile);
           const parsed = await ensureCandidateParsed();
           if (!parsed) continue;
+          // Goto proves each use where the import in force at the use decides it.
+          const memberUsesNeedProof = !!candidateAccess?.positionedImports;
           for (const [namespaceName, namespaceResult] of namespaceExports) {
             if (namespaceResult.kind !== "namespace") continue;
             if (
@@ -1741,7 +1769,7 @@ async function findReferencesInternal(
             );
             for (const range of ranges) {
               if (hasReachedCollectionLimit()) break;
-              if (parsed.sup.id === "python") {
+              if (memberUsesNeedProof) {
                 const proof = await goToDefinition(
                   index,
                   { file: fileId, line: range.start.line, column: range.start.column },
@@ -1762,8 +1790,7 @@ async function findReferencesInternal(
           }
           const staticNamedImport = imp.kind === "named" && !!imp.jvmStaticWildcardName;
           if (staticNamedImport && !javaStaticNamedImportIncludes(index, imp, definition)) continue;
-          const targetLanguage = supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id;
-          const jvmTarget = targetLanguage === "java" || targetLanguage === "kotlin";
+          const jvmTarget = isJvmLanguage(supportForFileWithoutHeaderSample(targetFile, index.languageExtensions)?.id);
           const lookupName = jvmTarget ? normalizeKotlinIdentifier(exported) : exported;
           const hit = staticNamedImport ? null : resolveExport(index, targetFile, lookupName, exportOptions);
           let matchesDef = staticNamedImport || (hit?.kind === "resolved" && matchesReferenceDefinition(hit.def));
@@ -1772,10 +1799,7 @@ async function findReferencesInternal(
             matchesDef = await bindingMatchesDefinition();
             attributedByProof = matchesDef;
           }
-          if (
-            !matchesDef &&
-            cppCanonicalStructuralExport(index, targetFile, exported, definition, parsedContext.sup.id)
-          ) {
+          if (!matchesDef && cppCanonicalStructuralExport(index, targetFile, exported, definition, referenceRules)) {
             // Recover candidates, but prove each overload call through goToDefinition.
             // Structural visibility alone cannot attribute the import token.
             matchesDef = true;
@@ -1948,9 +1972,7 @@ async function findReferencesInternal(
     if (
       !definition.isMember &&
       fileIdentityKey(fileId) !== fileIdentityKey(definitionFile) &&
-      (unitPeerKeys.has(fileIdentityKey(fileId)) ||
-        parsedContext.sup.id === "java" ||
-        parsedContext.sup.id === "kotlin") &&
+      (unitPeerKeys.has(fileIdentityKey(fileId)) || jvmDefinition) &&
       !hasReachedCollectionLimit()
     ) {
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -1976,7 +1998,7 @@ async function findReferencesInternal(
 
     // Only the exact dotted submodule path can refer to this definition through a
     // parent-package import. Other same-name uses are proven unrelated.
-    if (parsedContext.sup.id === "python" && !definition.isMember && !hasReachedCollectionLimit()) {
+    if (packageSubmodules && !definition.isMember && !hasReachedCollectionLimit()) {
       for (const { namespace, importBinding } of pythonParentPackageNamespacePaths(module, definitionFile)) {
         const parsed = await ensureCandidateParsed();
         const scope = await ensureScope();
@@ -2050,10 +2072,9 @@ async function findReferencesInternal(
         // no identifier holds (Ruby `empty?`) as the identifier before it.
         const normalizedName = entry.support?.normalizeIdentifier(referenceDef.localName) ?? referenceDef.localName;
         const probeName = entry.support?.bloomProbeName?.(normalizedName) ?? normalizedName;
+        const alternateKey = entry.support?.bloomAlternateKey;
         canonicalName =
-          entry.support?.id === "php" && isPhpCaseInsensitiveSymbolKind(definition.kind)
-            ? foldPhpIdentifierCase(probeName)
-            : probeName;
+          alternateKey && isPhpCaseInsensitiveSymbolKind(definition.kind) ? alternateKey(probeName) : probeName;
         canonicalNames.set(entry.support, canonicalName);
       }
       if (filter) {
@@ -2135,7 +2156,7 @@ async function findReferencesInternal(
   // later include outside the block can attach to the nested mixin. Bare same-kind calls and
   // includes inside the scanned scope are the references; anything else the walker added is not.
   let scssScopedCallableUnproven = false;
-  if (parsedContext.sup.id === "scss") {
+  if (referenceRules.scopedStylesheetNames) {
     const scoped = await scssScopedCallableReferences(index, definition);
     if (scoped?.unproven) {
       scssScopedCallableUnproven = true;
@@ -2178,7 +2199,7 @@ async function findReferencesInternal(
   // different `-`/`_` spelling owns the read; the exact-name walk would keep it on this declaration.
   let scssNearerSpellingDropped = false;
   if (
-    parsedContext.sup.id === "scss" &&
+    referenceRules.scopedStylesheetNames &&
     definition.localName.startsWith("$") &&
     !(await scssMemberForDefinition(index, definition))
   ) {
@@ -2223,7 +2244,7 @@ async function findReferencesInternal(
     ...(rubyReopen?.incomplete ? [definition.file] : []),
     ...(namespaceExportAliasUncertainty ? [definition.file] : []),
   ];
-  if (parsedContext.sup.id === "scss" && definition.localName.startsWith("$")) {
+  if (referenceRules.scopedStylesheetNames && definition.localName.startsWith("$")) {
     const facts = await scssFactsForFile(index, definition.file);
     if (scssNearerSpellingDropped || (facts && scssLocalSpellingGap(facts, definition))) {
       markNameEquivalenceGap(index, definition);
@@ -2231,7 +2252,7 @@ async function findReferencesInternal(
     if (await scssFlowLocalUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
     if (await scssBlockLocalExistenceUnproven(index, definition)) strategyUnavailableFiles.push(definition.file);
   }
-  if (parsedContext.sup.id === "python" && pythonPropertyAccessorNeedsPartialCoverage(parsedContext, definition)) {
+  if (accessRules?.classAttributeMembers && pythonPropertyAccessorNeedsPartialCoverage(parsedContext, definition)) {
     strategyUnavailableFiles.push(definition.file);
   }
   if (scssScopedCallableUnproven) strategyUnavailableFiles.push(definition.file);
@@ -2341,7 +2362,7 @@ function isExtensionDeclaration(
 /** A scope occurrence that is a bare Kotlin call under a lambda or extension body, which an implicit receiver may claim. */
 function isKotlinReceiverClaimableCall(parsedContext: ParsedFileContext, occurrence: Range): boolean {
   const start = occurrence.start.index;
-  if (parsedContext.sup.id !== "kotlin" || start === undefined) return false;
+  if (start === undefined) return false;
   return kotlinCalleeUnderImplicitReceiver(
     parsedContext.tree.rootNode.descendantForIndex(start, occurrence.end.index ?? start),
   );
@@ -2452,9 +2473,14 @@ function cIncludeLinkedModules(index: ProjectIndex, startFile: string): ModuleIn
 /**
  * C prototype and definition of one signature, joined only when one file includes
  * the other. Two translation units that merely share an unrelated header stay apart,
- * and `static` functions are not exports so they never join the family.
+ * and `static` functions are not exports so they never join the family. A linked file
+ * that parses as another language than the definition's (a C++ header) joins nothing.
  */
-async function cIncludeLinkedCallableEquivalents(index: ProjectIndex, def: SymbolDef): Promise<SymbolDef[]> {
+async function cIncludeLinkedCallableEquivalents(
+  index: ProjectIndex,
+  def: SymbolDef,
+  languageId: string,
+): Promise<SymbolDef[]> {
   if (def.kind !== SymbolKind.Function || def.cTag) return [];
   const expected = def.callable?.signature;
   if (!expected) return [];
@@ -2480,7 +2506,7 @@ async function cIncludeLinkedCallableEquivalents(index: ProjectIndex, def: Symbo
       rethrowStaleQuerySource(error);
       continue;
     }
-    if (candidateParsed.sup.id !== "c") continue;
+    if (candidateParsed.sup.id !== languageId) continue;
     for (const candidate of candidates) {
       if (sameDef(candidate, def, index.languageExtensions)) continue;
       if (candidate.callable?.signature !== expected) continue;
@@ -2563,7 +2589,7 @@ async function cppEquivalentCallableFamily(
       ...cppNamespaceFunctionEquivalentDefinitions(index, definition, context, definitionNameNode),
     ];
   } else if (callableLinkMode === "includes" && definition.kind === SymbolKind.Function && !definition.cTag) {
-    const linked = await cIncludeLinkedCallableEquivalents(index, definition);
+    const linked = await cIncludeLinkedCallableEquivalents(index, definition, context.sup.id);
     const seen = new Set(sameFileFunctionEquivalentDefinitions.map((item) => referenceSiteKey(item.file, item.range)));
     equivalents = [
       ...sameFileFunctionEquivalentDefinitions,
@@ -2678,8 +2704,11 @@ function shouldScanVerifiedReferences(
   def: SymbolDef,
   parsedContext: ParsedFileContext,
   receiverMemberDefinition: boolean,
+  referenceRules: ReferenceHooks,
 ): boolean {
-  if (parsedContext.sup.id === "php" && !isPhpCaseInsensitiveSymbolKind(def.kind)) {
+  // Where names also resolve namespace-wide, a member whose kind keeps its case is scanned through receivers only as
+  // a member variable.
+  if (referenceRules.globalNameStrategy && !isPhpCaseInsensitiveSymbolKind(def.kind)) {
     return def.kind === SymbolKind.Variable && receiverMemberDefinition;
   }
   return supportsReceiverMemberNavigation(parsedContext.sup.id) && receiverMemberDefinition;

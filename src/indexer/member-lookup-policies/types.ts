@@ -315,11 +315,18 @@ export type AccessTraversalRules = Readonly<{
   typeFileMembers?: true;
   /** Node types of a scoped name (`a.b.C`) whose scope and name fields read as a receiver chain. */
   scopedNameTypes?: Readonly<Record<string, true>>;
-  /** A receiver member resolves through the class hierarchy, where instance attributes and properties take part. */
+  /**
+   * A receiver member resolves through the class hierarchy, where instance attributes and properties take part. A
+   * receiver attribute assignment (`self.x = ...`) stands for the member goto proves, and a property's accessors keep
+   * its references partial.
+   */
   classAttributeMembers?: true;
   /** A property access of this node type inside a trait may name a property that a class using the trait declares. */
   traitPropertyAccessType?: string;
-  /** A scope-qualified member of this node type (`Owner::member`) resolves on the owner its qualifier names. */
+  /**
+   * A scope-qualified member of this node type (`Owner::member`) resolves on the owner its qualifier names. Goto at a
+   * name inside nested paths reads the outermost one, which resolves as a qualified name when its owner is no type.
+   */
   scopedMemberType?: string;
 }>;
 
@@ -337,7 +344,8 @@ export type ReceiverHooks = Readonly<{
   trailingLambdaCalls?: true;
   /**
    * `this` inside a lambda that may have a receiver, or labeled (`this@label`), can name that receiver rather than the
-   * enclosing type, which only the lambda-receiver lookup proves.
+   * enclosing type, which only the lambda-receiver lookup proves. A bare call inside such a lambda, or inside an
+   * extension body, may likewise name a member of the implicit receiver.
    */
   lambdaReceiverThis?: true;
   resolveAccess?: (context: ReceiverAccessContext) => Promise<GoToResult | null | undefined>;
@@ -402,7 +410,8 @@ export type OwnerHooks = Readonly<{
   scopedBaseNames?: true;
   /**
    * Declaration type of an owner composed into a class body (a trait): selection reads composed owners, to any depth,
-   * before the parent, and a supertype walk reads them only past its first, class-only level.
+   * before the parent, and a supertype walk reads them only past its first, class-only level. A composed owner that is
+   * not indexed may declare any member, so it keeps the references of a same-named member partial.
    */
   composedOwnerType?: string;
   /**
@@ -511,12 +520,14 @@ export type GraphHooks = Readonly<{
 export type MemberLookupPolicy = {
   /**
    * A class name resolves through the file's class-role `use` aliases and the namespace symbol table, never through the
-   * generic import, local, and named lookup.
+   * generic import, local, and named lookup. Goto prepares that table first, and a reference scan compares the
+   * definition's namespace-qualified names.
    */
   namespaceClassNames?: true;
   /**
-   * An import binds its name in one role (class, function, or constant): a use takes the role of the import that covers
-   * it, and an alias names a declaration of its own role only.
+   * Names live in roles (class, function, or constant): an import binds its name in one role, a use takes the role of
+   * its syntax or of the import that covers it, and an alias or scope binding names a declaration of its own role only.
+   * A namespace-qualified use resolves its path in that role.
    */
   roleQualifiedImports?: true;
   /** Member scopes are distinct for this language; absent means false. */
@@ -635,6 +646,11 @@ export type MemberLookupPolicy = {
   unprovenMembersRespectReceiverProof?: boolean;
   /** Whether an unplaced use's syntax can name the target at all, using the query's owned declaration token. */
   unprovenReferenceCandidate?(node: SyntaxNodeLike, definitionName: SyntaxNodeLike): boolean;
+  /**
+   * A function's name inside a struct field declaration names a function-pointer field, not the function, so a
+   * reference scan of a free function skips it.
+   */
+  functionPointerFields?: true;
   /** The enum case or static member a leading-dot use selects in the type `target` names (or in the type around a node). */
   contextualMember?(
     index: ProjectIndex,
@@ -773,6 +789,8 @@ export type ReceiverSyntaxRules = Readonly<{
       }>
     >
   >;
+  /** Node type of a bare `super`, which calls the enclosing method's implementation in a supertype. */
+  superCallType?: string;
   keywordConstruction?: (
     node: SyntaxNodeLike,
     source: string,

@@ -156,6 +156,8 @@ export type GraphParameterShapes = Readonly<{
 export interface CallableArityLanguageProfile {
   /** Binding used by resolved member calls; absent means bound. */
   readonly memberLookupBinding?: CallableBinding;
+  /** Callee node types whose call passes the receiver as an argument (an unbound call form); absent means none. */
+  readonly unboundCalleeTypes?: Readonly<Record<string, true>>;
   /** Detailed-graph parameter shapes; absent keeps generic declaration counting. */
   readonly graphDeclarationParameters?: GraphParameterShapes;
   /** Receiver-parameter recognition; see {@link CallableBinding} for how binding maps to slots. */
@@ -379,6 +381,8 @@ const rustProfile: CallableArityLanguageProfile = {
     firstParameterTypedPrefixes: ["self:"],
   },
   parameterNodeTypes: ["parameter", "self_parameter"],
+  // `Type::method(value)` names a method through its type, which passes the receiver as the first argument.
+  unboundCalleeTypes: { scoped_identifier: true },
 };
 
 /**

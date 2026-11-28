@@ -39,7 +39,7 @@ export type {
 const NO_POLICY: MemberLookupPolicy = {};
 
 export const MEMBER_LOOKUP_POLICIES: Readonly<Record<string, MemberLookupPolicy>> = {
-  c: { graph: graphRulesFor("c") },
+  c: { graph: graphRulesFor("c"), functionPointerFields: true },
   csharp: { ...csharpMemberLookupPolicy, graph: graphRulesFor("csharp") },
   cpp: {
     receiverResolution: {

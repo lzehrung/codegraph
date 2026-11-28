@@ -248,6 +248,16 @@ Do not put a new async `findReferencesInternal` wrapper around an async speciali
 
 Keep canonicalization before the reference plan, C# partial and Ruby reopened completeness, C includes and namespace spelling, Python package views and accessor uncertainty, PHP case folding and global names, bounded candidate collection, namespace proof, SCSS pruning, final sorting and all coverage reasons. An unavailable strategy must never become a complete answer; `null`, `undefined`, empty families, `not_found`, and partial coverage keep their original meanings.
 
+Slice 4 implements G2 and G11-G14 as facts of existing rows, read where the old code compared the language. No site needed a new exemption, and the inventory has no non-exempt records left:
+
+- `goToDefinitionInternal` selects the query's member policy once and reads `namespaceClassNames`, `roleQualifiedImports`, `lambdaReceiverThis`, `access.scopedMemberType`, the PHP `keywordConstruction` hook and a new `syntax.superCallType` (Ruby). `isUnresolvedReceiverMemberProperty` reads two new member-access row fields, `memberNameWrapperType` (Swift) and `unresolvedMemberMiss` (C).
+- Reference planning reads new reference-rule facts selected once per query or candidate search: `separateTagNamespace` (C), `packageSubmodules` (Python), `namespaceImportDirectories` and `globalImports` (C#), `structuralOverloadExports` (C++), `reopenedTypes` (Ruby) and `scopedStylesheetNames` (SCSS). `importCanReferenceDefinition` and `cppCanonicalStructuralExport` take the selected rules instead of a language id.
+- The definition's member policy, selected once (replacing up to four lookups), supplies `declarationsAreEquivalent`, `namespaceScopes`, `constantPaths`, `lambdaReceiverThis` and `classAttributeMembers`. A parsed candidate's access rules decide namespace-member proof (`positionedImports`, `namespaceScopes`), and the verified scan reads the candidate policy's `namespaceClassNames`, `roleQualifiedImports`, `traitPropertyAccessType` and a new `functionPointerFields` (C).
+- Java's Bloom marker and PHP's folded probe come from the support's `bloomSourceTokens` and `bloomAlternateKey`. The C include family compares a linked file's parsed language with the definition's.
+- Impact call binding reads the callsite's callable-arity profile: a new `unboundCalleeTypes` (Rust), the existing `memberLookupBinding` (C#) and `receiver.scopedFirstParameter` (Python).
+
+The final lint rule remains its own independently verified change, as planned below; until then the ratchet runs with an empty baseline.
+
 ## Breaking the `navigation-local.ts` registry cycle
 
 The current full name-policy registry imports `c-family.ts` and `implicit-self.ts`; both import `navigation-local.ts`. Therefore `navigation-local.ts -> name-lookup-policies/index.ts` would close a runtime cycle. It is not enough to move only a type or to import the existing reference registry and hope its transitive imports remain leaf-like.

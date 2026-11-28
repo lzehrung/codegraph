@@ -179,6 +179,36 @@ export type ReferenceHooks = Readonly<{
     functionType: string;
     containerTypes: Readonly<Record<string, true>>;
   }>;
+  /**
+   * Struct, union and enum tags are names apart from ordinary names: a definition is referenced only in its own
+   * namespace, and an export lookup in a namespace also walks the files the starting file includes.
+   */
+  separateTagNamespace?: true;
+  /**
+   * A package exposes its submodules as attributes: an unaliased dotted import also names each parent package, a named
+   * import from a package can bind a submodule, and an import of a package can reach a submodule's definitions through
+   * the dotted path.
+   */
+  packageSubmodules?: true;
+  /** A namespace import names the directories that hold the namespace's files, rather than one resolved file. */
+  namespaceImportDirectories?: true;
+  /** Project-wide (global) imports can name a definition from any file of the compilation, like a unit peer. */
+  globalImports?: true;
+  /**
+   * A same-named export that structurally reaches the definition makes an import a candidate even when export
+   * resolution names another overload; goto still proves each use.
+   */
+  structuralOverloadExports?: true;
+  /**
+   * A class body can reopen a type declared in another file: the references include every part, and stay partial
+   * while a part is unproven.
+   */
+  reopenedTypes?: true;
+  /**
+   * Mixins, functions and `$` variables can be scoped to a block: the stylesheet resolver decides which uses belong to
+   * such a name and when its coverage stays partial.
+   */
+  scopedStylesheetNames?: true;
   equivalentDefinitions?: (context: ReferencePlanContext) => Promise<readonly SymbolDef[] | undefined>;
   candidateFiles?: (context: ReferencePlanContext) => Promise<readonly FileId[] | undefined>;
   coverage?: (context: ReferencePlanContext, current: ReferenceCoverage) => ReferenceCoverage | undefined;

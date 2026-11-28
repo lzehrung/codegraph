@@ -11,6 +11,7 @@ import {
   pythonParentPackageNamespacePaths,
 } from "../../src/indexer/navigation-references.js";
 import { hasNamespaceReexport, resolveExport } from "../../src/indexer/navigation-resolve.js";
+import { referenceRulesFor } from "../../src/indexer/name-lookup-policies/reference-rules.js";
 import { candidateFilesImportingTarget } from "../../src/indexer/reference-candidates.js";
 import { sameDef } from "../../src/indexer/reference-context.js";
 import { withCsharpGlobalUsings } from "../../src/indexer/csharp-global-usings.js";
@@ -30,6 +31,7 @@ function exportingFilesByFullScan(
   languageId: string,
 ): string[] {
   const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
+  const rules = referenceRulesFor(languageId);
   const namespaceLinks: Array<{ sourceFile: string; exportedAs: string; targetFile: string }> = [];
   const mayLinkNamespaces = hasNamespaceReexport(index);
   for (const moduleIndex of index.byFile.values()) {
@@ -50,7 +52,7 @@ function exportingFilesByFullScan(
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
-      if (cppCanonicalStructuralExport(index, fileId, exportedName, def, languageId)) {
+      if (cppCanonicalStructuralExport(index, fileId, exportedName, def, rules)) {
         files.set(fileIdentityKey(fileId), fileId);
         break;
       }
@@ -93,6 +95,7 @@ export function referenceCandidatesByFullScan(
   languageId: string,
 ): string[] {
   const definitionKey = fileIdentityKey(def.file);
+  const rules = referenceRulesFor(languageId);
   const candidates = new Map<string, string>();
   if (def.isMember) candidates.set(definitionKey, def.file);
   for (const unitPeer of getCompilationUnitPeers(
@@ -137,7 +140,7 @@ export function referenceCandidatesByFullScan(
           ((imp.kind === "star" ||
             imp.kind === "namespace" ||
             (imp.kind === "named" && (imp.mechanism === "python" || isJsTsLanguage(languageId)))) &&
-            importCanReferenceDefinition(index, imp, def, exportedNames, languageId)),
+            importCanReferenceDefinition(index, imp, def, exportedNames, languageId, rules)),
       )
     ) {
       offered.set(fileIdentityKey(fileId), fileId);
@@ -153,7 +156,7 @@ export function referenceCandidatesByFullScan(
         if (typeof imp.resolved !== "string") return false;
         return (
           exportingFiles.has(fileIdentityKey(imp.resolved)) ||
-          importCanReferenceDefinition(index, imp, def, exportedNames, languageId)
+          importCanReferenceDefinition(index, imp, def, exportedNames, languageId, rules)
         );
       })
     ) {
