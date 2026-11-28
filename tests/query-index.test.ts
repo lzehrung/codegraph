@@ -26,7 +26,7 @@ import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import * as zlib from "node:zlib";
 
 vi.mock("node:zlib", { spy: true });
-import type { PreparedQueryIndexFile } from "../src/agent/query-index/content.js";
+import { packQueryTextChunks, type PreparedQueryIndexFile } from "../src/agent/query-index/content.js";
 import { findQueryIndexChunkCandidates } from "../src/agent/query-index/candidates.js";
 
 const roots: string[] = [];
@@ -195,8 +195,8 @@ describe("persistent query index", () => {
         try {
           return database
             .prepare(
-              `SELECT files.path, chunks.ordinal, chunks.kind, chunks.name, chunks.start_line,
-                    chunks.end_line, hex(chunks.text) AS text, chunks.normalized_text
+              `SELECT files.path, chunks.ordinal, chunks.kind, chunks.name, chunks.start_line, chunks.end_line,
+                    chunks.text_start, chunks.text_end, hex(files.chunk_text) AS chunk_text, chunks.normalized_text
              FROM chunks JOIN files USING (file_id) ORDER BY files.path, chunks.ordinal`,
             )
             .all();
@@ -254,8 +254,8 @@ describe("persistent query index", () => {
       .prepare(
         `
         SELECT
-          (SELECT sum(length(normalized_text)) FROM files) +
-          (SELECT sum(length(text) + length(normalized_text)) FROM chunks) AS bytes
+          (SELECT sum(length(normalized_text) + length(chunk_text)) FROM files) +
+          (SELECT sum(length(normalized_text)) FROM chunks) AS bytes
       `,
       )
       .get() as { bytes?: unknown } | undefined;
@@ -852,23 +852,11 @@ describe("persistent query index", () => {
 
     const migrated = new QueryIndexStore(databasePath);
     const migratedIdentityCount = migrated.sourceIdentities().size;
+    const rebuilt = migrated.rebuiltEarlierSchema;
     migrated.close();
     expect(migratedIdentityCount).toBe(0);
-
-    const inspected = new SqliteDatabase(databasePath, { readonly: true });
-    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-    const fileColumns = inspected.prepare("PRAGMA table_info(files)").all() as Array<{
-      name?: unknown;
-      type?: unknown;
-    }>;
-    const chunkColumns = inspected.prepare("PRAGMA table_info(chunks)").all() as Array<{
-      name?: unknown;
-      type?: unknown;
-    }>;
-    inspected.close();
-    expect(version?.user_version).toBe(4);
-    expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
-    expect(chunkColumns).toContainEqual(expect.objectContaining({ name: "text", type: "BLOB" }));
+    expect(rebuilt).toBe(true);
+    expectCurrentSchema(databasePath);
   });
 
   it("migrates v2 sidecars by rebuilding file eligibility data", async () => {
@@ -907,18 +895,30 @@ describe("persistent query index", () => {
 
     const migrated = new QueryIndexStore(databasePath);
     migrated.close();
-    const inspected = new SqliteDatabase(databasePath, { readonly: true });
-    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-    const fileColumns = inspected.prepare("PRAGMA table_info(files)").all() as Array<{
-      name?: unknown;
-      type?: unknown;
-    }>;
-    inspected.close();
-    expect(version?.user_version).toBe(4);
-    expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
+    expectCurrentSchema(databasePath);
   });
 
-  function compressQueryText(text: string): Uint8Array {
+  function expectCurrentSchema(databasePath: string): void {
+    const inspected = new SqliteDatabase(databasePath, { readonly: true });
+    try {
+      const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+      const columns = (table: string) =>
+        (inspected.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown; type?: unknown }>).map(
+          (column) => `${String(column.name)}:${String(column.type)}`,
+        );
+      expect(version?.user_version).toBe(5);
+      expect(columns("files")).toEqual(expect.arrayContaining(["normalized_text:BLOB", "chunk_text:BLOB"]));
+      expect(columns("chunks")).toEqual(
+        expect.arrayContaining(["text_start:INTEGER", "text_end:INTEGER", "normalized_text:TEXT"]),
+      );
+      expect(columns("chunks")).not.toContain("text:BLOB");
+      expect(inspected.prepare("SELECT count(*) AS count FROM metadata").get()).toEqual({ count: 0 });
+    } finally {
+      inspected.close();
+    }
+  }
+
+  function compressQueryText(text: string | Uint8Array): Uint8Array {
     return brotliCompressSync(text, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } });
   }
 
@@ -933,14 +933,16 @@ describe("persistent query index", () => {
       lineCount: fullText.split("\n").length,
       normalizedText: compressQueryText(fullText.toLowerCase()),
       sourceRead: true,
-      chunks: chunkTexts.map((text, ordinal) => ({
-        ordinal,
-        kind: "chunk",
-        text: compressQueryText(text),
-        normalizedText: text.toLowerCase(),
-        startLine: ordinal + 1,
-        endLine: ordinal + 1,
-      })),
+      ...packQueryTextChunks(
+        chunkTexts.map((text, ordinal) => ({
+          ordinal,
+          kind: "chunk",
+          text,
+          normalizedText: text.toLowerCase(),
+          startLine: ordinal + 1,
+          endLine: ordinal + 1,
+        })),
+      ),
     };
   }
 
@@ -1131,115 +1133,339 @@ describe("persistent query index", () => {
     }
   });
 
-  function createVersion3Sidecar(databasePath: string): void {
-    const v3 = new SqliteDatabase(databasePath);
-    v3.exec(`
-      CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-      CREATE TABLE files(
-        file_id INTEGER PRIMARY KEY,
-        path TEXT NOT NULL UNIQUE,
-        source_identity TEXT NOT NULL,
-        surface TEXT NOT NULL,
-        language TEXT,
-        normalized_text BLOB NOT NULL,
-        byte_length INTEGER NOT NULL,
-        line_count INTEGER NOT NULL
-      ) STRICT;
-      CREATE TABLE chunks(
-        chunk_id INTEGER PRIMARY KEY,
-        file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
-        ordinal INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        name TEXT,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        text BLOB NOT NULL,
-        normalized_text TEXT NOT NULL,
-        UNIQUE(file_id, ordinal)
-      ) STRICT;
-      CREATE INDEX chunks_file_id_idx ON chunks(file_id);
-      CREATE VIRTUAL TABLE chunk_search USING fts5(
-        normalized_text, content='chunks', content_rowid='chunk_id', tokenize='trigram'
+  /** Rewrites a current sidecar in the layout of schema version 3 or 4, which compressed each chunk's text alone. */
+  function rewriteAsLegacySidecar(databasePath: string, version: 3 | 4): void {
+    const db = new SqliteDatabase(databasePath);
+    try {
+      const files = db
+        .prepare(
+          `SELECT file_id, path, source_identity, surface, language, normalized_text, chunk_text, byte_length, line_count
+           FROM files ORDER BY file_id`,
+        )
+        .all() as Array<{
+        file_id: number;
+        path: string;
+        source_identity: string;
+        surface: string;
+        language: string | null;
+        normalized_text: Uint8Array;
+        chunk_text: Uint8Array;
+        byte_length: number;
+        line_count: number;
+      }>;
+      const chunks = db
+        .prepare(
+          `SELECT file_id, ordinal, kind, name, start_line, end_line, text_start, text_end, normalized_text
+           FROM chunks ORDER BY file_id, ordinal`,
+        )
+        .all() as Array<{
+        file_id: number;
+        ordinal: number;
+        kind: string;
+        name: string | null;
+        start_line: number;
+        end_line: number;
+        text_start: number;
+        text_end: number;
+        normalized_text: string;
+      }>;
+      db.exec(`
+        DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au;
+        DROP TABLE chunk_search; DROP TABLE chunk_compact_search; DROP TABLE chunks; DROP TABLE files;
+        CREATE TABLE files(
+          file_id INTEGER PRIMARY KEY,
+          path TEXT NOT NULL UNIQUE,
+          source_identity TEXT NOT NULL,
+          surface TEXT NOT NULL,
+          language TEXT,
+          normalized_text BLOB NOT NULL,
+          byte_length INTEGER NOT NULL,
+          line_count INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE chunks(
+          chunk_id INTEGER PRIMARY KEY,
+          file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          name TEXT,
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          text BLOB NOT NULL,
+          normalized_text TEXT NOT NULL,
+          UNIQUE(file_id, ordinal)
+        ) STRICT;
+        CREATE INDEX chunks_file_id_idx ON chunks(file_id);
+        CREATE VIRTUAL TABLE chunk_search USING fts5(
+          normalized_text, content='chunks', content_rowid='chunk_id', tokenize='trigram'
+        );
+        CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+          INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
+        END;
+      `);
+      const insertFile = db.prepare(
+        `INSERT INTO files(file_id, path, source_identity, surface, language, normalized_text, byte_length, line_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
-        INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
-      END;
-      CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
-        INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
-        VALUES ('delete', old.chunk_id, old.normalized_text);
-      END;
-      CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
-        INSERT INTO chunk_search(chunk_search, rowid, normalized_text)
-        VALUES ('delete', old.chunk_id, old.normalized_text);
-        INSERT INTO chunk_search(rowid, normalized_text) VALUES (new.chunk_id, new.normalized_text);
-      END;
-      INSERT INTO metadata(key, value) VALUES ('schemaVersion', '3'), ('projectSnapshotIdentity', 'old-snapshot');
-    `);
-    v3.prepare(
-      "INSERT INTO files(path, source_identity, surface, language, normalized_text, byte_length, line_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run("src/old.ts", "old", "code", "typescript", compressQueryText("get user data\ngetuser 1"), 24, 2);
-    const insertChunk = v3.prepare(
-      "INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    insertChunk.run(1, 0, "source", null, 1, 1, compressQueryText("get user data"), "get user data");
-    insertChunk.run(1, 1, "source", null, 2, 2, compressQueryText("getuser 1"), "getuser 1");
-    v3.exec("PRAGMA user_version = 3;");
-    v3.close();
+      const blocks = new Map<number, Buffer>();
+      for (const file of files) {
+        insertFile.run(
+          file.file_id,
+          file.path,
+          file.source_identity,
+          file.surface,
+          file.language,
+          file.normalized_text,
+          file.byte_length,
+          file.line_count,
+        );
+        blocks.set(file.file_id, zlib.brotliDecompressSync(file.chunk_text));
+      }
+      const insertChunk = db.prepare(
+        `INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const chunk of chunks) {
+        const text = blocks.get(chunk.file_id)!.subarray(chunk.text_start, chunk.text_end);
+        insertChunk.run(
+          chunk.file_id,
+          chunk.ordinal,
+          chunk.kind,
+          chunk.name,
+          chunk.start_line,
+          chunk.end_line,
+          compressQueryText(text),
+          chunk.normalized_text,
+        );
+      }
+      if (version === 4) {
+        db.exec(`
+          CREATE VIRTUAL TABLE chunk_compact_search USING fts5(
+            compact_text, content='', contentless_delete=1, tokenize='trigram case_sensitive 1'
+          );
+          INSERT INTO chunk_compact_search(rowid, compact_text) SELECT chunk_id, replace(normalized_text, ' ', '') FROM chunks;
+        `);
+      }
+      db.prepare("UPDATE metadata SET value = ? WHERE key = 'schemaVersion'").run(String(version));
+      db.exec(`PRAGMA user_version = ${version};`);
+    } finally {
+      db.close();
+    }
   }
 
-  it("backfills the compact-text index of a version 3 sidecar and keeps its rows", async () => {
+  it.each([3, 4] as const)("drops a version %i sidecar's per-chunk text instead of reading it", async (version) => {
     const root = await createRepo();
-    const databasePath = path.join(root, "query-v3.sqlite");
-    createVersion3Sidecar(databasePath);
+    const databasePath = path.join(root, `query-v${version}.sqlite`);
+    const store = new QueryIndexStore(databasePath);
+    store.replaceFiles([preparedFile("src/old.ts", ["get user data", "getuser 1"])], [], COMPACT_METADATA("legacy"));
+    store.close();
+    rewriteAsLegacySidecar(databasePath, version);
 
-    const migrated = new QueryIndexStore(databasePath);
+    const reopened = new QueryIndexStore(databasePath);
     try {
-      expect([...migrated.sourceIdentities()]).toEqual([["src/old.ts", "old"]]);
-      expect(migrated.metadata().schemaVersion).toBe(expectedQueryIndexVersionMetadata().schemaVersion);
-      // The pre-existing chunk that holds the run across a space is found through the backfilled index.
-      const retrieval = migrated.candidateChunkRetrievalForTerms(["getuser"], ["src/old.ts"], "getuser");
-      expect(chunkKeys(retrieval.chunks)).toEqual(["src/old.ts#0", "src/old.ts#1"]);
-
-      // Rows written and removed after the upgrade keep the compact index in step through the triggers.
-      migrated.replaceFiles(
-        [preparedFile("src/new.ts", ["xyzzy plugh", "zzyp 2"])],
-        ["src/old.ts"],
-        COMPACT_METADATA("after-migration"),
-      );
-      const added = migrated.candidateChunkRetrievalForTerms(["zzyp"], ["src/new.ts"], "zzyp");
-      expect(chunkKeys(added.chunks)).toEqual(["src/new.ts#0", "src/new.ts#1"]);
-      const removed = migrated.candidateChunkRetrievalForTerms(["getuser"], ["src/old.ts", "src/new.ts"], "getuser");
-      expect(removed.chunks).toEqual([]);
+      expect(reopened.rebuiltEarlierSchema).toBe(true);
+      expect(reopened.sourceIdentities().size).toBe(0);
+      expect(reopened.metadata()).toEqual({});
+      expect(reopened.candidateChunkRetrievalForTerms(["getuser"], ["src/old.ts"], "getuser").chunks).toEqual([]);
     } finally {
-      migrated.close();
+      reopened.close();
     }
+    expectCurrentSchema(databasePath);
 
-    const inspected = new SqliteDatabase(databasePath, { readonly: true });
-    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-    const compactRows = inspected.prepare("SELECT count(*) AS count FROM chunk_compact_search_docsize").get() as
-      | { count?: unknown }
-      | undefined;
-    inspected.close();
-    expect(version?.user_version).toBe(4);
-    expect(compactRows?.count).toBe(2);
+    // A later opener finds the finished rebuild, and rows written after it stay readable.
+    const later = new QueryIndexStore(databasePath);
+    try {
+      expect(later.rebuiltEarlierSchema).toBe(false);
+      later.replaceFiles([preparedFile("src/new.ts", ["xyzzy plugh", "zzyp 2"])], [], COMPACT_METADATA("rebuilt"));
+      const added = later.candidateChunkRetrievalForTerms(["zzyp"], ["src/new.ts"], "zzyp");
+      expect(chunkKeys(added.chunks)).toEqual(["src/new.ts#0", "src/new.ts#1"]);
+      expect(later.chunkTexts(added.chunks)).toEqual(["xyzzy plugh", "zzyp 2"]);
+    } finally {
+      later.close();
+    }
   });
 
-  it("rejects a version 3 sidecar that lost a table instead of backfilling an empty index", async () => {
+  it("rebuilds a version 4 sidecar that lost a table instead of reading what is left", async () => {
     const root = await createRepo();
-    const databasePath = path.join(root, "query-v3-broken.sqlite");
-    createVersion3Sidecar(databasePath);
+    const databasePath = path.join(root, "query-v4-broken.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    store.replaceFiles([preparedFile("src/old.ts", ["get user data"])], [], COMPACT_METADATA("legacy-broken"));
+    store.close();
+    rewriteAsLegacySidecar(databasePath, 4);
     const broken = new SqliteDatabase(databasePath);
-    broken.exec("DROP TRIGGER chunks_ai; DROP TRIGGER chunks_ad; DROP TRIGGER chunks_au; DROP TABLE chunk_search;");
+    broken.exec("DROP TRIGGER chunks_ai; DROP TABLE chunk_search;");
     broken.close();
 
-    expect(() => new QueryIndexStore(databasePath)).toThrow(/missing: chunk_search/);
-    const inspected = new SqliteDatabase(databasePath, { readonly: true });
-    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-    inspected.close();
-    expect(version?.user_version).toBe(3);
+    const reopened = new QueryIndexStore(databasePath);
+    const rebuilt = reopened.rebuiltEarlierSchema;
+    const identities = reopened.sourceIdentities().size;
+    reopened.close();
+    expect(rebuilt).toBe(true);
+    expect(identities).toBe(0);
+    expectCurrentSchema(databasePath);
   });
 
-  it("hydrates a duplicate multi-term chunk once without changing candidate ranking", async () => {
+  it("rebuilds a previous-format sidecar from source on the first search and answers like a cold build", async () => {
+    const root = await createRepo();
+    const initialSession = createSession(root);
+    await search(initialSession, root, "validateUser");
+    const sidecar = resolveQueryIndexPaths((await initialSession.loadProject()).index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(initialSession);
+    // Its metadata and source identities still match the project, so only the schema version tells the layouts apart.
+    rewriteAsLegacySidecar(sidecar, 4);
+
+    const coldCacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "cg-query-cold-"));
+    roots.push(coldCacheDir);
+    const coldSession = createAgentSession({ root, buildOptions: { cache: "disk", cacheDir: coldCacheDir } });
+    sessions.push(coldSession);
+    const upgradedSession = createSession(root);
+    const oracleSession = createSession(root, "off");
+    const cases = [
+      { query: "validate user", mode: "text" as const },
+      { query: "validateUser", mode: "hybrid" as const },
+      { query: "va", mode: "text" as const },
+      { query: "security guide", mode: "hybrid" as const },
+    ];
+    let snippets = 0;
+    for (const testCase of cases) {
+      const upgraded = await search(upgradedSession, root, testCase.query, testCase.mode);
+      const cold = await search(coldSession, root, testCase.query, testCase.mode);
+      const oracle = await search(oracleSession, root, testCase.query, testCase.mode);
+      expect(comparable(upgraded), testCase.query).toEqual(comparable(cold));
+      expect(comparable(upgraded), testCase.query).toEqual(comparable(oracle));
+      snippets += upgraded.results.flatMap((result) => result.evidence).filter((evidence) => evidence.snippet).length;
+    }
+    expect(snippets).toBeGreaterThan(0);
+    expect((await upgradedSession.loadProject()).buildReport?.queryIndex).toMatchObject({
+      sidecarState: "rebuilt",
+      filesRead: 4,
+    });
+    expect((await coldSession.loadProject()).buildReport?.queryIndex).toMatchObject({
+      sidecarState: "created",
+      filesRead: 4,
+    });
+  });
+
+  it("reads each chunk's text back from its file's block in the order asked, and refuses missing or broken ranges", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-chunk-text.sqlite");
+    const texts = ["", "日本 café", "emoji 😀 done", "lone \ud800 surrogate", "plain ascii"];
+    const store = new QueryIndexStore(databasePath);
+    try {
+      store.replaceFiles(
+        [preparedFile("src/text.ts", texts), preparedFile("src/other.ts", ["other text"])],
+        [],
+        COMPACT_METADATA("chunk-text"),
+      );
+      const wanted = [
+        { path: "src/other.ts", ordinal: 0 },
+        ...texts.map((_, ordinal) => ({ path: "src/text.ts", ordinal })).reverse(),
+        { path: "src/text.ts", ordinal: 1 },
+      ];
+      // Decoding a text compressed on its own reads a lone surrogate back as U+FFFD too.
+      const expected = wanted.map((chunk) =>
+        chunk.path === "src/other.ts" ? "other text" : Buffer.from(texts[chunk.ordinal]!, "utf8").toString("utf8"),
+      );
+      expect(store.chunkTexts(wanted)).toEqual(expected);
+      expect(store.chunkTexts([])).toEqual([]);
+      expect(() => store.chunkTexts([{ path: "src/text.ts", ordinal: texts.length }])).toThrow("missing");
+      expect(() => store.chunkTexts([{ path: "src/absent.ts", ordinal: 0 }])).toThrow("missing");
+    } finally {
+      store.close();
+    }
+
+    const broken = new SqliteDatabase(databasePath);
+    broken
+      .prepare(
+        "UPDATE chunks SET text_end = 1000000 WHERE ordinal = 2 AND file_id = (SELECT file_id FROM files WHERE path = ?)",
+      )
+      .run("src/text.ts");
+    broken.close();
+    const reopened = new QueryIndexStore(databasePath);
+    try {
+      expect(() => reopened.chunkTexts([{ path: "src/text.ts", ordinal: 2 }])).toThrow("outside");
+      expect(reopened.chunkTexts([{ path: "src/text.ts", ordinal: 1 }])).toEqual(["日本 café"]);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("reads chunk text only for the results a search returns, and none without snippets", async () => {
+    const root = await createRepo();
+    // A one-line class and its method are two chunks that start on one line, so every candidate becomes a result
+    // before the best `limit` of them are chosen.
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        fs.writeFile(
+          path.join(root, "src", `mod${index}.ts`),
+          `export class AlphaSession${index} { run() { return "alpha session ${index}"; } }\n`,
+        ),
+      ),
+    );
+    const session = createSession(root);
+    const oracleSession = createSession(root, "off");
+    await search(session, root, "alpha");
+    const chunkTexts = vi.spyOn(QueryIndexStore.prototype, "chunkTexts");
+    const decompress = vi.mocked(zlib.brotliDecompressSync);
+    for (const limit of [1, 3]) {
+      chunkTexts.mockClear();
+      decompress.mockClear();
+      const request = { root, query: "alpha session", mode: "text" as const, limit };
+      const indexed = await searchCodegraphWithSession(session, request);
+      const label = `limit ${limit}`;
+      expect(comparable(indexed), label).toEqual(comparable(await searchCodegraphWithSession(oracleSession, request)));
+      expect(chunkTexts, label).toHaveBeenCalledTimes(1);
+      const read = chunkTexts.mock.calls[0]![0];
+      const returned = indexed.results.flatMap((result) =>
+        result.evidence.filter((evidence) => evidence.source === "chunk"),
+      );
+      expect(returned.length, label).toBe(limit);
+      expect(
+        returned.every((evidence) => evidence.snippet),
+        label,
+      ).toBe(true);
+      expect(read.map((chunk) => chunk.path).sort(), label).toEqual(returned.map((evidence) => evidence.file).sort());
+      expect(indexed.candidateCounts.indexedTextChunks, label).toBeGreaterThan(read.length);
+      // One decompression per file whose chunks are read; ranking decompresses nothing.
+      expect(decompress, label).toHaveBeenCalledTimes(new Set(read.map((chunk) => chunk.path)).size);
+    }
+
+    chunkTexts.mockClear();
+    const request = { root, query: "alpha session", mode: "text" as const, limit: 3, includeSnippets: false };
+    const withoutSnippets = await searchCodegraphWithSession(session, request);
+    expect(chunkTexts).not.toHaveBeenCalled();
+    expect(withoutSnippets.results.flatMap((result) => result.evidence).some((evidence) => "snippet" in evidence)).toBe(
+      false,
+    );
+    expect(comparable(withoutSnippets)).toEqual(comparable(await searchCodegraphWithSession(oracleSession, request)));
+  });
+
+  it("fills the snippets of a graph-neighborhood search, whose final order differs from the text order", async () => {
+    const root = await createRepo();
+    // The `aaa` chunks lead the text order, and the graph neighborhood of `src/uses.ts` lifts the chunks of that file
+    // and of `src/auth.ts`, which it imports, above them.
+    await Promise.all([
+      ...Array.from({ length: 4 }, (_, index) =>
+        fs.writeFile(path.join(root, "src", `a${index}.ts`), `export const aaa${index} = 'alpha session';\n`),
+      ),
+      fs.writeFile(
+        path.join(root, "src", "uses.ts"),
+        "import { validateUser } from './auth';\nexport const checked = validateUser('alpha session');\n",
+      ),
+    ]);
+    const indexedSession = createSession(root);
+    const oracleSession = createSession(root, "off");
+    const request = { root, query: "alpha session", mode: "hybrid" as const, limit: 2, from: "src/uses.ts" };
+    const indexed = await searchCodegraphWithSession(indexedSession, request);
+    expect((await indexedSession.loadProject()).buildReport?.queryIndex?.sidecarState).toBe("created");
+    expect(comparable(indexed)).toEqual(comparable(await searchCodegraphWithSession(oracleSession, request)));
+    const chunkEvidence = indexed.results.flatMap((result) =>
+      result.evidence.filter((evidence) => evidence.source === "chunk"),
+    );
+    expect(chunkEvidence.map((evidence) => evidence.file)).toContain("src/uses.ts");
+    expect(chunkEvidence.every((evidence) => evidence.snippet)).toBe(true);
+  });
+
+  it("finds a duplicate multi-term chunk once without decompressing any chunk text", async () => {
     const root = await createRepo();
     const databasePath = path.join(root, "query-decompression.sqlite");
     const store = new QueryIndexStore(databasePath);
@@ -1257,6 +1483,9 @@ describe("persistent query index", () => {
       expect(candidateResult.candidates.map((candidate) => `${candidate.path}:${candidate.ordinal}`)).toEqual([
         "src/match.ts:0",
       ]);
+      // Ranking reads normalized text only; chunk text is decoded for returned results alone.
+      expect(decompressSpy).not.toHaveBeenCalled();
+      expect(store.chunkTexts(candidateResult.candidates)).toEqual(["const alphaValue = betaValue;"]);
       expect(decompressSpy).toHaveBeenCalledTimes(1);
     } finally {
       store.close();
@@ -2140,8 +2369,9 @@ describe("persistent query index", () => {
     await search(session, root, "filler", "text");
     const { result, fileRows } = await countFileRows(() => search(session, root, "zebra", "text"));
     expect(result.results.map((entry) => entry.file)).toContain("src/rare.ts");
-    // One row for the path of the matching file, where a read of the whole table takes every stored file.
-    expect(fileRows).toBe(1);
+    // One row for the path of the matching file and one for the chunk text of its snippet, where a read of the whole
+    // table takes every stored file.
+    expect(fileRows).toBe(2);
   });
 
   it("reads only the eligible files for a term the trigram index cannot answer", async () => {

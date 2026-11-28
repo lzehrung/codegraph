@@ -1,7 +1,7 @@
 import { SqliteDatabase } from "../../sqlite-driver.js";
 import { QUERY_INDEX_CHUNKER_VERSION, QUERY_INDEX_NORMALIZER_VERSION } from "./content.js";
 
-export const QUERY_INDEX_SCHEMA_VERSION = 4;
+export const QUERY_INDEX_SCHEMA_VERSION = 5;
 
 export type QueryIndexMetadata = {
   schemaVersion: string;
@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS files (
   surface TEXT NOT NULL,
   language TEXT,
   normalized_text BLOB NOT NULL,
+  chunk_text BLOB NOT NULL,
   byte_length INTEGER NOT NULL,
   line_count INTEGER NOT NULL
 ) STRICT;
 
+-- A chunk's text is the UTF-8 byte range [text_start, text_end) of its file's decompressed chunk_text.
 CREATE TABLE IF NOT EXISTS chunks (
   chunk_id INTEGER PRIMARY KEY,
   file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS chunks (
   name TEXT,
   start_line INTEGER NOT NULL,
   end_line INTEGER NOT NULL,
-  text BLOB NOT NULL,
+  text_start INTEGER NOT NULL,
+  text_end INTEGER NOT NULL,
   normalized_text TEXT NOT NULL,
   UNIQUE(file_id, ordinal)
 ) STRICT;
@@ -99,8 +102,8 @@ END;
 `;
 
 const REQUIRED_TABLES = ["metadata", "files", "chunks", "chunk_search", "chunk_compact_search"];
-/** The tables a version 3 sidecar holds; version 4 adds the compact-text index. */
-const VERSION_3_TABLES = ["metadata", "files", "chunks", "chunk_search"];
+const DERIVED_TRIGGERS = ["files_ai", "files_ad", "files_au", "chunks_ai", "chunks_ad", "chunks_au"];
+const DERIVED_TABLES = ["file_search", "chunk_search", "chunk_compact_search", "chunks", "files"];
 
 function numericValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
@@ -118,46 +121,27 @@ function existingQueryTables(db: SqliteDatabase): Set<string> {
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
-function rebuildDerivedQueryIndexSchema(db: SqliteDatabase): void {
-  db.transaction(() => {
-    db.exec("DROP TRIGGER IF EXISTS files_ai;");
-    db.exec("DROP TRIGGER IF EXISTS files_ad;");
-    db.exec("DROP TRIGGER IF EXISTS files_au;");
-    db.exec("DROP TRIGGER IF EXISTS chunks_ai;");
-    db.exec("DROP TRIGGER IF EXISTS chunks_ad;");
-    db.exec("DROP TRIGGER IF EXISTS chunks_au;");
-    db.exec("DROP TABLE IF EXISTS file_search;");
-    db.exec("DROP TABLE IF EXISTS chunk_search;");
-    db.exec("DROP TABLE IF EXISTS chunks;");
-    db.exec("DROP TABLE IF EXISTS files;");
-    db.exec(QUERY_INDEX_SCHEMA_SQL);
-    db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
-  })();
-}
-
 /**
- * Version 3 sidecars hold every chunk's normalized text already, so the compact-text index is derived from them
- * rather than rebuilt from source. The write lock is taken first so a second opener sees the finished migration.
+ * An earlier schema's rows are never read as current rows: versions 1 and 2 lack derived columns, and versions 3 and 4
+ * compress each chunk's text on its own where version 5 keeps one block per file. Their tables are dropped with the
+ * metadata, so the next update prepares every file again and no reader matches its snapshot identity against the
+ * emptied tables. The write lock is taken first so a second opener sees the finished rebuild instead of repeating it.
+ * Returns whether this call dropped earlier rows.
  */
-function backfillCompactSearch(db: SqliteDatabase): void {
+function rebuildDerivedQueryIndexSchema(db: SqliteDatabase): boolean {
   db.exec("BEGIN IMMEDIATE;");
   try {
-    if (readQueryIndexSchemaVersion(db) === 3) {
-      const existing = existingQueryTables(db);
-      const missing = VERSION_3_TABLES.filter((table) => !existing.has(table));
-      if (missing.length) throw new QueryIndexSchemaError(`Query index schema is missing: ${missing.join(", ")}.`);
-      db.exec("DROP TRIGGER IF EXISTS chunks_ai;");
-      db.exec("DROP TRIGGER IF EXISTS chunks_ad;");
-      db.exec("DROP TRIGGER IF EXISTS chunks_au;");
+    const version = readQueryIndexSchemaVersion(db);
+    const rebuilt = version > 0 && version < QUERY_INDEX_SCHEMA_VERSION;
+    if (rebuilt) {
+      for (const trigger of DERIVED_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${trigger};`);
+      for (const table of DERIVED_TABLES) db.exec(`DROP TABLE IF EXISTS ${table};`);
       db.exec(QUERY_INDEX_SCHEMA_SQL);
-      db.exec(
-        "INSERT INTO chunk_compact_search(rowid, compact_text) SELECT chunk_id, replace(normalized_text, ' ', '') FROM chunks;",
-      );
-      // The rows now match the current schema, so the sidecar keeps its content instead of being rebuilt from source.
-      db.exec("UPDATE metadata SET value = '4' WHERE key = 'schemaVersion';");
+      db.exec("DELETE FROM metadata;");
       db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
     }
     db.exec("COMMIT;");
+    return rebuilt;
   } catch (error) {
     try {
       db.exec("ROLLBACK;");
@@ -168,7 +152,8 @@ function backfillCompactSearch(db: SqliteDatabase): void {
   }
 }
 
-export function ensureQueryIndexSchema(db: SqliteDatabase): void {
+/** Opens the sidecar schema, creating it or rebuilding an earlier version's; returns whether earlier rows were dropped. */
+export function ensureQueryIndexSchema(db: SqliteDatabase): boolean {
   const version = readQueryIndexSchemaVersion(db);
   if (version > QUERY_INDEX_SCHEMA_VERSION) throw new QueryIndexFutureSchemaError(version);
   if (!version) {
@@ -181,19 +166,14 @@ export function ensureQueryIndexSchema(db: SqliteDatabase): void {
     db.pragma("auto_vacuum = INCREMENTAL");
     db.exec(QUERY_INDEX_SCHEMA_SQL);
     db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
-    return;
+    return false;
   }
-  if (version === 1 || version === 2) {
-    rebuildDerivedQueryIndexSchema(db);
-  } else if (version === 3) {
-    backfillCompactSearch(db);
-  } else if (version < QUERY_INDEX_SCHEMA_VERSION) {
-    throw new QueryIndexSchemaError(`Query index schema version ${version} has no supported migration.`);
-  }
+  const rebuilt = version < QUERY_INDEX_SCHEMA_VERSION && rebuildDerivedQueryIndexSchema(db);
   const existing = existingQueryTables(db);
   const missing = REQUIRED_TABLES.filter((table) => !existing.has(table));
   if (missing.length) throw new QueryIndexSchemaError(`Query index schema is missing: ${missing.join(", ")}.`);
   db.pragma("foreign_keys = ON");
+  return rebuilt;
 }
 
 export function readQueryIndexMetadata(db: SqliteDatabase): Partial<QueryIndexMetadata> {

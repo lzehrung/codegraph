@@ -58,7 +58,8 @@ function normalizedCandidateLimit(limit: number, fallback = QUERY_INDEX_CANDIDAT
   return Math.max(0, Math.min(Math.trunc(limit), QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT));
 }
 
-export type StoredQueryIndexChunk = QueryTextChunk & {
+/** A stored chunk without its text, which `chunkTexts` reads only for the chunks that need it. */
+export type StoredQueryIndexChunk = Omit<QueryTextChunk, "text"> & {
   path: string;
 };
 
@@ -109,19 +110,13 @@ function numericId(value: number | bigint): number {
   return numeric;
 }
 
-function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
-  const ordinal = row.ordinal;
-  const kind = row.kind;
-  const name = row.name;
-  const text = row.text;
-  const normalizedText = row.normalized_text;
-  const startLine = row.start_line;
-  const endLine = row.end_line;
+function storedChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
+  const { path, ordinal, kind, name, normalized_text: normalizedText, start_line: startLine, end_line: endLine } = row;
   if (
+    typeof path !== "string" ||
     typeof ordinal !== "number" ||
     typeof kind !== "string" ||
     (name !== null && typeof name !== "string") ||
-    typeof text !== "string" ||
     typeof normalizedText !== "string" ||
     typeof startLine !== "number" ||
     typeof endLine !== "number"
@@ -132,22 +127,11 @@ function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
     ordinal,
     kind,
     ...(typeof name === "string" ? { name } : {}),
-    text,
     normalizedText,
     startLine,
     endLine,
+    path,
   };
-}
-
-function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
-  if (typeof row.path !== "string" || !(row.text instanceof Uint8Array)) return null;
-  try {
-    const text = brotliDecompressSync(row.text).toString("utf8");
-    const chunk = chunkFromRow({ ...row, text });
-    return chunk ? { ...chunk, path: row.path } : null;
-  } catch {
-    return null;
-  }
 }
 
 const MAX_NORMALIZED_FILES_CACHE_ENTRIES = 2_048;
@@ -158,6 +142,8 @@ export class QueryIndexStore {
   private closed = false;
   private normalizedFiles: Map<string, string> | undefined;
   private normalizedFilesMetadataKey: string | undefined;
+  /** Whether opening dropped the rows of an earlier schema version, which the next update prepares again. */
+  readonly rebuiltEarlierSchema: boolean;
 
   /** Whether `close()` has run. Lets callers check lifecycle without touching internals. */
   get isClosed(): boolean {
@@ -168,7 +154,7 @@ export class QueryIndexStore {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
     this.db = db;
     try {
-      ensureQueryIndexSchema(db);
+      this.rebuiltEarlierSchema = ensureQueryIndexSchema(db);
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
@@ -337,12 +323,12 @@ export class QueryIndexStore {
       for (const file of files) deleteFile.run(file.path);
 
       const insertFile = this.db.prepare(`
-        INSERT INTO files(path, source_identity, surface, language, normalized_text, byte_length, line_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO files(path, source_identity, surface, language, normalized_text, chunk_text, byte_length, line_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertChunk = this.db.prepare(`
-        INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text_start, text_end, normalized_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const file of files) {
         const inserted = insertFile.run(
@@ -351,6 +337,7 @@ export class QueryIndexStore {
           file.surface,
           file.language ?? null,
           file.normalizedText,
+          file.chunkText,
           file.byteLength,
           file.lineCount,
         );
@@ -363,7 +350,8 @@ export class QueryIndexStore {
             chunk.name ?? null,
             chunk.startLine,
             chunk.endLine,
-            chunk.text,
+            chunk.textStart,
+            chunk.textEnd,
             chunk.normalizedText,
           );
         }
@@ -434,7 +422,7 @@ export class QueryIndexStore {
     }
   }
 
-  /** The stored rows of the given chunks, by chunk id. */
+  /** The stored rows of the given chunks without their text, by chunk id. */
   private chunkRowsById(chunkIds: readonly number[]): Map<number, Record<string, unknown>> {
     const rowsById = new Map<number, Record<string, unknown>>();
     if (!chunkIds.length) return rowsById;
@@ -442,7 +430,7 @@ export class QueryIndexStore {
       .prepare(
         `
         SELECT chunks.chunk_id AS chunk_id, files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+               chunks.start_line, chunks.end_line, chunks.normalized_text
         FROM chunks
         JOIN files ON files.file_id = chunks.file_id
         WHERE chunks.chunk_id IN (SELECT value FROM json_each(?))
@@ -453,6 +441,55 @@ export class QueryIndexStore {
       if (typeof row.chunk_id === "number") rowsById.set(row.chunk_id, row);
     }
     return rowsById;
+  }
+
+  /**
+   * The text of each given chunk, in the order given, decoded from its file's chunk text with one decompression per
+   * file. Read it in the read snapshot its chunks came from. Throws when a chunk or its text is not stored, so no chunk
+   * is ever paired with other text.
+   */
+  chunkTexts(chunks: readonly Pick<StoredQueryIndexChunk, "path" | "ordinal">[]): string[] {
+    if (!chunks.length) return [];
+    const ranges = this.db
+      .prepare(
+        `
+        SELECT wanted.key AS position, chunks.file_id AS file_id, chunks.text_start AS text_start,
+               chunks.text_end AS text_end
+        FROM json_each(?) AS wanted
+        JOIN files ON files.path = json_extract(wanted.value, '$[0]')
+        JOIN chunks ON chunks.file_id = files.file_id AND chunks.ordinal = json_extract(wanted.value, '$[1]')
+      `,
+      )
+      .all(JSON.stringify(chunks.map((chunk) => [chunk.path, chunk.ordinal]))) as Array<Record<string, unknown>>;
+    const fileIds = new Set<number>();
+    for (const row of ranges) {
+      if (typeof row.file_id === "number") fileIds.add(row.file_id);
+    }
+    const blocks = new Map<number, Buffer>();
+    const blockRows = this.db
+      .prepare("SELECT file_id, chunk_text FROM files WHERE file_id IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify([...fileIds])) as Array<Record<string, unknown>>;
+    for (const row of blockRows) {
+      if (typeof row.file_id === "number" && row.chunk_text instanceof Uint8Array) {
+        blocks.set(row.file_id, brotliDecompressSync(row.chunk_text));
+      }
+    }
+    const texts = new Array<string | undefined>(chunks.length).fill(undefined);
+    for (const row of ranges) {
+      const { position, file_id: fileId, text_start: start, text_end: end } = row;
+      const block = typeof fileId === "number" ? blocks.get(fileId) : undefined;
+      if (typeof position !== "number" || !block || typeof start !== "number" || typeof end !== "number") {
+        throw new Error("Query index chunk text is missing.");
+      }
+      const rangeInBlock =
+        Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && start <= end && end <= block.length;
+      if (!rangeInBlock) throw new Error("Query index chunk text range is outside its file's chunk text.");
+      texts[position] = block.toString("utf8", start, end);
+    }
+    return texts.map((text) => {
+      if (text === undefined) throw new Error("Query index chunk text is missing.");
+      return text;
+    });
   }
 
   /**
@@ -621,7 +658,7 @@ export class QueryIndexStore {
     const rowsByChunkId = this.chunkRowsById(matches);
     const chunks = matches.flatMap((chunkId) => {
       const row = rowsByChunkId.get(chunkId);
-      const chunk = row ? storedCandidateChunkFromRow(row) : null;
+      const chunk = row ? storedChunkFromRow(row) : null;
       return chunk ? [chunk] : [];
     });
     return {
@@ -636,7 +673,7 @@ export class QueryIndexStore {
       .prepare(
         `
         SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+               chunks.start_line, chunks.end_line, chunks.normalized_text
         FROM chunk_search
         JOIN chunks ON chunks.chunk_id = chunk_search.rowid
         JOIN files ON files.file_id = chunks.file_id
@@ -647,7 +684,7 @@ export class QueryIndexStore {
       )
       .all(query, normalizedLimit) as Array<Record<string, unknown>>;
     return rows.flatMap((row) => {
-      const chunk = storedCandidateChunkFromRow(row);
+      const chunk = storedChunkFromRow(row);
       return chunk ? [chunk] : [];
     });
   }
@@ -669,7 +706,7 @@ export class QueryIndexStore {
         .prepare(
           `
           SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+                 chunks.start_line, chunks.end_line, chunks.normalized_text
           FROM chunks
           JOIN files ON files.file_id = chunks.file_id
           WHERE files.path IN (${placeholders})
@@ -680,7 +717,7 @@ export class QueryIndexStore {
         )
         .all(...batch, query, remaining) as Array<Record<string, unknown>>;
       for (const row of rows) {
-        const chunk = storedCandidateChunkFromRow(row);
+        const chunk = storedChunkFromRow(row);
         if (chunk) candidates.push(chunk);
         if (candidates.length >= normalizedLimit) break;
       }

@@ -1,6 +1,6 @@
 # Paired source-family benchmark
 
-`npm run bench:paired` compares two already-built checkouts in separate Node processes. It adapts the accuracy batches' paired benchmark and measures eight operations, with base/head order reversed on every round. The default is six rounds for balanced run order, one project per source-language family, and `threads: 1` / `nativeThreads: 1` for both versions.
+`npm run bench:paired` compares two already-built checkouts in separate Node processes. It adapts the accuracy batches' paired benchmark and measures nine operations, with base/head order reversed on every round. The default is six rounds for balanced run order, one project per source-language family, and `threads: 1` / `nativeThreads: 1` for both versions.
 
 ## Inputs and command
 
@@ -16,6 +16,7 @@ npm run bench:paired -- /checkouts/base /checkouts/head \
 The corpus directory contains `hono`, `humanizer`, `okio`, `cjson`, `flask`, `rubocop`, `guzzle`, `gin`, `ripgrep`, `Kingfisher`, and `zls`. To run a smaller comparison, pass `--families ecmascript,dotnet` (also available: `jvm,c-cpp,python,ruby,php,go,rust,swift,zig`). A `--corpus-map paths.json` can supply an object mapping corpus IDs to existing checkout paths instead of relocating them; unspecified IDs use `--corpus-dir`.
 
 - `--rounds N`: at least five paired rounds; default 6. Prefer an even count to balance which version runs first.
+- `--operations search-index,search`: time only the listed operations, in the order of the table below; default all nine.
 - `--threads N` / `--native-threads N`: positive, identical limits for both versions; default 1 each. Native worker auto-selection is unchanged, and every build report records whether workers actually ran.
 - `--output file.json`: raw samples, medians, spreads, paired ratio/noise, slower counts, verdicts, build counters, and memory observations. Default: `paired-benchmark.json` in the caller's directory.
 - `--profile-dir directory`: after timing, capture a separate baseline V8 CPU profile for each operation. Instrumented runs never enter the paired verdict.
@@ -23,16 +24,17 @@ The corpus directory contains `hono`, `humanizer`, `okio`, `cjson`, `flask`, `ru
 
 ## Measured boundaries
 
-| Operation  | Timed work                                                                                      | Untimed setup                                 |
-| ---------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `init`     | `initCodegraphLifecycle` with a clean project lifecycle directory and empty isolated disk cache | Library import and cache removal              |
-| `cold`     | `buildProjectIndexIncremental` with `cache: "off"`                                              | Library import                                |
-| `nochange` | `buildProjectIndexIncremental` with its populated disk cache                                    | Initial cache warmup                          |
-| `onefile`  | The same incremental builder after toggling one appended comment line                           | Source edit                                   |
-| `graph`    | `buildSymbolGraphDetailed`                                                                      | Disk-backed index load                        |
-| `search`   | One hybrid `searchCodegraphWithSession` per sampled declaration name                            | Session, basic graph, and query-index loading |
-| `refs`     | `findReferences` for up to 25 fixed declaration positions                                       | Disk-backed index load                        |
-| `goto`     | `goToDefinition` at reference use-sites of those declarations                                   | Disk-backed index load                        |
+| Operation      | Timed work                                                                                      | Untimed setup                                 |
+| -------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `init`         | `initCodegraphLifecycle` with a clean project lifecycle directory and empty isolated disk cache | Library import and cache removal              |
+| `cold`         | `buildProjectIndexIncremental` with `cache: "off"`                                              | Library import                                |
+| `nochange`     | `buildProjectIndexIncremental` with its populated disk cache                                    | Initial cache warmup                          |
+| `onefile`      | The same incremental builder after toggling one appended comment line                           | Source edit                                   |
+| `graph`        | `buildSymbolGraphDetailed`                                                                      | Disk-backed index load                        |
+| `search-index` | `ensureSessionQueryIndex` creating the search sidecar from source                               | Session, index load, and sidecar removal      |
+| `search`       | One hybrid `searchCodegraphWithSession` per sampled declaration name                            | Session, basic graph, and query-index loading |
+| `refs`         | `findReferences` for up to 25 fixed declaration positions                                       | Disk-backed index load                        |
+| `goto`         | `goToDefinition` at reference use-sites of those declarations                                   | Disk-backed index load                        |
 
 `init` is **init (library, CLI startup excluded)**, not end-to-end `node dist/cli.js init` latency. The CLI has no `nativeThreads` control, so measuring its implementation through the library is necessary to pin both thread limits. Every operation runs in a fresh process; all timings exclude process startup and library loading.
 
@@ -40,7 +42,7 @@ The baseline chooses and records the exact declarations, search terms, use-sites
 
 ## Verdict and limitations
 
-Each round must return identical base/head workload counters: indexed files, graph nodes/edges, search queries/matches, or navigation sites/found targets/references, as applicable. A mismatch fails the command rather than comparing different work. Build-strategy counters and memory remain diagnostic, not equality requirements.
+Each round must return identical base/head workload counters: indexed files, graph nodes/edges, sidecar files and source files read, search queries/matches, or navigation sites/found targets/references, as applicable. A mismatch fails the command rather than comparing different work. Build-strategy counters and memory remain diagnostic, not equality requirements.
 
 Base/head spreads remain `(maximum - minimum) / median * 100` for context. The paired effect is the median of each round's `head / base` ratio; paired noise is `1.4826 * median(abs(ratio - median ratio))`, expressed as a percentage. This robust noise band is descriptive, not a confidence interval or significance test.
 
