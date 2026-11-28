@@ -165,6 +165,7 @@ A cached module is keyed by its own content, but its import targets depend on ot
 - a file it imports was deleted, or a resolved import or re-export target no longer exists;
 - an added file can satisfy one of its specifiers;
 - it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
+- it is a Python module whose `from pkg import name` can bind either an attribute of `pkg/__init__.py` or the submodule `pkg/name`, and a module was added to or deleted from `pkg` (a namespace package directory included), or the `pkg/__init__.py` it read to choose between them changed.
 
 With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
 

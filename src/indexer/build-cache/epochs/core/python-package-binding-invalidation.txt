@@ -1,0 +1,1 @@
+Python package imports re-resolve after submodule, namespace package, and initializer changes, so older caches can hold stale `from pkg import name` bindings.

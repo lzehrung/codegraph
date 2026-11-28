@@ -70,6 +70,7 @@ import {
 import { ProjectedSyntaxTree } from "../native/projected-tree.js";
 import { collectImportsForFile } from "./imports.js";
 import type { ImportDegradedHook } from "./imports/context.js";
+import { pythonPackageInitializerReaders } from "./imports/python.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { phpModuleImportNamesFromDeclarations } from "./php-namespace-symbols.js";
 import type { PhpModuleImportNames } from "./php-module-facts-types.js";
@@ -188,11 +189,12 @@ import {
   buildTrackedFileReverseDependencies,
   addedResolutionStems,
   collectDeletedTrackedFileDependents,
+  deletedImportTargetKeys,
   collectDirectDependents,
   collectTrackedFileDependents,
   collectSpecifierEdgeCandidates,
   collectPythonPackageImporters,
-  pythonImportersOfPackageInits,
+  pythonImportersOfPackages,
   externalSpecifierMatchesAddedStem,
   tsconfigAliasMappedTails,
   isMissingGitRevisionError,
@@ -1470,9 +1472,11 @@ async function buildProjectIndexFromExport(
  * A cached module is keyed by its own content, but its import bindings depend on other files.
  * A module is stale when:
  * - it changed;
- * - an import or re-export target no longer exists;
+ * - an import or re-export target no longer exists, or a Python namespace package directory it targets lost a file;
  * - an added file can satisfy one of its specifiers;
  * - it resolves imports through namespace or package declarations, and a file it depends on changed;
+ * - a Python `from pkg import name` of it read a changed `pkg/__init__.py` to choose between the attribute and the
+ *   submodule (`pythonPackageInitializerReaders`);
  * - a lookup of its imports over other files could not read one of them (`importLookupIncomplete`). Nothing records
  *   that file when no module covers it, so the file reading again changes no signature, manifest edge, or cache row.
  *
@@ -1524,14 +1528,17 @@ async function collectStaleCachedModules(args: {
   for (const [file, { mod }] of cachedModules) {
     if (mod.importLookupIncomplete) stale.add(file);
   }
-  // An importer resolved a file a symlink no longer reaches: its target still exists, so no probe finds it missing.
-  if (deletedFiles.length) {
-    const retiredKeys = new Set(deletedFiles.map(fileIdentityKey));
+  // A deletion can leave a target that no existence probe finds missing: a file a symlink no longer reaches still
+  // exists, and a Python namespace package directory can outlive its last Python file (`deletedImportTargetKeys`).
+  const markImportersOfDeletedTargets = (deleted: Iterable<string>): void => {
+    const deletedKeys = deletedImportTargetKeys(deleted);
     for (const [file, { mod }] of cachedModules) {
+      if (stale.has(file)) continue;
       const targets = cachedModuleTargets(mod, args.recoverJsonFiles.has(file));
-      if (targets.some((target) => retiredKeys.has(fileIdentityKey(target)))) stale.add(file);
+      if (targets.some((target) => deletedKeys.has(fileIdentityKey(target)))) stale.add(file);
     }
-  }
+  };
+  if (deletedFiles.length) markImportersOfDeletedTargets(deletedFiles);
   const resolvesFromDeclarations = (file: string): boolean =>
     DECLARATION_RESOLVED_IMPORT_LANGUAGES.has(
       supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "",
@@ -1548,6 +1555,8 @@ async function collectStaleCachedModules(args: {
   };
   const loadTsconfigPaths = (importer: string) =>
     loadTsconfigResolutionInputsFor(importer, args.projectRoot, args.opts?.logLevel).then((inputs) => inputs?.paths);
+  // The changed and added files, which can be package initializers that a Python importer read.
+  let changedOrAddedFiles: readonly string[];
   if (manifestFiles) {
     const currentKeys = new Set(args.files.map(fileIdentityKey));
     // A cache miss proves a change, even when a non-strict manifest signature (mtime:size) matches.
@@ -1603,6 +1612,8 @@ async function collectStaleCachedModules(args: {
       args.concurrency,
     );
     const deleted = new Set(missingFromBuild.filter((file) => unreached.has(file) || !existence.get(file)));
+    if (deleted.size) markImportersOfDeletedTargets(deleted);
+    changedOrAddedFiles = [...changed, ...added];
     for (const file of [
       ...changed,
       ...collectDeletedTrackedFileDependents(manifestFiles, deleted),
@@ -1647,6 +1658,7 @@ async function collectStaleCachedModules(args: {
       for (const importer of collectPythonPackageImporters(manifestFiles, added)) stale.add(importer);
     }
   } else {
+    changedOrAddedFiles = [...args.cacheMisses.changed, ...args.cacheMisses.added];
     const added = [...args.cacheMisses.added, ...args.cacheMisses.changed.filter(canRestoreResolution)];
     if (added.length) {
       const stemsByLanguage = new Map<string, ReadonlySet<string>>();
@@ -1672,7 +1684,7 @@ async function collectStaleCachedModules(args: {
       }
       // `from . import mod` targets `__init__.py`, so no specifier names an added `mod.py`.
       // Find these importers through their cached targets.
-      const packageImporters = pythonImportersOfPackageInits(
+      const packageImporters = pythonImportersOfPackages(
         Array.from(cachedModules, ([file, { mod }]) => [file, cachedModuleTargets(mod)] as const),
         added,
       );
@@ -1770,6 +1782,15 @@ async function collectStaleCachedModules(args: {
       }
     }
   }
+  // A Python `from pkg import name` reads `pkg/__init__.py` to choose between the attribute and the submodule.
+  const initializerReaders = await pythonPackageInitializerReaders(
+    args.projectRoot,
+    changedOrAddedFiles,
+    cachedModules,
+    stale,
+    args.concurrency,
+  );
+  for (const file of initializerReaders) stale.add(file);
   // A package star depends on every package file, not just its representative edge. A type
   // wildcard (`import p.C.*` naming class `p.C`) turns into a package star once package `p.C` exists.
   const isJvmFile = (file: string): boolean => {
@@ -3890,6 +3911,20 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
         markAsChanged(candidate);
       };
+      // A loaded module can target a deleted file that no manifest edge names, so `dependentFilesOfDeletedTracked`
+      // misses its importer: the submodule a Python `from pkg import name` bound, or a namespace package directory
+      // (`deletedImportTargetKeys`).
+      if (deletedTrackedFiles.size) {
+        const deletedKeys = deletedImportTargetKeys(deletedTrackedFiles);
+        for (const file of allFiles) {
+          if (changedFiles.has(file)) continue;
+          const mod = modules.get(fileIdentityKey(file));
+          if (!mod) continue;
+          if (cachedModuleTargets(mod).some((target) => deletedKeys.has(fileIdentityKey(target)))) {
+            reparseCachedFile(file);
+          }
+        }
+      }
       // An added file can satisfy a specifier whose stem matches it. Edges that cannot
       // round-trip (unstored resolution kind, or a C/C++ include with no form) are reparsed.
       if (addedFiles.length) {
