@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { normalizePath, stripBom } from "../paths.js";
+import { fileIdentityKey, normalizePath, stripBom } from "../paths.js";
 import { listProjectFiles } from "../project-files.js";
 import { fileExists } from "../workspace.js";
 import { findFirstExistingResolutionCandidate } from "./find-first-existing.js";
@@ -199,6 +199,50 @@ export async function getPhpComposerImplicitFiles(projectRoot: string, fromFile:
     deduped.add(path.resolve(filePath));
   }
   return Array.from(deduped);
+}
+
+/** The composer.json files from `file`'s directory up to `projectRoot`, nearest first. */
+async function composerPathsAbove(projectRoot: string, file: string): Promise<string[]> {
+  const rootKey = fileIdentityKey(path.resolve(projectRoot));
+  const composerPaths: string[] = [];
+  let directory = path.dirname(path.resolve(file));
+  for (;;) {
+    const composerPath = await findNearestFile(directory, projectRoot, "composer.json");
+    if (!composerPath) return composerPaths;
+    composerPaths.push(composerPath);
+    const composerDirectory = path.dirname(composerPath);
+    if (fileIdentityKey(composerDirectory) === rootKey) return composerPaths;
+    directory = path.dirname(composerDirectory);
+  }
+}
+
+/**
+ * The `importers` whose composer.json lists one of `addedFiles` under `autoload.files` or `autoload-dev.files`: once
+ * that file exists, `getPhpComposerImplicitFiles` imports it into each of them. Only the composer.json files above an
+ * added file are read, and no importer is looked up unless one of them lists it.
+ */
+export async function composerAutoloadFileImporters(
+  projectRoot: string,
+  addedFiles: readonly string[],
+  importers: Iterable<string>,
+): Promise<string[]> {
+  const listing = new Set<string>();
+  for (const file of addedFiles) {
+    const fileKey = fileIdentityKey(path.resolve(file));
+    for (const composerPath of await composerPathsAbove(projectRoot, file)) {
+      const config = await loadPhpComposerConfig(composerPath);
+      if (config?.files.some((entry) => fileIdentityKey(path.resolve(entry)) === fileKey)) {
+        listing.add(fileIdentityKey(composerPath));
+      }
+    }
+  }
+  if (!listing.size) return [];
+  const governed: string[] = [];
+  for (const importer of importers) {
+    const composerPath = await findPhpComposerPath(projectRoot, importer);
+    if (composerPath && listing.has(fileIdentityKey(composerPath))) governed.push(importer);
+  }
+  return governed;
 }
 
 export async function getPhpComposerAutoloadFiles(

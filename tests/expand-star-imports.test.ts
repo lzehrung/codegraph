@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expandStarImports } from "../src/indexer/expand-star-imports.js";
+import { expandStarImports, unexpandedModule } from "../src/indexer/expand-star-imports.js";
 import { SymbolKind, type ModuleIndex } from "../src/indexer/types.js";
 import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 
@@ -14,6 +14,17 @@ function namedLocals(mod: ModuleIndex | undefined): string[] {
     .filter((binding): binding is typeof binding & { kind: "named"; local: string } => binding.kind === "named")
     .map((binding) => binding.local)
     .sort();
+}
+
+function moduleMap(...modules: ModuleIndex[]): Map<string, ModuleIndex> {
+  return new Map(modules.map((mod) => [fileIdentityKey(mod.file), mod]));
+}
+
+/** The consumer `expandStarImports` leaves in the map, which replaces a star importer with an expanded copy. */
+function expandedConsumer(lib: ModuleIndex, consumer: ModuleIndex): ModuleIndex | undefined {
+  const modules = moduleMap(lib, consumer);
+  expandStarImports(modules);
+  return modules.get(fileIdentityKey(consumer.file));
 }
 
 describe("expandStarImports", () => {
@@ -37,14 +48,7 @@ describe("expandStarImports", () => {
       locals: [],
     };
 
-    expandStarImports(
-      new Map([
-        [fileIdentityKey(libFile), lib],
-        [fileIdentityKey(consumerFile), consumer],
-      ]),
-    );
-
-    expect(namedLocals(consumer)).toEqual(["bar", "foo"]);
+    expect(namedLocals(expandedConsumer(lib, consumer))).toEqual(["bar", "foo"]);
   });
 
   it("falls back to non-private locals when the target has no local exports", () => {
@@ -63,14 +67,7 @@ describe("expandStarImports", () => {
       locals: [],
     };
 
-    expandStarImports(
-      new Map([
-        [fileIdentityKey(libFile), lib],
-        [fileIdentityKey(consumerFile), consumer],
-      ]),
-    );
-
-    expect(namedLocals(consumer)).toEqual(["visible"]);
+    expect(namedLocals(expandedConsumer(lib, consumer))).toEqual(["visible"]);
   });
 
   it("uses exportedAs when a local export is renamed", () => {
@@ -89,14 +86,7 @@ describe("expandStarImports", () => {
       locals: [],
     };
 
-    expandStarImports(
-      new Map([
-        [fileIdentityKey(libFile), lib],
-        [fileIdentityKey(consumerFile), consumer],
-      ]),
-    );
-
-    const named = consumer.imports.filter(
+    const named = (expandedConsumer(lib, consumer)?.imports ?? []).filter(
       (binding): binding is typeof binding & { kind: "named"; local: string; imported: string } =>
         binding.kind === "named",
     );
@@ -121,14 +111,82 @@ describe("expandStarImports", () => {
       locals: [],
     };
 
-    expandStarImports(
-      new Map([
-        [fileIdentityKey(libFile), lib],
-        [fileIdentityKey(consumerFile), consumer],
-      ]),
-    );
+    const expanded = expandedConsumer(lib, consumer);
+    expect(namedLocals(expanded)).toEqual(["visible"]);
+    expect(namedLocals(expanded)).not.toContain("hidden");
+  });
 
-    expect(namedLocals(consumer)).toEqual(["visible"]);
-    expect(namedLocals(consumer)).not.toContain("hidden");
+  it("expands an earlier copy again from its source, without names the target no longer exports", () => {
+    const libFile = normalizePath("/tmp/cg-star-again.ts");
+    const consumerFile = normalizePath("/tmp/cg-star-again-consumer.ts");
+    const lib: ModuleIndex = {
+      file: libFile,
+      exports: [
+        { type: "local", exportedAs: "foo", target: symbol(libFile, "foo") },
+        { type: "local", exportedAs: "bar", target: symbol(libFile, "bar") },
+      ],
+      imports: [],
+      locals: [symbol(libFile, "foo"), symbol(libFile, "bar")],
+    };
+    const consumer: ModuleIndex = {
+      file: consumerFile,
+      exports: [],
+      imports: [{ kind: "star", from: "./lib", resolved: libFile }],
+      locals: [],
+    };
+    const modules = moduleMap(lib, consumer);
+    expandStarImports(modules);
+    const first = modules.get(fileIdentityKey(consumerFile));
+    expect(namedLocals(first)).toEqual(["bar", "foo"]);
+    expect(consumer.imports).toHaveLength(1);
+    expect(first && unexpandedModule(first)).toBe(consumer);
+
+    const editedLib: ModuleIndex = {
+      ...lib,
+      exports: [
+        { type: "local", exportedAs: "baz", target: symbol(libFile, "baz") },
+        { type: "local", exportedAs: "bar", target: symbol(libFile, "bar") },
+      ],
+      locals: [symbol(libFile, "baz"), symbol(libFile, "bar")],
+    };
+    modules.set(fileIdentityKey(libFile), editedLib);
+    expandStarImports(modules);
+    const second = modules.get(fileIdentityKey(consumerFile));
+    expect(second?.imports).toEqual(
+      expandedConsumer(editedLib, { ...consumer, imports: [...consumer.imports] })?.imports,
+    );
+    expect(second?.imports.map((binding) => (binding.kind === "named" ? binding.local : binding.kind))).toEqual([
+      "star",
+      "baz",
+      "bar",
+    ]);
+
+    // Names that stay the same keep the copy, so a cache keyed by the indexed module keeps its entry.
+    expandStarImports(modules);
+    expect(modules.get(fileIdentityKey(consumerFile))).toBe(second);
+  });
+
+  it("leaves a star importer as extracted once its target exports nothing", () => {
+    const libFile = normalizePath("/tmp/cg-star-emptied.ts");
+    const consumerFile = normalizePath("/tmp/cg-star-emptied-consumer.ts");
+    const lib: ModuleIndex = {
+      file: libFile,
+      exports: [{ type: "local", exportedAs: "foo", target: symbol(libFile, "foo") }],
+      imports: [],
+      locals: [symbol(libFile, "foo")],
+    };
+    const consumer: ModuleIndex = {
+      file: consumerFile,
+      exports: [],
+      imports: [{ kind: "star", from: "./lib", resolved: libFile }],
+      locals: [],
+    };
+    const modules = moduleMap(lib, consumer);
+    expandStarImports(modules);
+    expect(modules.get(fileIdentityKey(consumerFile))).not.toBe(consumer);
+
+    modules.set(fileIdentityKey(libFile), { ...lib, exports: [], locals: [] });
+    expandStarImports(modules);
+    expect(modules.get(fileIdentityKey(consumerFile))).toBe(consumer);
   });
 });

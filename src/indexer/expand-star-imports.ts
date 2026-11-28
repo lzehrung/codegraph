@@ -113,140 +113,200 @@ export function isJvmStaticWildcardMember(symbol: SymbolDef, ownerStartIndex: nu
   return !!symbol.isMember && !!symbol.jvmStaticMember && symbol.jvmTypeOwnerStartIndex === ownerStartIndex;
 }
 
+/** Each expanded copy's source: the module as extracted, before a star import added a binding to it. */
+const unexpandedSources = new WeakMap<ModuleIndex, ModuleIndex>();
+/** The latest expanded copy of each source, reused while its star imports bind the same names. */
+const expandedCopies = new WeakMap<ModuleIndex, ModuleIndex>();
+
+/** The module `mod` was expanded from, or `mod` itself when it holds only the bindings extraction produced. */
+export function unexpandedModule(mod: ModuleIndex): ModuleIndex {
+  return unexpandedSources.get(mod) ?? mod;
+}
+
+function expandedImportKey(binding: ImportBinding): string | null {
+  const typeOnly = binding.typeOnly ?? false;
+  if (binding.kind === "named") {
+    return JSON.stringify([
+      "named",
+      binding.from,
+      binding.resolved,
+      typeOnly,
+      binding.local,
+      binding.imported,
+      binding.cNamespace,
+      binding.jvmTypeOwnerStartIndex,
+      binding.jvmStaticWildcardName,
+      binding.jvmPackageIncomplete,
+    ]);
+  }
+  if (binding.kind === "namespace") {
+    return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
+  }
+  return null;
+}
+
+function boundImportKeys(imports: readonly ImportBinding[]): Set<string> {
+  const keys = new Set<string>();
+  for (const binding of imports) {
+    const key = expandedImportKey(binding);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
 /**
  * Expand `kind: "star"` import bindings into named or namespace imports so
  * later resolution can see the target's locals without re-parsing.
  *
- * This rewrites `mod.imports` only. It reads the resolved target's local
- * exports (or non-private locals) to choose names. It does not rewrite
- * `mod.exports` or `exportStar` entries (TypeScript `export *`).
+ * A star importer is replaced in `modules` by a copy whose `imports` append
+ * the expanded bindings. A module is never written to, so a cached or frozen
+ * module stays as extracted. The names come from the resolved target's local
+ * exports (or non-private locals). It does not rewrite `mod.exports` or
+ * `exportStar` entries (TypeScript `export *`).
  *
- * Disk-cached module rows are stored before this expansion. Snapshot hydrate
- * must run it before freezing the in-memory index.
+ * The names depend on other files, so each call starts again from the
+ * extracted bindings: a copy from an earlier call is expanded from its source,
+ * and a name its target no longer exports is dropped.
  */
 export function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOptions): void {
-  const expandedImportKey = (binding: ImportBinding): string | null => {
-    const typeOnly = binding.typeOnly ?? false;
-    if (binding.kind === "named") {
-      return JSON.stringify([
-        "named",
-        binding.from,
-        binding.resolved,
-        typeOnly,
-        binding.local,
-        binding.imported,
-        binding.cNamespace,
-        binding.jvmTypeOwnerStartIndex,
-        binding.jvmStaticWildcardName,
-        binding.jvmPackageIncomplete,
-      ]);
-    }
-    if (binding.kind === "namespace") {
-      return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
-    }
-    return null;
-  };
+  for (const [key, current] of modules) {
+    const source = unexpandedModule(current);
+    const expansion = starImportExpansion(source, modules, opts);
+    const expanded = expansion.bindings.length ? expandedCopy(source, expansion) : source;
+    if (expanded !== current) modules.set(key, expanded);
+  }
+}
 
-  for (const mod of modules.values()) {
-    const expandedImportKeys = new Set<string>();
-    for (const existing of mod.imports) {
-      const key = expandedImportKey(existing);
-      if (key) expandedImportKeys.add(key);
-    }
-    for (const imp of [...mod.imports]) {
-      // A C# `using static` imports one type's static members, not the file's exports.
-      if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
-      const packageFiles = imp.jvmPackageFiles;
-      const targetCount = packageFiles?.length ?? 1;
-      for (let packageIndex = 0; packageIndex < targetCount; packageIndex += 1) {
-        const targetFile = packageFiles ? packageFiles[packageIndex]! : imp.resolved;
-        const target = modules.get(fileIdentityKey(targetFile));
-        if (!target) continue;
-        // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
-        // so a header target must not pay for a header sample read here.
-        const targetSupport = supportForFileWithoutHeaderSample(targetFile, opts?.languageExtensions);
-        const targetRules = importNamePolicyFor(targetSupport?.id).starExpansion;
-        const targetPackageSyntax = targetSupport ? IMPORT_RESOLUTION_ROWS[targetSupport.id]?.packageSyntax : undefined;
-        const typeOnDemand = !packageFiles && !!imp.jvmTypeWildcardName && isJvmLanguage(targetSupport?.id);
-        const staticOnDemand =
-          !packageFiles && !!imp.jvmStaticWildcardName && targetPackageSyntax?.importKind === "type";
-        const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
-        const typeOwner =
-          (typeOnDemand || staticOnDemand) && ownerName
-            ? jvmWildcardTypeOwner(target, ownerName, targetSupport?.id)
-            : undefined;
-        const typeOwnerStartIndex = typeOwner?.range.start.index;
-        if (
-          (typeOnDemand || staticOnDemand) &&
-          (typeOwnerStartIndex === undefined || (typeOwner?.javaPackagePrivate && !imp.jvmSamePackage))
-        )
-          continue;
-        const exportedSymbols = symbolsForStarImport(
-          target,
-          targetRules,
-          !!packageFiles,
-          typeOwnerStartIndex,
-          staticOnDemand,
-        );
-        const importerPackageSyntax = imp.jvmPackageLanguageId
-          ? IMPORT_RESOLUTION_ROWS[imp.jvmPackageLanguageId]?.packageSyntax
+/** The bindings star imports add to one module, with each binding's `expandedImportKey`. */
+type StarImportExpansion = { bindings: ImportBinding[]; keys: string[] };
+
+/** The copy of `source` that appends the expansion: the previous copy when that appended the same bindings. */
+function expandedCopy(source: ModuleIndex, expansion: StarImportExpansion): ModuleIndex {
+  const previous = expandedCopies.get(source);
+  if (previous && appendsSameBindings(previous, source, expansion.keys)) return previous;
+  const copy: ModuleIndex = { ...source, imports: [...source.imports, ...expansion.bindings] };
+  unexpandedSources.set(copy, source);
+  expandedCopies.set(source, copy);
+  return copy;
+}
+
+/**
+ * The copy shares the source's own bindings. Every expanded field a key leaves out comes from the star import
+ * that produced the binding, which the same key from the same source always names.
+ */
+function appendsSameBindings(copy: ModuleIndex, source: ModuleIndex, keys: readonly string[]): boolean {
+  const start = source.imports.length;
+  if (copy.imports.length !== start + keys.length) return false;
+  return keys.every((key, index) => expandedImportKey(copy.imports[start + index]!) === key);
+}
+
+/**
+ * The bindings the star imports of `mod` add, in a cold build's order: one per name of each target, minus the
+ * names `mod` already binds the same way.
+ */
+function starImportExpansion(
+  mod: ModuleIndex,
+  modules: ReadonlyMap<FileId, ModuleIndex>,
+  opts: BuildOptions | undefined,
+): StarImportExpansion {
+  const expansion: StarImportExpansion = { bindings: [], keys: [] };
+  let boundKeys: Set<string> | undefined;
+  for (const imp of mod.imports) {
+    // A C# `using static` imports one type's static members, not the file's exports.
+    if (imp.kind !== "star" || imp.staticMembersOf || typeof imp.resolved !== "string") continue;
+    const packageFiles = imp.jvmPackageFiles;
+    const targetCount = packageFiles?.length ?? 1;
+    for (let packageIndex = 0; packageIndex < targetCount; packageIndex += 1) {
+      const targetFile = packageFiles ? packageFiles[packageIndex]! : imp.resolved;
+      const target = modules.get(fileIdentityKey(targetFile));
+      if (!target) continue;
+      // Only stylesheet and Ruby membership is asked below, and C and C++ answer both the same,
+      // so a header target must not pay for a header sample read here.
+      const targetSupport = supportForFileWithoutHeaderSample(targetFile, opts?.languageExtensions);
+      const targetRules = importNamePolicyFor(targetSupport?.id).starExpansion;
+      const targetPackageSyntax = targetSupport ? IMPORT_RESOLUTION_ROWS[targetSupport.id]?.packageSyntax : undefined;
+      const typeOnDemand = !packageFiles && !!imp.jvmTypeWildcardName && isJvmLanguage(targetSupport?.id);
+      const staticOnDemand = !packageFiles && !!imp.jvmStaticWildcardName && targetPackageSyntax?.importKind === "type";
+      const ownerName = imp.jvmTypeWildcardName ?? imp.jvmStaticWildcardName;
+      const typeOwner =
+        (typeOnDemand || staticOnDemand) && ownerName
+          ? jvmWildcardTypeOwner(target, ownerName, targetSupport?.id)
           : undefined;
-        const importsPeerTypesOnly =
-          importerPackageSyntax?.importKind === "type" && targetPackageSyntax?.importKind === "declaration";
-        // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
-        const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
-        const seen = new Set<string>();
-        for (const { name, symbol } of exportedSymbols) {
-          if (importsPeerTypesOnly && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
-            continue;
-          }
-          if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
-          if ((typeOnDemand || staticOnDemand) && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
-          let namespace: "tag" | "ordinary" | undefined;
-          if (symbol.cTag) namespace = "tag";
-          else if (hasCTagExports) namespace = "ordinary";
-          const symbolKey = namespace ? `${name}\0${namespace}` : name;
-          if (!name || seen.has(symbolKey)) continue;
-          seen.add(symbolKey);
-          const treatAsNamespace = targetRules?.namespaceKinds?.[symbol.kind];
-          const expandedImport: ImportBinding = treatAsNamespace
-            ? {
-                kind: "namespace",
-                localNS: name,
-                from: imp.from,
-                resolved: targetFile,
-                ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
-                ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
-              }
-            : {
-                kind: "named",
-                local: name,
-                imported: name,
-                from: imp.from,
-                resolved: targetFile,
-                ...(namespace ? { cNamespace: namespace } : {}),
-                ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
-                ...((typeOnDemand || staticOnDemand) && typeOwnerStartIndex !== undefined
-                  ? { jvmTypeOwnerStartIndex: typeOwnerStartIndex }
-                  : {}),
-                ...(staticOnDemand && imp.jvmStaticWildcardName
-                  ? { jvmStaticWildcardName: imp.jvmStaticWildcardName }
-                  : {}),
-                ...(imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
-                ...(packageFiles
-                  ? {
-                      jvmPackageLanguageId: imp.jvmPackageLanguageId,
-                      jvmPackageIncomplete: imp.jvmPackageIncomplete,
-                    }
-                  : {}),
-                ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
-              };
-          const expandedImportKeyValue = expandedImportKey(expandedImport);
-          if (!expandedImportKeyValue || expandedImportKeys.has(expandedImportKeyValue)) continue;
-          expandedImportKeys.add(expandedImportKeyValue);
-          mod.imports.push(expandedImport);
+      const typeOwnerStartIndex = typeOwner?.range.start.index;
+      if (
+        (typeOnDemand || staticOnDemand) &&
+        (typeOwnerStartIndex === undefined || (typeOwner?.javaPackagePrivate && !imp.jvmSamePackage))
+      )
+        continue;
+      const exportedSymbols = symbolsForStarImport(
+        target,
+        targetRules,
+        !!packageFiles,
+        typeOwnerStartIndex,
+        staticOnDemand,
+      );
+      const importerPackageSyntax = imp.jvmPackageLanguageId
+        ? IMPORT_RESOLUTION_ROWS[imp.jvmPackageLanguageId]?.packageSyntax
+        : undefined;
+      const importsPeerTypesOnly =
+        importerPackageSyntax?.importKind === "type" && targetPackageSyntax?.importKind === "declaration";
+      // Header files default to C in filename-only lookup. Only extracted C tags prove the namespace split.
+      const hasCTagExports = exportedSymbols.some(({ symbol }) => Boolean(symbol.cTag));
+      const seen = new Set<string>();
+      for (const { name, symbol } of exportedSymbols) {
+        if (importsPeerTypesOnly && symbol.kind !== SymbolKind.Class && symbol.kind !== SymbolKind.Interface) {
+          continue;
         }
+        if (packageFiles && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
+        if ((typeOnDemand || staticOnDemand) && symbol.javaPackagePrivate && !imp.jvmSamePackage) continue;
+        let namespace: "tag" | "ordinary" | undefined;
+        if (symbol.cTag) namespace = "tag";
+        else if (hasCTagExports) namespace = "ordinary";
+        const symbolKey = namespace ? `${name}\0${namespace}` : name;
+        if (!name || seen.has(symbolKey)) continue;
+        seen.add(symbolKey);
+        const treatAsNamespace = targetRules?.namespaceKinds?.[symbol.kind];
+        const expandedImport: ImportBinding = treatAsNamespace
+          ? {
+              kind: "namespace",
+              localNS: name,
+              from: imp.from,
+              resolved: targetFile,
+              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+              ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
+            }
+          : {
+              kind: "named",
+              local: name,
+              imported: name,
+              from: imp.from,
+              resolved: targetFile,
+              ...(namespace ? { cNamespace: namespace } : {}),
+              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+              ...((typeOnDemand || staticOnDemand) && typeOwnerStartIndex !== undefined
+                ? { jvmTypeOwnerStartIndex: typeOwnerStartIndex }
+                : {}),
+              ...(staticOnDemand && imp.jvmStaticWildcardName
+                ? { jvmStaticWildcardName: imp.jvmStaticWildcardName }
+                : {}),
+              ...(imp.jvmSamePackage !== undefined ? { jvmSamePackage: imp.jvmSamePackage } : {}),
+              ...(packageFiles
+                ? {
+                    jvmPackageLanguageId: imp.jvmPackageLanguageId,
+                    jvmPackageIncomplete: imp.jvmPackageIncomplete,
+                  }
+                : {}),
+              ...(imp.includeForm ? { includeForm: imp.includeForm } : {}),
+            };
+        const expandedImportKeyValue = expandedImportKey(expandedImport);
+        if (!expandedImportKeyValue) continue;
+        boundKeys ??= boundImportKeys(mod.imports);
+        if (boundKeys.has(expandedImportKeyValue)) continue;
+        boundKeys.add(expandedImportKeyValue);
+        expansion.bindings.push(expandedImport);
+        expansion.keys.push(expandedImportKeyValue);
       }
     }
   }
+  return expansion;
 }

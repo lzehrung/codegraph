@@ -53,7 +53,7 @@ import { cacheRoot } from "./location.js";
 import { recordCacheCorruption } from "./reports.js";
 import type { ManifestFileEntry } from "./manifest.js";
 import { compareCodeUnits } from "../../util/collections.js";
-import { expandStarImports } from "../expand-star-imports.js";
+import { expandStarImports, unexpandedModule } from "../expand-star-imports.js";
 import {
   isCsharpProjectUsing,
   isCsharpProjectUsingFacts,
@@ -872,39 +872,6 @@ function snapshotHydratesModulesFromDisk(version: number): boolean {
   return version === PROJECT_SNAPSHOT_VERSION;
 }
 
-function mutableModuleIndex(mod: ModuleIndex): ModuleIndex {
-  if (
-    !Object.isFrozen(mod) &&
-    !Object.isFrozen(mod.imports) &&
-    !Object.isFrozen(mod.exports) &&
-    !Object.isFrozen(mod.locals)
-  ) {
-    return mod;
-  }
-  return {
-    file: mod.file,
-    exports: [...mod.exports],
-    imports: [...mod.imports],
-    locals: [...mod.locals],
-    ...(mod.docstringsChecked ? { docstringsChecked: true } : {}),
-    ...(mod.declaredContainers ? { declaredContainers: [...mod.declaredContainers] } : {}),
-    ...(mod.angularJsFacts ? { angularJsFacts: mod.angularJsFacts } : {}),
-    ...(mod.csharpNamespaceFacts ? { csharpNamespaceFacts: mod.csharpNamespaceFacts } : {}),
-    ...(mod.jvmFacts ? { jvmFacts: mod.jvmFacts } : {}),
-    ...(mod.phpDeclarationNames ? { phpDeclarationNames: [...mod.phpDeclarationNames] } : {}),
-    ...(mod.nativeOutcome ? { nativeOutcome: mod.nativeOutcome } : {}),
-    ...(mod.parserDegraded ? { parserDegraded: true } : {}),
-    ...(mod.importLookupIncomplete ? { importLookupIncomplete: true } : {}),
-    ...(mod.syntaxTreeUnavailableReason && mod.syntaxTreeUnavailableFingerprint
-      ? {
-          syntaxTreeUnavailableReason: mod.syntaxTreeUnavailableReason,
-          syntaxTreeUnavailableFingerprint: mod.syntaxTreeUnavailableFingerprint,
-        }
-      : {}),
-    ...(mod.parseErrorRanges ? { parseErrorRanges: mod.parseErrorRanges } : {}),
-  };
-}
-
 /**
  * The modules the snapshot embeds. A module with a disk-cache row is left out, and a load restores it from that row.
  * A module native skipped, or whose parser degraded, may not be written to the cache: its row is then the stale one
@@ -916,7 +883,8 @@ function modulesForThinSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
 ): ModuleIndex[] {
-  const modules = [...index.byFile.values()];
+  // Star-import names come from other files, so a load expands each embedded module again.
+  const modules = Array.from(index.byFile.values(), unexpandedModule);
   const cachedFiles = listDiskCachedModuleFiles(projectRoot, opts);
   if (!cachedFiles) return modules;
   return modules.filter(
@@ -979,13 +947,8 @@ function collectSnapshotModules(
         modules.set(key, row.mod);
       }
     }
-    // expandStarImports only pushes onto star-import arrays. Snapshot-embedded
-    // bodies are frozen; SQLite rows are not. Clone only the frozen star
-    // importers, keep targets shared, then freeze whatever is still mutable.
-    for (const [key, mod] of modules) {
-      if (!mod.imports.some((binding) => binding.kind === "star")) continue;
-      modules.set(key, mutableModuleIndex(mod));
-    }
+    // Star expansion replaces each star importer with an expanded copy and writes to no loaded
+    // module, so a frozen snapshot-embedded body expands like a SQLite row.
     expandStarImports(modules, opts);
     for (const [key, mod] of modules) {
       if (Object.isFrozen(mod)) continue;
