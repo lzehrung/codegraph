@@ -5,6 +5,8 @@ import {
   canUseIncrementalDiscoveryFastPath,
   addedResolutionStems,
   collectDeletedTrackedFileDependents,
+  deletedImportTargetKeys,
+  pythonImportersOfPackages,
   collectTrackedFileDependents,
   externalSpecifierMatchesAddedStem,
   tsconfigAliasMappedTails,
@@ -52,6 +54,28 @@ describe("incremental-plan dependents", () => {
     };
     const deleted = new Set(["/proj/b.ts"]);
     expect(collectDeletedTrackedFileDependents(trackedEntries, deleted)).toEqual(new Set(["/proj/a.ts"]));
+  });
+
+  it("lists the directories above a deleted Python file, and no directory for another language", () => {
+    const keys = deletedImportTargetKeys(["/proj/pkg/ns/mod.py", "/proj/web/app.ts"]);
+    for (const target of ["/proj/pkg/ns/mod.py", "/proj/pkg/ns", "/proj/pkg", "/proj", "/proj/web/app.ts"]) {
+      expect(keys.has(fileIdentityKey(target))).toBe(true);
+    }
+    expect(keys.has(fileIdentityKey("/proj/web"))).toBe(false);
+    expect(keys.has(fileIdentityKey("/proj/pkg/__init__.py"))).toBe(false);
+  });
+
+  it("finds the Python importers of a namespace package directory and of an initializer above an added module", () => {
+    const importers = pythonImportersOfPackages(
+      [
+        ["/proj/ns_user.py", ["/proj/ns"]],
+        ["/proj/pkg_user.py", ["/proj/ns/pkg/__init__.py"]],
+        ["/proj/sibling_user.py", ["/proj/ns/a.py"]],
+        ["/proj/web/app.ts", ["/proj/ns"]],
+      ],
+      ["/proj/ns/pkg/b.py"],
+    );
+    expect(importers).toEqual(new Set(["/proj/ns_user.py", "/proj/pkg_user.py"]));
   });
 });
 

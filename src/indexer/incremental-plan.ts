@@ -123,19 +123,31 @@ export function collectDeletedTrackedFileDependents(
 
 const PYTHON_SOURCE_PATTERN = /\.pyi?$/iu;
 
+/** The directories above `file`, nearest first, ending at the top of its path. */
+function* parentDirectories(file: string): Generator<string> {
+  let directory = path.posix.dirname(normalizePath(file));
+  let previous: string;
+  do {
+    yield directory;
+    previous = directory;
+    directory = path.posix.dirname(directory);
+  } while (directory !== previous);
+}
+
 /**
  * `from pkg import name` binds the `name` attribute of `pkg/__init__.py` when that file defines
  * one; otherwise, once `pkg/name.py` (or a namespace directory `pkg/name/` holding Python code)
- * exists, it binds the submodule. That edge is already resolved to `__init__.py`, so no external
- * edge names the added module. Returns cached Python importers of every package on the added
- * file's directory chain; they are reparsed instead of reused. The walk is conservative:
- * importers whose binding does not change reparse to the same result.
+ * exists, it binds the submodule. That edge is already resolved to `__init__.py`, or to the
+ * directory of a namespace package, so no external edge names the added module. Returns cached
+ * Python importers of every package on the added file's directory chain; they are reparsed instead
+ * of reused. The walk is conservative: importers whose binding does not change reparse to the same
+ * result.
  */
 export function collectPythonPackageImporters(
   trackedEntries: Record<string, ManifestFileEntry>,
   addedFiles: readonly string[],
 ): Set<string> {
-  return pythonImportersOfPackageInits(
+  return pythonImportersOfPackages(
     Object.entries(trackedEntries).map(([file, entry]) => [
       file,
       entry.edges.flatMap((edge) => (edge.to.type === "file" ? [edge.to.path] : [])),
@@ -148,30 +160,51 @@ export function collectPythonPackageImporters(
  * Same as `collectPythonPackageImporters`, for builds without a manifest.
  * Takes the resolved import targets of each importer.
  */
-export function pythonImportersOfPackageInits(
+export function pythonImportersOfPackages(
   importerTargets: Iterable<readonly [file: string, targets: readonly string[]]>,
   addedFiles: readonly string[],
 ): Set<string> {
-  const packageInits = new Set<string>();
+  const packages = new Set<string>();
   for (const file of addedFiles) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
-    let directory = path.posix.dirname(normalizePath(file));
-    let previous: string;
-    do {
+    for (const directory of parentDirectories(file)) {
+      // A namespace package resolves to its directory, a regular package to its initializer. The
+      // directories above one already listed are listed too.
+      const directoryKey = fileIdentityKey(directory);
+      if (packages.has(directoryKey)) break;
+      packages.add(directoryKey);
       for (const init of ["__init__.py", "__init__.pyi"]) {
-        packageInits.add(fileIdentityKey(path.posix.join(directory, init)));
+        packages.add(fileIdentityKey(path.posix.join(directory, init)));
       }
-      previous = directory;
-      directory = path.posix.dirname(directory);
-    } while (directory !== previous);
+    }
   }
   const importers = new Set<string>();
-  if (!packageInits.size) return importers;
+  if (!packages.size) return importers;
   for (const [file, targets] of importerTargets) {
     if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
-    if (targets.some((target) => packageInits.has(fileIdentityKey(target)))) importers.add(file);
+    if (targets.some((target) => packages.has(fileIdentityKey(target)))) importers.add(file);
   }
   return importers;
+}
+
+/**
+ * Identity keys of the import targets that deleting `deletedFiles` leaves stale: each deleted file
+ * and, for a Python file, each directory above it. A Python import can resolve to a namespace
+ * package directory, which stops being importable when its last Python file goes and stops
+ * existing with its last file, so neither shows as a deleted file.
+ */
+export function deletedImportTargetKeys(deletedFiles: Iterable<string>): Set<string> {
+  const keys = new Set<string>();
+  for (const file of deletedFiles) {
+    keys.add(fileIdentityKey(file));
+    if (!PYTHON_SOURCE_PATTERN.test(file)) continue;
+    for (const directory of parentDirectories(file)) {
+      const directoryKey = fileIdentityKey(directory);
+      if (keys.has(directoryKey)) break;
+      keys.add(directoryKey);
+    }
+  }
+  return keys;
 }
 
 const RESOLUTION_ENTRY_STEMS = new Set(["index", "__init__", "mod", "package"]);

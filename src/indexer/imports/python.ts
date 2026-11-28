@@ -8,12 +8,13 @@ import { maskPythonCommentsAndStrings, stripPythonCommentsAndStrings } from "../
 import { currentProbeCache, type FsProbeCache } from "../../util/fs-probe-cache.js";
 import { PYTHON_IDENTIFIER_SOURCE } from "../../util/identifiers.js";
 import { fileIdentityKey } from "../../util/paths.js";
+import { mapLimit } from "../../util/concurrency.js";
 import { resolveSpecifierTargets } from "../../util/resolution/specifier-targets.js";
 import { resolvePythonSubmoduleExact } from "../../util/resolution/python.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rust-test-modules.js";
 import { pythonTypeCheckingContext, startsPythonCompoundHeader } from "../../util/python-type-checking.js";
 import { buildScopeIndexFromSource } from "../scope.js";
-import type { ImportBinding } from "../types.js";
+import type { ImportBinding, ModuleIndex } from "../types.js";
 import { attributeNamedBindingRanges } from "./binding-ranges.js";
 import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
 
@@ -191,6 +192,73 @@ async function pythonPackageMayBindAttribute(
     }
   }
   return attribute;
+}
+
+const PYTHON_PACKAGE_INITIALIZERS: ReadonlySet<string> = new Set(["__init__.py", "__init__.pyi"]);
+const PYTHON_MODULE_SUFFIX = /\.pyi?$/u;
+
+/** The module a resolved Python target is: `pkg/mod` for `pkg/mod.py` or `pkg/mod/__init__.py`; a directory is itself. */
+function pythonModulePath(target: string): string {
+  if (PYTHON_PACKAGE_INITIALIZERS.has(path.basename(target))) return path.dirname(target);
+  return target.replace(PYTHON_MODULE_SUFFIX, "");
+}
+
+/**
+ * The cached importers in `importers` whose `from pkg import name` read a package initializer `pkg/__init__.py` (or
+ * `.pyi`) among `changedFiles` to choose between the package attribute and the submodule (`pushNamedImport`): a named
+ * binding of that initializer whose name a submodule competes for, and a submodule binding whose `from` clause resolves
+ * to it. `import pkg.name` binds the submodule without reading the initializer, so its importer is left out, and so is
+ * every importer in `skip`.
+ */
+export async function pythonPackageInitializerReaders(
+  projectRoot: string,
+  changedFiles: Iterable<string>,
+  importers: ReadonlyMap<string, { readonly mod: ModuleIndex }>,
+  skip: ReadonlySet<string>,
+  concurrency: number,
+): Promise<string[]> {
+  const initializers = new Set<string>();
+  const packages = new Set<string>();
+  for (const file of changedFiles) {
+    if (!PYTHON_PACKAGE_INITIALIZERS.has(path.basename(file))) continue;
+    initializers.add(fileIdentityKey(file));
+    packages.add(fileIdentityKey(path.dirname(file)));
+  }
+  const readers: string[] = [];
+  if (!initializers.size) return readers;
+  const choseAttributeOfInitializer = (resolved: string, imported: string): boolean =>
+    initializers.has(fileIdentityKey(resolved)) && resolvePythonSubmoduleExact(resolved, imported) !== undefined;
+  const isSubmoduleOfChangedPackage = (resolved: string): boolean =>
+    packages.has(fileIdentityKey(path.dirname(pythonModulePath(resolved))));
+  const submoduleImporters: Array<{ file: string; specifiers: Set<string> }> = [];
+  for (const [file, { mod }] of importers) {
+    if (skip.has(file)) continue;
+    let specifiers: Set<string> | undefined;
+    let readsInitializer = false;
+    for (const binding of mod.imports) {
+      if (binding.mechanism !== "python" || typeof binding.resolved !== "string") continue;
+      if (binding.kind === "named" && choseAttributeOfInitializer(binding.resolved, binding.imported)) {
+        readsInitializer = true;
+        break;
+      }
+      if (binding.kind === "namespace" && isSubmoduleOfChangedPackage(binding.resolved)) {
+        (specifiers ??= new Set()).add(binding.from);
+      }
+    }
+    if (readsInitializer) readers.push(file);
+    else if (specifiers) submoduleImporters.push({ file, specifiers });
+  }
+  const resolvesToInitializer = await mapLimit(submoduleImporters, concurrency, async ({ file, specifiers }) => {
+    for (const specifier of specifiers) {
+      const target = await resolvePythonImportTarget(projectRoot, file, specifier);
+      if (typeof target === "string" && initializers.has(fileIdentityKey(target))) return true;
+    }
+    return false;
+  });
+  submoduleImporters.forEach(({ file }, index) => {
+    if (resolvesToInitializer[index]) readers.push(file);
+  });
+  return readers;
 }
 
 async function pushNamedImport(
