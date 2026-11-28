@@ -59,7 +59,7 @@ import {
   type QueryIndexCandidate,
   type QueryIndexCandidateResult,
 } from "./query-index/candidates.js";
-import { QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "./query-index/store.js";
+import { QUERY_INDEX_CANDIDATE_ROW_LIMIT, type QueryIndexStore } from "./query-index/store.js";
 import { registerSessionInvalidationHook } from "./session-lifecycle.js";
 import type { QueryIndexHandle } from "./query-index/update.js";
 import {
@@ -800,19 +800,21 @@ async function addTextResults(
         const scoringStarted = performance.now();
         const selected = rankTextCandidates(candidateChunks, query, mode, limit);
         unmaterializedCandidates = candidateChunks.length - selected.length;
+        const snippetChunks = new Map<AgentSearchEvidence, QueryIndexCandidate>();
         for (const position of selected) {
           const candidate = candidateChunks[position]!;
-          addTextFileResults(
+          const evidence = addTextChunkResult(
             snapshot,
             candidateResultMap,
             query,
-            includeSnippets,
             mode,
             candidate.path,
-            [candidate],
             candidate,
+            candidate.score,
           );
+          if (evidence && includeSnippets) snippetChunks.set(evidence, candidate);
         }
+        if (includeSnippets) fillIndexedSnippets(store, candidateResultMap, snippetChunks, query, limit);
         diagnostics.scoringMs += performance.now() - scoringStarted;
         return candidateSearch;
       });
@@ -897,51 +899,89 @@ function addTextFileResults(
   mode: AgentSearchMode,
   relFile: string,
   chunks: readonly SearchTextChunk[],
-  candidate?: QueryIndexCandidate,
 ): void {
-  const documentationFile = isDocumentationFile(relFile);
   for (const chunk of chunks) {
-    const match = candidate ? candidate.score : matchTokenScoreFromNormalized(chunk.normalizedText, query);
-    if (match.score <= 0) continue;
-    const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
+    const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
+    const evidence = addTextChunkResult(snapshot, resultMap, query, mode, relFile, chunk, match);
+    if (evidence && includeSnippets) evidence.snippet = makeSnippet(chunk.text, query);
+  }
+}
 
-    const result = upsertResult(resultMap, {
-      handle,
-      kind: "chunk",
-      label: textChunkLabel(relFile, chunk),
-      file: relFile,
-      range: {
-        start: { line: chunk.startLine, column: 0 },
-        end: { line: chunk.endLine, column: 0 },
-      },
-      provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
-    });
-    if (chunk.name && result.label === `${relFile}:${chunk.startLine}`) {
-      result.label = `${chunk.name} (${relFile})`;
-      result.range = {
-        start: { line: chunk.startLine, column: 0 },
-        end: { line: chunk.endLine, column: 0 },
-      };
-    }
-    result.score += match.score + textResultBoost(match, documentationFile, query, mode);
-    addMatchedRankTerms(result, match);
-    addReason(result, `text token match: ${match.matched.join(", ")}`);
-    addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
-    const evidence: AgentSearchEvidence = {
-      source: "chunk",
-      label: result.label,
-      file: relFile,
-      line: chunk.startLine,
+/** Adds a scoring text chunk to its result; returns the evidence it added, or nothing when it adds none. */
+function addTextChunkResult(
+  snapshot: AgentProjectSnapshot,
+  resultMap: Map<string, MutableSearchResult>,
+  query: SearchQueryTerms,
+  mode: AgentSearchMode,
+  relFile: string,
+  chunk: Pick<SearchTextChunk, "name" | "startLine" | "endLine">,
+  match: TokenMatch,
+): AgentSearchEvidence | undefined {
+  if (match.score <= 0) return undefined;
+  const documentationFile = isDocumentationFile(relFile);
+  const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
+
+  const result = upsertResult(resultMap, {
+    handle,
+    kind: "chunk",
+    label: textChunkLabel(relFile, chunk),
+    file: relFile,
+    range: {
+      start: { line: chunk.startLine, column: 0 },
+      end: { line: chunk.endLine, column: 0 },
+    },
+    provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
+  });
+  if (chunk.name && result.label === `${relFile}:${chunk.startLine}`) {
+    result.label = `${chunk.name} (${relFile})`;
+    result.range = {
+      start: { line: chunk.startLine, column: 0 },
+      end: { line: chunk.endLine, column: 0 },
     };
-    if (includeSnippets) {
-      // An indexed candidate reads its text for the first line that scores; that line sits in the snippet.
-      const matchedLine = candidate
-        ? firstMatchingLine(chunk.text, query.rankTokens, query.normalizedRankPhrase)
-        : undefined;
-      evidence.snippet = makeSnippet(chunk.text, query, matchedLine);
+  }
+  result.score += match.score + textResultBoost(match, documentationFile, query, mode);
+  addMatchedRankTerms(result, match);
+  addReason(result, `text token match: ${match.matched.join(", ")}`);
+  addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
+  const evidence: AgentSearchEvidence = {
+    source: "chunk",
+    label: result.label,
+    file: relFile,
+    line: chunk.startLine,
+  };
+  const added = addEvidence(result, evidence);
+  addFileFollowUps(result, relFile);
+  return added ? evidence : undefined;
+}
+
+/**
+ * Sets the snippets of the indexed chunk evidence that a response can return, reading the text of those chunks only.
+ * Text results never share a handle with another source, so without a graph neighborhood, which re-scores every result
+ * and comes with no `limit`, the returned text results are among the best `limit` of these by the final order.
+ */
+function fillIndexedSnippets(
+  store: QueryIndexStore,
+  resultMap: Map<string, MutableSearchResult>,
+  chunksByEvidence: ReadonlyMap<AgentSearchEvidence, QueryIndexCandidate>,
+  query: SearchQueryTerms,
+  limit: number | undefined,
+): void {
+  const returnable = limit === undefined ? [...resultMap.values()] : selectTopResults(resultMap, limit, 0).items;
+  const evidence: AgentSearchEvidence[] = [];
+  const chunks: QueryIndexCandidate[] = [];
+  for (const result of returnable) {
+    for (const entry of result.evidence) {
+      const chunk = chunksByEvidence.get(entry);
+      if (!chunk) continue;
+      evidence.push(entry);
+      chunks.push(chunk);
     }
-    addEvidence(result, evidence);
-    addFileFollowUps(result, relFile);
+  }
+  const texts = store.chunkTexts(chunks);
+  for (const [index, entry] of evidence.entries()) {
+    const text = texts[index]!;
+    // The first line that scores sits in the snippet.
+    entry.snippet = makeSnippet(text, query, firstMatchingLine(text, query.rankTokens, query.normalizedRankPhrase));
   }
 }
 
@@ -1252,7 +1292,8 @@ function addReason(result: MutableSearchResult, reason: string): void {
   if (reason.trim()) result.rankReasons.add(reason);
 }
 
-function addEvidence(result: MutableSearchResult, evidence: AgentSearchEvidence): void {
+/** Adds evidence unless the result already has evidence from the same source, label, file, and line. */
+function addEvidence(result: MutableSearchResult, evidence: AgentSearchEvidence): boolean {
   if (
     result.evidence.some(
       (entry) =>
@@ -1262,9 +1303,10 @@ function addEvidence(result: MutableSearchResult, evidence: AgentSearchEvidence)
         entry.line === evidence.line,
     )
   ) {
-    return;
+    return false;
   }
   result.evidence.push(evidence);
+  return true;
 }
 
 function buildSymbolNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, SymbolNeighbor[]> {

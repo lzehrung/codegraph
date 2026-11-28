@@ -1,5 +1,6 @@
 import { normalizeQuerySearchText } from "./content.js";
 import { QUERY_INDEX_CANDIDATE_ROW_LIMIT, type QueryIndexStore, type StoredQueryIndexChunk } from "./store.js";
+import { matchNormalizedField } from "../search-scoring.js";
 import { compareStrings } from "../../util/strings.js";
 
 export const QUERY_INDEX_CANDIDATE_VERSION = 7;
@@ -23,52 +24,14 @@ export type QueryIndexCandidateResult = {
   omittedCandidates: number;
 };
 
+/** A stored chunk's normalized text holds single spaces between words, as the shared search scorer expects. */
 function scoreCandidateChunk(
   normalizedText: string,
   rankTerms: readonly string[],
   normalizedRankPhrase = rankTerms.join(" "),
 ): QueryIndexCandidateScore {
-  if (!normalizedText.length || !rankTerms.length) {
-    return { score: 0, matched: [], exactPhrase: false, proximity: false, matchedTerms: 0 };
-  }
-  const words = new Set(normalizedText.split(/\s+/).filter(Boolean));
-  const compact = normalizedText.replace(/\s+/g, "");
-  const matched: string[] = [];
-  let score = 0;
-  for (const term of rankTerms) {
-    if (words.has(term)) {
-      score += 10;
-      matched.push(term);
-    } else if (compact.includes(term)) {
-      score += 7;
-      matched.push(term);
-    } else if (normalizedText.includes(term)) {
-      score += 4;
-      matched.push(term);
-    }
-  }
-  let exactPhrase = false;
-  let proximity = false;
-  if (matched.length === rankTerms.length && rankTerms.length > 1) {
-    score += 12;
-    if (normalizedText.includes(normalizedRankPhrase)) {
-      score += 30;
-      exactPhrase = true;
-    } else {
-      let fromIndex = 0;
-      proximity = true;
-      for (const term of rankTerms) {
-        const termIndex = normalizedText.indexOf(term, fromIndex);
-        if (termIndex < 0) {
-          proximity = false;
-          break;
-        }
-        fromIndex = termIndex + term.length;
-      }
-      if (proximity) score += 10;
-    }
-  }
-  return { score, matched, exactPhrase, proximity, matchedTerms: matched.length };
+  const match = matchNormalizedField(normalizedText, undefined, { rankTokens: rankTerms, normalizedRankPhrase });
+  return { ...match, matchedTerms: match.matched.length };
 }
 
 /** The first line of a candidate's text that scores for the terms, or the first line when none does. */

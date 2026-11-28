@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { brotliDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import prepareQueryIndexWorkerTask from "../src/agent/query-index/query-index-worker.js";
-import { MAX_QUERY_INDEX_TEXT_BYTES, prepareQueryIndexFile } from "../src/agent/query-index/content.js";
+import {
+  buildQueryTextChunks,
+  MAX_QUERY_INDEX_TEXT_BYTES,
+  prepareQueryIndexFile,
+} from "../src/agent/query-index/content.js";
 
 const roots: string[] = [];
 
@@ -81,6 +86,27 @@ describe("prepareQueryIndexFile branches", () => {
       lineCount: 0,
       chunks: [],
     });
+    expect(brotliDecompressSync(prepared!.chunkText).length).toBe(0);
+  });
+
+  it("compresses a file's chunk texts as one exact-size block whose byte ranges hold each chunk's text", async () => {
+    const source = "export const 日本 = 'café';\nexport function emoji() {\n  return '😀';\n}\n";
+    const root = await createRoot({ "src/unicode.ts": source });
+    const absolutePath = path.join(root, "src/unicode.ts");
+    const prepared = await prepareQueryIndexFile({ absolutePath, path: "src/unicode.ts", sourceIdentity: "unicode" });
+    expect(prepared).not.toBeNull();
+    // A compressed field owns exactly its bytes, so a worker's structured clone copies no spare buffer capacity.
+    for (const field of [prepared!.normalizedText, prepared!.chunkText]) {
+      expect(field.buffer.byteLength).toBe(field.byteLength);
+    }
+    const expected = buildQueryTextChunks(absolutePath, source);
+    expect(expected.length).toBeGreaterThan(1);
+    const block = brotliDecompressSync(prepared!.chunkText);
+    expect(prepared!.chunks.map((chunk) => block.toString("utf8", chunk.textStart, chunk.textEnd))).toEqual(
+      expected.map((chunk) => chunk.text),
+    );
+    expect(prepared!.chunks.at(-1)?.textEnd).toBe(block.length);
+    expect(prepared!.chunks.some((chunk) => "text" in chunk)).toBe(false);
   });
 
   it("falls back to line chunks when semantic chunking throws", async () => {

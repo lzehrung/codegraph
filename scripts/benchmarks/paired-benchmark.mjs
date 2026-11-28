@@ -17,7 +17,7 @@ import {
 } from "./paired-benchmark-lib.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
-const operations = ["init", "cold", "nochange", "onefile", "graph", "search", "refs", "goto"];
+const knownOperations = ["init", "cold", "nochange", "onefile", "graph", "search-index", "search", "refs", "goto"];
 const measure = path.join(directory, "measure-operation.mjs");
 const args = process.argv.slice(2);
 const [baseArgument, headArgument] = args.splice(0, 2);
@@ -28,6 +28,7 @@ const options = {
   corpusDir: "",
   corpusMap: "",
   families: "",
+  operations: "",
   output: path.resolve("paired-benchmark.json"),
   profileDir: "",
   profileOnly: false,
@@ -39,6 +40,7 @@ const optionKeys = {
   "--corpus-dir": "corpusDir",
   "--corpus-map": "corpusMap",
   "--families": "families",
+  "--operations": "operations",
   "--output": "output",
   "--profile-dir": "profileDir",
 };
@@ -55,7 +57,7 @@ const missingCheckouts = !baseArgument || !headArgument;
 const missingCorpus = !options.corpusDir && !options.corpusMap;
 if (missingCheckouts || missingCorpus) {
   throw new Error(
-    "Usage: paired-benchmark.mjs <base> <head> --corpus-dir <directory> [--families <list>] [--rounds 6] [--output <json>] [--profile-dir <directory>] [--profile-only]",
+    "Usage: paired-benchmark.mjs <base> <head> --corpus-dir <directory> [--families <list>] [--operations <list>] [--rounds 6] [--output <json>] [--profile-dir <directory>] [--profile-only]",
   );
 }
 for (const key of ["rounds", "threads", "nativeThreads"]) {
@@ -80,6 +82,12 @@ for (const family of selectedFamilies) {
   if (!manifest.some((corpus) => corpus.family === family)) throw new Error(`Unknown family ${family}.`);
 }
 const corpora = manifest.filter((corpus) => selectedFamilies.includes(corpus.family));
+const requestedOperations = options.operations ? options.operations.split(",") : knownOperations;
+for (const operation of requestedOperations) {
+  if (!knownOperations.includes(operation)) throw new Error(`Unknown operation ${operation}.`);
+}
+// Operations keep the known order, so `search-index` builds the sidecar that `search` then reads.
+const operations = knownOperations.filter((operation) => requestedOperations.includes(operation));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-paired-"));
 
 function git(root, ...arguments_) {

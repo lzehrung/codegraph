@@ -35,6 +35,7 @@ const workloadFields = {
   nochange: ["files"],
   onefile: ["files"],
   graph: ["nodes", "edges"],
+  "search-index": ["files", "filesRead"],
   search: ["queries", "matches"],
   refs: ["sites", "found", "references"],
   goto: ["sites", "found", "references"],

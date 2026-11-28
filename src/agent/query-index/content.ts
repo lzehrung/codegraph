@@ -8,13 +8,14 @@ export const MAX_QUERY_INDEX_TEXT_BYTES = 300_000;
 export const QUERY_INDEX_NORMALIZER_VERSION = 2;
 export const QUERY_INDEX_CHUNKER_VERSION = 3;
 
-function compressQueryText(text: string): Uint8Array {
-  const compressed = brotliCompressSync(text, {
+function compressQueryText(input: string | Uint8Array): Uint8Array {
+  const compressed = brotliCompressSync(input, {
     params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
   });
-  // Worker results cross a structured clone, which drops the Buffer prototype. Normalize the
-  // in-process result too so a batch prepared either way produces identical rows.
-  return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength);
+  // A small result is a view into a 16 KiB output buffer, which a worker's structured clone would copy whole. The copy
+  // keeps only the compressed bytes, and as a plain Uint8Array it has the type a worker result arrives with, so a batch
+  // prepared either way produces identical rows.
+  return new Uint8Array(compressed);
 }
 
 export type QueryTextChunk = {
@@ -27,8 +28,10 @@ export type QueryTextChunk = {
   endLine: number;
 };
 
+/** A chunk as stored: its text is the UTF-8 byte range `[textStart, textEnd)` of its file's decompressed chunk text. */
 export type PreparedQueryTextChunk = Omit<QueryTextChunk, "text"> & {
-  text: Uint8Array;
+  textStart: number;
+  textEnd: number;
 };
 
 export type QueryIndexFileInput = {
@@ -45,9 +48,30 @@ export type PreparedQueryIndexFile = {
   byteLength: number;
   lineCount: number;
   normalizedText: Uint8Array;
+  /** The compressed UTF-8 text of every chunk of the file, in ordinal order. */
+  chunkText: Uint8Array;
   chunks: PreparedQueryTextChunk[];
   sourceRead: boolean;
 };
+
+/**
+ * Compresses a file's chunk texts as one block, one compressor per file rather than one per chunk. Each chunk's text is
+ * encoded on its own into its byte range, so decoding the range returns exactly what encoding that text alone would.
+ */
+export function packQueryTextChunks(
+  chunks: readonly QueryTextChunk[],
+): Pick<PreparedQueryIndexFile, "chunkText" | "chunks"> {
+  let byteLength = 0;
+  for (const chunk of chunks) byteLength += Buffer.byteLength(chunk.text, "utf8");
+  const block = Buffer.allocUnsafe(byteLength);
+  let offset = 0;
+  const prepared = chunks.map(({ text, ...chunk }) => {
+    const textStart = offset;
+    offset += block.write(text, offset, "utf8");
+    return { ...chunk, textStart, textEnd: offset };
+  });
+  return { chunkText: compressQueryText(block), chunks: prepared };
+}
 
 export function normalizeQuerySearchText(input: string): string {
   return input
@@ -142,7 +166,7 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
         byteLength: stat.size,
         lineCount: 0,
         normalizedText: compressQueryText(""),
-        chunks: [],
+        ...packQueryTextChunks([]),
         sourceRead: false,
       };
     }
@@ -157,10 +181,7 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
       byteLength: stat.size,
       lineCount: text ? text.split(/\r?\n/).length : 0,
       normalizedText: compressQueryText(normalizeQuerySearchText(text)),
-      chunks: chunkQueryText(input.absolutePath, text, support).map((chunk) => ({
-        ...chunk,
-        text: compressQueryText(chunk.text),
-      })),
+      ...packQueryTextChunks(chunkQueryText(input.absolutePath, text, support)),
       sourceRead: true,
     };
   } catch {

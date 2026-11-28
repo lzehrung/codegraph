@@ -303,7 +303,8 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
     metadata.normalizerVersion === versions.normalizerVersion &&
     metadata.chunkerVersion === versions.chunkerVersion &&
     metadata.projectRootIdentity === current.projectRootIdentity;
-  const requiresContentRebuild = !contentVersionsMatch && storedIdentities.size > 0;
+  // Opening a sidecar of an earlier schema drops its rows, so every file is prepared again from source.
+  const requiresContentRebuild = store.rebuiltEarlierSchema || (!contentVersionsMatch && storedIdentities.size > 0);
   const changed = contentVersionsMatch
     ? current.files.filter((file) => storedIdentities.get(file.path) !== file.sourceIdentity)
     : current.files;

@@ -194,6 +194,7 @@ describe("paired real-project benchmark statistics", () => {
     ["nochange", { files: 2 }],
     ["onefile", { files: 2 }],
     ["graph", { nodes: 2, edges: 3 }],
+    ["search-index", { files: 3, filesRead: 2 }],
     ["search", { queries: 2, matches: 3 }],
     ["refs", { sites: 2, found: 2, references: 3 }],
     ["goto", { sites: 2, found: 2, references: 0 }],

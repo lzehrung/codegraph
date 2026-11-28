@@ -124,6 +124,23 @@ if (op === "prepare") {
     return { found, references };
   });
   result = { ms, sites: sites.length, ...value };
+} else if (op === "search-index") {
+  const { createAgentSession } = await load("agent/session.js");
+  const { ensureSessionQueryIndex } = await load("agent/query-index/session-store.js");
+  const { resolveQueryIndexPaths } = await load("agent/query-index/paths.js");
+  const session = createAgentSession({ root, useConfig: false, buildOptions: disk });
+  try {
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    // The project index stays warm; the search sidecar is built from source every time.
+    const { sidecar } = resolveQueryIndexPaths(snapshot.index.cacheRootDir);
+    for (const file of [sidecar, `${sidecar}-wal`, `${sidecar}-shm`]) fs.rmSync(file, { force: true });
+    const { ms, value } = await timed(() => ensureSessionQueryIndex(session, snapshot));
+    const { sidecarState, filesAdded, filesRead } = value.diagnostics;
+    if (sidecarState !== "created") throw new Error(`search-index: expected a created sidecar, got ${sidecarState}.`);
+    result = { ms, files: filesAdded, filesRead };
+  } finally {
+    session.invalidate();
+  }
 } else if (op === "search") {
   const { createAgentSession } = await load("agent/session.js");
   const { searchCodegraphWithSession } = await load("agent/search.js");

@@ -55,7 +55,14 @@ function hasWholeWord(normalized: string, token: string): boolean {
   return false;
 }
 
-export function matchNormalizedField(normalized: string, compact: string, query: SearchQueryTerms): TokenMatch {
+/** The query terms a score reads. */
+export type RankTerms = {
+  readonly rankTokens: readonly string[];
+  readonly normalizedRankPhrase: string;
+};
+
+/** Scores normalized text; without a prepared compact form, the compact text is derived once a token needs it. */
+export function matchNormalizedField(normalized: string, compact: string | undefined, query: RankTerms): TokenMatch {
   if (!normalized) return emptyTokenMatch();
   const matched: string[] = [];
   let score = 0;
@@ -64,7 +71,7 @@ export function matchNormalizedField(normalized: string, compact: string, query:
     if (hasWholeWord(normalized, token)) {
       score += 10;
       matched.push(token);
-    } else if (compact.includes(token)) {
+    } else if ((compact ??= normalized.replace(/\s+/g, "")).includes(token)) {
       score += 7;
       matched.push(token);
     } else if (normalized.includes(token)) {
