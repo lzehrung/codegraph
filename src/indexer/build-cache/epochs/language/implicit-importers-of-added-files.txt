@@ -1,0 +1,1 @@
+Add a module hook that extracts again the files an added file joins implicitly, used by PHP for Composer autoload files.

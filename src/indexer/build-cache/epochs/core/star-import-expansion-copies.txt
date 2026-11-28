@@ -1,0 +1,1 @@
+Star imports expand into copies from each module's extracted bindings, and snapshots embed modules without expanded bindings, so caches holding stale expansions rebuild.

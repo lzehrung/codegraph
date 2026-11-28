@@ -1,4 +1,5 @@
 import { ProjectedSyntaxTree } from "../../native/projected-tree.js";
+import { composerAutoloadFileImporters } from "../../util/resolution/php-composer.js";
 import { primePhpModuleImportNames } from "../../util/resolution/php-module-facts-cache.js";
 import type { ModuleIndexHooks } from "../language-hook-types.js";
 import { attemptParsePreparedFileContext } from "../parse-context.js";
@@ -10,6 +11,7 @@ import {
 } from "../php-namespace-symbols.js";
 
 export const phpModule: ModuleIndexHooks = {
+  implicitImportersOfAddedFiles: composerAutoloadFileImporters,
   prepare(prepared, options, collectModule) {
     const attempt = attemptParsePreparedFileContext(prepared);
     prepared.projectFactsParse = attempt;

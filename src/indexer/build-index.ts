@@ -83,7 +83,7 @@ import {
 } from "./module-record.js";
 import type { ModuleRecord, ModuleRecordTask } from "./module-record-types.js";
 import { collectParseErrorRanges } from "./parse-errors.js";
-import { expandStarImports } from "./expand-star-imports.js";
+import { expandStarImports, unexpandedModule } from "./expand-star-imports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { BloomFilter, buildBloomFilterFromSource, type BloomFilterCache } from "../util/bloom-filter.js";
 import type { NativeBloomFilterPayload } from "../worker/native-bloom-types.js";
@@ -1023,6 +1023,11 @@ function externalEdgeTargetKey(to: Edge["to"]): string {
   return to.type === "file" ? `file:${fileIdentityKey(to.path)}` : `external:${to.name}`;
 }
 
+/** The specifier an edge was written with: its raw text, or an external edge's name when it kept none. */
+function edgeSpecifier(edge: Edge): string {
+  return edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw;
+}
+
 const PRECISE_SPECIFIER_RESOLUTION_LANGUAGES: Record<string, true> = {
   c: true,
   cpp: true,
@@ -1057,11 +1062,10 @@ async function specifierResolutionChanged(
   const modulePolicy = indexLanguagePolicyFor(support.id).module;
   const usesTsconfigPaths = modulePolicy?.tsconfigPaths;
 
-  const specifierOf = (edge: Edge): string => (edge.to.type === "external" ? edge.raw || edge.to.name : edge.raw);
   const matching: Edge[] = [];
   const needsAlias: Edge[] = [];
   for (const edge of specifierEdges) {
-    const specifier = specifierOf(edge);
+    const specifier = edgeSpecifier(edge);
     if (externalSpecifierMatchesAddedStem(specifier, support.id, addedStems, [], addedFiles, addedFileLanguageId)) {
       matching.push(edge);
       continue;
@@ -1073,11 +1077,11 @@ async function specifierResolutionChanged(
     const paths = await loadTsconfigPaths(file);
     if (paths && Object.keys(paths).length) {
       for (const edge of needsAlias) {
-        const mapped = tsconfigAliasMappedTails(specifierOf(edge), paths);
+        const mapped = tsconfigAliasMappedTails(edgeSpecifier(edge), paths);
         if (
           mapped.length &&
           externalSpecifierMatchesAddedStem(
-            specifierOf(edge),
+            edgeSpecifier(edge),
             support.id,
             addedStems,
             mapped,
@@ -1629,12 +1633,7 @@ async function collectStaleCachedModules(args: {
     // Treat these files like added files.
     const resolutionInputs = [...added, ...[...changed, ...deleted].filter(canRestoreResolution)];
     if (resolutionInputs.length) {
-      const stemsByLanguage = new Map<string, ReadonlySet<string>>();
-      const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
-        let stems = stemsByLanguage.get(languageId);
-        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(resolutionInputs, languageId)));
-        return stems;
-      };
+      const addedStemsForLanguage = addedStemsByLanguage(resolutionInputs);
       const candidates = [...collectSpecifierEdgeCandidates(manifestFiles, true)].filter(
         (file) => cachedModules.has(file) && !stale.has(file),
       );
@@ -1656,30 +1655,44 @@ async function collectStaleCachedModules(args: {
         if (changedResolution[index]) stale.add(candidate);
       });
       for (const importer of collectPythonPackageImporters(manifestFiles, added)) stale.add(importer);
+      if (added.length) {
+        const cachedImporters: Array<readonly [string, ModuleIndex, readonly Edge[]]> = [];
+        for (const [file, { mod }] of cachedModules) {
+          if (!stale.has(file)) cachedImporters.push([file, mod, manifestFiles[file]?.edges ?? []]);
+        }
+        const importersWithoutEdges = await importersOfAddedFilesWithoutEdges({
+          importers: cachedImporters,
+          addedFiles: added,
+          loadTsconfigPaths,
+          languageExtensions: args.opts?.languageExtensions,
+          concurrency: args.concurrency,
+        });
+        for (const importer of importersWithoutEdges) stale.add(importer);
+        const implicitImporters = await implicitImportersOfAddedFiles({
+          projectRoot: args.projectRoot,
+          addedFiles: added,
+          importers: () => cachedModules.keys(),
+          languageExtensions: args.opts?.languageExtensions,
+        });
+        for (const importer of implicitImporters) stale.add(importer);
+      }
     }
   } else {
     changedOrAddedFiles = [...args.cacheMisses.changed, ...args.cacheMisses.added];
     const added = [...args.cacheMisses.added, ...args.cacheMisses.changed.filter(canRestoreResolution)];
     if (added.length) {
-      const stemsByLanguage = new Map<string, ReadonlySet<string>>();
+      const addedStemsForLanguage = addedStemsByLanguage(added);
       for (const [file, { mod }] of cachedModules) {
         if (stale.has(file)) continue;
-        const languageId = supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id ?? "default";
-        let stems = stemsByLanguage.get(languageId);
-        if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(added, languageId)));
-        const tsconfigPaths = indexLanguagePolicyFor(languageId).module?.tsconfigPaths
-          ? await loadTsconfigPaths(file)
-          : undefined;
-        const addedCanSatisfy = cachedModuleSpecifiers(mod).some((specifier) =>
-          externalSpecifierMatchesAddedStem(
-            specifier,
-            languageId,
-            stems,
-            tsconfigPaths ? tsconfigAliasMappedTails(specifier, tsconfigPaths) : [],
-            added,
-            (file) => supportForFileWithoutHeaderSample(file, args.opts?.languageExtensions)?.id,
-          ),
-        );
+        const addedCanSatisfy = await addedFileCanSatisfy({
+          file,
+          specifiers: cachedModuleSpecifiers(mod),
+          addedFiles: added,
+          anyLanguageFile: true,
+          addedStemsForLanguage,
+          loadTsconfigPaths,
+          languageExtensions: args.opts?.languageExtensions,
+        });
         if (addedCanSatisfy) stale.add(file);
       }
       // `from . import mod` targets `__init__.py`, so no specifier names an added `mod.py`.
@@ -1689,6 +1702,15 @@ async function collectStaleCachedModules(args: {
         added,
       );
       for (const file of packageImporters) stale.add(file);
+    }
+    if (args.cacheMisses.added.length) {
+      const implicitImporters = await implicitImportersOfAddedFiles({
+        projectRoot: args.projectRoot,
+        addedFiles: args.cacheMisses.added,
+        importers: () => cachedModules.keys(),
+        languageExtensions: args.opts?.languageExtensions,
+      });
+      for (const importer of implicitImporters) stale.add(importer);
     }
     // C++ module specifiers name declarations, not file stems. The stem check cannot see
     // a second declarer, a file that stopped declaring a module, or a deleted declarer.
@@ -1857,6 +1879,168 @@ function cachedModuleSpecifiers(mod: ModuleIndex): string[] {
     if (entry.type !== "local") specifiers.push(entry.moduleSpecifier ?? entry.fromModule);
   }
   return specifiers;
+}
+
+/** Specifiers a cached module wrote that no manifest edge records, by whether they resolved to a project file. */
+type SpecifiersWithoutEdges = { resolved: string[]; unresolved: string[] };
+
+/**
+ * Specifiers of a cached module that no manifest edge records, by spelling or by resolved file, such as a CommonJS
+ * `require` in a TypeScript file. A language with an `implicitImportersOfAddedFiles` hook owns its resolved star
+ * imports that no edge records (Composer `autoload.files`), so `ownsImplicitStars` leaves those to the hook.
+ */
+function specifiersWithoutEdges(
+  mod: ModuleIndex,
+  edges: readonly Edge[],
+  ownsImplicitStars: boolean,
+): SpecifiersWithoutEdges {
+  const recordedSpecifiers = new Set<string>();
+  const recordedTargets = new Set<string>();
+  for (const edge of edges) {
+    recordedSpecifiers.add(edgeSpecifier(edge));
+    if (edge.to.type === "file") recordedTargets.add(fileIdentityKey(edge.to.path));
+  }
+  const recorded = (specifier: string, target: string | undefined): boolean =>
+    recordedSpecifiers.has(specifier) || (target !== undefined && recordedTargets.has(fileIdentityKey(target)));
+  const source = unexpandedModule(mod);
+  const resolved = new Set<string>();
+  const unresolved = new Set<string>();
+  for (const binding of source.imports) {
+    const target = typeof binding.resolved === "string" ? binding.resolved : undefined;
+    if (recorded(binding.from, target)) continue;
+    if (target === undefined) unresolved.add(binding.from);
+    else if (!ownsImplicitStars || binding.kind !== "star") resolved.add(binding.from);
+  }
+  for (const entry of source.exports) {
+    if (entry.type === "local") continue;
+    const specifier = entry.moduleSpecifier ?? entry.fromModule;
+    const target = entry.fromModule === specifier ? undefined : entry.fromModule;
+    if (recorded(specifier, target)) continue;
+    if (target === undefined) unresolved.add(specifier);
+    else resolved.add(specifier);
+  }
+  return { resolved: [...resolved].filter((specifier) => !unresolved.has(specifier)), unresolved: [...unresolved] };
+}
+
+/**
+ * Whether an added file can satisfy one of the `specifiers` that `file` wrote: its stem matches one, or, when
+ * `anyLanguageFile` is set, the language re-resolves its imports on any added file of the language. Only extracting
+ * `file` again tells whether it does.
+ */
+async function addedFileCanSatisfy(args: {
+  file: string;
+  specifiers: readonly string[];
+  addedFiles: readonly string[];
+  anyLanguageFile: boolean;
+  addedStemsForLanguage: (languageId: string) => ReadonlySet<string>;
+  loadTsconfigPaths: (file: string) => Promise<Record<string, readonly string[]> | undefined>;
+  languageExtensions: BuildOptions["languageExtensions"];
+}): Promise<boolean> {
+  const languageId = supportForFileWithoutHeaderSample(args.file, args.languageExtensions)?.id ?? "default";
+  const stems = args.addedStemsForLanguage(languageId);
+  const tsconfigPaths = indexLanguagePolicyFor(languageId).module?.tsconfigPaths
+    ? await args.loadTsconfigPaths(args.file)
+    : undefined;
+  const addedFileLanguageId = (added: string): string | undefined =>
+    supportForFileWithoutHeaderSample(added, args.languageExtensions)?.id;
+  return args.specifiers.some((specifier) =>
+    externalSpecifierMatchesAddedStem(
+      specifier,
+      languageId,
+      stems,
+      tsconfigPaths ? tsconfigAliasMappedTails(specifier, tsconfigPaths) : [],
+      args.anyLanguageFile ? args.addedFiles : [],
+      addedFileLanguageId,
+    ),
+  );
+}
+
+/** `addedResolutionStems` of `addedFiles` for each language, computed on first use. */
+function addedStemsByLanguage(addedFiles: readonly string[]): (languageId: string) => ReadonlySet<string> {
+  const stemsByLanguage = new Map<string, ReadonlySet<string>>();
+  return (languageId) => {
+    let stems = stemsByLanguage.get(languageId);
+    if (!stems) stemsByLanguage.set(languageId, (stems = addedResolutionStems(addedFiles, languageId)));
+    return stems;
+  };
+}
+
+/**
+ * Cached importers that an added file can satisfy through a specifier no manifest edge records. The edge check
+ * never sees those specifiers, so they are checked like the bindings of a build without a manifest. A specifier
+ * that resolved to a file changes only for an added file its stem names: a higher-priority candidate.
+ */
+async function importersOfAddedFilesWithoutEdges(args: {
+  importers: Iterable<readonly [file: string, mod: ModuleIndex, edges: readonly Edge[]]>;
+  addedFiles: readonly string[];
+  loadTsconfigPaths: (file: string) => Promise<Record<string, readonly string[]> | undefined>;
+  languageExtensions: BuildOptions["languageExtensions"];
+  concurrency: number;
+}): Promise<string[]> {
+  const candidates: Array<{ file: string; specifiers: SpecifiersWithoutEdges }> = [];
+  for (const [file, mod, edges] of args.importers) {
+    const languageId = supportForFileWithoutHeaderSample(file, args.languageExtensions)?.id;
+    const ownsImplicitStars =
+      !!languageId && !!indexLanguagePolicyFor(languageId).module?.implicitImportersOfAddedFiles;
+    const specifiers = specifiersWithoutEdges(mod, edges, ownsImplicitStars);
+    if (specifiers.resolved.length || specifiers.unresolved.length) candidates.push({ file, specifiers });
+  }
+  if (!candidates.length) return [];
+  const addedStemsForLanguage = addedStemsByLanguage(args.addedFiles);
+  const canSatisfy = (file: string, specifiers: readonly string[], anyLanguageFile: boolean): Promise<boolean> =>
+    addedFileCanSatisfy({
+      file,
+      specifiers,
+      addedFiles: args.addedFiles,
+      anyLanguageFile,
+      addedStemsForLanguage,
+      loadTsconfigPaths: args.loadTsconfigPaths,
+      languageExtensions: args.languageExtensions,
+    });
+  const satisfied = await mapLimit(candidates, args.concurrency, async ({ file, specifiers }) => {
+    if (specifiers.unresolved.length && (await canSatisfy(file, specifiers.unresolved, true))) return true;
+    return !!specifiers.resolved.length && (await canSatisfy(file, specifiers.resolved, false));
+  });
+  return candidates.filter((_, index) => satisfied[index]).map(({ file }) => file);
+}
+
+/** The files `files()` lists in `languageId`, listed only once a caller reads the first one. */
+function* filesOfLanguage(
+  files: () => Iterable<string>,
+  languageId: string,
+  languageExtensions: BuildOptions["languageExtensions"],
+): Generator<string> {
+  for (const file of files()) {
+    if (supportForFileWithoutHeaderSample(file, languageExtensions)?.id === languageId) yield file;
+  }
+}
+
+/**
+ * Cached importers that an added file joins without a specifier naming it, from the
+ * `implicitImportersOfAddedFiles` hook of each language that has added files.
+ */
+async function implicitImportersOfAddedFiles(args: {
+  projectRoot: string;
+  addedFiles: readonly string[];
+  importers: () => Iterable<string>;
+  languageExtensions: BuildOptions["languageExtensions"];
+}): Promise<string[]> {
+  const addedByLanguage = new Map<string, string[]>();
+  for (const file of args.addedFiles) {
+    const languageId = supportForFileWithoutHeaderSample(file, args.languageExtensions)?.id;
+    if (!languageId || !indexLanguagePolicyFor(languageId).module?.implicitImportersOfAddedFiles) continue;
+    const files = addedByLanguage.get(languageId);
+    if (files) files.push(file);
+    else addedByLanguage.set(languageId, [file]);
+  }
+  const importers: string[] = [];
+  for (const [languageId, addedFiles] of addedByLanguage) {
+    const implicitImporters = indexLanguagePolicyFor(languageId).module?.implicitImportersOfAddedFiles;
+    if (!implicitImporters) continue;
+    const languageImporters = filesOfLanguage(args.importers, languageId, args.languageExtensions);
+    importers.push(...(await implicitImporters(args.projectRoot, addedFiles, languageImporters)));
+  }
+  return importers;
 }
 
 /**
@@ -3925,17 +4109,12 @@ async function buildProjectIndexIncrementalInProbeCache(
           }
         }
       }
-      // An added file can satisfy a specifier whose stem matches it. Edges that cannot
-      // round-trip (unstored resolution kind, or a C/C++ include with no form) are reparsed.
+      // An added file can satisfy a specifier whose stem matches it. Edges that cannot round-trip (unstored resolution
+      // kind, or a C/C++ include with no form) are reparsed. A specifier no edge records is read from the loaded module.
       if (addedFiles.length) {
-        const addedStemsByLanguage = new Map<string, ReadonlySet<string>>();
-        const addedStemsForLanguage = (languageId: string): ReadonlySet<string> => {
-          const existing = addedStemsByLanguage.get(languageId);
-          if (existing) return existing;
-          const stems = addedResolutionStems(addedFiles, languageId);
-          addedStemsByLanguage.set(languageId, stems);
-          return stems;
-        };
+        const addedStemsForLanguage = addedStemsByLanguage(addedFiles);
+        const loadTsconfigPaths = (importer: string) =>
+          loadTsconfigResolutionInputsFor(importer, projectRoot, opts?.logLevel).then((inputs) => inputs?.paths);
         const specifierEdgeCandidates = collectSpecifierEdgeCandidates(trackedEntries, true);
         if (specifierEdgeCandidates.size) {
           const candidateFiles = Array.from(specifierEdgeCandidates);
@@ -3953,8 +4132,7 @@ async function buildProjectIndexIncrementalInProbeCache(
               loadMatchPathForFile,
               addedFiles,
               addedStemsForLanguage,
-              (importer) =>
-                loadTsconfigResolutionInputsFor(importer, projectRoot, opts?.logLevel).then((inputs) => inputs?.paths),
+              loadTsconfigPaths,
             );
           });
           for (let index = 0; index < candidateFiles.length; index += 1) {
@@ -3963,6 +4141,29 @@ async function buildProjectIndexIncrementalInProbeCache(
         }
         for (const importer of collectPythonPackageImporters(trackedEntries, addedFiles)) {
           if (allFiles.has(importer) && !changedFiles.has(importer)) reparseCachedFile(importer);
+        }
+        const loadedImporters: Array<readonly [string, ModuleIndex, readonly Edge[]]> = [];
+        for (const [file, entry] of Object.entries(trackedEntries)) {
+          if (!allFiles.has(file) || changedFiles.has(file)) continue;
+          const mod = modules.get(fileIdentityKey(file));
+          if (mod) loadedImporters.push([file, mod, entry.edges]);
+        }
+        const importersWithoutEdges = await importersOfAddedFilesWithoutEdges({
+          importers: loadedImporters,
+          addedFiles,
+          loadTsconfigPaths,
+          languageExtensions: opts?.languageExtensions,
+          concurrency: conc,
+        });
+        for (const importer of importersWithoutEdges) reparseCachedFile(importer);
+        const implicitImporters = await implicitImportersOfAddedFiles({
+          projectRoot,
+          addedFiles,
+          importers: () => loadedImporters.map(([file]) => file),
+          languageExtensions: opts?.languageExtensions,
+        });
+        for (const importer of implicitImporters) {
+          if (!changedFiles.has(importer)) reparseCachedFile(importer);
         }
       }
       // Declaration imports resolve through the files that declare their names. A body edit changes no names and

@@ -38,15 +38,17 @@ function sqlitePath(root: string): string {
   return path.join(cacheDir(root), "index-cache.sqlite");
 }
 
+type SnapshotModule = { file: string; imports?: Array<{ kind: string; from: string }> };
+
 async function readSnapshot(root: string): Promise<{
   version: number;
-  modules: Array<{ file: string }>;
+  modules: SnapshotModule[];
   fileSignatures: Record<string, unknown>;
 }> {
   const raw = await fsp.readFile(snapshotPath(root));
   return JSON.parse(brotliDecompressSync(raw).toString("utf8")) as {
     version: number;
-    modules: Array<{ file: string }>;
+    modules: SnapshotModule[];
     fileSignatures: Record<string, unknown>;
   };
 }
@@ -313,6 +315,17 @@ describe("thin project snapshot", () => {
     expect(consumer).toMatchObject({ nativeOutcome: "used", parserDegraded: true });
     expect(consumer?.imports.some((binding) => binding.kind === "named" && binding.local === "helper")).toBe(true);
     expect(lib?.parserDegraded).toBeUndefined();
+
+    // The snapshot embeds the degraded importer as extracted, so a later load expands it against the current target.
+    const embedded = (await readSnapshot(root)).modules.find((module) => module.file === "consumer.py");
+    expect(embedded?.imports).toEqual([expect.objectContaining({ kind: "star", from: "lib" })]);
+    await fsp.writeFile(path.join(root, "lib.py"), "def other():\n    return 2\n", "utf8");
+    const reloaded = await buildProjectIndexIncremental(root, { cache: "disk", threads: 1 });
+    const consumerKey = fileIdentityKey(normalizePath(path.join(root, "consumer.py")));
+    const named = reloaded.byFile
+      .get(consumerKey)
+      ?.imports.flatMap((binding) => (binding.kind === "named" ? [binding.local] : []));
+    expect(named).toEqual(["other"]);
   });
 
   it("rejects a legacy snapshot with a malformed parser-degraded marker", async () => {
@@ -379,7 +392,7 @@ describe("thin project snapshot", () => {
     ).toBe(true);
   });
 
-  it("copies frozen modules before expanding star imports", () => {
+  it("expands frozen modules into copies and writes to none of them", () => {
     const libFile = normalizePath("/tmp/cg-star-lib.ts");
     const consumerFile = normalizePath("/tmp/cg-star-consumer.ts");
     const range = { start: { line: 1, column: 0 }, end: { line: 1, column: 3 } };
@@ -410,22 +423,13 @@ describe("thin project snapshot", () => {
       [fileIdentityKey(libFile), lib],
       [fileIdentityKey(consumerFile), consumer],
     ]);
-    expect(() => expandStarImports(frozen)).toThrow(TypeError);
+    expandStarImports(frozen);
 
-    const owned = new Map<string, ModuleIndex>([
-      [fileIdentityKey(libFile), lib],
-      [
-        fileIdentityKey(consumerFile),
-        { ...consumer, exports: [...consumer.exports], imports: [...consumer.imports], locals: [...consumer.locals] },
-      ],
-    ]);
-    expandStarImports(owned);
-    expect(owned.get(fileIdentityKey(libFile))).toBe(lib);
-    expect(
-      owned
-        .get(fileIdentityKey(consumerFile))
-        ?.imports.some((binding) => binding.kind === "named" && binding.local === "foo"),
-    ).toBe(true);
+    expect(frozen.get(fileIdentityKey(libFile))).toBe(lib);
+    expect(consumer.imports).toEqual([{ kind: "star", from: "./lib", resolved: libFile }]);
+    const expanded = frozen.get(fileIdentityKey(consumerFile));
+    expect(expanded).not.toBe(consumer);
+    expect(expanded?.imports.some((binding) => binding.kind === "named" && binding.local === "foo")).toBe(true);
   });
 
   it("expands star imports after hydrating SQLite module bodies", async () => {

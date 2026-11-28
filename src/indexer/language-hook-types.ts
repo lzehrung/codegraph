@@ -17,6 +17,16 @@ export type ModuleIndexHooks = Readonly<{
   declaredContainers?: (source: string) => string[];
   /** Whether an occurrence must be re-extracted because its stored edge lacks resolution inputs. */
   specifierNeedsSource?: (edge: Edge) => boolean;
+  /**
+   * The cached `importers` of the language that an added file of the language joins without a specifier or edge
+   * naming it, such as a file a manifest imports into every source it governs. A warm build extracts them again.
+   * `importers` is read only when an added file can be such a file.
+   */
+  implicitImportersOfAddedFiles?: (
+    projectRoot: string,
+    addedFiles: readonly string[],
+    importers: Iterable<string>,
+  ) => Promise<string[]>;
   /** Build declarations directly from source, without parser-query imports or a fallback tree. */
   sourceModule?: (file: FileId, source: string) => ModuleIndex;
   /** Complete a prepared file before cross-file declaration lookup starts. */

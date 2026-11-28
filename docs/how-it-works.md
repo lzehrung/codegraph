@@ -167,7 +167,9 @@ A cached module is keyed by its own content, but its import targets depend on ot
 - it is a C#, Java, Kotlin, PHP, or C++ module, and a file it depends on changed. These imports resolve through the namespace or package declarations of other files.
 - it is a Python module whose `from pkg import name` can bind either an attribute of `pkg/__init__.py` or the submodule `pkg/name`, and a module was added to or deleted from `pkg` (a namespace package directory included), or the `pkg/__init__.py` it read to choose between them changed.
 
-With an index manifest, the build re-resolves the affected specifiers of added files. Without one (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+With an index manifest, the build re-resolves the affected specifiers of added files. It reads a specifier that no manifest edge records, such as a CommonJS `require` in a TypeScript file, from the cached import bindings. Without a manifest (a `memory` cache, or a `disk` cache that no manifest-writing build has seen), the cached import bindings replace the manifest edges.
+
+The names a star import binds come from its targets, so every build expands star imports again from each cached module's own bindings. A cached importer then binds what its targets export now without being extracted again.
 
 Incremental indexing applies the full build's discovery patterns, includes, and ignores, including `.gitignore` and repository/configured excludes, to changed and untracked Git candidates; `buildGraphDelta` uses the same filters for changed paths. Editing or staging an ignored file does not add it to the index. `buildGraphDelta` reports removed manifest files and their edges even when a rename destination is ignored. Explicit library file inputs remain explicit overrides.
 
